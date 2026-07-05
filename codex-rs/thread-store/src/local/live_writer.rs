@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -160,30 +161,66 @@ pub(super) async fn shutdown_thread(
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
     let recorder = store.live_recorder(thread_id).await?;
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    recorder.shutdown().await.map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await?;
-    if let Some(metrics) = codex_otel::global()
-        && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
-    {
-        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-        let _ = metrics.histogram(ROLLOUT_SIZE_BYTES_METRIC, size_bytes, &[]);
-    }
-    store.live_recorders.lock().await.remove(&thread_id);
-    Ok(())
+    let store = store.clone();
+    tokio::spawn(async move {
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        recorder.shutdown().await.map_err(thread_store_io_error)?;
+        sync_materialized_rollout_path(&store, thread_id).await?;
+        if let Some(metrics) = codex_otel::global()
+            && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
+        {
+            let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+            let _ = metrics.histogram(ROLLOUT_SIZE_BYTES_METRIC, size_bytes, &[]);
+        }
+        remove_live_recorder_if_current(&store, thread_id, &recorder).await;
+        Ok(())
+    })
+    .await
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!("shutdown cleanup task failed for thread {thread_id}: {err}"),
+    })?
 }
 
 pub(super) async fn discard_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorders
-        .lock()
+    let recorder = match store.live_recorder(thread_id).await {
+        Ok(recorder) => recorder,
+        Err(ThreadStoreError::ThreadNotFound { .. }) => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    spawn_discard_cleanup(store.clone(), thread_id, recorder)
         .await
-        .remove(&thread_id)
-        .map(|_| ())
-        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("discard cleanup task failed for thread {thread_id}: {err}"),
+        })?;
+    Ok(())
+}
+
+pub(super) fn spawn_discard_cleanup(
+    store: LocalThreadStore,
+    thread_id: ThreadId,
+    recorder: Arc<RolloutRecorder>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        recorder.discard().await;
+        remove_live_recorder_if_current(&store, thread_id, &recorder).await;
+    })
+}
+
+async fn remove_live_recorder_if_current(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    recorder: &Arc<RolloutRecorder>,
+) {
+    let mut live_recorders = store.live_recorders.lock().await;
+    if live_recorders
+        .get(&thread_id)
+        .is_some_and(|entry| Arc::ptr_eq(&entry.recorder, recorder))
+    {
+        live_recorders.remove(&thread_id);
+    }
 }
 
 pub(super) async fn rollout_path(

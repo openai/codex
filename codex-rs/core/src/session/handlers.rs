@@ -617,6 +617,47 @@ async fn emit_thread_stop_lifecycle(sess: &Session) {
     }
 }
 
+enum ThreadPersistenceShutdown {
+    Closed,
+    DiscardedAfterError,
+}
+
+async fn shutdown_thread_persistence(
+    sess: &Session,
+    failure_context: &str,
+) -> ThreadPersistenceShutdown {
+    let Some(live_thread) = sess.live_thread().cloned() else {
+        return ThreadPersistenceShutdown::Closed;
+    };
+    let failure_context = failure_context.to_owned();
+    // Terminal cleanup must outlive the submission loop. If the loop is canceled while a
+    // graceful shutdown is still waiting on I/O, the same task still reaches the discard
+    // fallback and releases the live-writer lease.
+    tokio::spawn(async move {
+        if let Err(err) = live_thread.shutdown().await {
+            warn!("{failure_context}: {err}");
+            // A terminal session has no remaining owner that can retry a buffered writer.
+            // Release the writer lease so a later resume can recover the durable prefix
+            // instead of failing forever with a duplicate live writer.
+            if let Err(discard_err) = live_thread.discard().await {
+                warn!(
+                    "thread persistence discard reported an error after terminal release: {discard_err}"
+                );
+            }
+            warn!(
+                "discarded thread persistence after shutdown error; buffered rollout items may be lost"
+            );
+            return ThreadPersistenceShutdown::DiscardedAfterError;
+        }
+        ThreadPersistenceShutdown::Closed
+    })
+    .await
+    .unwrap_or_else(|err| {
+        warn!("terminal thread persistence cleanup task failed: {err}");
+        ThreadPersistenceShutdown::DiscardedAfterError
+    })
+}
+
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
@@ -634,12 +675,10 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
 
     emit_thread_stop_lifecycle(sess.as_ref()).await;
 
-    // Gracefully flush and shutdown thread persistence on session end so tests
-    // that inspect durable state do not race with the background writer.
-    if let Some(live_thread) = sess.live_thread()
-        && let Err(e) = live_thread.shutdown().await
-    {
-        warn!("failed to shutdown thread persistence: {e}");
+    if matches!(
+        shutdown_thread_persistence(sess.as_ref(), "failed to shutdown thread persistence").await,
+        ThreadPersistenceShutdown::DiscardedAfterError
+    ) {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
@@ -851,11 +890,11 @@ pub(super) async fn submission_loop(
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
         emit_thread_stop_lifecycle(sess.as_ref()).await;
-        if let Some(live_thread) = sess.live_thread()
-            && let Err(err) = live_thread.shutdown().await
-        {
-            warn!("failed to shutdown thread persistence after submission channel closed: {err}");
-        }
+        let _ = shutdown_thread_persistence(
+            sess.as_ref(),
+            "failed to shutdown thread persistence after submission channel closed",
+        )
+        .await;
     }
     debug!("Agent loop exited");
 }

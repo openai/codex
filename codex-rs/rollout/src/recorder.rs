@@ -115,6 +115,9 @@ enum RolloutCmd {
     Shutdown {
         ack: oneshot::Sender<std::io::Result<()>>,
     },
+    Discard {
+        ack: oneshot::Sender<()>,
+    },
 }
 
 /// Observable state for the background rollout writer task.
@@ -1038,6 +1041,23 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+
+    /// Stop the writer without draining buffered items.
+    ///
+    /// This returns only after the writer has closed its command receiver, so stale recorder
+    /// clones cannot enqueue writes after the caller releases its live-writer lease.
+    pub async fn discard(&self) {
+        let (tx_done, rx_done) = oneshot::channel();
+        if self
+            .tx
+            .send(RolloutCmd::Discard { ack: tx_done })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let _ = rx_done.await;
+    }
 }
 
 pub(crate) fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
@@ -1723,10 +1743,18 @@ async fn rollout_writer(
     cwd: PathBuf,
     rollout_path: PathBuf,
 ) -> std::io::Result<()> {
+    enum TerminalAck {
+        Shutdown(oneshot::Sender<std::io::Result<()>>),
+        Discard(oneshot::Sender<()>),
+    }
+
     let mut state = RolloutWriterState::new(file, deferred_log_file_info, meta, cwd, rollout_path);
 
     // Process rollout commands
-    while let Some(cmd) = rx.recv().await {
+    let terminal_ack = loop {
+        let Some(cmd) = rx.recv().await else {
+            break None;
+        };
         match cmd {
             RolloutCmd::AddItems(items) => {
                 state.add_items(items);
@@ -1740,14 +1768,28 @@ async fn rollout_writer(
             }
             RolloutCmd::Shutdown { ack } => match state.shutdown().await {
                 Ok(()) => {
-                    let _ = ack.send(Ok(()));
-                    break;
+                    break Some(TerminalAck::Shutdown(ack));
                 }
                 Err(err) => {
                     let _ = ack.send(Err(err));
                 }
             },
+            RolloutCmd::Discard { ack } => {
+                break Some(TerminalAck::Discard(ack));
+            }
         }
+    };
+
+    drop(state);
+    drop(rx);
+    match terminal_ack {
+        Some(TerminalAck::Shutdown(ack)) => {
+            let _ = ack.send(Ok(()));
+        }
+        Some(TerminalAck::Discard(ack)) => {
+            let _ = ack.send(());
+        }
+        None => {}
     }
 
     Ok(())

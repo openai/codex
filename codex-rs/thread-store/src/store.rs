@@ -66,8 +66,10 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Discards the live thread writer without forcing pending in-memory items to become durable.
     ///
     /// Core calls this when session initialization fails after a live writer has been created.
-    /// Implementations should release any live writer resources for the thread while preserving
-    /// already-durable thread data.
+    /// This is an idempotent terminal release: implementations must preserve already-durable
+    /// thread data, finish releasing the lease after cleanup starts even if the returned future
+    /// is canceled or reports a diagnostic error, and prevent previously obtained writer handles
+    /// from appending once it returns.
     fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
     /// Loads persisted history for resume, fork, rollback, and memory jobs.
