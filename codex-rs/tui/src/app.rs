@@ -215,6 +215,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod owned_screen;
+mod owned_screen_resize;
 mod pending_interactive_replay;
 mod pets;
 mod platform_actions;
@@ -1269,11 +1270,29 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        match &event {
+            TuiEvent::Resize => {
+                self.chat_widget.cancel_owned_screen_split_drag();
+            }
+            TuiEvent::FocusLost => {
+                if self.chat_widget.cancel_owned_screen_split_drag() {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            TuiEvent::Key(_)
+            | TuiEvent::Paste(_)
+            | TuiEvent::MouseScroll(_)
+            | TuiEvent::MousePrimary(_)
+            | TuiEvent::Draw => {}
+        }
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
         }
 
         if self.overlay.is_some() {
+            if self.chat_widget.cancel_owned_screen_split_drag() {
+                tui.frame_requester().schedule_frame();
+            }
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
@@ -1303,9 +1322,10 @@ See the Codex keymap documentation for supported actions and examples."
                         .await;
                     }
                 }
-                TuiEvent::MousePrimaryPress(event) => {
-                    self.handle_owned_screen_mouse_primary_press(tui, event);
+                TuiEvent::MousePrimary(event) => {
+                    self.handle_owned_screen_mouse_primary(tui, event);
                 }
+                TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.rebuild_transcript_after_backtrack(tui)?;

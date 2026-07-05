@@ -16,6 +16,9 @@ use tokio::sync::mpsc;
 
 use super::InitialHistoryReplayBuffer;
 use super::owned_screen::OwnedScreen;
+use super::owned_screen_resize::OwnedScreenLayout;
+use super::owned_screen_resize::OwnedScreenSplitState;
+use super::owned_screen_resize::PaneSplitPreference;
 use super::thread_events::ThreadBufferedEvent;
 use crate::app_event::ConversationOrigin;
 use crate::app_event::PaneSlot;
@@ -25,6 +28,7 @@ use crate::history_cell::HistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::transcript_reflow::TranscriptReflowState;
+use crate::tui::MousePrimaryEvent;
 
 pub(super) fn parent_pane_shortcut() -> KeyBinding {
     key_hint::alt(KeyCode::Char('1'))
@@ -125,6 +129,7 @@ pub(crate) struct ConversationPanes {
     side: Option<ConversationPane>,
     focused: PaneSlot,
     dispatch: Option<PaneSlot>,
+    owned_screen_split: OwnedScreenSplitState,
 }
 
 // Rendering and `/side` lifecycle consume the remaining APIs in the next stack layers.
@@ -136,6 +141,7 @@ impl ConversationPanes {
             side: None,
             focused: PaneSlot::Parent,
             dispatch: None,
+            owned_screen_split: OwnedScreenSplitState::default(),
         })
     }
 
@@ -173,6 +179,7 @@ impl ConversationPanes {
     }
 
     pub(super) fn take_side(&mut self) -> Option<ConversationPane> {
+        self.owned_screen_split.clear_rendered_layout();
         if self.focused == PaneSlot::Side {
             self.focus(PaneSlot::Parent);
         }
@@ -184,6 +191,26 @@ impl ConversationPanes {
                 .store(/*val*/ false, Ordering::Release);
         }
         self.side.take()
+    }
+
+    pub(super) fn owned_screen_split_preference(&self) -> PaneSplitPreference {
+        self.owned_screen_split.preference()
+    }
+
+    pub(super) fn record_owned_screen_layout(&mut self, layout: OwnedScreenLayout) {
+        self.owned_screen_split.record_layout(layout);
+    }
+
+    pub(super) fn handle_owned_screen_split_mouse(&mut self, event: MousePrimaryEvent) -> bool {
+        self.owned_screen_split.handle_mouse(event)
+    }
+
+    pub(super) fn owned_screen_split_is_dragging(&self) -> bool {
+        self.owned_screen_split.is_dragging()
+    }
+
+    pub(super) fn cancel_owned_screen_split_drag(&mut self) -> bool {
+        self.owned_screen_split.cancel_drag()
     }
 
     pub(super) fn by_slot(&self, slot: PaneSlot) -> Option<&ConversationPane> {

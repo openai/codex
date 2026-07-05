@@ -18,15 +18,14 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::owned_screen_resize::OwnedScreenLayout;
 use super::*;
 use crate::AltScreenBehavior;
 use crate::key_hint::is_plain_text_key_event;
-use crate::tui::MousePrimaryPressEvent;
+use crate::tui::MousePrimaryEvent;
+use crate::tui::MousePrimaryEventKind;
 use crate::tui::MouseScrollEvent;
 
-const MIN_SPLIT_PANE_WIDTH: u16 = 41;
-const SPLIT_DIVIDER_WIDTH: u16 = 1;
-const MIN_SPLIT_WIDTH: u16 = MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_DIVIDER_WIDTH;
 const PANE_HEADER_HEIGHT: u16 = 1;
 
 pub(super) struct OwnedScreen {
@@ -39,59 +38,6 @@ pub(super) struct OwnedScreen {
 struct RenderedOwnedScreen {
     cursor: Option<(u16, u16)>,
     cursor_style: SetCursorStyle,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OwnedScreenLayout {
-    Single {
-        slot: PaneSlot,
-        area: Rect,
-        show_header: bool,
-    },
-    Split {
-        area: Rect,
-        parent: Rect,
-        divider: Rect,
-        side: Rect,
-    },
-}
-
-impl OwnedScreenLayout {
-    fn new(area: Rect, has_side: bool, focused: PaneSlot) -> Self {
-        if !has_side {
-            return Self::Single {
-                slot: PaneSlot::Parent,
-                area,
-                show_header: false,
-            };
-        }
-        if area.width < MIN_SPLIT_WIDTH {
-            return Self::Single {
-                slot: focused,
-                area,
-                show_header: true,
-            };
-        }
-
-        let pane_width = area.width.saturating_sub(SPLIT_DIVIDER_WIDTH);
-        let parent_width = (pane_width + 1) / 2;
-        let side_width = pane_width.saturating_sub(parent_width);
-        let parent = Rect::new(area.x, area.y, parent_width, area.height);
-        let divider = Rect::new(parent.right(), area.y, SPLIT_DIVIDER_WIDTH, area.height);
-        let side = Rect::new(divider.right(), area.y, side_width, area.height);
-        Self::Split {
-            area,
-            parent,
-            divider,
-            side,
-        }
-    }
-
-    fn area(self) -> Rect {
-        match self {
-            Self::Single { area, .. } | Self::Split { area, .. } => area,
-        }
-    }
 }
 
 impl OwnedScreen {
@@ -231,14 +177,19 @@ fn render_pane_header(slot: PaneSlot, focused: bool, area: Rect, buffer: &mut Bu
     );
 }
 
-fn render_divider(area: Rect, buffer: &mut Buffer) {
+fn render_divider(area: Rect, active: bool, buffer: &mut Buffer) {
     if area.width == 0 {
         return;
     }
+    let style = if active {
+        Style::default().cyan().bold()
+    } else {
+        Style::default().dim()
+    };
     for y in area.y..area.bottom() {
         buffer[(area.x, y)]
-            .set_symbol("│")
-            .set_style(Style::default().dim());
+            .set_symbol(if active { "┃" } else { "│" })
+            .set_style(style);
     }
 }
 
@@ -265,6 +216,8 @@ fn render_layout(
     focused: PaneSlot,
     buffer: &mut Buffer,
 ) -> Option<RenderedOwnedScreen> {
+    panes.record_owned_screen_layout(layout);
+    let divider_active = panes.owned_screen_split_is_dragging();
     Clear.render(layout.area(), buffer);
     for slot in [PaneSlot::Parent, PaneSlot::Side] {
         if let Some(screen) = panes
@@ -303,7 +256,7 @@ fn render_layout(
                 focused,
                 buffer,
             );
-            render_divider(divider, buffer);
+            render_divider(divider, divider_active, buffer);
             match focused {
                 PaneSlot::Parent => parent_rendered,
                 PaneSlot::Side => side_rendered,
@@ -380,6 +333,9 @@ impl App {
         tui: &mut tui::Tui,
         event: MouseScrollEvent,
     ) -> bool {
+        if self.chat_widget.owned_screen_split_is_dragging() {
+            return true;
+        }
         for slot in [PaneSlot::Parent, PaneSlot::Side] {
             let handled = self.chat_widget.by_slot_mut(slot).is_some_and(|pane| {
                 pane.chat_widget.no_modal_or_popup_active()
@@ -397,12 +353,33 @@ impl App {
         false
     }
 
-    pub(super) fn handle_owned_screen_mouse_primary_press(
+    pub(super) fn handle_owned_screen_mouse_primary(
         &mut self,
         tui: &mut tui::Tui,
-        event: MousePrimaryPressEvent,
+        event: MousePrimaryEvent,
     ) -> bool {
-        if !self.chat_widget.has_side() {
+        if self.overlay.is_some()
+            || !self.chat_widget.has_side()
+            || !self.chat_widget.no_modal_or_popup_active()
+        {
+            if self.chat_widget.cancel_owned_screen_split_drag() {
+                tui.frame_requester().schedule_frame();
+            }
+            return false;
+        }
+
+        if self.chat_widget.handle_owned_screen_split_mouse(event) {
+            match event.kind {
+                MousePrimaryEventKind::Drag => tui
+                    .frame_requester()
+                    .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL),
+                MousePrimaryEventKind::Press | MousePrimaryEventKind::Release => {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            return true;
+        }
+        if event.kind != MousePrimaryEventKind::Press {
             return false;
         }
 
@@ -474,12 +451,16 @@ impl App {
         if !self.has_owned_screen() {
             return Ok(None);
         }
+        if !self.chat_widget.no_modal_or_popup_active() {
+            self.chat_widget.cancel_owned_screen_split_drag();
+        }
         let focused = self.chat_widget.focused_slot();
         let has_side = self.chat_widget.has_side();
+        let split_preference = self.chat_widget.owned_screen_split_preference();
         let mut rendered_area = Rect::default();
         tui.draw(/*height*/ u16::MAX, |frame| {
             rendered_area = frame.area();
-            let layout = OwnedScreenLayout::new(rendered_area, has_side, focused);
+            let layout = OwnedScreenLayout::new(rendered_area, has_side, focused, split_preference);
             if let Some(rendered) =
                 render_layout(&mut self.chat_widget, layout, focused, frame.buffer)
                 && let Some((x, y)) = rendered.cursor

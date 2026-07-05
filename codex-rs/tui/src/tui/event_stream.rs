@@ -34,7 +34,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
-use super::MousePrimaryPressEvent;
+use super::MousePrimaryEvent;
+use super::MousePrimaryEventKind;
 use super::MouseScrollDirection;
 use super::MouseScrollEvent;
 use super::TuiEvent;
@@ -184,7 +185,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
     /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        // Some crossterm events map to None (e.g. FocusLost, mouse movement); loop so we keep polling
+        // Some crossterm events map to None (for example, mouse movement); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         for _ in 0..MAX_SKIPPED_EVENTS_PER_POLL {
             let poll_result = {
@@ -277,7 +278,22 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     row: mouse_event.row,
                 })),
                 MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
-                    Some(TuiEvent::MousePrimaryPress(MousePrimaryPressEvent {
+                    Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                        kind: MousePrimaryEventKind::Press,
+                        column: mouse_event.column,
+                        row: mouse_event.row,
+                    }))
+                }
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                    Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                        kind: MousePrimaryEventKind::Drag,
+                        column: mouse_event.column,
+                        row: mouse_event.row,
+                    }))
+                }
+                MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                    Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                        kind: MousePrimaryEventKind::Release,
                         column: mouse_event.column,
                         row: mouse_event.row,
                     }))
@@ -296,7 +312,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             }
             Event::FocusLost => {
                 self.terminal_focused.store(false, Ordering::Relaxed);
-                None
+                Some(TuiEvent::FocusLost)
             }
         }
     }
@@ -433,23 +449,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn key_event_skips_unmapped() {
+    async fn focus_lost_maps_to_event_and_updates_terminal_state() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
-        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+        let mut stream = make_stream(broker, draw_rx, terminal_focused.clone());
 
         handle.send(Ok(Event::FocusLost));
-        handle.send(Ok(Event::Key(KeyEvent::new(
-            KeyCode::Char('a'),
-            KeyModifiers::NONE,
-        ))));
 
-        let next = stream.next().await.unwrap();
-        match next {
-            TuiEvent::Key(key) => {
-                assert_eq!(key, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-            }
-            other => panic!("expected key event, got {other:?}"),
-        }
+        assert!(matches!(stream.next().await, Some(TuiEvent::FocusLost)));
+        assert!(!terminal_focused.load(Ordering::Relaxed));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -507,7 +514,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn primary_mouse_press_maps_to_event() {
+    async fn primary_mouse_lifecycle_maps_to_events() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
         let mut stream = make_stream(broker, draw_rx, terminal_focused);
 
@@ -517,12 +524,41 @@ mod tests {
             row: 4,
             modifiers: KeyModifiers::NONE,
         })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 5,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 7,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        })));
 
         assert!(matches!(
             stream.next().await,
-            Some(TuiEvent::MousePrimaryPress(MousePrimaryPressEvent {
+            Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                kind: MousePrimaryEventKind::Press,
                 column: 3,
                 row: 4,
+            }))
+        ));
+        assert!(matches!(
+            stream.next().await,
+            Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                kind: MousePrimaryEventKind::Drag,
+                column: 5,
+                row: 6,
+            }))
+        ));
+        assert!(matches!(
+            stream.next().await,
+            Some(TuiEvent::MousePrimary(MousePrimaryEvent {
+                kind: MousePrimaryEventKind::Release,
+                column: 7,
+                row: 8,
             }))
         ));
     }
@@ -540,13 +576,25 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         })));
         handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
+            kind: MouseEventKind::Down(MouseButton::Middle),
             column: 3,
             row: 4,
             modifiers: KeyModifiers::NONE,
         })));
         handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 3,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Middle),
+            column: 3,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
             column: 4,
             row: 4,
             modifiers: KeyModifiers::NONE,
