@@ -38,7 +38,6 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
-        let had_active_round = self.mcp_startup_status.is_some();
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             // Ignore-mode buffers the next plausible round so stale post-finish
@@ -102,9 +101,6 @@ impl ChatWidget {
                     self.on_warning(error);
                 }
             }
-        }
-        if !had_active_round {
-            self.mcp_startup_generation = self.mcp_startup_generation.wrapping_add(1);
         }
         self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
@@ -200,11 +196,6 @@ impl ChatWidget {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
         }
 
-        self.clear_mcp_startup_state();
-        self.maybe_send_next_queued_input();
-    }
-
-    pub(super) fn clear_mcp_startup_state(&mut self) {
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
         self.mcp_startup_ignore_updates_until_next_start = true;
@@ -215,6 +206,7 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() && mcp_startup_owned_status {
             self.restore_reasoning_status_header();
         }
+        self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
