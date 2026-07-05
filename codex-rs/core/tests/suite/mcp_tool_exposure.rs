@@ -141,7 +141,10 @@ async fn later_follow_up_uses_background_recovered_apps_after_mid_thread_startup
         "Calendar should be available before the MCP refresh: {initial_request}"
     );
 
-    tokio::fs::remove_dir_all(test.codex_home_path().join("cache/codex_apps_tools")).await?;
+    let tools_cache = test.codex_home_path().join("cache/codex_apps_tools");
+    if tokio::fs::try_exists(&tools_cache).await? {
+        tokio::fs::remove_dir_all(tools_cache).await?;
+    }
     startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
     let runtime_mcp_config = test.codex.runtime_mcp_config(&test.config).await;
     let refresh_config = McpServerRefreshConfig {

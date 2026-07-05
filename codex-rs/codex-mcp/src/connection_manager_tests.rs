@@ -114,7 +114,7 @@ async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
                 .expect("create in-process RMCP client"),
         ),
         server_info: create_test_server_info("Ready"),
-        tools,
+        tools: Arc::new(arc_swap::ArcSwap::from_pointee(tools)),
         tool_filter: ToolFilter::default(),
         tool_timeout: None,
         server_instructions: None,

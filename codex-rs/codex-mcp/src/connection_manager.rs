@@ -535,9 +535,9 @@ impl McpConnectionManager {
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
-    /// On success, the refreshed tools replace shared cache contents when the
-    /// cache is enabled and the latest filtered tools are returned directly to
-    /// the caller. On failure, existing shared cache contents remain unchanged.
+    /// On success, the refreshed tools become visible to this manager, replace
+    /// shared cache contents when the cache is enabled, and are returned
+    /// directly to the caller. On failure, existing tools remain unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let managed_client = self
             .clients
@@ -585,12 +585,12 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        let tools = filter_tools(tools, &managed_client.tool_filter)
-            .into_iter()
-            .map(|mut tool| {
-                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                self.with_server_metadata(tool)
-            });
+        let tools = filter_tools(tools, &managed_client.tool_filter);
+        managed_client.replace_uncached_tools(tools.clone());
+        let tools = tools.into_iter().map(|mut tool| {
+            tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+            self.with_server_metadata(tool)
+        });
         Ok(normalize_tools_for_model_with_prefix(
             tools,
             self.prefix_mcp_tool_names,

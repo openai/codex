@@ -38,6 +38,7 @@ use crate::tools::filter_tools;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Result;
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use async_channel::Sender;
 use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
@@ -101,7 +102,7 @@ const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
 pub(crate) struct ManagedClient {
     pub(crate) client: Arc<RmcpClient>,
     pub(crate) server_info: McpServerInfo,
-    pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) tools: Arc<ArcSwap<Vec<ToolInfo>>>,
     pub(crate) tool_filter: ToolFilter,
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
@@ -133,7 +134,13 @@ impl ManagedClient {
             );
         }
 
-        self.tools.clone()
+        self.tools.load_full().as_ref().clone()
+    }
+
+    pub(crate) fn replace_uncached_tools(&self, tools: Vec<ToolInfo>) {
+        if self.codex_apps_tools_cache_context.is_none() {
+            self.tools.store(Arc::new(tools));
+        }
     }
 }
 
@@ -868,7 +875,7 @@ async fn start_server_task(
     let managed = ManagedClient {
         client: Arc::clone(&client),
         server_info,
-        tools,
+        tools: Arc::new(ArcSwap::from_pointee(tools)),
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_instructions: initialize_result.instructions,
