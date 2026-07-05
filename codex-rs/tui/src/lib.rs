@@ -105,6 +105,7 @@ mod clipboard_paste;
 mod collaboration_modes;
 mod color;
 mod config_update;
+mod conversation_selection;
 mod conversation_viewport;
 pub(crate) mod custom_terminal;
 mod pets;
