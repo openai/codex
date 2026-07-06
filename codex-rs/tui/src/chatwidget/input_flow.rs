@@ -26,10 +26,6 @@ impl ChatWidget {
         self.finish_startup_draft_protection_if_ready();
     }
 
-    pub(crate) fn startup_draft_needs_mcp_server_names(&self) -> bool {
-        self.startup_draft_pending_mcp_servers.is_some()
-    }
-
     pub(super) fn finish_startup_draft_protection_if_ready(&mut self) {
         let startup_ready = self.startup_draft_rendered
             && self.is_session_configured()

@@ -630,21 +630,52 @@ fn spawn_startup_thread_start(
     app_server: &AppServerSession,
     config: Config,
     app_event_tx: AppEventSender,
+    load_legacy_mcp_server_names: bool,
 ) {
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
     let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
     tokio::spawn(async move {
         let result = crate::app_server_session::start_thread_with_request_handle(
-            request_handle,
+            request_handle.clone(),
             config,
             thread_params_mode,
             remote_cwd_override,
         )
-        .await
-        .map_err(|err| format!("{err:#}"));
+        .await;
+        let result = match result {
+            Ok(mut started) => {
+                if load_legacy_mcp_server_names && started.mcp_server_names.is_none() {
+                    load_legacy_startup_mcp_server_names(request_handle, &mut started).await;
+                }
+                Ok(started)
+            }
+            Err(err) => Err(format!("{err:#}")),
+        };
         app_event_tx.send(AppEvent::StartupThreadStarted { result });
     });
+}
+
+async fn load_legacy_startup_mcp_server_names(
+    request_handle: AppServerRequestHandle,
+    started: &mut AppServerStartedThread,
+) {
+    let server_names = match background_requests::fetch_all_mcp_server_statuses(
+        request_handle,
+        McpServerStatusDetail::ToolsAndAuthOnly,
+        Some(started.session.thread_id),
+    )
+    .await
+    {
+        Ok(statuses) => statuses.into_iter().map(|status| status.name).collect(),
+        Err(err) => {
+            tracing::warn!(
+                "failed to load startup MCP server names from an older app server: {err}"
+            );
+            Vec::new()
+        }
+    };
+    started.mcp_server_names = Some(server_names);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -893,7 +924,12 @@ impl App {
         );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+                spawn_startup_thread_start(
+                    &app_server,
+                    config.clone(),
+                    app_event_tx.clone(),
+                    /*load_legacy_mcp_server_names*/ allow_startup_text,
+                );
                 // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)

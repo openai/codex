@@ -517,31 +517,8 @@ impl App {
                 turns,
                 mcp_server_names,
             }) => {
-                let mcp_server_names = match mcp_server_names {
-                    Some(mcp_server_names) => mcp_server_names,
-                    None if self.chat_widget.startup_draft_needs_mcp_server_names() => {
-                        match super::background_requests::fetch_all_mcp_server_statuses(
-                            app_server.request_handle(),
-                            McpServerStatusDetail::ToolsAndAuthOnly,
-                            Some(session.thread_id),
-                        )
-                        .await
-                        {
-                            Ok(statuses) => {
-                                statuses.into_iter().map(|status| status.name).collect()
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "failed to load startup MCP server names from an older app server: {err}"
-                                );
-                                Vec::new()
-                            }
-                        }
-                    }
-                    None => Vec::new(),
-                };
                 self.chat_widget
-                    .set_startup_draft_expected_mcp_servers(mcp_server_names);
+                    .set_startup_draft_expected_mcp_servers(mcp_server_names.unwrap_or_default());
                 self.enqueue_primary_thread_session(session, turns).await?;
                 self.chat_widget.maybe_send_next_queued_input();
             }

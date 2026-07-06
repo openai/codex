@@ -255,6 +255,8 @@ async fn restored_startup_draft_loads_mcp_names_from_older_app_servers() {
         .await
         .expect("startup thread");
     started.mcp_server_names = None;
+    load_legacy_startup_mcp_server_names(app_server.request_handle(), &mut started).await;
+    assert_eq!(started.mcp_server_names, Some(Vec::new()));
 
     app.handle_startup_thread_started(&mut app_server, Ok(started))
         .await
