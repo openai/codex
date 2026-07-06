@@ -44,6 +44,15 @@ pub enum WindowsSandboxProxySettingsMode {
     Preserve,
 }
 
+/// Network settings installed by an administrator during managed Windows sandbox setup.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WindowsSandboxProvisioningSettings {
+    /// Loopback proxy ports permitted for the offline sandbox identity.
+    pub proxy_ports: Vec<u16>,
+    /// Whether the offline sandbox identity may exchange arbitrary loopback traffic.
+    pub allow_local_binding: bool,
+}
+
 #[cfg(target_os = "windows")]
 mod acl;
 #[cfg(target_os = "windows")]

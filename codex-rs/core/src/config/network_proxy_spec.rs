@@ -14,6 +14,8 @@ use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::host_and_port_from_network_addr;
+#[cfg(any(target_os = "windows", test))]
+use codex_network_proxy::managed_proxy_ports;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::models::PermissionProfile;
@@ -27,6 +29,7 @@ pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     hard_deny_allowlist_misses: bool,
+    base_environment_id: Option<String>,
 }
 
 pub struct StartedNetworkProxy {
@@ -77,12 +80,29 @@ impl NetworkProxySpec {
         self.config.network.enabled
     }
 
+    /// Returns a copy whose primary listeners are attributed to one execution environment.
+    pub fn with_base_environment_id(&self, environment_id: Option<&str>) -> Self {
+        let mut spec = self.clone();
+        spec.base_environment_id = environment_id.map(str::to_string);
+        spec
+    }
+
     pub fn proxy_host_and_port(&self) -> String {
         host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
     }
 
     pub fn socks_enabled(&self) -> bool {
         self.config.network.enable_socks5
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub(crate) fn configured_proxy_ports(&self) -> std::io::Result<Vec<u16>> {
+        managed_proxy_ports(&self.config).map_err(std::io::Error::other)
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub(crate) fn allow_local_binding(&self) -> bool {
+        self.config.network.allow_local_binding
     }
 
     pub(crate) fn from_config_and_constraints(
@@ -116,6 +136,7 @@ impl NetworkProxySpec {
             config,
             constraints,
             hard_deny_allowlist_misses,
+            base_environment_id: None,
         })
     }
 
@@ -129,6 +150,10 @@ impl NetworkProxySpec {
     ) -> std::io::Result<StartedNetworkProxy> {
         let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
+        #[cfg(target_os = "windows")]
+        if let Some(base_environment_id) = self.base_environment_id.as_deref() {
+            builder = builder.base_environment_id(base_environment_id);
+        }
         if enable_network_approval_flow && !self.hard_deny_allowlist_misses {
             if let Some(policy_decider) = policy_decider {
                 builder = builder.policy_decider_arc(policy_decider);
@@ -154,11 +179,13 @@ impl NetworkProxySpec {
         &self,
         permission_profile: &PermissionProfile,
     ) -> std::io::Result<Self> {
-        Self::from_config_and_constraints(
+        let mut spec = Self::from_config_and_constraints(
             self.base_config.clone(),
             self.requirements.clone(),
             permission_profile,
-        )
+        )?;
+        spec.base_environment_id = self.base_environment_id.clone();
+        Ok(spec)
     }
 
     pub(crate) fn with_exec_policy_network_rules(

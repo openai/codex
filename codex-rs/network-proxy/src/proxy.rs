@@ -10,6 +10,8 @@ use crate::socks5;
 use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(target_os = "windows")]
+use anyhow::bail;
 use clap::Parser;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -100,6 +102,7 @@ pub struct NetworkProxyBuilder {
     state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     socks_addr: Option<SocketAddr>,
+    base_environment_id: Option<String>,
     managed_by_codex: bool,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
@@ -111,6 +114,7 @@ impl Default for NetworkProxyBuilder {
             state: None,
             http_addr: None,
             socks_addr: None,
+            base_environment_id: None,
             managed_by_codex: true,
             policy_decider: None,
             blocked_request_observer: None,
@@ -131,6 +135,14 @@ impl NetworkProxyBuilder {
 
     pub fn socks_addr(mut self, addr: SocketAddr) -> Self {
         self.socks_addr = Some(addr);
+        self
+    }
+
+    /// Associates the primary proxy listeners with one execution environment.
+    ///
+    /// Commands in other environments continue to use isolated listener pairs.
+    pub fn base_environment_id(mut self, environment_id: impl Into<String>) -> Self {
+        self.base_environment_id = Some(environment_id.into());
         self
     }
 
@@ -193,6 +205,11 @@ impl NetworkProxyBuilder {
                 managed_http_addr,
                 managed_socks_addr,
                 current_cfg.network.enable_socks5,
+                if self.base_environment_id.is_some() {
+                    WindowsManagedPortSelection::ConfiguredOnly
+                } else {
+                    WindowsManagedPortSelection::AllowEphemeralFallback
+                },
             )
             .context("reserve managed loopback proxy listeners")?;
             #[cfg(not(target_os = "windows"))]
@@ -227,6 +244,7 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             socks5_udp_enabled: current_cfg.network.enable_socks5_udp,
+            base_environment_id: self.base_environment_id,
             runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
                 &current_cfg,
             )?)),
@@ -251,22 +269,45 @@ fn reserve_loopback_ephemeral_listeners(
 }
 
 #[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowsManagedPortSelection {
+    ConfiguredOnly,
+    AllowEphemeralFallback,
+}
+
+#[cfg(target_os = "windows")]
 fn reserve_windows_managed_listeners(
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     reserve_socks_listener: bool,
+    port_selection: WindowsManagedPortSelection,
 ) -> Result<ReservedListenerSet> {
     let http_addr = windows_managed_loopback_addr(http_addr);
     let socks_addr = windows_managed_loopback_addr(socks_addr);
+    if port_selection == WindowsManagedPortSelection::ConfiguredOnly {
+        if http_addr.port() == 0 {
+            bail!("configured Windows HTTP proxy address must use a fixed non-zero port");
+        }
+        if reserve_socks_listener && socks_addr.port() == 0 {
+            bail!("configured Windows SOCKS proxy address must use a fixed non-zero port");
+        }
+    }
 
     match try_reserve_windows_managed_listeners(http_addr, socks_addr, reserve_socks_listener) {
         Ok(listeners) => Ok(listeners),
-        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+        Err(err)
+            if err.kind() == std::io::ErrorKind::AddrInUse
+                && port_selection == WindowsManagedPortSelection::AllowEphemeralFallback =>
+        {
             warn!("managed Windows proxy ports are busy; falling back to ephemeral loopback ports");
             reserve_loopback_ephemeral_listeners(reserve_socks_listener)
                 .context("reserve fallback loopback proxy listeners")
         }
-        Err(err) => Err(err).context("reserve Windows managed proxy listeners"),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "reserve configured Windows managed proxy listeners at {http_addr} and {socks_addr}"
+            )
+        }),
     }
 }
 
@@ -366,6 +407,7 @@ pub struct NetworkProxy {
     socks_addr: SocketAddr,
     socks_enabled: bool,
     socks5_udp_enabled: bool,
+    base_environment_id: Option<String>,
     runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -387,6 +429,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
+            && self.base_environment_id == other.base_environment_id
             && self.runtime_settings() == other.runtime_settings()
     }
 }
@@ -778,6 +821,13 @@ impl NetworkProxy {
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
+        if self.base_environment_id.as_deref() == Some(environment_id) {
+            return Ok(EnvironmentProxyAddrs {
+                http_addr: self.http_addr,
+                socks_addr: self.socks_addr,
+            });
+        }
+
         let mut proxies = self
             .environment_proxies
             .lock()
@@ -913,6 +963,7 @@ impl NetworkProxy {
 
         let http_state = self.state.clone();
         let http_decider = self.policy_decider.clone();
+        let http_environment_id = self.base_environment_id.clone();
         let http_addr = self.http_addr;
         let http_task = tokio::spawn(async move {
             match http_listener {
@@ -921,7 +972,7 @@ impl NetworkProxy {
                         http_state,
                         listener,
                         http_decider,
-                        /*environment_id*/ None,
+                        http_environment_id,
                     )
                     .await
                 }
@@ -930,7 +981,7 @@ impl NetworkProxy {
                         http_state,
                         http_addr,
                         http_decider,
-                        /*environment_id*/ None,
+                        http_environment_id,
                     )
                     .await
                 }
@@ -940,6 +991,7 @@ impl NetworkProxy {
         let socks_task = if current_cfg.network.enable_socks5 {
             let socks_state = self.state.clone();
             let socks_decider = self.policy_decider.clone();
+            let socks_environment_id = self.base_environment_id.clone();
             let socks_addr = self.socks_addr;
             let enable_socks5_udp = current_cfg.network.enable_socks5_udp;
             Some(tokio::spawn(async move {
@@ -949,7 +1001,7 @@ impl NetworkProxy {
                             socks_state,
                             listener,
                             socks_decider,
-                            /*environment_id*/ None,
+                            socks_environment_id,
                             enable_socks5_udp,
                         )
                         .await
@@ -959,7 +1011,7 @@ impl NetworkProxy {
                             socks_state,
                             socks_addr,
                             socks_decider,
-                            /*environment_id*/ None,
+                            socks_environment_id,
                             enable_socks5_udp,
                         )
                         .await
@@ -1070,11 +1122,61 @@ impl Drop for NetworkProxyHandle {
 mod tests {
     use super::*;
     use crate::config::NetworkProxySettings;
+    use crate::network_policy::NetworkDecision;
+    use crate::network_policy::NetworkPolicyRequest;
+    use crate::network_policy::NetworkProtocol;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::path::Path;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    fn proxy_addr_from_env(env: &HashMap<String, String>, key: &str, scheme: &str) -> SocketAddr {
+        env.get(key)
+            .and_then(|value| value.strip_prefix(scheme))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("expected {key} to contain a {scheme} proxy address"))
+    }
+
+    async fn issue_denied_http_request(proxy_addr: SocketAddr) -> Result<()> {
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr).await?;
+        stream
+            .write_all(
+                b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+            )
+            .await?;
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(2), stream.read_to_end(&mut response)).await??;
+        assert!(
+            response.starts_with(b"HTTP/1.1 403 Forbidden"),
+            "unexpected proxy response: {}",
+            String::from_utf8_lossy(&response)
+        );
+        Ok(())
+    }
+
+    async fn issue_denied_socks_request(proxy_addr: SocketAddr) -> Result<()> {
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr).await?;
+        stream.write_all(&[0x05, 0x01, 0x00]).await?;
+        let mut greeting = [0_u8; 2];
+        timeout(Duration::from_secs(2), stream.read_exact(&mut greeting)).await??;
+        assert_eq!(greeting, [0x05, 0x00]);
+
+        let host = b"example.com";
+        let mut request = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
+        request.extend_from_slice(host);
+        request.extend_from_slice(&80_u16.to_be_bytes());
+        stream.write_all(&request).await?;
+        let mut response = [0_u8; 2];
+        timeout(Duration::from_secs(2), stream.read_exact(&mut response)).await??;
+        assert_eq!(response[0], 0x05);
+        assert_ne!(response[1], 0x00);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
@@ -1143,11 +1245,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
-        let proxy = NetworkProxy::builder().state(state).build().await?;
+    async fn base_environment_reuses_primary_listener_and_keeps_other_environments_isolated()
+    -> Result<()> {
+        let http_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
+        let http_addr = http_listener.local_addr()?;
+        let socks_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
+        let socks_addr = socks_listener.local_addr()?;
+        drop(http_listener);
+        drop(socks_listener);
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            enabled: true,
+            proxy_url: format!("http://{http_addr}"),
+            socks_url: format!("socks5h://{socks_addr}"),
+            ..NetworkProxySettings::default()
+        }));
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
+            let seen_requests = Arc::clone(&seen_requests);
+            move |request: NetworkPolicyRequest| {
+                seen_requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((request.protocol, request.environment_id));
+                async { NetworkDecision::deny("test denial") }
+            }
+        });
+        let proxy = NetworkProxy::builder()
+            .state(state)
+            .base_environment_id("local")
+            .policy_decider_arc(decider)
+            .build()
+            .await?;
         let handle = proxy.run().await?;
 
         let base_env = HashMap::from([("PRESERVED".to_string(), "value".to_string())]);
@@ -1159,7 +1287,7 @@ mod tests {
             Some("value")
         );
         assert_ne!(local.env.get("HTTP_PROXY"), remote.env.get("HTTP_PROXY"));
-        assert_ne!(
+        assert_eq!(
             local.env.get("HTTP_PROXY"),
             Some(&format!("http://{}", proxy.http_addr()))
         );
@@ -1196,6 +1324,25 @@ mod tests {
         let mut legacy_env = base_env;
         proxy.apply_to_env_for_environment(&mut legacy_env, "local")?;
         assert_eq!(legacy_env, local.env);
+
+        issue_denied_http_request(proxy_addr_from_env(&local.env, "HTTP_PROXY", "http://")).await?;
+        issue_denied_http_request(proxy_addr_from_env(&remote.env, "HTTP_PROXY", "http://"))
+            .await?;
+        issue_denied_socks_request(proxy_addr_from_env(&local.env, "ALL_PROXY", "socks5h://"))
+            .await?;
+        issue_denied_socks_request(proxy_addr_from_env(&remote.env, "ALL_PROXY", "socks5h://"))
+            .await?;
+        assert_eq!(
+            *seen_requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![
+                (NetworkProtocol::Http, Some("local".to_string())),
+                (NetworkProtocol::Http, Some("remote".to_string())),
+                (NetworkProtocol::Socks5Tcp, Some("local".to_string())),
+                (NetworkProtocol::Socks5Tcp, Some("remote".to_string())),
+            ]
+        );
 
         handle.shutdown().await?;
         Ok(())
@@ -1262,6 +1409,7 @@ mod tests {
             SocketAddr::from(([127, 0, 0, 1], busy_port)),
             SocketAddr::from(([127, 0, 0, 1], 48081)),
             /*reserve_socks_listener*/ false,
+            WindowsManagedPortSelection::AllowEphemeralFallback,
         )
         .unwrap();
 

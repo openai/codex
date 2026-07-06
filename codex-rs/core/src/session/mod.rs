@@ -1025,6 +1025,13 @@ impl Session {
         }
     }
 
+    fn base_proxy_environment_id(environment_manager: &EnvironmentManager) -> Option<&'static str> {
+        environment_manager
+            .try_local_environment()
+            .is_some()
+            .then_some(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+    }
+
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
         exec_policy: &codex_execpolicy::Policy,
@@ -1109,6 +1116,12 @@ impl Session {
             return;
         }
 
+        let spec = spec.with_base_environment_id(Self::base_proxy_environment_id(
+            self.services
+                .turn_environments
+                .environment_manager()
+                .as_ref(),
+        ));
         match Self::start_managed_network_proxy(
             &spec,
             current_exec_policy.as_ref(),

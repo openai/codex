@@ -26,6 +26,7 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
         config: NetworkProxyConfig::default(),
         constraints: NetworkProxyConstraints::default(),
         hard_deny_allowlist_misses: false,
+        base_environment_id: None,
     };
     let metadata = NetworkProxyAuditMetadata {
         conversation_id: Some("conversation-1".to_string()),
@@ -38,6 +39,41 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
         .build_state_with_audit_metadata(metadata.clone())
         .expect("state should build");
     assert_eq!(state.audit_metadata(), &metadata);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn base_environment_uses_the_configured_windows_port_after_recompute() -> std::io::Result<()>
+{
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied port");
+    let busy_port = occupied.local_addr().expect("read occupied port").port();
+    let permission_profile = PermissionProfile::workspace_write();
+    let mut config = NetworkProxyConfig::default();
+    config.network.proxy_url = format!("http://127.0.0.1:{busy_port}");
+    config.network.enable_socks5 = false;
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        /*requirements*/ None,
+        &permission_profile,
+    )?
+    .with_base_environment_id(Some(codex_exec_server::LOCAL_ENVIRONMENT_ID))
+    .recompute_for_permission_profile(&permission_profile)?;
+
+    let result = spec
+        .start_proxy(
+            &permission_profile,
+            /*policy_decider*/ None,
+            /*blocked_request_observer*/ None,
+            /*enable_network_approval_flow*/ false,
+            NetworkProxyAuditMetadata::default(),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "stable Windows proxy ingress must not use an ephemeral fallback"
+    );
+    Ok(())
 }
 
 #[test]

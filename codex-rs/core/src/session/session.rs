@@ -891,6 +891,7 @@ impl Session {
             } else {
                 ShellSnapshot::disabled()
             };
+            let base_proxy_environment_id = Self::base_proxy_environment_id(&environment_manager);
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
@@ -974,8 +975,9 @@ impl Session {
             let (network_proxy, session_network_proxy) =
                 if let Some(spec) = config.permissions.network.as_ref() {
                     let current_exec_policy = exec_policy.current();
+                    let spec = spec.with_base_environment_id(base_proxy_environment_id);
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-                        spec,
+                        &spec,
                         current_exec_policy.as_ref(),
                         config.permissions.permission_profile(),
                         network_policy_decider.as_ref().map(Arc::clone),

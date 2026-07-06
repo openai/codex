@@ -270,6 +270,7 @@ impl CommandExecRequestProcessor {
         };
         let started_network_proxy = match network_proxy_spec.as_ref() {
             Some(spec) => match spec
+                .with_base_environment_id(Some(codex_exec_server::LOCAL_ENVIRONMENT_ID))
                 .start_proxy(
                     &network_proxy_permission_profile,
                     /*policy_decider*/ None,

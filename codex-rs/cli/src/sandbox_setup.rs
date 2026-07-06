@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::ArgAction;
 use clap::ArgGroup;
 use clap::Parser;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 
@@ -77,10 +79,17 @@ pub(crate) fn parse_setup_command(
 
 async fn run_elevated(cmd: SandboxSetupCommand) -> anyhow::Result<()> {
     let identity = resolve_sandbox_setup_identity(&cmd)?;
+    let config = ConfigBuilder::default()
+        .codex_home(identity.codex_home.clone())
+        .fallback_cwd(Some(identity.codex_home.clone()))
+        .build()
+        .await
+        .context("failed to load target user's Codex config for sandbox provisioning")?;
 
     codex_core::windows_sandbox::run_elevated_provisioning_setup(
         identity.codex_home.as_path(),
         identity.real_user.as_str(),
+        config.permissions.network.as_ref(),
     )?;
     ConfigEditsBuilder::new(identity.codex_home.as_path())
         .set_windows_sandbox_mode("elevated")

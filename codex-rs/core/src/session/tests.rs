@@ -756,6 +756,18 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
 }
 
 #[tokio::test]
+async fn base_proxy_environment_requires_a_local_environment() {
+    assert_eq!(
+        Session::base_proxy_environment_id(&EnvironmentManager::default_for_tests()),
+        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+    );
+    assert_eq!(
+        Session::base_proxy_environment_id(&EnvironmentManager::without_environments()),
+        None
+    );
+}
+
+#[tokio::test]
 async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
     let permission_profile = PermissionProfile::workspace_write();
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(

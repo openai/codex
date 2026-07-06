@@ -340,9 +340,13 @@ async fn run_command_under_sandbox(
     let _ = log_denials;
 
     let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
+    let network_proxy_spec =
+        config.permissions.network.as_ref().map(|spec| {
+            spec.with_base_environment_id(Some(codex_exec_server::LOCAL_ENVIRONMENT_ID))
+        });
 
     // This proxy should only live for the lifetime of the child process.
-    let network_proxy = match config.permissions.network.as_ref() {
+    let network_proxy = match network_proxy_spec.as_ref() {
         Some(spec) => Some(
             spec.start_proxy(
                 &permission_profile,

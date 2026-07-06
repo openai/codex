@@ -903,7 +903,35 @@ fn run_elevated_setup_inner(
     run_setup_exe(&payload, needs_elevation, request.codex_home)
 }
 
-pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Result<()> {
+fn build_provisioning_payload(
+    codex_home: &Path,
+    real_user: &str,
+    settings: crate::WindowsSandboxProvisioningSettings,
+) -> ElevationPayload {
+    ElevationPayload {
+        version: SETUP_VERSION,
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
+        codex_home: codex_home.to_path_buf(),
+        command_cwd: codex_home.to_path_buf(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        deny_read_paths: Vec::new(),
+        deny_write_paths: Vec::new(),
+        proxy_ports: settings.proxy_ports,
+        allow_local_binding: settings.allow_local_binding,
+        otel: codex_otel::global_statsig_metrics_settings(),
+        real_user: real_user.to_string(),
+        mode: SetupMode::ProvisionOnly,
+        refresh_only: false,
+    }
+}
+
+pub fn run_elevated_provisioning_setup(
+    codex_home: &Path,
+    real_user: &str,
+    settings: crate::WindowsSandboxProvisioningSettings,
+) -> Result<()> {
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         failure(
@@ -922,23 +950,7 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
             "sandbox provisioning setup must be run from an elevated process",
         ));
     }
-    let payload = ElevationPayload {
-        version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: codex_home.to_path_buf(),
-        read_roots: Vec::new(),
-        write_roots: Vec::new(),
-        deny_read_paths: Vec::new(),
-        deny_write_paths: Vec::new(),
-        proxy_ports: Vec::new(),
-        allow_local_binding: false,
-        otel: codex_otel::global_statsig_metrics_settings(),
-        real_user: real_user.to_string(),
-        mode: SetupMode::ProvisionOnly,
-        refresh_only: false,
-    };
+    let payload = build_provisioning_payload(codex_home, real_user, settings);
     run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
 }
 
@@ -1237,6 +1249,23 @@ mod tests {
             super::offline_proxy_settings_for_request(&request, Some(&explicit)),
             explicit
         );
+    }
+
+    #[test]
+    fn provisioning_payload_forwards_managed_proxy_settings() {
+        let codex_home = Path::new(r"C:\Users\test\.codex");
+        let payload = super::build_provisioning_payload(
+            codex_home,
+            "test-user",
+            crate::WindowsSandboxProvisioningSettings {
+                proxy_ports: vec![3128, 8081],
+                allow_local_binding: true,
+            },
+        );
+
+        assert_eq!(payload.proxy_ports, vec![3128, 8081]);
+        assert!(payload.allow_local_binding);
+        assert!(matches!(payload.mode, super::SetupMode::ProvisionOnly));
     }
 
     #[test]
