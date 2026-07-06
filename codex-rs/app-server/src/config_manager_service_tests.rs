@@ -708,7 +708,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
         tmp.path().to_path_buf(),
         vec![],
         LoaderOverrides::without_managed_config_for_tests(),
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(
             r#"
 [features]
 personality = true

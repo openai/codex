@@ -61,9 +61,10 @@ fn layers_are_returned_in_stack_order() {
 #[test]
 fn strict_layers_reject_unknown_config_fields() {
     let base_dir = base_dir();
-    let err = cloud_config_layers_from_fragments_strict(
+    let err = cloud_managed_config_layers_from_fragments_strict(
         vec![fragment("strict", "Strict layer", "unknown_key = true")],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect_err("strict config should reject unknown fields");
 

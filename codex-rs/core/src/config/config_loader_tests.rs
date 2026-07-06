@@ -6,6 +6,7 @@ use crate::config::permission_profile_catalog;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudManagedLayer;
 use codex_config::ConfigError;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -53,9 +54,10 @@ fn config_error_from_io(err: &std::io::Error) -> &ConfigError {
 }
 
 fn cloud_config_bundle_requirement_source() -> RequirementSource {
-    RequirementSource::EnterpriseManaged {
-        id: "req_1".to_string(),
-        name: "Base requirements".to_string(),
+    RequirementSource::CloudManaged {
+        layer: CloudManagedLayer::SystemOverlay,
+        id: "managed_req_1".to_string(),
+        name: "system-overlay requirements 1".to_string(),
     }
 }
 
@@ -1090,7 +1092,7 @@ allowed_approval_policies = ["on-request"]
         &[] as &[(String, TomlValue)],
         ConfigLoadOptions {
             loader_overrides,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approval_policies = ["never"]"#,
             ),
             ..Default::default()
@@ -1320,7 +1322,7 @@ async fn load_config_layers_includes_cloud_config_bundle() -> anyhow::Result<()>
     let requirements = r#"allowed_approval_policies = ["never"]"#;
     let expected: ConfigRequirementsToml = toml::from_str(requirements)?;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -1933,7 +1935,7 @@ review_model = "system-review"
         &[] as &[(String, TomlValue)],
         ConfigLoadOptions {
             loader_overrides: overrides,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_config(
                 r#"model = "cloud"
 model_provider = "cloud-provider"
 "#,
@@ -1968,9 +1970,10 @@ model_provider = "cloud-provider"
             ConfigLayerSource::System {
                 file: AbsolutePathBuf::from_absolute_path(&system_config_path)?,
             },
-            ConfigLayerSource::EnterpriseManaged {
-                id: "cfg_1".to_string(),
-                name: "Base config".to_string(),
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
+                id: "managed_cfg_1".to_string(),
+                name: "system-overlay config 1".to_string(),
             },
             ConfigLayerSource::User {
                 file: AbsolutePathBuf::from_absolute_path(codex_home.join(CONFIG_TOML_FILE))?,
@@ -2008,7 +2011,7 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
     overrides.system_requirements_path = Some(system_requirements_path);
     overrides.ignore_managed_requirements = true;
 
-    let cloud_config_bundle = CloudConfigBundleFixture::loader_with_enterprise_requirement(
+    let cloud_config_bundle = CloudConfigBundleFixture::loader_with_system_overlay_requirement(
         r#"allowed_approval_policies = ["never"]"#,
     );
 
@@ -2065,7 +2068,7 @@ statusMessage = "checking"
     );
     let expected: ConfigRequirementsToml = toml::from_str(&requirements)?;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -2106,7 +2109,7 @@ async fn load_config_layers_resolves_relative_bundle_requirements_paths_against_
 deny_read = ["secrets/**"]
 "#;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -2159,7 +2162,7 @@ async fn strict_config_rejects_unknown_cloud_config_key() {
         ConfigLoadOptions {
             loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
             strict_config: true,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_config(
                 "unknown_key = true",
             ),
         },
@@ -2190,7 +2193,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
         &codex_home,

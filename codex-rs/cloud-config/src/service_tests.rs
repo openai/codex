@@ -255,14 +255,12 @@ fn chatgpt_auth_json_with_mode(
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: Vec::new(),
             managed_layers: CloudConfigTomlManagedLayers {
                 baseline: vec![test_config_fragment()],
                 system_overlay: Vec::new(),
             },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: Vec::new(),
             managed_layers: CloudRequirementsTomlManagedLayers {
                 baseline: Vec::new(),
                 system_overlay: vec![test_requirements_fragment()],
@@ -321,7 +319,6 @@ fn replacement_requirements_bundle() -> CloudConfigBundle {
                     contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
                 }],
             },
-            ..Default::default()
         },
     }
 }
@@ -337,7 +334,6 @@ fn invalid_config_bundle() -> CloudConfigBundle {
                 }],
                 system_overlay: Vec::new(),
             },
-            ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle::default(),
     }
@@ -369,7 +365,6 @@ windows_managed_dir = 'C:\managed\overlay'
                     .to_string(),
                 }],
             },
-            ..Default::default()
         },
     }
 }
@@ -484,14 +479,12 @@ fn bundle_shape_tag_describes_managed_documents() {
                     baseline: vec![test_config_fragment()],
                     system_overlay: vec![test_config_fragment()],
                 },
-                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 managed_layers: CloudRequirementsTomlManagedLayers {
                     baseline: vec![test_requirements_fragment()],
                     system_overlay: vec![test_requirements_fragment()],
                 },
-                ..Default::default()
             },
         })),
         "cloud_managed_config,cloud_managed_requirements"
@@ -788,16 +781,6 @@ async fn get_bundle_treats_legacy_v1_cache_as_miss_and_rewrites_v2() {
     assert_eq!(cache_json["signed_payload"]["version"], 2);
     let bundle_json = &cache_json["signed_payload"]["bundle"];
     assert!(bundle_json["config_toml"]["managed_layers"].is_object());
-    assert!(
-        bundle_json["config_toml"]
-            .get("enterprise_managed")
-            .is_none()
-    );
-    assert!(
-        bundle_json["requirements_toml"]
-            .get("enterprise_managed")
-            .is_none()
-    );
 }
 
 #[tokio::test]
@@ -1250,7 +1233,6 @@ fn bundle_response_conversion_uses_only_managed_layers_and_preserves_order() {
                         config_fragment("low", "model = \"low\""),
                     ],
                 },
-                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 managed_layers: CloudRequirementsTomlManagedLayers {
@@ -1260,7 +1242,6 @@ fn bundle_response_conversion_uses_only_managed_layers_and_preserves_order() {
                         "allowed_approval_policies = [\"never\"]",
                     )],
                 },
-                ..Default::default()
             },
         })
     );

@@ -3,7 +3,6 @@ use crate::ConfigLayerSource;
 use crate::ConfigRequirementsToml;
 use crate::Sourced;
 use crate::compose_requirements;
-use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -41,76 +40,6 @@ async fn shared_future_runs_once() {
 }
 
 #[test]
-fn bundle_layers_preserve_enterprise_managed_bucket_order() {
-    let tempdir = tempdir().expect("tempdir");
-    let base_dir = AbsolutePathBuf::from_absolute_path(tempdir.path()).expect("absolute path");
-    let layers = CloudConfigBundleLayers::from_bundle(
-        CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![
-                    CloudConfigFragment {
-                        id: "cfg_high".to_string(),
-                        name: "High config".to_string(),
-                        contents: "model = \"high\"".to_string(),
-                    },
-                    CloudConfigFragment {
-                        id: "cfg_low".to_string(),
-                        name: "Low config".to_string(),
-                        contents: "model = \"low\"".to_string(),
-                    },
-                ],
-                ..Default::default()
-            },
-            requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![
-                    CloudRequirementsFragment {
-                        id: "req_high".to_string(),
-                        name: "High requirements".to_string(),
-                        contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
-                    },
-                    CloudRequirementsFragment {
-                        id: "req_low".to_string(),
-                        name: "Low requirements".to_string(),
-                        contents: "allowed_approval_policies = [\"never\"]".to_string(),
-                    },
-                ],
-                ..Default::default()
-            },
-        },
-        &base_dir,
-    )
-    .expect("bundle should be converted into layers");
-
-    assert_eq!(
-        layers
-            .enterprise_managed_config
-            .iter()
-            .map(|layer| layer.name.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            ConfigLayerSource::EnterpriseManaged {
-                id: "cfg_low".to_string(),
-                name: "Low config".to_string(),
-            },
-            ConfigLayerSource::EnterpriseManaged {
-                id: "cfg_high".to_string(),
-                name: "High config".to_string(),
-            },
-        ]
-    );
-    assert_eq!(
-        compose_requirements(layers.enterprise_managed_requirements)
-            .expect("requirements should compose")
-            .expect("requirements should be present")
-            .into_toml(),
-        ConfigRequirementsToml {
-            allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-            ..Default::default()
-        }
-    );
-}
-
-#[test]
 fn bundle_layers_preserve_managed_bucket_order_and_provenance() {
     let tempdir = tempdir().expect("tempdir");
     let base_dir = AbsolutePathBuf::from_absolute_path(tempdir.path()).expect("absolute path");
@@ -127,7 +56,6 @@ fn bundle_layers_preserve_managed_bucket_order_and_provenance() {
                         config_fragment("overlay_low"),
                     ],
                 },
-                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 managed_layers: CloudRequirementsTomlManagedLayers {
@@ -137,7 +65,6 @@ fn bundle_layers_preserve_managed_bucket_order_and_provenance() {
                         requirements_fragment("overlay_req_low"),
                     ],
                 },
-                ..Default::default()
             },
         },
         &base_dir,
@@ -191,18 +118,20 @@ fn bundle_layers_preserve_managed_bucket_order_and_provenance() {
 }
 
 #[test]
-fn bundle_layers_can_strict_validate_enterprise_managed_config() {
+fn bundle_layers_can_strict_validate_managed_config() {
     let tempdir = tempdir().expect("tempdir");
     let base_dir = AbsolutePathBuf::from_absolute_path(tempdir.path()).expect("absolute path");
     let err = CloudConfigBundleLayers::from_bundle_strict_config(
         CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![CloudConfigFragment {
-                    id: "cfg".to_string(),
-                    name: "Cloud config".to_string(),
-                    contents: "unknown_key = true".to_string(),
-                }],
-                ..Default::default()
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: Vec::new(),
+                    system_overlay: vec![CloudConfigFragment {
+                        id: "cfg".to_string(),
+                        name: "Cloud config".to_string(),
+                        contents: "unknown_key = true".to_string(),
+                    }],
+                },
             },
             requirements_toml: CloudRequirementsTomlBundle::default(),
         },

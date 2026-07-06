@@ -266,7 +266,7 @@ async fn malformed_custom_rules_preserve_managed_forbidden_prefix() -> Result<()
 
     let mut builder = test_codex()
         .with_cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [rules]
 prefix_rules = [
