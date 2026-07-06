@@ -18,6 +18,10 @@
 
 mod store_lock;
 
+#[cfg(test)]
+#[path = "oauth/test_support.rs"]
+mod test_support;
+
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
@@ -862,52 +866,13 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_keyring_store::tests::MockKeyringStore;
     use codex_secrets::compute_keyring_account;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::sync::MutexGuard;
-    use std::sync::OnceLock;
-    use std::sync::PoisonError;
-    use tempfile::tempdir;
 
-    use codex_keyring_store::tests::MockKeyringStore;
-
-    struct TempCodexHome {
-        _guard: MutexGuard<'static, ()>,
-        _dir: tempfile::TempDir,
-    }
-
-    impl TempCodexHome {
-        fn new() -> Self {
-            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-            let guard = LOCK
-                .get_or_init(Mutex::default)
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let dir = tempdir().expect("create CODEX_HOME temp dir");
-            unsafe {
-                std::env::set_var("CODEX_HOME", dir.path());
-            }
-            Self {
-                _guard: guard,
-                _dir: dir,
-            }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            self._dir.path()
-        }
-    }
-
-    impl Drop for TempCodexHome {
-        fn drop(&mut self) {
-            unsafe {
-                std::env::remove_var("CODEX_HOME");
-            }
-        }
-    }
+    use super::test_support::TempCodexHome;
 
     #[test]
     fn load_oauth_tokens_reads_from_keyring_when_available() -> Result<()> {

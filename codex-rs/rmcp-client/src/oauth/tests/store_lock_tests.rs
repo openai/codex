@@ -1,9 +1,4 @@
-use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::OnceLock;
-use std::sync::PoisonError;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
@@ -20,7 +15,6 @@ use oauth2::basic::BasicTokenType;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
-use tempfile::tempdir;
 use tracing::Event;
 use tracing::Id;
 use tracing::Metadata;
@@ -43,43 +37,9 @@ use crate::oauth::save_oauth_tokens_to_file_with_lock_held;
 use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
+use crate::oauth::test_support::TempCodexHome;
 
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
-
-struct TempCodexHome {
-    _guard: MutexGuard<'static, ()>,
-    _dir: tempfile::TempDir,
-}
-
-impl TempCodexHome {
-    fn new() -> Self {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = LOCK
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let dir = tempdir().expect("create CODEX_HOME temp dir");
-        unsafe {
-            std::env::set_var("CODEX_HOME", dir.path());
-        }
-        Self {
-            _guard: guard,
-            _dir: dir,
-        }
-    }
-
-    fn path(&self) -> &Path {
-        self._dir.path()
-    }
-}
-
-impl Drop for TempCodexHome {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("CODEX_HOME");
-        }
-    }
-}
 
 fn assert_tokens_match_without_expiry(actual: &StoredOAuthTokens, expected: &StoredOAuthTokens) {
     assert_eq!(actual.server_name, expected.server_name);
