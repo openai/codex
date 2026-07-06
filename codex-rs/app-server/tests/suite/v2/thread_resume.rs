@@ -262,13 +262,15 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Result<()> {
+async fn thread_resume_reuses_idle_thread_when_full_config_matches() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let workspace = TempDir::new()?;
     let project_agents = workspace.path().join("AGENTS.md");
     std::fs::write(&project_agents, "project instructions")?;
+    let config = std::collections::HashMap::from([("features.plugins".to_string(), json!(false))]);
+    let developer_instructions = "stable developer instructions".to_string();
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -276,6 +278,8 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
+            config: Some(config.clone()),
+            developer_instructions: Some(developer_instructions.clone()),
             ..Default::default()
         })
         .await?;
@@ -315,11 +319,82 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
     )
     .await??;
 
+    let base_instructions = read_session_meta_line(
+        thread
+            .path
+            .as_deref()
+            .expect("materialized thread should have a rollout path"),
+    )
+    .await?
+    .meta
+    .base_instructions
+    .expect("materialized thread should persist base instructions")
+    .text;
+
+    let subscribed_invalid_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(workspace.path().display().to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "features.plugins".to_string(),
+                json!("invalid"),
+            )])),
+            base_instructions: Some(base_instructions.clone()),
+            developer_instructions: Some(developer_instructions.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let subscribed_invalid_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(subscribed_invalid_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadResumeResponse>(subscribed_invalid_resume_resp)?;
+    assert_eq!(instruction_sources, vec![project_agents_source.clone()]);
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+
     std::fs::remove_file(project_agents.as_path())?;
+
+    let invalid_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(workspace.path().display().to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "features.plugins".to_string(),
+                json!("invalid"),
+            )])),
+            base_instructions: Some(base_instructions.clone()),
+            developer_instructions: Some(developer_instructions.clone()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(invalid_resume_id)),
+    )
+    .await??;
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
+            cwd: Some(workspace.path().display().to_string()),
+            service_tier: Some(None),
+            config: Some(config.clone()),
+            base_instructions: Some(base_instructions.clone()),
+            developer_instructions: Some(developer_instructions.clone()),
             ..Default::default()
         })
         .await?;
@@ -334,6 +409,41 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(instruction_sources, vec![project_agents_source]);
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+
+    let changed_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            cwd: Some(workspace.path().display().to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "features.plugins".to_string(),
+                json!(true),
+            )])),
+            base_instructions: Some(base_instructions),
+            developer_instructions: Some(developer_instructions),
+            ..Default::default()
+        })
+        .await?;
+    let changed_resume_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(changed_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadResumeResponse>(changed_resume_response)?;
+    assert!(instruction_sources.is_empty());
 
     Ok(())
 }
@@ -2969,6 +3079,10 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "features.plugins".to_string(),
+                json!(false),
+            )])),
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                 limit: None,
                 sort_direction: None,

@@ -526,15 +526,19 @@ impl TurnRequestProcessor {
             additional_context,
             thread_settings,
         };
+        let trace_context = self.request_trace_context(&request_id).await;
         let turn_id = thread
             .submit_user_input_with_client_user_message_id(
                 turn_op,
-                self.request_trace_context(&request_id).await,
+                trace_context,
                 client_user_message_id,
             )
             .await
             .map_err(|err| {
-                let error = internal_error(format!("failed to start turn: {err}"));
+                let error = match err {
+                    CodexErr::InvalidRequest(message) => invalid_request(message),
+                    err => internal_error(format!("failed to start turn: {err}")),
+                };
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
                 error
             })?;

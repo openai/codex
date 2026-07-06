@@ -3,6 +3,7 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -21,6 +22,109 @@ struct ThreadListFilters {
     search_term: Option<String>,
     use_state_db_only: bool,
     relation_filter: Option<StoreThreadRelationFilter>,
+}
+
+fn resume_configs_semantically_equal(
+    desired: &Config,
+    loaded: &Config,
+    snapshot: &ThreadConfigSnapshot,
+) -> bool {
+    let desired_service_tier = desired
+        .service_tier
+        .as_deref()
+        .filter(|service_tier| *service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE);
+    let loaded_service_tier = snapshot
+        .service_tier
+        .as_deref()
+        .filter(|service_tier| *service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE);
+    let desired_permission_profile = desired
+        .permissions
+        .permission_profile()
+        .clone()
+        .materialize_project_roots_with_workspace_roots(&desired.workspace_roots);
+    if desired.model.as_deref() != Some(snapshot.model.as_str())
+        || desired.model_provider_id != snapshot.model_provider_id
+        || desired_service_tier != loaded_service_tier
+        || desired.cwd.as_path() != snapshot.cwd().as_path()
+        || desired.workspace_roots != snapshot.workspace_roots
+        || desired.model_reasoning_effort != snapshot.reasoning_effort
+        || desired.model_reasoning_summary != snapshot.reasoning_summary
+        || desired.personality != snapshot.personality
+        || desired.approvals_reviewer != snapshot.approvals_reviewer
+        || desired.permissions.approval_policy.value() != snapshot.approval_policy
+        || desired.permissions.active_permission_profile() != snapshot.active_permission_profile
+        || desired.permissions.profile_workspace_roots() != snapshot.profile_workspace_roots
+        || desired_permission_profile != snapshot.permission_profile
+        || desired.permissions.network != loaded.permissions.network
+        || desired.permissions.allow_login_shell != loaded.permissions.allow_login_shell
+        || desired.permissions.shell_environment_policy
+            != loaded.permissions.shell_environment_policy
+        || desired.permissions.windows_sandbox_mode != loaded.permissions.windows_sandbox_mode
+        || desired.permissions.windows_sandbox_private_desktop
+            != loaded.permissions.windows_sandbox_private_desktop
+    {
+        return false;
+    }
+
+    let mut desired = desired.clone();
+    let mut loaded = loaded.clone();
+    loaded.model = desired.model.clone();
+    loaded.model_provider_id = desired.model_provider_id.clone();
+    loaded.service_tier = desired.service_tier.clone();
+    loaded.cwd = desired.cwd.clone();
+    loaded.workspace_roots = desired.workspace_roots.clone();
+    loaded.workspace_roots_explicit = desired.workspace_roots_explicit;
+    loaded.model_reasoning_effort = desired.model_reasoning_effort.clone();
+    loaded.model_reasoning_summary = desired.model_reasoning_summary;
+    loaded.personality = desired.personality;
+    loaded.approvals_reviewer = desired.approvals_reviewer;
+    loaded.permissions = desired.permissions.clone();
+
+    const LIVE_SETTING_KEYS: &[&str] = &[
+        "approval_policy",
+        "approvals_reviewer",
+        "cwd",
+        "default_permissions",
+        "developer_instructions",
+        "instructions",
+        "model",
+        "model_provider",
+        "model_reasoning_effort",
+        "model_reasoning_summary",
+        "personality",
+        "sandbox_mode",
+        "sandbox_workspace_write",
+        "service_tier",
+        "workspace_roots",
+    ];
+    let normalize_layer_config = |config: &Config| {
+        let mut effective_config = config.config_layer_stack.effective_config();
+        if let Some(table) = effective_config.as_table_mut() {
+            for key in LIVE_SETTING_KEYS {
+                table.remove(*key);
+            }
+        }
+        effective_config
+    };
+    if normalize_layer_config(&desired) != normalize_layer_config(&loaded)
+        || desired.config_layer_stack.requirements() != loaded.config_layer_stack.requirements()
+        || desired.config_layer_stack.requirements_toml()
+            != loaded.config_layer_stack.requirements_toml()
+        || desired
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules()
+            != loaded
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules()
+    {
+        return false;
+    }
+
+    desired.config_layer_stack = ConfigLayerStack::default();
+    loaded.config_layer_stack = ConfigLayerStack::default();
+    desired.startup_warnings.clear();
+    loaded.startup_warnings.clear();
+    desired == loaded
 }
 
 fn collect_resume_override_mismatches(
@@ -128,10 +232,6 @@ fn collect_resume_override_mismatches(
         ));
     }
 
-    if request.config.is_some() {
-        mismatch_details
-            .push("config overrides were provided and ignored while running".to_string());
-    }
     if request.base_instructions.is_some() {
         mismatch_details
             .push("baseInstructions override was provided and ignored while running".to_string());
@@ -376,6 +476,12 @@ enum RunningThreadResumeResult {
     /// The optional stored thread contains the history-bearing probe that cold
     /// resume can reuse instead of reading the rollout again.
     NotRunning(Option<Box<StoredThread>>),
+}
+
+enum IdleThreadShutdownResult {
+    Complete,
+    Busy,
+    Pending,
 }
 
 impl ThreadRequestProcessor {
@@ -792,7 +898,6 @@ impl ThreadRequestProcessor {
     }
 
     async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
-        self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
@@ -802,6 +907,49 @@ impl ThreadRequestProcessor {
         self.thread_watch_manager
             .remove_thread(&thread_id.to_string())
             .await;
+        self.pending_thread_unloads.lock().await.remove(&thread_id);
+    }
+
+    async fn shutdown_idle_thread_for_replacement(
+        &self,
+        thread_id: ThreadId,
+        thread: Arc<CodexThread>,
+    ) -> IdleThreadShutdownResult {
+        let processor = self.clone();
+        let shutdown = self.background_tasks.spawn(async move {
+            let complete = match thread.try_shutdown_if_idle().await {
+                Ok(false) => false,
+                Ok(true) | Err(_) => {
+                    thread.wait_until_terminated().await;
+                    true
+                }
+            };
+            if complete {
+                processor.thread_manager.remove_thread(&thread_id).await;
+                processor.finalize_thread_teardown(thread_id).await;
+            } else {
+                processor
+                    .pending_thread_unloads
+                    .lock()
+                    .await
+                    .remove(&thread_id);
+            }
+            complete
+        });
+        match tokio::time::timeout(Duration::from_secs(10), shutdown).await {
+            Ok(Ok(true)) => IdleThreadShutdownResult::Complete,
+            Ok(Ok(false)) => IdleThreadShutdownResult::Busy,
+            Ok(Err(error)) => {
+                warn!("thread {thread_id} replacement shutdown task failed: {error}");
+                IdleThreadShutdownResult::Pending
+            }
+            Err(_) => {
+                warn!(
+                    "thread {thread_id} replacement shutdown is still pending; teardown will continue in the background"
+                );
+                IdleThreadShutdownResult::Pending
+            }
+        }
     }
 
     async fn thread_unsubscribe_response_inner(
@@ -1497,10 +1645,11 @@ impl ThreadRequestProcessor {
         let count = thread
             .increment_out_of_band_elicitation_count()
             .await
-            .map_err(|err| {
-                internal_error(format!(
+            .map_err(|err| match err {
+                CodexErr::InvalidRequest(message) => invalid_request(message),
+                err => internal_error(format!(
                     "failed to increment out-of-band elicitation counter: {err}"
-                ))
+                )),
             })?;
         Ok(ThreadIncrementElicitationResponse {
             count,
@@ -2641,24 +2790,6 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
-            && self
-                .pending_thread_unloads
-                .lock()
-                .await
-                .contains(&thread_id)
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(format!(
-                        "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-                    )),
-                )
-                .await;
-            return Ok(());
-        }
-
         if params.sandbox.is_some() && params.permissions.is_some() {
             self.outgoing
                 .send_error(
@@ -2678,6 +2809,23 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
+            && self
+                .pending_thread_unloads
+                .lock()
+                .await
+                .contains(&thread_id)
+        {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(format!(
+                        "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                    )),
+                )
+                .await;
+            return Ok(());
+        }
         let stored_thread_from_running_probe = match self
             .resume_running_thread(
                 &request_id,
@@ -2695,29 +2843,10 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let ThreadResumeParams {
-            thread_id,
-            history,
-            path,
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            runtime_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
-            permissions,
-            config: mut request_overrides,
-            base_instructions,
-            developer_instructions,
-            personality,
-            exclude_turns,
-            initial_turns_page,
-        } = params;
-        let include_turns = !exclude_turns;
+        let include_turns = !params.exclude_turns;
+        let initial_turns_page = params.initial_turns_page.clone();
 
-        let resume_result = if let Some(history) = history {
+        let resume_result = if let Some(history) = params.history.as_ref() {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
@@ -2726,7 +2855,7 @@ impl ThreadRequestProcessor {
                 .await
                 .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
-            self.resume_thread_from_rollout(&thread_id, path.as_ref())
+            self.resume_thread_from_rollout(&params.thread_id, params.path.as_ref())
                 .await
                 .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         };
@@ -2738,38 +2867,17 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let history_cwd = thread_history.session_cwd();
-        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
-        let mut typesafe_overrides = self.build_thread_config_overrides(
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            runtime_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
-            permissions,
-            base_instructions,
-            developer_instructions,
-            personality,
-        );
-        self.load_and_apply_persisted_resume_metadata(
-            &thread_history,
-            &mut request_overrides,
-            &mut typesafe_overrides,
-        )
-        .await;
-
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let resumed_thread_id = match &thread_history {
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        };
         let config = match self
-            .config_manager
-            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+            .load_resume_config(&params, resumed_thread_id, thread_history.session_cwd())
             .await
         {
             Ok(config) => config,
-            Err(err) => {
-                let error = config_load_error(&err);
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return Ok(());
             }
@@ -2953,23 +3061,59 @@ impl ThreadRequestProcessor {
 
     async fn load_and_apply_persisted_resume_metadata(
         &self,
-        thread_history: &InitialHistory,
+        thread_id: Option<ThreadId>,
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
     ) -> Option<ThreadMetadata> {
-        let InitialHistory::Resumed(resumed_history) = thread_history else {
-            return None;
-        };
+        let thread_id = thread_id?;
         let state_db_ctx = self.state_db.clone()?;
-        let persisted_metadata = state_db_ctx
-            .get_thread(resumed_history.conversation_id)
-            .await
-            .ok()
-            .flatten()?;
+        let persisted_metadata = state_db_ctx.get_thread(thread_id).await.ok().flatten()?;
         merge_persisted_resume_metadata(request_overrides, typesafe_overrides, &persisted_metadata);
         Some(persisted_metadata)
     }
 
+    async fn load_resume_config(
+        &self,
+        params: &ThreadResumeParams,
+        thread_id: Option<ThreadId>,
+        history_cwd: Option<PathBuf>,
+    ) -> Result<Config, JSONRPCErrorError> {
+        let runtime_workspace_roots = params
+            .runtime_workspace_roots
+            .clone()
+            .map(resolve_runtime_workspace_roots);
+        let mut typesafe_overrides = self.build_thread_config_overrides(
+            params.model.clone(),
+            params.model_provider.clone(),
+            params.service_tier.clone(),
+            params.cwd.clone(),
+            runtime_workspace_roots,
+            params.approval_policy,
+            params.approvals_reviewer,
+            params.sandbox,
+            params.permissions.clone(),
+            params.base_instructions.clone(),
+            params.developer_instructions.clone(),
+            params.personality,
+        );
+        let mut request_overrides = params.config.clone();
+        self.load_and_apply_persisted_resume_metadata(
+            thread_id,
+            &mut request_overrides,
+            &mut typesafe_overrides,
+        )
+        .await;
+
+        self.config_manager
+            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+            .await
+            .map_err(|err| config_load_error(&err))
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "resume replacement must be serialized against listener subscription"
+    )]
     #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_running_thread(
         &self,
@@ -3035,14 +3179,111 @@ impl ThreadRequestProcessor {
                     active_path.display()
                 )));
             }
-            let config_snapshot = existing_thread.config_snapshot().await;
-            let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
+            let (mismatch_details, allow_cold_resume) = if params.config.is_some() {
+                let session_meta = source_thread.history.as_ref().and_then(|history| {
+                    history.items.iter().find_map(|item| match item {
+                        RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
+                        _ => None,
+                    })
+                });
+                let history_cwd = session_meta.map(|meta| meta.cwd.clone());
+                let persisted_base_instructions = session_meta
+                    .and_then(|meta| meta.base_instructions.as_ref())
+                    .map(|instructions| instructions.text.clone());
+                let desired_config = self
+                    .load_resume_config(params, Some(existing_thread_id), history_cwd)
+                    .await;
+                match desired_config {
+                    Ok(mut desired_config) => {
+                        let config_snapshot = existing_thread.config_snapshot().await;
+                        let mut loaded_config = (*existing_thread.config().await).clone();
+
+                        desired_config.base_instructions = desired_config
+                            .base_instructions
+                            .or_else(|| persisted_base_instructions.clone());
+                        loaded_config.base_instructions =
+                            persisted_base_instructions.or(loaded_config.base_instructions);
+
+                        desired_config.service_tier =
+                            if desired_config.features.enabled(Feature::FastMode) {
+                                match desired_config.service_tier.take() {
+                                    Some(service_tier) => {
+                                        let model = desired_config
+                                            .model
+                                            .as_deref()
+                                            .unwrap_or(config_snapshot.model.as_str());
+                                        let model_info = self
+                                            .thread_manager
+                                            .get_models_manager()
+                                            .get_model_info(
+                                                model,
+                                                &desired_config.to_models_manager_config(),
+                                            )
+                                            .await;
+                                        (service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
+                                            || model_info.supports_service_tier(&service_tier))
+                                        .then_some(service_tier)
+                                    }
+                                    None => None,
+                                }
+                            } else {
+                                None
+                            };
+                        loaded_config.service_tier = config_snapshot.service_tier.clone();
+
+                        if resume_configs_semantically_equal(
+                            &desired_config,
+                            &loaded_config,
+                            &config_snapshot,
+                        ) {
+                            (Vec::new(), true)
+                        } else {
+                            (
+                                vec![
+                                    "effective resume configuration differs from the loaded thread configuration"
+                                        .to_string(),
+                                ],
+                                true,
+                            )
+                        }
+                    }
+                    Err(error) => {
+                        let loaded_status = self
+                            .thread_watch_manager
+                            .loaded_status_for_thread(&existing_thread_id.to_string())
+                            .await;
+                        let is_running =
+                            matches!(existing_thread.agent_status().await, AgentStatus::Running);
+                        let has_subscribers = !self
+                            .thread_state_manager
+                            .subscribed_connection_ids(existing_thread_id)
+                            .await
+                            .is_empty();
+                        if matches!(loaded_status, ThreadStatus::Idle)
+                            && !is_running
+                            && !has_subscribers
+                        {
+                            return Err(error);
+                        }
+                        (
+                            vec![format!(
+                                "requested resume configuration is invalid: {}",
+                                error.message
+                            )],
+                            // Invalid input may be ignored to preserve rejoin, but
+                            // must never evict the valid cached thread.
+                            false,
+                        )
+                    }
+                }
+            } else {
+                let config_snapshot = existing_thread.config_snapshot().await;
+                (
+                    collect_resume_override_mismatches(params, &config_snapshot),
+                    true,
+                )
+            };
             if !mismatch_details.is_empty() {
-                let has_subscribers = !self
-                    .thread_state_manager
-                    .subscribed_connection_ids(existing_thread_id)
-                    .await
-                    .is_empty();
                 let loaded_status = self
                     .thread_watch_manager
                     .loaded_status_for_thread(&existing_thread_id.to_string())
@@ -3050,23 +3291,49 @@ impl ThreadRequestProcessor {
                 let is_running =
                     matches!(existing_thread.agent_status().await, AgentStatus::Running);
 
-                if !has_subscribers && matches!(loaded_status, ThreadStatus::Idle) && !is_running {
-                    // A loaded idle thread is only a cache entry. Shut it down
-                    // before removing it so cold resume cannot duplicate a
-                    // thread that timed out during shutdown.
-                    match wait_for_thread_shutdown(&existing_thread).await {
-                        ThreadShutdownResult::Complete => {
-                            self.thread_manager.remove_thread(&existing_thread_id).await;
-                            self.finalize_thread_teardown(existing_thread_id).await;
+                let should_cold_resume = if allow_cold_resume
+                    && matches!(loaded_status, ThreadStatus::Idle)
+                    && !is_running
+                {
+                    let mut pending_thread_unloads = self.pending_thread_unloads.lock().await;
+                    let has_subscribers = !self
+                        .thread_state_manager
+                        .subscribed_connection_ids(existing_thread_id)
+                        .await
+                        .is_empty();
+                    if has_subscribers {
+                        false
+                    } else if pending_thread_unloads.insert(existing_thread_id) {
+                        true
+                    } else {
+                        return Err(invalid_request(format!(
+                            "thread {existing_thread_id} is closing; retry thread/resume after the thread is closed"
+                        )));
+                    }
+                } else {
+                    false
+                };
+                if should_cold_resume {
+                    // A loaded idle thread is only a cache entry. Mark it as
+                    // closing before shutdown so a new subscriber cannot race
+                    // with replacement.
+                    match self
+                        .shutdown_idle_thread_for_replacement(
+                            existing_thread_id,
+                            Arc::clone(&existing_thread),
+                        )
+                        .await
+                    {
+                        IdleThreadShutdownResult::Complete => {
                             // Shutdown can flush newer rollout items, so reload the
                             // stored thread before starting the replacement session.
                             return Ok(RunningThreadResumeResult::NotRunning(None));
                         }
-                        ThreadShutdownResult::SubmitFailed => {
-                            warn!("failed to submit Shutdown to thread {existing_thread_id}");
-                        }
-                        ThreadShutdownResult::TimedOut => {
-                            warn!("thread {existing_thread_id} shutdown timed out");
+                        IdleThreadShutdownResult::Busy => {}
+                        IdleThreadShutdownResult::Pending => {
+                            return Err(invalid_request(format!(
+                                "thread {existing_thread_id} is closing; retry thread/resume after the thread is closed"
+                            )));
                         }
                     }
                 }
@@ -3079,6 +3346,7 @@ impl ThreadRequestProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            let config_snapshot = existing_thread.config_snapshot().await;
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
