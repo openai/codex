@@ -7,9 +7,7 @@ the process manager to spawn PTYs once an ExecRequest is prepared.
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
-use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -26,6 +24,7 @@ use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
+use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -179,9 +178,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
-        let retry_reason = ctx.retry_reason.clone();
-        let reason = retry_reason.clone().or_else(|| req.justification.clone());
-        let guardian_review_id = ctx.guardian_review_id.clone();
+        let reason = ctx
+            .retry_reason
+            .clone()
+            .or_else(|| req.justification.clone());
         Box::pin(async move {
             let native_cwd = match req.cwd.to_abs_path() {
                 Ok(c) => c,
@@ -192,24 +192,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     return ReviewDecision::Abort;
                 }
             };
-            if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
-                    session,
-                    turn,
-                    review_id,
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
-                        command,
-                        cwd: native_cwd.clone(),
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
-                    retry_reason,
-                )
-                .await;
-            }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
                 session
@@ -231,6 +213,22 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     .await
             })
             .await
+        })
+    }
+
+    fn approval_action(
+        &self,
+        req: &UnifiedExecRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> std::io::Result<ApprovalAction> {
+        Ok(ApprovalAction::ExecCommand {
+            id: ctx.call_id.to_string(),
+            command: req.command.clone(),
+            cwd: req.cwd.to_abs_path()?,
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
+            justification: req.justification.clone(),
+            tty: req.tty,
         })
     }
 
@@ -320,10 +318,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             req.sandbox_permissions,
             &file_system_sandbox_policy,
         );
-        let managed_network = managed_network_for_sandbox_permissions(
+        let managed_network = attempt.network_proxy(managed_network_for_sandbox_permissions(
             req.network.as_ref(),
             launch_sandbox_permissions,
-        );
+        ));
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         let (env, managed_network_context) = match managed_network {
             Some(network) => {
