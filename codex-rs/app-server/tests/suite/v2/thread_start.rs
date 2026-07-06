@@ -10,6 +10,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
@@ -57,6 +58,17 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const EXEC_POLICY_PARSE_WARNING_SUMMARY: &str = "Error parsing rules; custom rules not applied.";
+
+fn is_exec_policy_config_warning(notification: &JSONRPCNotification) -> bool {
+    notification.method == "configWarning"
+        && notification
+            .params
+            .as_ref()
+            .and_then(|params| params.get("summary"))
+            .and_then(Value::as_str)
+            == Some(EXEC_POLICY_PARSE_WARNING_SUMMARY)
+}
 
 async fn start_thread_with_model(
     mcp: &mut TestAppServer,
@@ -131,15 +143,10 @@ async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> 
 
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_matching_notification("exec-policy configWarning", |notification| {
-            notification.method == "configWarning"
-                && notification
-                    .params
-                    .as_ref()
-                    .and_then(|params| params.get("summary"))
-                    .and_then(Value::as_str)
-                    == Some("Error parsing rules; custom rules not applied.")
-        }),
+        mcp.read_stream_until_matching_notification(
+            "exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
     )
     .await??;
     let notification: ServerNotification = notification.try_into()?;
@@ -181,6 +188,50 @@ async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> 
     assert!(
         details.contains("Parse error"),
         "unexpected warning details: {details}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_does_not_repeat_initialize_exec_policy_warning() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let rules_dir = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    std::fs::write(rules_dir.join("broken.rules"), "prefix_rule(")?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(
+            "initialize exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadStartResponse = to_response(response)?;
+
+    let duplicate_warning = timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_matching_notification(
+            "duplicate exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
+    )
+    .await;
+    assert!(
+        duplicate_warning.is_err(),
+        "thread/start repeated the initialize exec-policy warning"
     );
 
     Ok(())
