@@ -211,6 +211,10 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
+    pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
+        self.codex.try_shutdown_if_idle().await
+    }
+
     /// Wait until the underlying session loop has terminated.
     pub async fn wait_until_terminated(&self) {
         self.codex.session_loop_termination.clone().await;
@@ -452,6 +456,9 @@ impl CodexThread {
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
+        let Some(_reservation) = self.codex.session.try_reserve_activity() else {
+            return;
+        };
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -472,6 +479,11 @@ impl CodexThread {
                 "items must not be empty".to_string(),
             ));
         }
+        let Some(_reservation) = self.codex.session.try_reserve_activity() else {
+            return Err(CodexErr::InvalidRequest(
+                "thread is shutting down".to_string(),
+            ));
+        };
 
         let turn_context = self.codex.session.new_default_turn().await;
         if self.codex.session.reference_context_item().await.is_none() {
@@ -634,6 +646,11 @@ impl CodexThread {
         server: &str,
         uri: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        let _reservation = self
+            .codex
+            .session
+            .try_reserve_activity()
+            .ok_or_else(|| anyhow::anyhow!("thread is shutting down"))?;
         let result = self
             .current_mcp_runtime()
             .await
@@ -651,6 +668,11 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        let _reservation = self
+            .codex
+            .session
+            .try_reserve_activity()
+            .ok_or_else(|| anyhow::anyhow!("thread is shutting down"))?;
         self.current_mcp_runtime()
             .await
             .manager_arc()
@@ -663,6 +685,11 @@ impl CodexThread {
     }
 
     pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let Some(_reservation) = self.codex.session.try_reserve_activity() else {
+            return Err(CodexErr::InvalidRequest(
+                "thread is shutting down".to_string(),
+            ));
+        };
         let mut elicitations = self.out_of_band_elicitations.lock().await;
         let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
@@ -675,6 +702,11 @@ impl CodexThread {
     }
 
     pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let Some(_reservation) = self.codex.session.try_reserve_activity() else {
+            return Err(CodexErr::InvalidRequest(
+                "thread is shutting down".to_string(),
+            ));
+        };
         let mut elicitations = self.out_of_band_elicitations.lock().await;
         if elicitations.count == 0 {
             return Err(CodexErr::InvalidRequest(

@@ -767,15 +767,57 @@ impl Codex {
 
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "submission ordering must remain serialized while a bounded-channel send waits"
+    )]
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
-        self.tx_sub
-            .send(sub)
-            .await
-            .map_err(|_| CodexErr::InternalAgentDied)?;
+        let is_shutdown = matches!(&sub.op, Op::Shutdown);
+        let _send_guard = self.session.submission_send_lock.lock().await;
+        let Some(reservation) = self.session.submission_lifecycle.try_reserve(is_shutdown) else {
+            if is_shutdown {
+                return Ok(());
+            }
+            return Err(CodexErr::InvalidRequest(
+                "thread is shutting down".to_string(),
+            ));
+        };
+        if self.tx_sub.send(sub).await.is_err() {
+            return Err(CodexErr::InternalAgentDied);
+        }
+        reservation.commit();
         Ok(())
+    }
+
+    /// Atomically submits shutdown only when no work is active, queued, or
+    /// being dispatched. Once claimed, new submissions and automatic idle work
+    /// are rejected so shutdown cannot race a newly starting turn.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the send lock serializes the idle claim with submission delivery"
+    )]
+    pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
+        let _send_guard = self.session.submission_send_lock.lock().await;
+        if self.session.submission_lifecycle.is_closing() {
+            return Ok(true);
+        }
+        let Some(reservation) = self.session.try_claim_idle_shutdown().await else {
+            return Ok(false);
+        };
+        let sub = Submission {
+            id: new_submission_id(),
+            op: Op::Shutdown,
+            client_user_message_id: None,
+            trace: current_span_w3c_trace_context(),
+        };
+        if self.tx_sub.send(sub).await.is_err() {
+            return Err(CodexErr::InternalAgentDied);
+        }
+        reservation.commit();
+        Ok(true)
     }
 
     /// Persist a thread-level memory mode update for the active session.
@@ -978,6 +1020,44 @@ fn push_prompt_fragment(
 }
 
 impl Session {
+    async fn has_idle_shutdown_blocker(&self) -> bool {
+        matches!(self.agent_status.borrow().clone(), AgentStatus::Running)
+            || self.conversation.running_state().await.is_some()
+            || *self.services.elicitations.subscribe().borrow()
+            || self.input_queue.has_pending_mailbox_items().await
+            || self.active_turn.lock().await.is_some()
+            || !self.list_background_terminals().await.is_empty()
+            || self
+                .services
+                .agent_control
+                .has_nonfinal_thread_spawn_children(self.thread_id)
+                .await
+    }
+
+    pub(crate) async fn try_claim_idle_shutdown(
+        &self,
+    ) -> Option<session::SubmissionReservation<'_>> {
+        let watcher_snapshot = self
+            .services
+            .agent_control
+            .completion_watcher_snapshot(self.thread_id);
+        if watcher_snapshot.0 > 0 || self.has_idle_shutdown_blocker().await {
+            return None;
+        }
+        let reservation = self.submission_lifecycle.try_reserve_idle_shutdown()?;
+        let watcher_recheck = self
+            .services
+            .agent_control
+            .completion_watcher_snapshot(self.thread_id);
+        if watcher_recheck.0 > 0
+            || watcher_recheck.1 != watcher_snapshot.1
+            || self.has_idle_shutdown_blocker().await
+        {
+            return None;
+        }
+        Some(reservation)
+    }
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
@@ -1194,6 +1274,9 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+        let Some(_reservation) = self.try_reserve_activity() else {
+            return;
+        };
         handlers::user_input_or_turn_inner(
             self,
             Uuid::now_v7().to_string(),
@@ -1757,9 +1840,27 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
+        let parent_completion_guard = if turn_context.multi_agent_version == MultiAgentVersion::V2
+            && matches!(
+                legacy_source,
+                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+            )
+            && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) = &turn_context.session_source
+        {
+            Some(
+                self.services
+                    .agent_control
+                    .register_completion_watcher(*parent_thread_id),
+            )
+        } else {
+            None
+        };
         self.send_event_raw(event).await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
             .await;
+        drop(parent_completion_guard);
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)

@@ -232,7 +232,6 @@ pub(crate) async fn run_codex_thread_one_shot(
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
     let session = Arc::clone(&io.session);
     let session_loop_termination = io.session_loop_termination.clone();
@@ -245,14 +244,7 @@ pub(crate) async fn run_codex_thread_one_shot(
             );
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
-                let _ = ops_tx
-                    .send(Submission {
-                        id: "shutdown".to_string(),
-                        op: Op::Shutdown {},
-                        client_user_message_id: None,
-                        trace: None,
-                    })
-                    .await;
+                let _ = io_for_bridge.submit(Op::Shutdown {}).await;
                 child_cancel.cancel();
                 break;
             }

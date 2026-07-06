@@ -1,3 +1,4 @@
+use super::session::SubmissionLifecycle;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
@@ -5518,6 +5519,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        submission_lifecycle: SubmissionLifecycle::default(),
+        submission_send_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -6481,6 +6484,94 @@ async fn submit_with_id_captures_current_span_trace_context() {
 
     let submitted = rx_sub.recv().await.expect("submission");
     assert_eq!(submitted.trace, Some(expected_trace));
+}
+
+#[tokio::test]
+async fn cancelled_submission_and_idle_shutdown_release_lifecycle_reservations() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+
+    tx_sub
+        .send(Submission {
+            id: "filler".into(),
+            op: Op::Interrupt,
+            client_user_message_id: None,
+            trace: None,
+        })
+        .await
+        .expect("fill submission channel");
+
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::clone(&session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let blocked_submit = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.submit(Op::Interrupt).await })
+    };
+    tokio::time::timeout(StdDuration::from_secs(1), async {
+        while session.submission_send_lock.try_lock().is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("submission should hold the send lock while blocking");
+    blocked_submit.abort();
+    assert!(
+        blocked_submit
+            .await
+            .expect_err("blocked submission should be cancelled")
+            .is_cancelled()
+    );
+    let released_submission = session
+        .try_claim_idle_shutdown()
+        .await
+        .expect("cancelled submission should release its lifecycle reservation");
+    drop(released_submission);
+    assert!(!session.submission_lifecycle.is_closing());
+
+    let blocked_shutdown = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.try_shutdown_if_idle().await })
+    };
+    tokio::time::timeout(StdDuration::from_secs(1), async {
+        while !session.submission_lifecycle.is_closing() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("idle shutdown should claim lifecycle state before blocking");
+    blocked_shutdown.abort();
+    assert!(
+        blocked_shutdown
+            .await
+            .expect_err("blocked idle shutdown should be cancelled")
+            .is_cancelled()
+    );
+    let released_shutdown = session
+        .try_claim_idle_shutdown()
+        .await
+        .expect("cancelled idle shutdown should release its lifecycle reservation");
+    drop(released_shutdown);
+    assert!(!session.submission_lifecycle.is_closing());
+
+    let filler = rx_sub.recv().await.expect("filler submission");
+    assert_eq!(filler.id, "filler");
+    assert!(
+        codex
+            .try_shutdown_if_idle()
+            .await
+            .expect("idle shutdown should submit after cancellation")
+    );
+    let shutdown = rx_sub.recv().await.expect("shutdown submission");
+    assert_eq!(shutdown.op, Op::Shutdown);
 }
 
 #[tokio::test]
@@ -7644,6 +7735,8 @@ where
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        submission_lifecycle: SubmissionLifecycle::default(),
+        submission_send_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -9949,6 +10042,43 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     );
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn idle_shutdown_claim_waits_for_submissions_and_blocks_automatic_turns() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let pending = sess
+        .try_reserve_activity()
+        .expect("open session should reserve a submission");
+    assert!(sess.try_claim_idle_shutdown().await.is_none());
+    drop(pending);
+
+    sess.input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "pending context".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+    assert!(sess.try_claim_idle_shutdown().await.is_none());
+    sess.input_queue.drain_mailbox_input_items().await;
+
+    let shutdown = sess
+        .try_claim_idle_shutdown()
+        .await
+        .expect("idle session should claim shutdown");
+    let item = user_message("synthetic idle input");
+    let err = sess
+        .try_start_turn_if_idle(vec![item.clone()])
+        .await
+        .expect_err("claimed shutdown should reject automatic idle work");
+
+    assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
+    assert_eq!(vec![item], err.into_input());
+    assert!(sess.active_turn.lock().await.is_none());
+    drop(shutdown);
 }
 
 #[tokio::test]

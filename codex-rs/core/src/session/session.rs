@@ -20,11 +20,107 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
+pub(crate) struct SubmissionLifecycle {
+    state: AtomicUsize,
+}
+
+const SUBMISSION_CLOSING: usize = 1 << (usize::BITS - 1);
+const SUBMISSION_COUNT_MASK: usize = SUBMISSION_CLOSING - 1;
+
+impl Default for SubmissionLifecycle {
+    fn default() -> Self {
+        Self {
+            state: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl SubmissionLifecycle {
+    pub(crate) fn is_closing(&self) -> bool {
+        self.state.load(Ordering::SeqCst) & SUBMISSION_CLOSING != 0
+    }
+
+    pub(crate) fn try_reserve(&self, close: bool) -> Option<SubmissionReservation<'_>> {
+        self.state
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+                if state & SUBMISSION_CLOSING != 0 {
+                    return None;
+                }
+                let count = state & SUBMISSION_COUNT_MASK;
+                assert!(count < SUBMISSION_COUNT_MASK, "submission count overflow");
+                Some((state + 1) | if close { SUBMISSION_CLOSING } else { 0 })
+            })
+            .ok()?;
+        Some(SubmissionReservation {
+            lifecycle: self,
+            clear_closing_on_drop: close,
+            active: true,
+        })
+    }
+
+    pub(crate) fn try_reserve_idle_shutdown(&self) -> Option<SubmissionReservation<'_>> {
+        self.state
+            .compare_exchange(
+                0,
+                SUBMISSION_CLOSING | 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .ok()
+            .map(|_| SubmissionReservation {
+                lifecycle: self,
+                clear_closing_on_drop: true,
+                active: true,
+            })
+    }
+
+    pub(crate) fn finish_submission(&self) {
+        self.release(/*clear_closing*/ false);
+    }
+
+    fn release(&self, clear_closing: bool) {
+        let _ = self
+            .state
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+                if state & SUBMISSION_COUNT_MASK == 0 {
+                    return None;
+                }
+                let mut next = state - 1;
+                if clear_closing {
+                    next &= !SUBMISSION_CLOSING;
+                }
+                Some(next)
+            });
+    }
+}
+
+pub(crate) struct SubmissionReservation<'a> {
+    lifecycle: &'a SubmissionLifecycle,
+    clear_closing_on_drop: bool,
+    active: bool,
+}
+
+impl SubmissionReservation<'_> {
+    pub(crate) fn commit(mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for SubmissionReservation<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.lifecycle.release(self.clear_closing_on_drop);
+        }
+    }
+}
+
 pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
@@ -41,6 +137,8 @@ pub(crate) struct Session {
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) submission_lifecycle: SubmissionLifecycle,
+    pub(crate) submission_send_lock: Mutex<()>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -463,6 +561,10 @@ impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id
+    }
+
+    pub(crate) fn try_reserve_activity(&self) -> Option<SubmissionReservation<'_>> {
+        self.submission_lifecycle.try_reserve(/*close*/ false)
     }
 
     /// Returns the identity shared by the root thread and all descendant threads.
@@ -1137,6 +1239,8 @@ impl Session {
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
+                submission_lifecycle: SubmissionLifecycle::default(),
+                submission_send_lock: Mutex::new(()),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,

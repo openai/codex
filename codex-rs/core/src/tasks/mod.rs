@@ -474,6 +474,9 @@ impl Session {
             return;
         }
 
+        let Some(reservation) = self.try_reserve_activity() else {
+            return;
+        };
         {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
@@ -481,6 +484,7 @@ impl Session {
             }
             *active_turn = Some(ActiveTurn::default());
         }
+        drop(reservation);
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())

@@ -11,6 +11,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::state::ActiveTurn;
 use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
@@ -2168,6 +2169,126 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             /*trigger_turn*/ false,
         )
     ));
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test intentionally blocks parent delivery while asserting the idle-shutdown gate"
+)]
+async fn multi_agent_v2_terminal_delivery_blocks_parent_idle_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let root = harness
+        .manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let root_thread_id = root.thread_id;
+    let root_thread = root.thread;
+    let root_control = root_thread.codex.session.services.agent_control.clone();
+    let child_path = AgentPath::root().join("worker_a").expect("child path");
+    let child_thread_id = root_control
+        .spawn_agent(
+            config,
+            text_input("hello worker"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(child_path),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    let child_session = Arc::clone(&child_thread.codex.session);
+    let child_submission_guard = timeout(
+        Duration::from_secs(5),
+        child_session.submission_send_lock.lock(),
+    )
+    .await
+    .expect("child input submission should dispatch");
+    drop(child_submission_guard);
+    child_session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
+    assert!(child_session.active_turn.lock().await.is_none());
+
+    let error_turn = child_session.new_default_turn().await;
+    *child_session.active_turn.lock().await = Some(ActiveTurn::default());
+    child_session
+        .send_event(
+            error_turn.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: "terminal turn error".to_string(),
+                codex_error_info: None,
+            }),
+        )
+        .await;
+    assert!(
+        root_thread
+            .codex
+            .session
+            .try_claim_idle_shutdown()
+            .await
+            .is_none(),
+        "an Error status must not hide an active child turn"
+    );
+    assert!(!root_thread.codex.session.submission_lifecycle.is_closing());
+    child_session.active_turn.lock().await.take();
+
+    let parent_send_guard = root_thread.codex.session.submission_send_lock.lock().await;
+    let child_turn = child_session.new_default_turn().await;
+    let terminal_delivery = tokio::spawn(async move {
+        child_session
+            .send_event(
+                child_turn.as_ref(),
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: child_turn.sub_id.clone(),
+                    last_agent_message: Some("done".to_string()),
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                }),
+            )
+            .await;
+    });
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let (pending, _) = root_control.completion_watcher_snapshot(root_thread_id);
+            if pending > 0 && is_final(&child_thread.agent_status().await) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("terminal status should publish while parent delivery is blocked");
+
+    assert!(
+        root_thread
+            .codex
+            .session
+            .try_claim_idle_shutdown()
+            .await
+            .is_none(),
+        "parent must remain reusable until child completion delivery finishes"
+    );
+    assert!(!root_thread.codex.session.submission_lifecycle.is_closing());
+
+    drop(parent_send_guard);
+    timeout(Duration::from_secs(5), terminal_delivery)
+        .await
+        .expect("terminal delivery should unblock")
+        .expect("terminal delivery task should succeed");
 }
 
 #[tokio::test]

@@ -42,6 +42,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
@@ -103,8 +104,65 @@ pub(crate) struct AgentControl {
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    completion_watchers: Arc<CompletionWatcherTracker>,
     /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
     rollout_budget: Arc<RolloutBudget>,
+}
+
+#[derive(Default)]
+struct CompletionWatcherTracker {
+    state: Mutex<HashMap<ThreadId, CompletionWatcherState>>,
+}
+
+#[derive(Default)]
+struct CompletionWatcherState {
+    pending: usize,
+    generation: u64,
+}
+
+pub(crate) struct CompletionWatcherGuard {
+    tracker: Arc<CompletionWatcherTracker>,
+    parent_thread_id: ThreadId,
+}
+
+impl CompletionWatcherTracker {
+    fn register(self: &Arc<Self>, parent_thread_id: ThreadId) -> CompletionWatcherGuard {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = state.entry(parent_thread_id).or_default();
+        entry.pending += 1;
+        entry.generation = entry.generation.wrapping_add(1);
+        CompletionWatcherGuard {
+            tracker: Arc::clone(self),
+            parent_thread_id,
+        }
+    }
+
+    fn snapshot(&self, parent_thread_id: ThreadId) -> (usize, u64) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .get(&parent_thread_id)
+            .map(|entry| (entry.pending, entry.generation))
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for CompletionWatcherGuard {
+    fn drop(&mut self) {
+        let mut state = self
+            .tracker
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = state.get_mut(&self.parent_thread_id) {
+            entry.pending = entry.pending.saturating_sub(1);
+        }
+    }
 }
 
 impl AgentControl {
@@ -135,6 +193,46 @@ impl AgentControl {
 
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
         self.rollout_budget.as_ref()
+    }
+
+    pub(crate) fn completion_watcher_snapshot(&self, parent_thread_id: ThreadId) -> (usize, u64) {
+        self.completion_watchers.snapshot(parent_thread_id)
+    }
+
+    pub(crate) fn register_completion_watcher(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> CompletionWatcherGuard {
+        self.completion_watchers.register(parent_thread_id)
+    }
+
+    pub(crate) async fn has_nonfinal_thread_spawn_children(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> bool {
+        let Ok(state) = self.upgrade() else {
+            return false;
+        };
+        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
+            return false;
+        };
+        for (child_thread_id, _) in children {
+            let Ok(child_thread) = state.get_thread(child_thread_id).await else {
+                continue;
+            };
+            if !is_final(&child_thread.agent_status().await)
+                || child_thread
+                    .codex
+                    .session
+                    .active_turn
+                    .lock()
+                    .await
+                    .is_some()
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Send rich user input items to an existing agent thread.
@@ -468,8 +566,10 @@ impl AgentControl {
         else {
             return;
         };
+        let completion_watcher = self.register_completion_watcher(parent_thread_id);
         let control = self.clone();
         tokio::spawn(async move {
+            let _completion_watcher = completion_watcher;
             let status = match control.subscribe_status(child_thread_id).await {
                 Ok(mut status_rx) => {
                     let mut status = status_rx.borrow().clone();
