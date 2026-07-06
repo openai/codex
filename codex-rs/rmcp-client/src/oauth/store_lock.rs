@@ -7,12 +7,12 @@
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use anyhow::Result;
 use codex_utils_home_dir::find_codex_home;
 
@@ -28,12 +28,46 @@ const LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock
 /// lock failure. Falling back while another process owns the aggregate-store lock could leave the
 /// newer credential in File while a stale Secrets entry remains preferred.
 #[derive(Debug, thiserror::Error)]
-#[error("failed to acquire MCP OAuth {store} aggregate-store lock")]
-pub(super) struct OAuthStoreLockFailure {
-    store: &'static str,
+pub(super) enum OAuthStoreLockFailure {
+    #[error("failed to resolve CODEX_HOME for MCP OAuth {store} aggregate-store lock")]
+    CodexHome {
+        store: OAuthStore,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to create MCP OAuth {store} aggregate-store lock directory {}", path.display())]
+    CreateDir {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to open MCP OAuth {store} aggregate-store lock {}", path.display())]
+    Open {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "timed out after {acquire_timeout:?} waiting for MCP OAuth {store} aggregate-store lock {}",
+        path.display()
+    )]
+    Timeout {
+        store: OAuthStore,
+        path: PathBuf,
+        acquire_timeout: Duration,
+    },
+    #[error("failed to lock MCP OAuth {store} aggregate-store lock {}", path.display())]
+    Lock {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum OAuthStore {
     File,
     Secrets,
@@ -46,11 +80,13 @@ impl OAuthStore {
             Self::Secrets => "secrets-store.lock",
         }
     }
+}
 
-    fn description(self) -> &'static str {
+impl std::fmt::Display for OAuthStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::File => "fallback file",
-            Self::Secrets => "encrypted secrets",
+            Self::File => f.write_str("fallback file"),
+            Self::Secrets => f.write_str("encrypted secrets"),
         }
     }
 }
@@ -62,14 +98,14 @@ pub(super) struct OAuthStoreLock {
 
 impl OAuthStoreLock {
     pub(super) fn acquire(store: OAuthStore) -> Result<Self> {
-        let codex_home = find_codex_home().context(OAuthStoreLockFailure {
-            store: store.description(),
-        })?;
-        Self::acquire_in(&codex_home, store, STORE_LOCK_ACQUIRE_TIMEOUT).context(
-            OAuthStoreLockFailure {
-                store: store.description(),
-            },
-        )
+        // This lock intentionally follows the existing local File/Secrets credential-store
+        // authority. Those stores are CODEX_HOME-backed today: if CODEX_HOME is unset they use
+        // the default home (`~/.codex`), and if an embedder has no local home/filesystem authority
+        // those stores already cannot operate. A future provider-backed credential store should
+        // provide its own matching lock authority instead of using this local path.
+        let codex_home = find_codex_home()
+            .map_err(|source| OAuthStoreLockFailure::CodexHome { store, source })?;
+        Self::acquire_in(&codex_home, store, STORE_LOCK_ACQUIRE_TIMEOUT)
     }
 
     pub(super) fn acquire_in(
@@ -79,7 +115,11 @@ impl OAuthStoreLock {
     ) -> Result<Self> {
         let path = oauth_store_lock_path(codex_home, store);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|source| OAuthStoreLockFailure::CreateDir {
+                store,
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
 
         let file = OpenOptions::new()
@@ -88,12 +128,10 @@ impl OAuthStoreLock {
             .create(true)
             .truncate(false)
             .open(&path)
-            .with_context(|| {
-                format!(
-                    "failed to open MCP OAuth {} store lock {}",
-                    store.description(),
-                    path.display()
-                )
+            .map_err(|source| OAuthStoreLockFailure::Open {
+                store,
+                path: path.clone(),
+                source,
             })?;
         let started = Instant::now();
         let mut reported_contention = false;
@@ -102,17 +140,18 @@ impl OAuthStoreLock {
             match file.try_lock() {
                 Ok(()) => return Ok(Self { _file: file }),
                 Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= acquire_timeout => {
-                    anyhow::bail!(
-                        "timed out after {acquire_timeout:?} waiting for MCP OAuth {} store lock {}",
-                        store.description(),
-                        path.display()
-                    );
+                    return Err(OAuthStoreLockFailure::Timeout {
+                        store,
+                        path,
+                        acquire_timeout,
+                    }
+                    .into());
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
                     if !reported_contention {
                         tracing::debug!(
                             target: LOCK_CONTENTION_EVENT_TARGET,
-                            store = store.description(),
+                            store = %store,
                             lock_path = %path.display(),
                             "waiting for another process to finish updating MCP OAuth store state"
                         );
@@ -121,13 +160,12 @@ impl OAuthStoreLock {
                     std::thread::sleep(STORE_LOCK_RETRY_SLEEP.min(acquire_timeout));
                 }
                 Err(error) => {
-                    return Err(std::io::Error::from(error)).with_context(|| {
-                        format!(
-                            "failed to lock MCP OAuth {} store lock {}",
-                            store.description(),
-                            path.display()
-                        )
-                    });
+                    return Err(OAuthStoreLockFailure::Lock {
+                        store,
+                        path,
+                        source: io::Error::from(error),
+                    }
+                    .into());
                 }
             }
         }
@@ -137,3 +175,7 @@ impl OAuthStoreLock {
 fn oauth_store_lock_path(codex_home: &Path, store: OAuthStore) -> PathBuf {
     codex_home.join(OAUTH_LOCK_DIR).join(store.lock_filename())
 }
+
+#[cfg(test)]
+#[path = "tests/store_lock_tests.rs"]
+mod tests;

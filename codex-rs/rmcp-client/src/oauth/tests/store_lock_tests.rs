@@ -1,7 +1,26 @@
+use std::path::Path;
+use std::process::Command;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
+use std::sync::PoisonError;
 use std::sync::mpsc;
 use std::time::Duration;
+use std::time::Instant;
 
+use anyhow::Context;
 use anyhow::Result;
+use codex_config::types::AuthKeyringBackendKind;
+use codex_keyring_store::tests::MockKeyringStore;
+use oauth2::AccessToken;
+use oauth2::RefreshToken;
+use oauth2::Scope;
+use oauth2::TokenResponse;
+use oauth2::basic::BasicTokenType;
+use pretty_assertions::assert_eq;
+use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::VendorExtraTokenFields;
+use tempfile::tempdir;
 use tracing::Event;
 use tracing::Id;
 use tracing::Metadata;
@@ -10,13 +29,11 @@ use tracing::span::Attributes;
 use tracing::span::Record;
 use tracing::subscriber::Interest;
 
-use super::MockKeyringStore;
-use super::TempCodexHome;
-use super::assert_tokens_match_without_expiry;
-use super::sample_tokens;
-use crate::oauth::OAuthStore;
-use crate::oauth::OAuthStoreLock;
-use crate::oauth::OAuthStoreLockFailure;
+use super::OAuthStore;
+use super::OAuthStoreLock;
+use super::OAuthStoreLockFailure;
+use crate::oauth::StoredOAuthTokens;
+use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::fallback_file_path;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::load_oauth_tokens_from_keyring;
@@ -26,9 +43,180 @@ use crate::oauth::save_oauth_tokens_to_file_with_lock_held;
 use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
-use codex_config::types::AuthKeyringBackendKind;
 
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
+
+struct TempCodexHome {
+    _guard: MutexGuard<'static, ()>,
+    _dir: tempfile::TempDir,
+}
+
+impl TempCodexHome {
+    fn new() -> Self {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let guard = LOCK
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let dir = tempdir().expect("create CODEX_HOME temp dir");
+        unsafe {
+            std::env::set_var("CODEX_HOME", dir.path());
+        }
+        Self {
+            _guard: guard,
+            _dir: dir,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        self._dir.path()
+    }
+}
+
+impl Drop for TempCodexHome {
+    fn drop(&mut self) {
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+    }
+}
+
+fn assert_tokens_match_without_expiry(actual: &StoredOAuthTokens, expected: &StoredOAuthTokens) {
+    assert_eq!(actual.server_name, expected.server_name);
+    assert_eq!(actual.url, expected.url);
+    assert_eq!(actual.client_id, expected.client_id);
+    assert_eq!(actual.expires_at, expected.expires_at);
+    assert_token_response_match_without_expiry(&actual.token_response, &expected.token_response);
+}
+
+fn assert_token_response_match_without_expiry(
+    actual: &WrappedOAuthTokenResponse,
+    expected: &WrappedOAuthTokenResponse,
+) {
+    let actual_response = &actual.0;
+    let expected_response = &expected.0;
+
+    assert_eq!(
+        actual_response.access_token().secret(),
+        expected_response.access_token().secret()
+    );
+    assert_eq!(actual_response.token_type(), expected_response.token_type());
+    assert_eq!(
+        actual_response.refresh_token().map(RefreshToken::secret),
+        expected_response.refresh_token().map(RefreshToken::secret),
+    );
+    assert_eq!(actual_response.scopes(), expected_response.scopes());
+    assert_eq!(
+        actual_response.extra_fields().0,
+        expected_response.extra_fields().0
+    );
+    assert_eq!(
+        actual_response.expires_in().is_some(),
+        expected_response.expires_in().is_some()
+    );
+}
+
+fn sample_tokens() -> StoredOAuthTokens {
+    let mut response = OAuthTokenResponse::new(
+        AccessToken::new("access-token".to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    response.set_refresh_token(Some(RefreshToken::new("refresh-token".to_string())));
+    response.set_scopes(Some(vec![
+        Scope::new("scope-a".to_string()),
+        Scope::new("scope-b".to_string()),
+    ]));
+    let expires_in = Duration::from_secs(3600);
+    response.set_expires_in(Some(&expires_in));
+    let expires_at = crate::oauth::compute_expires_at_millis(&response);
+
+    StoredOAuthTokens {
+        server_name: "test-server".to_string(),
+        url: "https://example.test".to_string(),
+        client_id: "client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at,
+    }
+}
+
+const LOCK_HOLDER_CHILD_TEST: &str =
+    "oauth::store_lock::tests::store_lock_is_released_when_holder_process_exits_child";
+const LOCK_HOLDER_READY_PATH_ENV: &str = "CODEX_OAUTH_STORE_LOCK_CHILD_READY_PATH";
+
+#[test]
+fn store_lock_is_released_when_holder_process_exits() -> Result<()> {
+    let env = TempCodexHome::new();
+    let ready_file = env.path().join("lock-holder-ready");
+    let mut child = Command::new(std::env::current_exe()?)
+        .arg("--exact")
+        .arg(LOCK_HOLDER_CHILD_TEST)
+        .arg("--ignored")
+        .env("CODEX_HOME", env.path())
+        .env(LOCK_HOLDER_READY_PATH_ENV, &ready_file)
+        .spawn()
+        .context("spawn OAuth store lock holder test process")?;
+
+    let test_result = (|| -> Result<()> {
+        let started = Instant::now();
+        while !ready_file.exists() {
+            if started.elapsed() > Duration::from_secs(/*secs*/ 5) {
+                anyhow::bail!("timed out waiting for child process to acquire OAuth store lock");
+            }
+            std::thread::sleep(Duration::from_millis(/*millis*/ 20));
+        }
+
+        let error = match OAuthStoreLock::acquire_in(
+            env.path(),
+            OAuthStore::File,
+            Duration::from_millis(/*millis*/ 100),
+        ) {
+            Ok(_) => {
+                anyhow::bail!("live holder process should keep the OAuth store lock unavailable")
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.downcast_ref::<OAuthStoreLockFailure>(),
+            Some(OAuthStoreLockFailure::Timeout { .. })
+        ));
+
+        child
+            .kill()
+            .context("kill OAuth store lock holder process")?;
+        let status = child
+            .wait()
+            .context("wait for killed OAuth store lock holder process")?;
+        assert!(!status.success());
+        let _lock = OAuthStoreLock::acquire_in(
+            env.path(),
+            OAuthStore::File,
+            Duration::from_secs(/*secs*/ 1),
+        )?;
+        Ok(())
+    })();
+
+    if let Ok(None) = child.try_wait() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    test_result
+}
+
+#[test]
+#[ignore = "child process for store_lock_is_released_when_holder_process_exits"]
+fn store_lock_is_released_when_holder_process_exits_child() -> Result<()> {
+    let ready_file = match std::env::var_os(LOCK_HOLDER_READY_PATH_ENV) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => return Ok(()),
+    };
+    let _lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    std::fs::write(ready_file, b"ready")?;
+    loop {
+        std::thread::sleep(Duration::from_secs(/*secs*/ 60));
+    }
+}
 
 #[test]
 fn auto_save_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {

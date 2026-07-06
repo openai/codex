@@ -874,9 +874,6 @@ mod tests {
 
     use codex_keyring_store::tests::MockKeyringStore;
 
-    #[path = "store_lock_tests.rs"]
-    mod store_lock_tests;
-
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
