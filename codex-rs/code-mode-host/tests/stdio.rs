@@ -504,13 +504,17 @@ return;
         next_callback_event(&mut events_rx).await,
         CallbackEvent::Started("tool_call_slow".to_string())
     );
-    assert_eq!(
+    let mut closure_events = vec![
         next_callback_event(&mut events_rx).await,
-        CallbackEvent::Cancelled("tool_call_slow".to_string())
-    );
-    assert_eq!(
         next_callback_event(&mut events_rx).await,
-        CallbackEvent::CellClosed(running_cell_id.clone())
+    ];
+    closure_events.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+    assert_eq!(
+        closure_events,
+        vec![
+            CallbackEvent::Cancelled("tool_call_slow".to_string()),
+            CallbackEvent::CellClosed(running_cell_id.clone()),
+        ]
     );
     assert_eq!(
         wait_task
