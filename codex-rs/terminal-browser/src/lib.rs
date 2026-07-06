@@ -26,6 +26,7 @@ pub use actions::BrowserToolOutput;
 pub use diagnostics::BrowserDoctorReport;
 pub use error::BrowserToolFailure;
 pub use error::classify_browser_error;
+pub use human_control::HumanControlToken;
 pub use input::BrowserInputModifiers;
 pub use input::BrowserKeyInput;
 pub use input::BrowserMouseButton;

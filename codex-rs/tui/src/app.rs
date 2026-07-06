@@ -539,6 +539,8 @@ pub(crate) struct App {
     pub(crate) terminal_browser_owner_thread_id: Option<ThreadId>,
     /// Invalidates delayed browser-profile approvals when the owned runtime changes.
     pub(crate) terminal_browser_generation: u64,
+    /// Closed runtimes retained by conversation so explicit reopen preserves profile selection.
+    terminal_browser_reopenable: HashMap<ThreadId, terminal_browser::ReopenableTerminalBrowser>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     pub(crate) enhanced_keys_supported: bool,
@@ -1059,6 +1061,7 @@ See the Codex keymap documentation for supported actions and examples."
             terminal_browser: None,
             terminal_browser_owner_thread_id: None,
             terminal_browser_generation: 0,
+            terminal_browser_reopenable: HashMap::new(),
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
@@ -1310,6 +1313,51 @@ See the Codex keymap documentation for supported actions and examples."
             self.handle_draw_pre_render(tui)?;
         }
 
+        if self.terminal_browser_human_control_active() {
+            let browser_viewport = self
+                .owned_screen_frame
+                .panel_body(crate::app_event::OwnedScreenPanel::Summary)
+                .map(crate::terminal_browser::browser_viewport);
+            match event {
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Char(']'),
+                    modifiers,
+                    kind,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    if kind == KeyEventKind::Press
+                        && let Some(target) = self.active_terminal_browser_control_target()
+                    {
+                        self.app_event_tx
+                            .unscoped()
+                            .send(AppEvent::EndTerminalBrowserControl { target });
+                    }
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::Key(key_event) => {
+                    self.forward_terminal_browser_key(key_event);
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::Paste(pasted) => {
+                    self.forward_terminal_browser_text(&pasted.replace("\r", "\n"));
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::MouseScroll(mouse_event) => {
+                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport);
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::MousePrimary(mouse_event) => {
+                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport);
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::MouseOther(mouse_event) => {
+                    self.forward_terminal_browser_mouse(mouse_event, browser_viewport);
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::FocusLost | TuiEvent::Draw | TuiEvent::Resize => {}
+            }
+        }
+
         if self.overlay.is_some() {
             let frame_canceled = self.owned_screen_frame.cancel_interaction();
             let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
@@ -1353,8 +1401,8 @@ See the Codex keymap documentation for supported actions and examples."
                 TuiEvent::MousePrimary(event) => {
                     self.handle_owned_screen_mouse_primary(tui, event);
                 }
-                // Raw browser input is routed after the browser panel is integrated into the
-                // owned-screen frame. Other app surfaces intentionally ignore these events.
+                // Non-conversation mouse events are emitted only during browser takeover and are
+                // consumed above. Other app surfaces intentionally ignore them.
                 TuiEvent::MouseOther(_) => {}
                 TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
@@ -1438,6 +1486,9 @@ See the Codex keymap documentation for supported actions and examples."
 impl Drop for App {
     fn drop(&mut self) {
         if let Some(browser) = self.terminal_browser.as_ref() {
+            browser.terminate();
+        }
+        for browser in self.terminal_browser_reopenable.values() {
             browser.terminate();
         }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {

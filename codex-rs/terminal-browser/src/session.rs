@@ -12,6 +12,7 @@ use crate::diagnostics::BrowserInstallation;
 use crate::diagnostics::inspect_installation;
 use crate::diagnostics::installation_report;
 use crate::diagnostics::unavailable_report;
+use crate::human_control::HumanControlStateTransition;
 use crate::human_control::HumanInputSender;
 use crate::human_control::QueuedHumanInput;
 use crate::network::BrowserNetworkPolicy;
@@ -55,6 +56,7 @@ pub(crate) struct Inner {
     pub(crate) human_control: AtomicBool,
     pub(crate) human_control_transition: AtomicBool,
     pub(crate) human_control_generation: AtomicU64,
+    pub(crate) human_handle_invalidation_pending: AtomicBool,
     pub(crate) human_input_tx: HumanInputSender,
     pub(crate) human_input_rx: Mutex<Option<tokio::sync::mpsc::Receiver<QueuedHumanInput>>>,
 }
@@ -117,6 +119,7 @@ impl TerminalBrowser {
                 human_control: AtomicBool::new(/*v*/ false),
                 human_control_transition: AtomicBool::new(/*v*/ false),
                 human_control_generation: AtomicU64::new(/*v*/ 0),
+                human_handle_invalidation_pending: AtomicBool::new(/*v*/ false),
                 human_input_tx,
                 human_input_rx: Mutex::new(Some(human_input_rx)),
             }),
@@ -199,7 +202,12 @@ impl TerminalBrowser {
     }
 
     pub fn set_visibility(&self, visible: bool) {
-        self.inner.update_view(|view| view.visible = visible);
+        if visible {
+            self.inner.update_view(|view| view.visible = true);
+        } else {
+            self.inner
+                .transition_human_control(HumanControlStateTransition::Hide);
+        }
     }
 
     pub fn resize(&self, size: TerminalSize) -> Result<()> {
@@ -255,10 +263,13 @@ impl Inner {
     }
 
     pub(crate) fn set_crashed(&self, message: String) {
-        self.human_control.store(/*val*/ false, Ordering::SeqCst);
-        self.human_control_generation
-            .fetch_add(/*val*/ 1, Ordering::SeqCst);
         self.update_view(|view| {
+            self.human_control_generation
+                .fetch_add(/*val*/ 1, Ordering::SeqCst);
+            if self.human_control.swap(/*val*/ false, Ordering::SeqCst) {
+                self.human_handle_invalidation_pending
+                    .store(/*val*/ true, Ordering::SeqCst);
+            }
             view.human_control = false;
             view.status = BrowserStatus::Crashed { message };
         });

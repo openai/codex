@@ -263,7 +263,7 @@ impl ChatWidget {
                     );
                     return;
                 }
-                self.app_event_tx.send(AppEvent::ToggleTerminalBrowser);
+                self.app_event_tx.send(AppEvent::ShowTerminalBrowser);
             }
             SlashCommand::Init => {
                 const INIT_PROMPT: &str = include_str!("../../prompt_for_init_command.md");
@@ -316,13 +316,19 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
-            SlashCommand::Sidebar | SlashCommand::Summary => {
+            SlashCommand::Sidebar => {
                 let Some(panel) = owned_screen_panel_for_command(cmd) else {
                     return;
                 };
                 self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
                     panel,
                     preference: None,
+                });
+            }
+            SlashCommand::Summary => {
+                self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
+                    panel: OwnedScreenPanel::Summary,
+                    preference: Some(OwnedScreenPanelPreference::Shown),
                 });
             }
             SlashCommand::Permissions => {

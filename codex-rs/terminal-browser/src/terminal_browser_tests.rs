@@ -8,6 +8,7 @@ use crate::TerminalSize;
 use crate::actions::bounded_snapshot_json;
 use crate::devtools::validated_websocket_url;
 use crate::handles::BrowserHandles;
+use crate::human_control::HumanControlStateTransition;
 use crate::process::carbonyl_args;
 use crate::screen::TerminalQueryResponder;
 use crate::screen::TerminalScreen;
@@ -67,6 +68,131 @@ async fn model_actions_are_rejected_during_human_control() {
         .expect_err("model action should be rejected");
 
     assert!(error.to_string().contains("human_control_active"));
+}
+
+#[tokio::test]
+async fn crash_exit_from_human_control_flushes_pending_handle_invalidation() {
+    let browser = TerminalBrowser::discover();
+    browser
+        .inner
+        .human_control
+        .store(/*val*/ true, Ordering::SeqCst);
+
+    browser.inner.set_crashed("input disconnected".to_string());
+
+    assert!(!browser.is_human_control_active());
+    assert!(
+        browser
+            .inner
+            .human_handle_invalidation_pending
+            .load(Ordering::SeqCst)
+    );
+    let _ = browser
+        .execute("test-session", "snapshot", serde_json::json!({}))
+        .await
+        .expect_err("browser session is not open");
+    assert!(
+        !browser
+            .inner
+            .human_handle_invalidation_pending
+            .load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
+async fn hiding_the_panel_ends_human_control_without_relocking_tool_dispatch() {
+    let browser = TerminalBrowser::discover();
+    *browser
+        .inner
+        .session_key
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("test-session".to_string());
+    browser
+        .inner
+        .human_control
+        .store(/*val*/ true, Ordering::SeqCst);
+    browser.inner.update_view(|view| {
+        view.visible = true;
+        view.human_control = true;
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 1),
+        browser.execute(
+            "test-session",
+            "set_visibility",
+            serde_json::json!({ "visible": false }),
+        ),
+    )
+    .await
+    .expect("visibility update must not deadlock")
+    .expect("visibility update should succeed");
+
+    assert!(!browser.is_human_control_active());
+    let view = browser.view();
+    assert!(!view.visible);
+    assert!(!view.human_control);
+}
+
+#[tokio::test]
+async fn hiding_the_panel_invalidates_a_queued_human_control_request() {
+    let browser = TerminalBrowser::discover();
+    let token = browser.human_control_token();
+    browser.set_visibility(/*visible*/ false);
+
+    let error = browser
+        .toggle_human_control(token)
+        .await
+        .expect_err("hidden panel should cancel the queued request");
+
+    assert_eq!(error.to_string(), "browser control transition was canceled");
+    assert!(!browser.is_human_control_active());
+    let view = browser.view();
+    assert!(!view.visible);
+    assert!(!view.human_control);
+}
+
+#[test]
+fn hiding_the_panel_wins_a_race_with_a_claimed_human_control_generation() {
+    for _ in 0..32 {
+        let browser = TerminalBrowser::discover();
+        browser.set_visibility(/*visible*/ true);
+        let control_generation = browser
+            .inner
+            .human_control_generation
+            .load(Ordering::SeqCst);
+        let active_generation = control_generation.wrapping_add(/*rhs*/ 1);
+        browser
+            .inner
+            .human_control_generation
+            .compare_exchange(
+                /*current*/ control_generation,
+                /*new*/ active_generation,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .expect("claim control generation");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(/*n*/ 2));
+        let activation_browser = browser.clone();
+        let activation_barrier = std::sync::Arc::clone(&barrier);
+        let activation = std::thread::spawn(move || {
+            activation_barrier.wait();
+            activation_browser.inner.transition_human_control(
+                HumanControlStateTransition::Activate {
+                    generation: active_generation,
+                },
+            )
+        });
+
+        barrier.wait();
+        browser.set_visibility(/*visible*/ false);
+        let _ = activation.join().expect("activation thread");
+
+        assert!(!browser.is_human_control_active());
+        let view = browser.view();
+        assert!(!view.visible);
+        assert!(!view.human_control);
+    }
 }
 
 #[test]

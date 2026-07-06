@@ -396,6 +396,7 @@ impl App {
         if self.terminal_browser_owner_thread_id == Some(thread_id) {
             self.reset_terminal_browser_for_thread_change().await;
         }
+        self.discard_reopenable_terminal_browser(thread_id);
         let remove_side_pane = self.installed_side_thread_id() == Some(thread_id);
         if remove_side_pane || self.side_threads.contains_key(&thread_id) {
             self.retire_thread(thread_id);

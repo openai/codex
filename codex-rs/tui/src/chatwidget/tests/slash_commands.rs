@@ -2953,32 +2953,84 @@ async fn raw_slash_command_reports_usage_for_invalid_arg() {
 }
 
 #[tokio::test]
-async fn panel_slash_commands_emit_toggle_and_preference_events() {
+async fn bare_browser_slash_command_emits_show_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::TerminalBrowser, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Browser);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::ShowTerminalBrowser)),
+        "expected bare /browser to show the browser panel; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn bare_summary_slash_command_selects_summary_panel() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    for (command, panel) in [
-        (SlashCommand::Sidebar, OwnedScreenPanel::Sidebar),
-        (SlashCommand::Summary, OwnedScreenPanel::Summary),
+    chat.dispatch_command(SlashCommand::Summary);
+
+    let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
+        _ => None,
+    });
+    assert_eq!(
+        event,
+        Some((
+            OwnedScreenPanel::Summary,
+            Some(OwnedScreenPanelPreference::Shown),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn summary_slash_command_args_set_panel_preference() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for (arg, preference) in [
+        ("on", OwnedScreenPanelPreference::Shown),
+        ("off", OwnedScreenPanelPreference::Hidden),
+        ("auto", OwnedScreenPanelPreference::Auto),
     ] {
-        chat.dispatch_command(command);
+        chat.dispatch_command_with_args(SlashCommand::Summary, arg.to_string(), Vec::new());
         let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
             AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
             _ => None,
         });
-        assert_eq!(event, Some((panel, None)));
+        assert_eq!(
+            event,
+            Some((OwnedScreenPanel::Summary, Some(preference))),
+            "unexpected /summary {arg} event"
+        );
+    }
+}
 
-        for (arg, preference) in [
-            ("on", OwnedScreenPanelPreference::Shown),
-            ("off", OwnedScreenPanelPreference::Hidden),
-            ("auto", OwnedScreenPanelPreference::Auto),
-        ] {
-            chat.dispatch_command_with_args(command, arg.to_string(), Vec::new());
-            let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
-                AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
-                _ => None,
-            });
-            assert_eq!(event, Some((panel, Some(preference))));
-        }
+#[tokio::test]
+async fn sidebar_slash_command_emits_toggle_and_preference_events() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Sidebar);
+    let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
+        _ => None,
+    });
+    assert_eq!(event, Some((OwnedScreenPanel::Sidebar, None)));
+
+    for (arg, preference) in [
+        ("on", OwnedScreenPanelPreference::Shown),
+        ("off", OwnedScreenPanelPreference::Hidden),
+        ("auto", OwnedScreenPanelPreference::Auto),
+    ] {
+        chat.dispatch_command_with_args(SlashCommand::Sidebar, arg.to_string(), Vec::new());
+        let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
+            _ => None,
+        });
+        assert_eq!(event, Some((OwnedScreenPanel::Sidebar, Some(preference))));
     }
 }
 

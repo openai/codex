@@ -36,6 +36,7 @@ use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_terminal_browser::HumanControlToken;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -215,6 +216,14 @@ pub(crate) struct ConversationTarget {
     pub(crate) thread_id: ThreadId,
 }
 
+/// Identifies one terminal-browser runtime and human-control epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalBrowserControlTarget {
+    pub(crate) owner_thread_id: ThreadId,
+    pub(crate) generation: u64,
+    pub(crate) token: HumanControlToken,
+}
+
 impl ConversationTarget {
     #[allow(dead_code)]
     pub(crate) fn origin(self) -> ConversationOrigin {
@@ -358,8 +367,8 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
 
-    /// Show or hide the terminal-browser panel.
-    ToggleTerminalBrowser,
+    /// Show and select the terminal-browser panel.
+    ShowTerminalBrowser,
 
     /// Close the terminal-browser process without forgetting a named profile.
     CloseTerminalBrowser,
@@ -382,8 +391,14 @@ pub(crate) enum AppEvent {
     /// Enter or leave exclusive keyboard-and-mouse browser control.
     ToggleTerminalBrowserControl,
 
+    /// Idempotently leave exclusive keyboard-and-mouse browser control.
+    EndTerminalBrowserControl {
+        target: TerminalBrowserControlTarget,
+    },
+
     /// A human-control transition completed.
     TerminalBrowserControlCompleted {
+        target: TerminalBrowserControlTarget,
         error: Option<String>,
     },
 

@@ -76,6 +76,13 @@ pub(super) enum OwnedScreenFrameFocus {
     Summary,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum OwnedScreenRightRailContent {
+    #[default]
+    Summary,
+    Browser,
+}
+
 impl OwnedScreenFrameFocus {
     fn panel(self) -> Option<OwnedScreenPanel> {
         match self {
@@ -140,6 +147,7 @@ pub(super) struct OwnedScreenFrameState {
     sidebar: PanelState,
     summary: PanelState,
     focus: OwnedScreenFrameFocus,
+    right_rail_content: OwnedScreenRightRailContent,
     last_activated_panel: Option<OwnedScreenPanel>,
     interaction: FrameInteraction,
     layout: Option<OwnedScreenFrameLayout>,
@@ -151,6 +159,7 @@ impl Default for OwnedScreenFrameState {
             sidebar: PanelState::new(SIDEBAR_DEFAULT_WIDTH),
             summary: PanelState::new(SUMMARY_DEFAULT_WIDTH),
             focus: OwnedScreenFrameFocus::Conversation,
+            right_rail_content: OwnedScreenRightRailContent::Summary,
             last_activated_panel: None,
             interaction: FrameInteraction::Idle,
             layout: None,
@@ -165,6 +174,20 @@ impl OwnedScreenFrameState {
 
     pub(super) fn focus_conversation(&mut self) {
         self.focus = OwnedScreenFrameFocus::Conversation;
+    }
+
+    pub(super) fn right_rail_content(&self) -> OwnedScreenRightRailContent {
+        self.right_rail_content
+    }
+
+    pub(super) fn set_right_rail_content(&mut self, content: OwnedScreenRightRailContent) {
+        self.right_rail_content = content;
+    }
+
+    pub(super) fn select_right_rail_content(&mut self, content: OwnedScreenRightRailContent) {
+        self.set_right_rail_content(content);
+        self.set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+        self.focus = OwnedScreenFrameFocus::Summary;
     }
 
     pub(super) fn preference(&self, panel: OwnedScreenPanel) -> OwnedScreenPanelPreference {

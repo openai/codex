@@ -19,6 +19,21 @@ const MAX_HUMAN_TEXT_BYTES: usize = 64 * 1024;
 
 pub(crate) struct HumanInputSender(mpsc::Sender<QueuedHumanInput>);
 
+/// Captures the browser-control epoch at the time a UI transition is requested.
+///
+/// Hiding or closing the browser invalidates outstanding tokens so delayed tasks cannot retake
+/// control after the user has dismissed the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HumanControlToken {
+    generation: u64,
+}
+
+pub(crate) enum HumanControlStateTransition {
+    Activate { generation: u64 },
+    Deactivate { generation: u64 },
+    Hide,
+}
+
 enum HumanInput {
     Key(BrowserKeyInput),
     Text(String),
@@ -28,6 +43,49 @@ enum HumanInput {
 pub(crate) struct QueuedHumanInput {
     generation: u64,
     input: HumanInput,
+}
+
+impl Inner {
+    pub(crate) fn transition_human_control(&self, transition: HumanControlStateTransition) -> bool {
+        let mut transitioned = false;
+        self.update_view(|view| match transition {
+            HumanControlStateTransition::Activate { generation }
+                if self.human_control_generation.load(Ordering::SeqCst) == generation =>
+            {
+                self.human_control.store(/*val*/ true, Ordering::SeqCst);
+                view.human_control = true;
+                view.visible = true;
+                transitioned = true;
+            }
+            HumanControlStateTransition::Deactivate { generation }
+                if self.human_control_generation.load(Ordering::SeqCst) == generation
+                    && self.human_control.load(Ordering::SeqCst) =>
+            {
+                self.human_control_generation
+                    .fetch_add(/*val*/ 1, Ordering::SeqCst);
+                if self.human_control.swap(/*val*/ false, Ordering::SeqCst) {
+                    self.human_handle_invalidation_pending
+                        .store(/*val*/ true, Ordering::SeqCst);
+                }
+                view.human_control = false;
+                transitioned = true;
+            }
+            HumanControlStateTransition::Hide => {
+                self.human_control_generation
+                    .fetch_add(/*val*/ 1, Ordering::SeqCst);
+                if self.human_control.swap(/*val*/ false, Ordering::SeqCst) {
+                    self.human_handle_invalidation_pending
+                        .store(/*val*/ true, Ordering::SeqCst);
+                }
+                view.human_control = false;
+                view.visible = false;
+                transitioned = true;
+            }
+            HumanControlStateTransition::Activate { .. }
+            | HumanControlStateTransition::Deactivate { .. } => {}
+        });
+        transitioned
+    }
 }
 
 impl TerminalBrowser {
@@ -40,7 +98,16 @@ impl TerminalBrowser {
         self.inner.human_control.load(Ordering::SeqCst)
     }
 
-    pub async fn toggle_human_control(&self) -> Result<bool> {
+    pub fn human_control_token(&self) -> HumanControlToken {
+        HumanControlToken {
+            generation: self.inner.human_control_generation.load(Ordering::SeqCst),
+        }
+    }
+
+    pub async fn toggle_human_control(
+        &self,
+        token: HumanControlToken,
+    ) -> Result<HumanControlToken> {
         self.inner
             .human_control_transition
             .compare_exchange(
@@ -53,19 +120,22 @@ impl TerminalBrowser {
         let _transition = HumanControlTransition {
             active: &self.inner.human_control_transition,
         };
+        anyhow::ensure!(
+            self.inner.human_control_generation.load(Ordering::SeqCst) == token.generation,
+            "browser control transition was canceled"
+        );
         if self.is_human_control_active() {
-            self.end_human_control().await?;
+            self.end_human_control(token).await
         } else {
-            self.begin_human_control().await?;
+            self.begin_human_control(token.generation).await
         }
-        Ok(self.is_human_control_active())
     }
 
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "entering human control must serialize the live-session check with model actions"
     )]
-    pub async fn begin_human_control(&self) -> Result<()> {
+    async fn begin_human_control(&self, control_generation: u64) -> Result<HumanControlToken> {
         if let Some(receiver) = self
             .inner
             .human_input_rx
@@ -83,6 +153,7 @@ impl TerminalBrowser {
             .operation
             .try_lock()
             .map_err(|_| anyhow!("browser_busy: another terminal browser action is running"))?;
+        self.flush_human_handle_invalidation().await;
         anyhow::ensure!(
             self.inner.session.lock().await.is_some(),
             "terminal browser is not open"
@@ -107,37 +178,69 @@ impl TerminalBrowser {
             process_running && view_running,
             "terminal browser is not running"
         );
+        let active_generation = control_generation.wrapping_add(/*rhs*/ 1);
         self.inner
             .human_control_generation
-            .fetch_add(/*val*/ 1, Ordering::SeqCst);
-        self.inner
-            .human_control
-            .store(/*val*/ true, Ordering::SeqCst);
-        self.inner.update_view(|view| {
-            view.human_control = true;
-            view.visible = true;
-        });
-        Ok(())
+            .compare_exchange(
+                /*current*/ control_generation,
+                /*new*/ active_generation,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .map_err(|_| anyhow!("browser control transition was canceled"))?;
+        if !self
+            .inner
+            .transition_human_control(HumanControlStateTransition::Activate {
+                generation: active_generation,
+            })
+        {
+            anyhow::bail!("browser control transition was canceled");
+        }
+        Ok(HumanControlToken {
+            generation: active_generation,
+        })
     }
 
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "ending human control must serialize handle invalidation with model actions"
     )]
-    pub async fn end_human_control(&self) -> Result<()> {
-        self.inner
-            .human_control_generation
-            .fetch_add(/*val*/ 1, Ordering::SeqCst);
-        self.inner
-            .human_control
-            .store(/*val*/ false, Ordering::SeqCst);
-        self.inner.update_view(|view| view.human_control = false);
+    pub async fn end_human_control(&self, token: HumanControlToken) -> Result<HumanControlToken> {
+        anyhow::ensure!(
+            self.inner
+                .transition_human_control(HumanControlStateTransition::Deactivate {
+                    generation: token.generation,
+                }),
+            "browser control transition was canceled"
+        );
         let _operation = self.inner.operation.lock().await;
+        self.flush_human_handle_invalidation().await;
+        Ok(HumanControlToken {
+            generation: token.generation.wrapping_add(/*rhs*/ 1),
+        })
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "deferred cleanup must serialize handle invalidation with model actions"
+    )]
+    pub async fn complete_human_control_cleanup(&self) {
+        let _operation = self.inner.operation.lock().await;
+        self.flush_human_handle_invalidation().await;
+    }
+
+    pub(crate) async fn flush_human_handle_invalidation(&self) {
+        if !self
+            .inner
+            .human_handle_invalidation_pending
+            .swap(/*val*/ false, Ordering::SeqCst)
+        {
+            return;
+        }
         let mut session = self.inner.session.lock().await;
         if let Some(session) = session.as_mut() {
             session.handles.clear();
         }
-        Ok(())
     }
 
     pub fn send_human_key(&self, input: BrowserKeyInput) -> Result<()> {

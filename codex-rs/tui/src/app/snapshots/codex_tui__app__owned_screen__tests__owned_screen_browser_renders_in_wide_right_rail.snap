@@ -1,0 +1,16 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+expression: terminal.backend()
+---
+" Tasks                      │committed response                                                              ┃ Summary | Browser                "
+"  New task  /new            │                                                                                ┃ running Example                  "
+"  Search    /resume         │                                                                                ┃ https://example.com              "
+"                            │                                                                                ┃Codex browser panel               "
+"  Current                   │                                                                                ┃interactive page                  "
+"  • Parent                  │                                                                                ┃ready                             "
+"                            │                                                                                ┃                                  "
+"                            │                                                                                ┃                                  "
+"                            │                                                                                ┃                                  "
+"                            │› draft sentinel                                                                ┃                                  "
+"                            │                                                                                ┃                                  "
+"                            │  gpt-5.5 default · /tmp/project                                                ┃ Esc hide                         "

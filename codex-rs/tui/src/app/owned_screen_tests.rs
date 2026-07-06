@@ -1,3 +1,8 @@
+use codex_terminal_browser::BrowserCell;
+use codex_terminal_browser::BrowserScreen;
+use codex_terminal_browser::BrowserStatus;
+use codex_terminal_browser::BrowserView;
+use codex_terminal_browser::TerminalBrowser;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -5,6 +10,7 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::time::Duration;
@@ -158,24 +164,85 @@ fn render_app(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
 }
 
 fn render_frame_app(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
+    render_frame_app_with_browser(app, width, height, /*browser_view*/ None)
+}
+
+fn render_frame_app_with_browser(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    browser_view: Option<&BrowserView>,
+) -> Terminal<TestBackend> {
     let frame_overlays_enabled = app.chat_widget.no_modal_or_popup_active();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
     terminal
         .draw(|frame| {
-            if let Some(rendered) = render_owned_screen_contents(
+            let browser = browser_view.map(|view| OwnedScreenBrowser {
+                runtime: None,
+                view,
+            });
+            let rendered = render_owned_screen_contents(
                 &mut app.chat_widget,
                 &mut app.owned_screen_frame,
                 frame.area(),
                 frame.buffer_mut(),
                 frame_overlays_enabled,
-            ) && app.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
-                && let Some((x, y)) = rendered.cursor
-            {
-                frame.set_cursor_position((x, y));
+                browser,
+            );
+            if let Some(rendered) = rendered {
+                if browser_view.is_some_and(|view| view.human_control)
+                    && let Some((x, y)) = rendered.browser_cursor
+                {
+                    frame.set_cursor_position((x, y));
+                } else if app.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
+                    && let Some((x, y)) = rendered.cursor
+                {
+                    frame.set_cursor_position((x, y));
+                }
             }
         })
         .expect("render owned frame");
     terminal
+}
+
+fn browser_view(human_control: bool, cursor: Option<(u16, u16)>) -> BrowserView {
+    let rows = 3;
+    let cols = 24;
+    let mut cells = vec![BrowserCell::default(); usize::from(rows * cols)];
+    for (row, text) in ["Codex browser panel", "interactive page", "ready"]
+        .into_iter()
+        .enumerate()
+    {
+        for (col, character) in text.chars().enumerate() {
+            cells[row * usize::from(cols) + col].text = character.to_string();
+        }
+    }
+    BrowserView {
+        status: BrowserStatus::Running,
+        title: Some("Example".to_string()),
+        url: Some("https://example.com".to_string()),
+        visible: true,
+        human_control,
+        screen: BrowserScreen {
+            rows,
+            cols,
+            cells,
+            cursor,
+        },
+    }
+}
+
+fn attach_visible_browser(app: &mut App) -> Arc<TerminalBrowser> {
+    let thread_id = ThreadId::new();
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .attach_thread(thread_id, /*receiver*/ None);
+    let browser = Arc::new(TerminalBrowser::discover());
+    browser.set_visibility(/*visible*/ true);
+    app.terminal_browser = Some(Arc::clone(&browser));
+    app.terminal_browser_owner_thread_id = Some(thread_id);
+    browser
 }
 
 fn is_following_bottom(app: &App, slot: PaneSlot) -> bool {
@@ -262,6 +329,154 @@ async fn owned_screen_explicit_summary_renders_as_narrow_overlay() {
         "owned_screen_explicit_summary_renders_as_narrow_overlay",
         terminal.backend()
     );
+}
+
+#[tokio::test]
+async fn owned_screen_browser_renders_in_wide_right_rail() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let browser = browser_view(/*human_control*/ false, Some((1, 2)));
+
+    let terminal = render_frame_app_with_browser(
+        &mut app,
+        /*width*/ 144,
+        /*height*/ 12,
+        Some(&browser),
+    );
+
+    assert_snapshot!(
+        "owned_screen_browser_renders_in_wide_right_rail",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
+async fn owned_screen_browser_preserves_narrow_overlay_chrome() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let browser = browser_view(/*human_control*/ false, Some((1, 2)));
+
+    let terminal = render_frame_app_with_browser(
+        &mut app,
+        /*width*/ 75,
+        /*height*/ 12,
+        Some(&browser),
+    );
+
+    assert_snapshot!(
+        "owned_screen_browser_preserves_narrow_overlay_chrome",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
+async fn browser_cursor_wins_over_composer_during_human_control() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    app.owned_screen_frame.focus_conversation();
+    let browser = browser_view(/*human_control*/ true, Some((1, 2)));
+
+    let mut terminal = render_frame_app_with_browser(
+        &mut app,
+        /*width*/ 144,
+        /*height*/ 12,
+        Some(&browser),
+    );
+    let body = app
+        .owned_screen_frame
+        .panel_body(OwnedScreenPanel::Summary)
+        .expect("browser panel body");
+    let viewport = browser_viewport(body);
+
+    assert_eq!(
+        terminal.get_cursor_position().expect("browser cursor"),
+        Position::new(
+            viewport.x.saturating_add(/*rhs*/ 2),
+            viewport.y.saturating_add(/*rhs*/ 1),
+        )
+    );
+}
+
+#[tokio::test]
+async fn escape_hides_a_docked_browser_without_hiding_the_shared_rail() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    let browser = attach_visible_browser(&mut app);
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    app.owned_screen_frame.layout(
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 144, /*height*/ 12,
+        ),
+        /*has_side*/ false,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    assert!(app.handle_owned_screen_navigation_key(
+        &mut tui,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    ));
+
+    assert!(!browser.view().visible);
+    assert_eq!(
+        app.owned_screen_frame.right_rail_content(),
+        OwnedScreenRightRailContent::Summary
+    );
+    assert_eq!(
+        app.owned_screen_frame.preference(OwnedScreenPanel::Summary),
+        OwnedScreenPanelPreference::Shown
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn outside_click_hides_a_browser_overlay() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    let browser = attach_visible_browser(&mut app);
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    app.owned_screen_frame.layout(
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 75, /*height*/ 12,
+        ),
+        /*has_side*/ false,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+
+    assert!(!browser.view().visible);
+    assert_eq!(
+        app.owned_screen_frame.right_rail_content(),
+        OwnedScreenRightRailContent::Summary
+    );
+    assert_eq!(
+        app.owned_screen_frame.preference(OwnedScreenPanel::Summary),
+        OwnedScreenPanelPreference::Hidden
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -570,6 +785,7 @@ async fn modal_scroll_bypasses_background_frame_panel() {
             direction: MouseScrollDirection::Down,
             column: summary.x,
             row: summary.y,
+            modifiers: KeyModifiers::NONE,
         },
     ));
     assert_eq!(

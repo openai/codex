@@ -13,6 +13,7 @@ use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
+use crate::terminal_browser::TerminalBrowserNetworkAvailability;
 use crate::terminal_browser::dynamic_tool_specs;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 use codex_app_server_client::AppServerClient;
@@ -1410,9 +1411,9 @@ fn thread_start_params_from_config(
     let dynamic_tools = (matches!(thread_params_mode, ThreadParamsMode::Embedded)
         && cfg!(any(target_os = "macos", target_os = "linux"))
         && config.features.enabled(Feature::TerminalBrowser)
-        && config.permissions.network_sandbox_policy().is_enabled()
-        && config.permissions.network.is_none())
-    .then(dynamic_tool_specs);
+        && TerminalBrowserNetworkAvailability::from_config(config)
+            == TerminalBrowserNetworkAvailability::Direct)
+        .then(dynamic_tool_specs);
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()

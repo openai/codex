@@ -525,6 +525,7 @@ impl App {
                     && !self.config.features.enabled(Feature::TerminalBrowser)
                 {
                     self.reset_terminal_browser_for_thread_change().await;
+                    self.discard_all_reopenable_terminal_browsers();
                 }
                 if windows_sandbox_changed {
                     self.propagate_windows_sandbox_turn_context();
@@ -550,6 +551,7 @@ impl App {
         }
         if terminal_browser_disabled {
             self.reset_terminal_browser_for_thread_change().await;
+            self.discard_all_reopenable_terminal_browsers();
         }
         if show_memory_enable_notice {
             self.chat_widget.add_memories_enable_notice();

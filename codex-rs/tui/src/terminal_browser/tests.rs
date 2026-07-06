@@ -259,13 +259,16 @@ fn terminal_browser_panel_snapshot() {
     );
     let mut buffer = Buffer::empty(area);
 
-    let viewport = render_view_for_test(&view, area, &mut buffer);
+    let rendered = render_view_for_test(&view, area, &mut buffer);
 
     assert_eq!(
-        viewport,
-        Rect::new(
-            /*x*/ 0, /*y*/ 2, /*width*/ 48, /*height*/ 7,
-        )
+        rendered,
+        super::panel::BrowserPanelRender {
+            viewport: Rect::new(
+                /*x*/ 0, /*y*/ 2, /*width*/ 48, /*height*/ 7,
+            ),
+            cursor: Some((0, 3)),
+        }
     );
     assert_snapshot!(buffer_text(&buffer, area));
 }

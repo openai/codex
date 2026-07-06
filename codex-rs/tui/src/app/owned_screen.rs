@@ -20,11 +20,16 @@ use ratatui::widgets::Widget;
 
 use super::owned_screen_frame::OwnedScreenFrameFocus;
 use super::owned_screen_frame::OwnedScreenFrameState;
+use super::owned_screen_frame::OwnedScreenRightRailContent;
 use super::owned_screen_resize::OwnedScreenLayout;
 use super::*;
 use crate::AltScreenBehavior;
 use crate::app_event::OwnedScreenPanel;
+use crate::app_event::OwnedScreenPanelPreference;
 use crate::key_hint::is_plain_text_key_event;
+use crate::terminal_browser::TerminalBrowserPanel;
+use crate::terminal_browser::browser_viewport;
+use crate::terminal_browser::render_browser_view;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
 use crate::tui::MouseScrollEvent;
@@ -42,7 +47,14 @@ pub(super) struct OwnedScreen {
 struct RenderedOwnedScreen {
     cursor: Option<(u16, u16)>,
     cursor_style: SetCursorStyle,
+    browser_cursor: Option<(u16, u16)>,
     selection_autoscroll_active: bool,
+}
+
+#[derive(Clone, Copy)]
+struct OwnedScreenBrowser<'a> {
+    runtime: Option<&'a Arc<TerminalBrowser>>,
+    view: &'a codex_terminal_browser::BrowserView,
 }
 
 impl OwnedScreen {
@@ -109,6 +121,7 @@ impl OwnedScreen {
         RenderedOwnedScreen {
             cursor: bottom_pane.cursor_pos(bottom_area),
             cursor_style: bottom_pane.cursor_style(bottom_area),
+            browser_cursor: None,
             selection_autoscroll_active,
         }
     }
@@ -395,9 +408,16 @@ impl App {
         let composer_is_empty = self.chat_widget.composer_is_empty();
         let frame_has_focus =
             self.owned_screen_frame.focus() != OwnedScreenFrameFocus::Conversation;
+        let hide_browser = matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code == KeyCode::Esc
+            && self.owned_screen_frame.focus() == OwnedScreenFrameFocus::Summary
+            && self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser;
         if (composer_is_empty || frame_has_focus)
             && self.owned_screen_frame.handle_navigation_key(key_event)
         {
+            if hide_browser {
+                self.hide_terminal_browser_panel();
+            }
             tui.frame_requester()
                 .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
             return true;
@@ -495,7 +515,17 @@ impl App {
 
         let route_to_frame =
             event.kind == MousePrimaryEventKind::Press || self.owned_screen_frame.is_interacting();
+        let browser_was_selected =
+            self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser;
         if route_to_frame && self.owned_screen_frame.handle_mouse_primary(event) {
+            if browser_was_selected
+                && self
+                    .owned_screen_frame
+                    .preference(OwnedScreenPanel::Summary)
+                    == OwnedScreenPanelPreference::Hidden
+            {
+                self.hide_terminal_browser_panel();
+            }
             if self.backtrack.primed {
                 self.reset_backtrack_state();
             }
@@ -673,6 +703,17 @@ impl App {
             self.chat_widget.cancel_owned_screen_split_drag();
             self.cancel_owned_screen_selection();
         }
+        let terminal_browser = self.terminal_browser_for_current_thread();
+        let terminal_browser_view = terminal_browser.as_ref().map(|browser| browser.view());
+        let browser_human_control = terminal_browser_view
+            .as_ref()
+            .is_some_and(|view| view.human_control);
+        let owned_screen_browser = terminal_browser_view
+            .as_ref()
+            .map(|view| OwnedScreenBrowser {
+                runtime: terminal_browser.as_ref(),
+                view,
+            });
         let mut rendered_area = Rect::default();
         let mut selection_autoscroll_active = false;
         tui.draw(/*height*/ u16::MAX, |frame| {
@@ -683,9 +724,13 @@ impl App {
                 rendered_area,
                 frame.buffer,
                 frame_overlays_enabled,
+                owned_screen_browser,
             ) {
                 selection_autoscroll_active = rendered.selection_autoscroll_active;
-                if self.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
+                if browser_human_control && let Some((x, y)) = rendered.browser_cursor {
+                    frame.set_cursor_style(SetCursorStyle::DefaultUserShape);
+                    frame.set_cursor_position((x, y));
+                } else if self.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
                     && let Some((x, y)) = rendered.cursor
                 {
                     frame.set_cursor_style(rendered.cursor_style);
@@ -707,6 +752,7 @@ fn render_owned_screen_contents(
     area: Rect,
     buffer: &mut Buffer,
     frame_overlays_enabled: bool,
+    terminal_browser: Option<OwnedScreenBrowser<'_>>,
 ) -> Option<RenderedOwnedScreen> {
     if !frame_overlays_enabled {
         owned_screen_frame.focus_conversation();
@@ -720,19 +766,50 @@ fn render_owned_screen_contents(
         owned_screen_frame.layout_without_overlay(area, has_side)
     };
     let layout = OwnedScreenLayout::new(frame_layout.center, has_side, focused, split_preference);
-    let rendered = render_layout(chat_widget, layout, focused, buffer);
+    let mut rendered = render_layout(chat_widget, layout, focused, buffer);
     owned_screen_frame.render_panel(
         OwnedScreenPanel::Sidebar,
         "Tasks",
         &sidebar_placeholder_lines(),
         buffer,
     );
-    owned_screen_frame.render_panel(
-        OwnedScreenPanel::Summary,
-        "Summary",
-        &summary_placeholder_lines(),
-        buffer,
-    );
+    match owned_screen_frame.right_rail_content() {
+        OwnedScreenRightRailContent::Summary => owned_screen_frame.render_panel(
+            OwnedScreenPanel::Summary,
+            "Summary",
+            &summary_placeholder_lines(),
+            buffer,
+        ),
+        OwnedScreenRightRailContent::Browser => {
+            if let (Some(browser), Some(body)) = (
+                terminal_browser,
+                owned_screen_frame.render_panel_chrome(
+                    OwnedScreenPanel::Summary,
+                    "Browser",
+                    buffer,
+                ),
+            ) {
+                if let Some(runtime) = browser.runtime {
+                    let panel = TerminalBrowserPanel::new(Arc::clone(runtime));
+                    if let Err(error) = panel.resize(body) {
+                        tracing::debug!(%error, "failed to resize terminal browser panel");
+                    }
+                }
+                let browser_render = render_browser_view(browser.view, body, buffer);
+                debug_assert_eq!(browser_render.viewport, browser_viewport(body));
+                if let Some(rendered) = &mut rendered {
+                    rendered.browser_cursor = browser_render.cursor;
+                }
+            } else {
+                owned_screen_frame.render_panel(
+                    OwnedScreenPanel::Summary,
+                    "Summary",
+                    &summary_placeholder_lines(),
+                    buffer,
+                );
+            }
+        }
+    }
     owned_screen_frame.render_dividers(buffer);
     rendered
 }

@@ -12,22 +12,45 @@ use codex_terminal_browser::BrowserNetworkPolicy;
 use codex_terminal_browser::BrowserStatus;
 use codex_terminal_browser::TerminalBrowser;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use ratatui::layout::Rect;
+use tokio::sync::oneshot;
 
 use super::App;
+use super::owned_screen_frame::OwnedScreenRightRailContent;
 use crate::app_event::AppEvent;
+use crate::app_event::TerminalBrowserControlTarget;
 use crate::app_event::TerminalBrowserProfileApproval;
 use crate::app_event::TerminalBrowserProfileCommand;
+use crate::terminal_browser::TerminalBrowserNetworkAvailability;
+use crate::terminal_browser::browser_key_input;
+use crate::terminal_browser::browser_mouse_input;
 use crate::terminal_browser::profile_approval_view_params;
 
+pub(super) struct ReopenableTerminalBrowser {
+    browser: Arc<TerminalBrowser>,
+    closed: oneshot::Receiver<()>,
+}
+
+impl ReopenableTerminalBrowser {
+    pub(super) fn terminate(&self) {
+        self.browser.terminate();
+    }
+}
+
 impl App {
+    fn terminal_browser_network_availability(&self) -> TerminalBrowserNetworkAvailability {
+        TerminalBrowserNetworkAvailability::from_config(self.chat_widget.config_ref())
+    }
+
     fn terminal_browser_network_policy(&self) -> BrowserNetworkPolicy {
-        let config = self.chat_widget.config_ref();
-        if config.permissions.network_sandbox_policy().is_enabled()
-            && config.permissions.network.is_none()
-        {
-            BrowserNetworkPolicy::Direct
-        } else {
-            BrowserNetworkPolicy::Disabled
+        match self.terminal_browser_network_availability() {
+            TerminalBrowserNetworkAvailability::Direct => BrowserNetworkPolicy::Direct,
+            TerminalBrowserNetworkAvailability::Restricted
+            | TerminalBrowserNetworkAvailability::ManagedProxyUnsupported => {
+                BrowserNetworkPolicy::Disabled
+            }
         }
     }
 
@@ -73,19 +96,33 @@ impl App {
             return None;
         }
 
-        if self.terminal_browser_owner_thread_id != Some(owner_thread_id) {
+        if self.terminal_browser.is_some()
+            && self.terminal_browser_owner_thread_id != Some(owner_thread_id)
+        {
             self.reset_terminal_browser_for_thread_change().await;
         }
 
         if self.terminal_browser.is_none() {
-            let browser = self.discover_terminal_browser();
-            let mut updates = browser.subscribe();
-            let app_event_tx = self.app_event_tx.clone();
-            tokio::spawn(async move {
-                while updates.changed().await.is_ok() {
-                    app_event_tx.send(AppEvent::TerminalBrowserUpdated);
+            let (browser, needs_update_watcher) = if let Some(reopenable) =
+                self.terminal_browser_reopenable.remove(&owner_thread_id)
+            {
+                let ReopenableTerminalBrowser { browser, closed } = reopenable;
+                if closed.await.is_err() {
+                    browser.close().await;
                 }
-            });
+                (browser, false)
+            } else {
+                (self.discover_terminal_browser(), true)
+            };
+            if needs_update_watcher {
+                let mut updates = browser.subscribe();
+                let app_event_tx = self.app_event_tx.unscoped();
+                tokio::spawn(async move {
+                    while updates.changed().await.is_ok() {
+                        app_event_tx.send(AppEvent::TerminalBrowserUpdated);
+                    }
+                });
+            }
             self.terminal_browser_generation =
                 self.terminal_browser_generation.wrapping_add(/*rhs*/ 1);
             self.terminal_browser = Some(browser);
@@ -99,7 +136,7 @@ impl App {
     }
 
     async fn terminal_browser_for_active_thread(&mut self) -> Option<Arc<TerminalBrowser>> {
-        let owner_thread_id = self.current_displayed_thread_id()?;
+        let owner_thread_id = self.chat_widget.focused_thread_id()?;
         self.terminal_browser_for_thread(owner_thread_id).await
     }
 
@@ -108,7 +145,7 @@ impl App {
         request_thread_id: &str,
     ) -> bool {
         terminal_browser_request_matches_thread(
-            self.current_displayed_thread_id(),
+            self.chat_widget.focused_thread_id(),
             request_thread_id,
         )
     }
@@ -117,7 +154,135 @@ impl App {
         self.terminal_browser.is_some()
             && self
                 .terminal_browser_owner_thread_id
-                .is_some_and(|owner| self.current_displayed_thread_id() == Some(owner))
+                .is_some_and(|owner| self.chat_widget.focused_thread_id() == Some(owner))
+    }
+
+    pub(super) fn terminal_browser_for_current_thread(&self) -> Option<Arc<TerminalBrowser>> {
+        self.terminal_browser_owned_by_current_thread()
+            .then(|| self.terminal_browser.clone())
+            .flatten()
+    }
+
+    pub(super) fn terminal_browser_control_target(&self) -> Option<TerminalBrowserControlTarget> {
+        let owner_thread_id = self.terminal_browser_owner_thread_id?;
+        let browser = self.terminal_browser_for_current_thread()?;
+        Some(TerminalBrowserControlTarget {
+            owner_thread_id,
+            generation: self.terminal_browser_generation,
+            token: browser.human_control_token(),
+        })
+    }
+
+    pub(super) fn active_terminal_browser_control_target(
+        &self,
+    ) -> Option<TerminalBrowserControlTarget> {
+        let target = self.terminal_browser_control_target()?;
+        self.terminal_browser_for_current_thread()?
+            .is_human_control_active()
+            .then_some(target)
+    }
+
+    pub(super) fn terminal_browser_control_target_is_current(
+        &self,
+        target: TerminalBrowserControlTarget,
+    ) -> bool {
+        self.terminal_browser_control_target() == Some(target)
+    }
+
+    pub(super) fn terminal_browser_human_control_active(&self) -> bool {
+        self.has_owned_screen()
+            && self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser
+            && self
+                .owned_screen_frame
+                .panel_body(crate::app_event::OwnedScreenPanel::Summary)
+                .is_some()
+            && self
+                .terminal_browser_for_current_thread()
+                .is_some_and(|browser| browser.is_human_control_active())
+    }
+
+    pub(super) fn sync_terminal_browser_panel(&mut self) -> bool {
+        if !self.has_owned_screen() {
+            return false;
+        }
+        let browser_view = self
+            .terminal_browser_for_current_thread()
+            .map(|browser| browser.view());
+        if let Some(view) = &browser_view {
+            if view.visible
+                && self.owned_screen_frame.right_rail_content()
+                    != OwnedScreenRightRailContent::Browser
+            {
+                self.owned_screen_frame
+                    .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+            } else if self.owned_screen_frame.right_rail_content()
+                == OwnedScreenRightRailContent::Browser
+                && !view.visible
+            {
+                self.owned_screen_frame
+                    .set_right_rail_content(OwnedScreenRightRailContent::Summary);
+            }
+        }
+        browser_view.is_some_and(|view| view.visible && view.human_control)
+    }
+
+    pub(super) fn hide_terminal_browser_panel(&mut self) {
+        if let Some(browser) = self.terminal_browser_for_current_thread() {
+            let invalidate_human_handles = browser.is_human_control_active();
+            browser.set_visibility(/*visible*/ false);
+            if invalidate_human_handles {
+                tokio::spawn(async move {
+                    browser.complete_human_control_cleanup().await;
+                });
+            }
+        }
+        if self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser {
+            self.owned_screen_frame
+                .set_right_rail_content(OwnedScreenRightRailContent::Summary);
+        }
+    }
+
+    pub(super) fn forward_terminal_browser_key(&mut self, key_event: KeyEvent) {
+        let Some(input) = browser_key_input(key_event) else {
+            return;
+        };
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        if let Err(error) = browser.send_human_key(input) {
+            self.chat_widget
+                .add_error_message(format!("Failed to send browser key: {error}"));
+        }
+    }
+
+    pub(super) fn forward_terminal_browser_text(&mut self, text: &str) {
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        if let Err(error) = browser.send_human_text(text) {
+            self.chat_widget
+                .add_error_message(format!("Failed to paste into browser: {error}"));
+        }
+    }
+
+    pub(super) fn forward_terminal_browser_mouse(
+        &mut self,
+        mouse_event: MouseEvent,
+        viewport: Option<Rect>,
+    ) {
+        let Some(viewport) = viewport else {
+            return;
+        };
+        let Some(input) = browser_mouse_input(mouse_event, viewport) else {
+            return;
+        };
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        if let Err(error) = browser.send_human_mouse(input) {
+            self.chat_widget
+                .add_error_message(format!("Failed to send browser mouse event: {error}"));
+        }
     }
 
     pub(super) async fn terminal_browser_for_active_request(
@@ -138,7 +303,22 @@ impl App {
         }
     }
 
-    pub(super) async fn toggle_terminal_browser(&mut self) {
+    pub(super) async fn show_terminal_browser(&mut self) {
+        if !self.has_owned_screen() {
+            self.chat_widget.add_info_message(
+                "Terminal browser panels require `tui.alternate_screen = \"always\"`.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+        if let Some(message) = self
+            .terminal_browser_network_availability()
+            .unavailable_message()
+        {
+            self.chat_widget
+                .add_info_message(message.to_string(), /*hint*/ None);
+            return;
+        }
         let Some(browser) = self.terminal_browser_for_active_thread().await else {
             self.chat_widget.add_info_message(
                 "Terminal browser is disabled for this session.".to_string(),
@@ -158,21 +338,40 @@ impl App {
             return;
         }
 
-        browser.set_visibility(!browser.view().visible);
-        self.app_event_tx.send(AppEvent::TerminalBrowserUpdated);
+        browser.set_visibility(/*visible*/ true);
+        self.app_event_tx
+            .unscoped()
+            .send(AppEvent::TerminalBrowserUpdated);
     }
 
     pub(super) fn close_terminal_browser(&mut self) {
-        let Some(browser) = self.terminal_browser.as_ref().cloned() else {
+        let Some(owner_thread_id) = self
+            .terminal_browser_owner_thread_id
+            .filter(|_| self.terminal_browser_owned_by_current_thread())
+        else {
             self.chat_widget.add_info_message(
                 "Terminal browser is not enabled.".to_string(),
                 /*hint*/ None,
             );
             return;
         };
-        let app_event_tx = self.app_event_tx.clone();
+        let Some(browser) = self.take_terminal_browser_for_thread_change() else {
+            return;
+        };
+        let (closed_tx, closed_rx) = oneshot::channel();
+        if let Some(replaced) = self.terminal_browser_reopenable.insert(
+            owner_thread_id,
+            ReopenableTerminalBrowser {
+                browser: Arc::clone(&browser),
+                closed: closed_rx,
+            },
+        ) {
+            replaced.terminate();
+        }
+        let app_event_tx = self.app_event_tx.unscoped();
         tokio::spawn(async move {
             browser.close().await;
+            let _ = closed_tx.send(());
             app_event_tx.send(AppEvent::TerminalBrowserClosed);
         });
     }
@@ -183,6 +382,10 @@ impl App {
             self.terminal_browser_generation.wrapping_add(/*rhs*/ 1);
         let browser = self.terminal_browser.take()?;
         browser.set_visibility(/*visible*/ false);
+        if self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser {
+            self.owned_screen_frame
+                .set_right_rail_content(OwnedScreenRightRailContent::Summary);
+        }
         Some(browser)
     }
 
@@ -191,21 +394,43 @@ impl App {
             return;
         };
         browser.close().await;
-        self.app_event_tx.send(AppEvent::TerminalBrowserClosed);
+        self.app_event_tx
+            .unscoped()
+            .send(AppEvent::TerminalBrowserClosed);
     }
 
     pub(super) fn reset_terminal_browser_for_focus_change(&mut self) {
         let Some(browser) = self.take_terminal_browser_for_thread_change() else {
             return;
         };
-        let app_event_tx = self.app_event_tx.clone();
+        let app_event_tx = self.app_event_tx.unscoped();
         app_event_tx.send(AppEvent::TerminalBrowserClosed);
         tokio::spawn(async move {
             browser.close().await;
         });
     }
 
+    pub(super) fn discard_reopenable_terminal_browser(&mut self, thread_id: ThreadId) {
+        if let Some(browser) = self.terminal_browser_reopenable.remove(&thread_id) {
+            browser.terminate();
+        }
+    }
+
+    pub(super) fn discard_all_reopenable_terminal_browsers(&mut self) {
+        for (_, browser) in self.terminal_browser_reopenable.drain() {
+            browser.terminate();
+        }
+    }
+
     pub(super) async fn doctor_terminal_browser(&mut self) {
+        if let Some(message) = self
+            .terminal_browser_network_availability()
+            .unavailable_message()
+        {
+            self.chat_widget
+                .add_info_message(message.to_string(), /*hint*/ None);
+            return;
+        }
         let Some(browser) = self.terminal_browser_for_active_thread().await else {
             self.chat_widget
                 .add_error_message("Terminal browser is not enabled.".to_string());
@@ -287,7 +512,7 @@ impl App {
         approval: &TerminalBrowserProfileApproval,
     ) -> bool {
         self.terminal_browser.is_some()
-            && self.current_displayed_thread_id() == Some(approval.thread_id)
+            && self.chat_widget.focused_thread_id() == Some(approval.thread_id)
             && self.terminal_browser_owner_thread_id == Some(approval.thread_id)
             && self.terminal_browser_generation == approval.generation
     }
@@ -319,16 +544,70 @@ impl App {
     }
 
     pub(super) async fn toggle_terminal_browser_control(&mut self) {
+        if !self.has_owned_screen() {
+            self.chat_widget.add_info_message(
+                "Terminal browser control requires `tui.alternate_screen = \"always\"`."
+                    .to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
         let Some(browser) = self.terminal_browser_for_active_thread().await else {
             self.chat_widget
                 .add_error_message("Terminal browser is not enabled.".to_string());
             return;
         };
-        let app_event_tx = self.app_event_tx.clone();
+        let Some(target) = self.terminal_browser_control_target() else {
+            return;
+        };
+        if !browser.view().visible
+            || self.owned_screen_frame.right_rail_content() != OwnedScreenRightRailContent::Browser
+        {
+            self.chat_widget.add_info_message(
+                "Show the terminal browser before taking control.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+        let app_event_tx = self.app_event_tx.unscoped();
         tokio::spawn(async move {
-            let result = browser.toggle_human_control().await;
+            let result = browser.toggle_human_control(target.token).await;
+            let mut completion_target = target;
+            let error = match result {
+                Ok(token) => {
+                    completion_target.token = token;
+                    None
+                }
+                Err(error) => Some(error.to_string()),
+            };
             app_event_tx.send(AppEvent::TerminalBrowserControlCompleted {
-                error: result.err().map(|error| error.to_string()),
+                target: completion_target,
+                error,
+            });
+        });
+    }
+
+    pub(super) fn end_terminal_browser_control(&mut self, target: TerminalBrowserControlTarget) {
+        if !self.terminal_browser_control_target_is_current(target) {
+            return;
+        }
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        let app_event_tx = self.app_event_tx.unscoped();
+        tokio::spawn(async move {
+            let result = browser.end_human_control(target.token).await;
+            let mut completion_target = target;
+            let error = match result {
+                Ok(token) => {
+                    completion_target.token = token;
+                    None
+                }
+                Err(error) => Some(error.to_string()),
+            };
+            app_event_tx.send(AppEvent::TerminalBrowserControlCompleted {
+                target: completion_target,
+                error,
             });
         });
     }

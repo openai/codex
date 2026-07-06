@@ -2,7 +2,7 @@
 source: tui/src/app/owned_screen_tests.rs
 expression: terminal.backend()
 ---
-" Tasks                      │committed response                                                              │ Summary                          "
+" Tasks                      │committed response                                                              │ Summary | Browser                "
 "  New task  /new            │                                                                                │  Focused thread                  "
 "  Search    /resume         │                                                                                │                                  "
 "                            │                                                                                │  Environment, plan, agents,      "

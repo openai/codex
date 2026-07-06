@@ -4,9 +4,12 @@
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
 use super::conversation_events::normalize_conversation_event;
+use super::owned_screen_frame::OwnedScreenRightRailContent;
 use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::app_event::ConversationOrigin;
+use crate::app_event::OwnedScreenPanel;
+use crate::app_event::OwnedScreenPanelPreference;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
@@ -58,6 +61,8 @@ impl App {
         conversation_origin: Option<ConversationOrigin>,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        let conversation_command_targets_focused =
+            conversation_origin.is_none_or(|origin| origin.pane == self.chat_widget.focused_slot());
         match event {
             AppEvent::FromConversation { .. } => {
                 unreachable!("conversation event envelope should be normalized before dispatch")
@@ -89,17 +94,36 @@ impl App {
                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             }
             AppEvent::SetOwnedScreenPanel { panel, preference } => {
-                if !self.has_owned_screen() {
-                    self.chat_widget.add_info_message(
-                        "Panels require `tui.alternate_screen = \"always\"`.".to_string(),
-                        /*details*/ None,
-                    );
-                } else if let Some(preference) = preference {
-                    self.owned_screen_frame.set_preference(panel, preference);
-                } else {
-                    self.owned_screen_frame.toggle(panel);
+                if conversation_command_targets_focused {
+                    if !self.has_owned_screen() {
+                        self.chat_widget.add_info_message(
+                            "Panels require `tui.alternate_screen = \"always\"`.".to_string(),
+                            /*details*/ None,
+                        );
+                    } else {
+                        if panel == OwnedScreenPanel::Summary && preference.is_some() {
+                            self.hide_terminal_browser_panel();
+                            tui.set_raw_mouse_events(/*raw_mouse_events*/ false);
+                            self.owned_screen_frame
+                                .select_right_rail_content(OwnedScreenRightRailContent::Summary);
+                        }
+                        if let Some(preference) = preference {
+                            self.owned_screen_frame.set_preference(panel, preference);
+                        } else {
+                            self.owned_screen_frame.toggle(panel);
+                            if panel == OwnedScreenPanel::Summary
+                                && self.owned_screen_frame.right_rail_content()
+                                    == OwnedScreenRightRailContent::Browser
+                                && self.owned_screen_frame.preference(panel)
+                                    == OwnedScreenPanelPreference::Hidden
+                            {
+                                self.hide_terminal_browser_panel();
+                                tui.set_raw_mouse_events(/*raw_mouse_events*/ false);
+                            }
+                        }
+                    }
+                    tui.frame_requester().schedule_frame();
                 }
-                tui.frame_requester().schedule_frame();
             }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
@@ -428,15 +452,23 @@ impl App {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
             }
-            AppEvent::ToggleTerminalBrowser => {
-                self.toggle_terminal_browser().await;
-                tui.frame_requester().schedule_frame();
+            AppEvent::ShowTerminalBrowser => {
+                if conversation_command_targets_focused {
+                    self.show_terminal_browser().await;
+                    let raw_mouse_events = self.sync_terminal_browser_panel();
+                    tui.set_raw_mouse_events(raw_mouse_events);
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::CloseTerminalBrowser => {
-                self.close_terminal_browser();
+                if conversation_command_targets_focused {
+                    self.close_terminal_browser();
+                }
             }
             AppEvent::DoctorTerminalBrowser => {
-                self.doctor_terminal_browser().await;
+                if conversation_command_targets_focused {
+                    self.doctor_terminal_browser().await;
+                }
             }
             AppEvent::TerminalBrowserDoctorCompleted { healthy, summary } => {
                 if healthy {
@@ -446,50 +478,60 @@ impl App {
                 }
             }
             AppEvent::ManageTerminalBrowserProfile(command) => {
-                self.manage_terminal_browser_profile(command).await;
+                if conversation_command_targets_focused {
+                    self.manage_terminal_browser_profile(command).await;
+                }
             }
             AppEvent::ApproveTerminalBrowserProfile(approval) => {
                 self.approve_terminal_browser_profile(approval).await;
             }
             AppEvent::ToggleTerminalBrowserControl => {
-                self.toggle_terminal_browser_control().await;
+                if conversation_command_targets_focused {
+                    self.toggle_terminal_browser_control().await;
+                }
             }
-            AppEvent::TerminalBrowserControlCompleted { error } => {
-                let active = self.terminal_browser_owned_by_current_thread()
+            AppEvent::EndTerminalBrowserControl { target } => {
+                if conversation_command_targets_focused {
+                    self.end_terminal_browser_control(target);
+                }
+            }
+            AppEvent::TerminalBrowserControlCompleted { target, error } => {
+                let current = self.terminal_browser_control_target_is_current(target);
+                let active = current
                     && self
                         .terminal_browser
                         .as_ref()
                         .is_some_and(|browser| browser.is_human_control_active());
-                tui.set_raw_mouse_events(/*raw_mouse_events*/ active);
-                if let Some(error) = error {
-                    self.chat_widget
-                        .add_error_message(format!("Browser control failed: {error}"));
+                let raw_mouse_events = if current {
+                    active
                 } else {
-                    let message = if active {
-                        "You control the browser now. Press Ctrl+] to return control to Codex."
+                    self.sync_terminal_browser_panel()
+                };
+                tui.set_raw_mouse_events(raw_mouse_events);
+                if current {
+                    if let Some(error) = error {
+                        let browser_visible = self
+                            .terminal_browser
+                            .as_ref()
+                            .is_some_and(|browser| browser.view().visible);
+                        if browser_visible {
+                            self.chat_widget
+                                .add_error_message(format!("Browser control failed: {error}"));
+                        }
                     } else {
-                        "Browser control returned to Codex; previous node handles were invalidated."
-                    };
-                    self.chat_widget
-                        .add_info_message(message.to_string(), /*hint*/ None);
+                        let message = if active {
+                            "You control the browser now. Press Ctrl+] to return control to Codex."
+                        } else {
+                            "Browser control returned to Codex; previous node handles were invalidated."
+                        };
+                        self.chat_widget
+                            .add_info_message(message.to_string(), /*hint*/ None);
+                    }
                 }
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::TerminalBrowserClosed => {
-                let raw_mouse_events = self.terminal_browser_owned_by_current_thread()
-                    && self
-                        .terminal_browser
-                        .as_ref()
-                        .is_some_and(|browser| browser.is_human_control_active());
-                tui.set_raw_mouse_events(raw_mouse_events);
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::TerminalBrowserUpdated => {
-                let raw_mouse_events = self.terminal_browser_owned_by_current_thread()
-                    && self
-                        .terminal_browser
-                        .as_ref()
-                        .is_some_and(|browser| browser.is_human_control_active());
+            AppEvent::TerminalBrowserClosed | AppEvent::TerminalBrowserUpdated => {
+                let raw_mouse_events = self.sync_terminal_browser_panel();
                 tui.set_raw_mouse_events(raw_mouse_events);
                 tui.frame_requester().schedule_frame();
             }

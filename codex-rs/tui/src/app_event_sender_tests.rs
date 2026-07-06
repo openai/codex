@@ -61,6 +61,21 @@ fn global_sender_preserves_active_thread_codex_ops() {
 }
 
 #[test]
+fn unscoped_sender_removes_a_conversation_envelope() {
+    let (tx, mut rx) = unbounded_channel();
+    let sender = AppEventSender::new(tx)
+        .scoped_to_conversation(PaneSlot::Parent)
+        .unscoped();
+
+    sender.send(AppEvent::TerminalBrowserUpdated);
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TerminalBrowserUpdated)
+    ));
+}
+
+#[test]
 fn unbound_conversation_sender_does_not_fall_back_to_active_thread() {
     let (tx, mut rx) = unbounded_channel();
     let sender = AppEventSender::new(tx).scoped_to_conversation(PaneSlot::Parent);

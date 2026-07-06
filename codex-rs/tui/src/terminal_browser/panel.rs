@@ -28,6 +28,13 @@ pub(crate) struct BrowserPanelAreas {
     pub(crate) footer: Rect,
 }
 
+/// Geometry produced while rendering a browser panel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BrowserPanelRender {
+    pub(crate) viewport: Rect,
+    pub(crate) cursor: Option<(u16, u16)>,
+}
+
 /// Splits an already-assigned panel rectangle into browser chrome and content.
 ///
 /// This helper never centers, shrinks, or otherwise relocates `area`; the application frame owns
@@ -78,20 +85,39 @@ impl TerminalBrowserPanel {
             cols: viewport.width,
         })
     }
-
-    /// Renders into exactly `area` and returns the browser content viewport used for input.
-    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) -> Rect {
-        render_view(&self.browser.view(), area, buf)
-    }
 }
 
-fn render_view(view: &BrowserView, area: Rect, buf: &mut Buffer) -> Rect {
+pub(crate) fn render_browser_view(
+    view: &BrowserView,
+    area: Rect,
+    buf: &mut Buffer,
+) -> BrowserPanelRender {
     Clear.render(area, buf);
     let areas = browser_panel_areas(area);
     render_header(view, areas.header, buf);
     render_screen_or_status(view, areas.viewport, buf);
     render_footer(view, areas.footer, buf);
-    areas.viewport
+    BrowserPanelRender {
+        viewport: areas.viewport,
+        cursor: browser_cursor(view, areas.viewport),
+    }
+}
+
+fn browser_cursor(view: &BrowserView, viewport: Rect) -> Option<(u16, u16)> {
+    if !matches!(&view.status, BrowserStatus::Running)
+        || view.screen.rows == 0
+        || view.screen.cols == 0
+        || view.screen.cells.is_empty()
+    {
+        return None;
+    }
+    let (row, col) = view.screen.cursor?;
+    (row < viewport.height && col < viewport.width).then(|| {
+        (
+            viewport.x.saturating_add(col),
+            viewport.y.saturating_add(row),
+        )
+    })
 }
 
 fn render_header(view: &BrowserView, area: Rect, buf: &mut Buffer) {
@@ -275,8 +301,12 @@ pub(super) fn style_for_test(cell: &BrowserCell) -> Style {
 }
 
 #[cfg(test)]
-pub(super) fn render_view_for_test(view: &BrowserView, area: Rect, buf: &mut Buffer) -> Rect {
-    render_view(view, area, buf)
+pub(super) fn render_view_for_test(
+    view: &BrowserView,
+    area: Rect,
+    buf: &mut Buffer,
+) -> BrowserPanelRender {
+    render_browser_view(view, area, buf)
 }
 
 #[cfg(test)]

@@ -160,6 +160,11 @@ impl ConversationPanes {
         self.focused
     }
 
+    pub(super) fn focused_thread_id(&self) -> Option<ThreadId> {
+        self.by_slot(self.focused)
+            .and_then(ConversationPane::thread_id)
+    }
+
     pub(super) fn has_side(&self) -> bool {
         self.side.is_some()
     }

@@ -192,6 +192,10 @@ impl Inner {
         Ok(path)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the session guard is explicitly dropped before the conditional close await"
+    )]
     async fn start_session(self: &Arc<Self>, config: SessionConfig) -> Result<()> {
         let binary = self.validated_binary().await?;
         anyhow::ensure!(

@@ -665,9 +665,8 @@ mod tests {
         let first = stream.next().await;
         let second = stream.next().await;
         let third = stream.next().await;
-        assert!(matches!(first, Some(TuiEvent::Draw)));
         assert!(matches!(
-            second,
+            first,
             Some(TuiEvent::MouseScroll(MouseScrollEvent {
                 direction: MouseScrollDirection::Up,
                 column: 5,
@@ -675,6 +674,7 @@ mod tests {
                 modifiers: KeyModifiers::ALT,
             }))
         ));
+        assert!(matches!(second, Some(TuiEvent::Draw)));
         assert!(matches!(
             third,
             Some(TuiEvent::MouseScroll(MouseScrollEvent {

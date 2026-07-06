@@ -21,6 +21,7 @@ expression: commands
 /resume - resume a saved chat
 /fork - fork the current chat
 /app - continue this session in Codex Desktop
+/browser - show, hide, or control the terminal browser
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /agent - switch the active agent thread

@@ -68,6 +68,11 @@ impl AppEventSender {
         }
     }
 
+    /// Returns a sender that delivers app-global lifecycle events without a conversation envelope.
+    pub(crate) fn unscoped(&self) -> Self {
+        Self::new(self.app_event_tx.clone())
+    }
+
     /// Binds this widget scope to the thread supplied by its session configuration.
     pub(crate) fn bind_conversation_thread(&self, thread_id: ThreadId) {
         let Some(scope) = &self.conversation_scope else {

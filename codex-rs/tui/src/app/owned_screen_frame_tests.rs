@@ -1,6 +1,9 @@
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::*;
@@ -80,6 +83,100 @@ fn shown_panel_docks_to_hard_minimum_then_becomes_overlay() {
 }
 
 #[test]
+fn selecting_browser_reuses_and_focuses_the_summary_rail() {
+    let mut state = OwnedScreenFrameState::default();
+    let initial = state.layout(area(/*width*/ 144), /*has_side*/ false);
+    let initial_summary = initial.summary.expect("summary rail").area;
+    assert_eq!(
+        state.right_rail_content(),
+        OwnedScreenRightRailContent::Summary
+    );
+
+    state.select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let selected = state.layout(area(/*width*/ 144), /*has_side*/ false);
+
+    assert_eq!(
+        state.right_rail_content(),
+        OwnedScreenRightRailContent::Browser
+    );
+    assert_eq!(
+        selected.summary.expect("browser rail").area,
+        initial_summary
+    );
+    assert_eq!(state.focus(), OwnedScreenFrameFocus::Summary);
+    assert_eq!(
+        state.preference(OwnedScreenPanel::Summary),
+        OwnedScreenPanelPreference::Shown
+    );
+}
+
+#[test]
+fn panel_body_excludes_docked_header_and_overlay_border() {
+    let mut docked_state = OwnedScreenFrameState::default();
+    let docked = docked_state.layout(area(/*width*/ 144), /*has_side*/ false);
+    let docked_area = docked.summary.expect("docked summary").area;
+    assert_eq!(
+        docked_state.panel_body(OwnedScreenPanel::Summary),
+        Some(Rect::new(
+            docked_area.x,
+            docked_area.y.saturating_add(/*rhs*/ 1),
+            docked_area.width,
+            docked_area.height.saturating_sub(/*rhs*/ 1),
+        ))
+    );
+
+    let mut overlay_state = OwnedScreenFrameState::default();
+    overlay_state.select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let overlay = overlay_state.layout(area(/*width*/ 75), /*has_side*/ false);
+    let overlay_area = overlay.summary.expect("browser overlay").area;
+    assert_eq!(
+        overlay_state.panel_body(OwnedScreenPanel::Summary),
+        Some(Rect::new(
+            overlay_area.x.saturating_add(/*rhs*/ 1),
+            overlay_area.y.saturating_add(/*rhs*/ 1),
+            overlay_area.width.saturating_sub(/*rhs*/ 2),
+            overlay_area.height.saturating_sub(/*rhs*/ 2),
+        ))
+    );
+}
+
+#[test]
+fn right_rail_chrome_highlights_the_selected_tab_when_focused() {
+    let mut state = OwnedScreenFrameState::default();
+    state.select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let layout = state.layout(area(/*width*/ 144), /*has_side*/ false);
+    let rail = layout.summary.expect("browser rail").area;
+    let mut buffer = Buffer::empty(Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 180, /*height*/ 30,
+    ));
+
+    assert_eq!(
+        state.render_panel_chrome(OwnedScreenPanel::Summary, "Summary", &mut buffer),
+        state.panel_body(OwnedScreenPanel::Summary)
+    );
+    let title = (rail.x..rail.x.saturating_add(/*rhs*/ 19))
+        .map(|x| buffer[(x, rail.y)].symbol())
+        .collect::<String>();
+    assert_eq!(title, " Summary | Browser ");
+    assert_eq!(
+        buffer[(rail.x.saturating_add(/*rhs*/ 1), rail.y)].style(),
+        Style::default()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .underline_color(Color::Reset)
+            .dim()
+    );
+    assert_eq!(
+        buffer[(rail.x.saturating_add(/*rhs*/ 11), rail.y)].style(),
+        Style::default()
+            .fg(Color::Cyan)
+            .bg(Color::Reset)
+            .underline_color(Color::Reset)
+            .bold()
+    );
+}
+
+#[test]
 fn last_explicit_panel_gets_docking_priority() {
     let mut state = OwnedScreenFrameState::default();
     state.set_preference(OwnedScreenPanel::Sidebar, OwnedScreenPanelPreference::Shown);
@@ -105,16 +202,19 @@ fn divider_drag_resizes_only_the_target_panel() {
         kind: MousePrimaryEventKind::Press,
         column: divider.x,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse_primary(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Drag,
         column: area(/*width*/ 144).x + 35,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse_primary(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Release,
         column: area(/*width*/ 144).x + 35,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
 
     let resized = state.layout(area(/*width*/ 151), /*has_side*/ false);
@@ -136,11 +236,13 @@ fn resizing_auto_panel_keeps_it_visible_at_the_auto_breakpoint() {
         kind: MousePrimaryEventKind::Press,
         column: divider.x,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse_primary(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Drag,
         column: divider.x.saturating_add(/*rhs*/ 1),
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
 
     let resized = state.layout(area(/*width*/ 109), /*has_side*/ false);
@@ -160,11 +262,13 @@ fn clicking_divider_without_dragging_preserves_auto_preference() {
         kind: MousePrimaryEventKind::Press,
         column: divider.x,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse_primary(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Release,
         column: divider.x,
         row: divider.y,
+        modifiers: KeyModifiers::NONE,
     }));
 
     assert_eq!(
@@ -191,6 +295,7 @@ fn panel_scroll_is_independent_and_clamped() {
         direction: MouseScrollDirection::Down,
         column: sidebar.x,
         row: sidebar.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(state.sidebar.scroll, PANEL_SCROLL_ROWS);
     assert_eq!(state.summary.scroll, 0);
@@ -221,6 +326,7 @@ fn overlay_consumes_wheel_outside_its_boundary() {
         direction: MouseScrollDirection::Down,
         column: layout.center.x,
         row: layout.center.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(state.summary.scroll, 0);
 
@@ -228,6 +334,7 @@ fn overlay_consumes_wheel_outside_its_boundary() {
         direction: MouseScrollDirection::Down,
         column: overlay.x,
         row: overlay.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(state.summary.scroll, PANEL_SCROLL_ROWS);
 }
@@ -249,6 +356,7 @@ fn hiding_overlay_invalidates_its_input_boundary_immediately() {
         direction: MouseScrollDirection::Down,
         column: layout.center.x,
         row: layout.center.y,
+        modifiers: KeyModifiers::NONE,
     }));
 }
 
@@ -264,6 +372,7 @@ fn outside_press_dismisses_overlay_without_leaking_to_conversation() {
         kind: MousePrimaryEventKind::Press,
         column: outside.x,
         row: outside.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(
         state.preference(OwnedScreenPanel::Sidebar),
@@ -286,6 +395,7 @@ fn conversation_press_does_not_hide_a_docked_explicit_panel() {
         kind: MousePrimaryEventKind::Press,
         column: layout.center.x,
         row: layout.center.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(
         state.preference(OwnedScreenPanel::Sidebar),
@@ -310,6 +420,7 @@ fn fallback_overlay_is_dismissed_when_last_explicit_panel_docks() {
         kind: MousePrimaryEventKind::Press,
         column: sidebar.area.right(),
         row: sidebar.area.y,
+        modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(
         state.preference(OwnedScreenPanel::Sidebar),
@@ -362,6 +473,7 @@ fn panel_pointer_captures_drag_until_release() {
                 outside
             },
             row: sidebar.y,
+            modifiers: KeyModifiers::NONE,
         }));
     }
     assert!(!state.is_interacting());

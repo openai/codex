@@ -86,6 +86,7 @@ impl TerminalBrowser {
             .operation
             .try_lock()
             .map_err(|_| anyhow!("browser_busy: another terminal browser action is running"))?;
+        self.flush_human_handle_invalidation().await;
         let session_changed = {
             let mut current = self
                 .inner
@@ -199,6 +200,7 @@ impl TerminalBrowser {
             "set_visibility" => {
                 let args: VisibilityArgs = serde_json::from_value(arguments)?;
                 self.set_visibility(args.visible);
+                self.flush_human_handle_invalidation().await;
                 Ok(BrowserToolOutput::Text(format!(
                     "terminal browser visibility set to {}",
                     args.visible
