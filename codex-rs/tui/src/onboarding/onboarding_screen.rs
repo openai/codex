@@ -509,7 +509,10 @@ pub(crate) async fn run_onboarding_app(
                         TuiEvent::Paste(text) => {
                             onboarding_screen.handle_paste(text);
                         }
-                        TuiEvent::MouseScroll(_) | TuiEvent::MousePrimary(_) | TuiEvent::FocusLost => {}
+                        TuiEvent::MouseScroll(_)
+                        | TuiEvent::MousePrimary(_)
+                        | TuiEvent::MouseOther(_)
+                        | TuiEvent::FocusLost => {}
                         TuiEvent::Draw | TuiEvent::Resize => {
                             if !did_full_clear_after_success
                                 && onboarding_screen.steps.iter().any(|step| {

@@ -21,6 +21,10 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 #[cfg(not(unix))]
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
@@ -521,6 +525,10 @@ pub enum TuiEvent {
     MouseScroll(MouseScrollEvent),
     /// A primary mouse-button lifecycle event with terminal coordinates.
     MousePrimary(MousePrimaryEvent),
+    /// A mouse event not represented by the conversation-focused primary and vertical-scroll
+    /// variants. Browser takeover uses this for pointer motion, secondary buttons, and horizontal
+    /// scrolling without broadening conversation input handling.
+    MouseOther(MouseEvent),
     /// Notification that the terminal stopped receiving keyboard and mouse input.
     FocusLost,
     /// A terminal size notification that should be handled as resize-sensitive draw work.
@@ -537,6 +545,22 @@ pub struct MouseScrollEvent {
     pub direction: MouseScrollDirection,
     pub column: u16,
     pub row: u16,
+    pub modifiers: KeyModifiers,
+}
+
+impl From<MouseScrollEvent> for MouseEvent {
+    fn from(event: MouseScrollEvent) -> Self {
+        let kind = match event.direction {
+            MouseScrollDirection::Up => MouseEventKind::ScrollUp,
+            MouseScrollDirection::Down => MouseEventKind::ScrollDown,
+        };
+        Self {
+            kind,
+            column: event.column,
+            row: event.row,
+            modifiers: event.modifiers,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -544,6 +568,23 @@ pub struct MousePrimaryEvent {
     pub kind: MousePrimaryEventKind,
     pub column: u16,
     pub row: u16,
+    pub modifiers: KeyModifiers,
+}
+
+impl From<MousePrimaryEvent> for MouseEvent {
+    fn from(event: MousePrimaryEvent) -> Self {
+        let kind = match event.kind {
+            MousePrimaryEventKind::Press => MouseEventKind::Down(MouseButton::Left),
+            MousePrimaryEventKind::Drag => MouseEventKind::Drag(MouseButton::Left),
+            MousePrimaryEventKind::Release => MouseEventKind::Up(MouseButton::Left),
+        };
+        Self {
+            kind,
+            column: event.column,
+            row: event.row,
+            modifiers: event.modifiers,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -572,6 +613,8 @@ pub struct Tui {
     suspend_context: SuspendContext,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
+    // Browser takeover needs mouse events that the conversation UI intentionally ignores.
+    raw_mouse_events: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
@@ -624,6 +667,7 @@ impl Tui {
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
             terminal_focused: Arc::new(AtomicBool::new(true)),
+            raw_mouse_events: Arc::new(AtomicBool::new(false)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
@@ -657,6 +701,12 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    /// Preserve pointer motion, secondary buttons, and horizontal scrolling for browser takeover.
+    pub(crate) fn set_raw_mouse_events(&self, raw_mouse_events: bool) {
+        self.raw_mouse_events
+            .store(raw_mouse_events, Ordering::Relaxed);
     }
 
     pub fn is_alt_screen_active(&self) -> bool {
@@ -753,6 +803,7 @@ impl Tui {
             self.event_broker.clone(),
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
+            self.raw_mouse_events.clone(),
             self.suspend_context.clone(),
             self.screen_session.clone(),
         );
@@ -761,6 +812,7 @@ impl Tui {
             self.event_broker.clone(),
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
+            self.raw_mouse_events.clone(),
         );
         Box::pin(stream)
     }

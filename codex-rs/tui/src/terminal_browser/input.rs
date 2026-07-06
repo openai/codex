@@ -22,15 +22,7 @@ pub(crate) fn browser_key_input(event: KeyEvent) -> Option<BrowserKeyInput> {
     let modifiers = browser_modifiers(event.modifiers);
     let (key, code, text) = match event.code {
         KeyCode::Char(character) => {
-            let code = if character.is_ascii_alphabetic() {
-                format!("Key{}", character.to_ascii_uppercase())
-            } else if character.is_ascii_digit() {
-                format!("Digit{character}")
-            } else if character == ' ' {
-                "Space".to_string()
-            } else {
-                character.to_string()
-            };
+            let code = browser_key_code(character);
             let text = (!modifiers.control && !modifiers.alt && !modifiers.meta)
                 .then(|| character.to_string());
             (character.to_string(), code, text)
@@ -68,6 +60,41 @@ pub(crate) fn browser_key_input(event: KeyEvent) -> Option<BrowserKeyInput> {
         text,
         modifiers,
     })
+}
+
+fn browser_key_code(character: char) -> String {
+    if character.is_ascii_alphabetic() {
+        return format!("Key{}", character.to_ascii_uppercase());
+    }
+    if character.is_ascii_digit() {
+        return format!("Digit{character}");
+    }
+    let code = match character {
+        ' ' => "Space",
+        '!' => "Digit1",
+        '@' => "Digit2",
+        '#' => "Digit3",
+        '$' => "Digit4",
+        '%' => "Digit5",
+        '^' => "Digit6",
+        '&' => "Digit7",
+        '*' => "Digit8",
+        '(' => "Digit9",
+        ')' => "Digit0",
+        '-' | '_' => "Minus",
+        '=' | '+' => "Equal",
+        '[' | '{' => "BracketLeft",
+        ']' | '}' => "BracketRight",
+        '\\' | '|' => "Backslash",
+        ';' | ':' => "Semicolon",
+        '\'' | '"' => "Quote",
+        ',' | '<' => "Comma",
+        '.' | '>' => "Period",
+        '/' | '?' => "Slash",
+        '`' | '~' => "Backquote",
+        _ => return character.to_string(),
+    };
+    code.to_string()
 }
 
 /// Converts a crossterm mouse event into coordinates relative to `viewport`.

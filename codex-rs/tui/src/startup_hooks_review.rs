@@ -169,6 +169,7 @@ async fn run_startup_hooks_review_app(
             TuiEvent::Paste(_)
             | TuiEvent::MouseScroll(_)
             | TuiEvent::MousePrimary(_)
+            | TuiEvent::MouseOther(_)
             | TuiEvent::FocusLost => {}
             TuiEvent::Draw | TuiEvent::Resize => draw_view(tui, &view)?,
         }

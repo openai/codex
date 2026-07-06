@@ -188,7 +188,12 @@ fn is_following_bottom(app: &App, slot: PaneSlot) -> bool {
 }
 
 fn primary_event(kind: MousePrimaryEventKind, column: u16, row: u16) -> MousePrimaryEvent {
-    MousePrimaryEvent { kind, column, row }
+    MousePrimaryEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
 }
 
 fn primary_press(column: u16, row: u16) -> MousePrimaryEvent {
@@ -1495,6 +1500,7 @@ async fn mouse_wheel_routes_by_pointer_without_changing_focus() {
             direction: MouseScrollDirection::Up,
             column: 2,
             row: 2,
+            modifiers: KeyModifiers::NONE,
         },
     ));
     assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
@@ -1507,6 +1513,7 @@ async fn mouse_wheel_routes_by_pointer_without_changing_focus() {
             direction: MouseScrollDirection::Up,
             column: 44,
             row: 2,
+            modifiers: KeyModifiers::NONE,
         },
     ));
     assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
@@ -1556,6 +1563,7 @@ async fn mouse_wheel_routes_to_the_pane_with_an_active_selection() {
             direction: MouseScrollDirection::Up,
             column: side_area.x,
             row: side_area.y,
+            modifiers: KeyModifiers::NONE,
         },
     ));
 
@@ -1594,6 +1602,7 @@ async fn narrow_side_clears_parent_hit_area_before_wheel_routing() {
             direction: MouseScrollDirection::Up,
             column: side_area.x,
             row: side_area.y,
+            modifiers: KeyModifiers::NONE,
         },
     ));
     assert!(is_following_bottom(&app, PaneSlot::Parent));
@@ -1618,6 +1627,7 @@ async fn resizing_between_split_and_focused_only_preserves_pane_state() {
         direction: MouseScrollDirection::Up,
         column: 2,
         row: 2,
+        modifiers: KeyModifiers::NONE,
     }));
     assert!(app.chat_widget.focus(PaneSlot::Side));
 
@@ -1801,6 +1811,7 @@ async fn mouse_wheel_scrolls_transcript_without_changing_draft() {
         direction: MouseScrollDirection::Up,
         column: 2,
         row: 2,
+        modifiers: KeyModifiers::NONE,
     }));
     terminal
         .draw(|frame| {
@@ -1823,12 +1834,14 @@ async fn mouse_wheel_scrolls_transcript_without_changing_draft() {
         direction: MouseScrollDirection::Up,
         column: 2,
         row: 7,
+        modifiers: KeyModifiers::NONE,
     }));
 
     assert!(screen.handle_mouse_scroll(MouseScrollEvent {
         direction: MouseScrollDirection::Down,
         column: 2,
         row: 2,
+        modifiers: KeyModifiers::NONE,
     }));
     terminal
         .draw(|frame| {

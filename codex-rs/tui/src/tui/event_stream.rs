@@ -150,6 +150,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     draw_stream: BroadcastStream<()>,
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
+    raw_mouse_events: Arc<AtomicBool>,
     poll_draw_first: bool,
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
@@ -162,6 +163,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         broker: Arc<EventBroker<S>>,
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
+        raw_mouse_events: Arc<AtomicBool>,
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
         #[cfg(unix)] screen_session: ScreenSession,
     ) -> Self {
@@ -171,6 +173,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             draw_stream: BroadcastStream::new(draw_rx),
             resume_stream,
             terminal_focused,
+            raw_mouse_events,
             poll_draw_first: false,
             #[cfg(unix)]
             suspend_context,
@@ -271,17 +274,20 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     direction: MouseScrollDirection::Up,
                     column: mouse_event.column,
                     row: mouse_event.row,
+                    modifiers: mouse_event.modifiers,
                 })),
                 MouseEventKind::ScrollDown => Some(TuiEvent::MouseScroll(MouseScrollEvent {
                     direction: MouseScrollDirection::Down,
                     column: mouse_event.column,
                     row: mouse_event.row,
+                    modifiers: mouse_event.modifiers,
                 })),
                 MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                     Some(TuiEvent::MousePrimary(MousePrimaryEvent {
                         kind: MousePrimaryEventKind::Press,
                         column: mouse_event.column,
                         row: mouse_event.row,
+                        modifiers: mouse_event.modifiers,
                     }))
                 }
                 MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
@@ -289,6 +295,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         kind: MousePrimaryEventKind::Drag,
                         column: mouse_event.column,
                         row: mouse_event.row,
+                        modifiers: mouse_event.modifiers,
                     }))
                 }
                 MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
@@ -296,6 +303,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         kind: MousePrimaryEventKind::Release,
                         column: mouse_event.column,
                         row: mouse_event.row,
+                        modifiers: mouse_event.modifiers,
                     }))
                 }
                 MouseEventKind::Down(_)
@@ -303,7 +311,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 | MouseEventKind::Drag(_)
                 | MouseEventKind::Moved
                 | MouseEventKind::ScrollLeft
-                | MouseEventKind::ScrollRight => None,
+                | MouseEventKind::ScrollRight => self
+                    .raw_mouse_events
+                    .load(Ordering::Relaxed)
+                    .then_some(TuiEvent::MouseOther(mouse_event)),
             },
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
@@ -422,6 +433,7 @@ mod tests {
             broker,
             draw_rx,
             terminal_focused,
+            Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]
             crate::tui::job_control::SuspendContext::new(),
             #[cfg(unix)]
@@ -543,6 +555,7 @@ mod tests {
                 kind: MousePrimaryEventKind::Press,
                 column: 3,
                 row: 4,
+                modifiers: KeyModifiers::NONE,
             }))
         ));
         assert!(matches!(
@@ -551,6 +564,7 @@ mod tests {
                 kind: MousePrimaryEventKind::Drag,
                 column: 5,
                 row: 6,
+                modifiers: KeyModifiers::NONE,
             }))
         ));
         assert!(matches!(
@@ -559,59 +573,86 @@ mod tests {
                 kind: MousePrimaryEventKind::Release,
                 column: 7,
                 row: 8,
+                modifiers: KeyModifiers::NONE,
             }))
         ));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn vertical_mouse_wheel_maps_to_scroll_and_ignored_events_yield_to_draws() {
+    async fn non_conversation_mouse_events_are_preserved() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let raw_mouse_events = Arc::new(AtomicBool::new(true));
+        let mut stream = TuiEventStream::new(
+            broker,
+            draw_rx,
+            terminal_focused,
+            raw_mouse_events,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            ScreenSession::new(),
+        );
+
+        let events = [
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Right),
+                column: 3,
+                row: 4,
+                modifiers: KeyModifiers::ALT,
+            },
+            MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 5,
+                row: 6,
+                modifiers: KeyModifiers::NONE,
+            },
+            MouseEvent {
+                kind: MouseEventKind::ScrollLeft,
+                column: 7,
+                row: 8,
+                modifiers: KeyModifiers::SHIFT,
+            },
+        ];
+        for event in events {
+            handle.send(Ok(Event::Mouse(event)));
+        }
+
+        for expected in events {
+            assert!(matches!(
+                stream.next().await,
+                Some(TuiEvent::MouseOther(actual)) if actual == expected
+            ));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn non_conversation_mouse_events_are_dropped_by_default() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        })));
+        let expected_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected_key)));
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::Key(key)) if key == expected_key));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn vertical_mouse_wheel_maps_to_scroll() {
         let (broker, handle, draw_tx, draw_rx, terminal_focused) = setup();
         let mut stream = make_stream(broker, draw_rx, terminal_focused);
         stream.poll_draw_first = false;
 
         handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Right),
-            column: 3,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        })));
-        handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Middle),
-            column: 3,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        })));
-        handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Right),
-            column: 3,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        })));
-        handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Middle),
-            column: 3,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        })));
-        handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::ScrollLeft,
-            column: 4,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        })));
-        for column in 0..=MAX_SKIPPED_EVENTS_PER_POLL {
-            handle.send(Ok(Event::Mouse(MouseEvent {
-                kind: MouseEventKind::Moved,
-                column: column as u16,
-                row: 0,
-                modifiers: KeyModifiers::NONE,
-            })));
-        }
-        handle.send(Ok(Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
             column: 5,
             row: 6,
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::ALT,
         })));
         handle.send(Ok(Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -631,6 +672,7 @@ mod tests {
                 direction: MouseScrollDirection::Up,
                 column: 5,
                 row: 6,
+                modifiers: KeyModifiers::ALT,
             }))
         ));
         assert!(matches!(
@@ -639,6 +681,7 @@ mod tests {
                 direction: MouseScrollDirection::Down,
                 column: 7,
                 row: 8,
+                modifiers: KeyModifiers::NONE,
             }))
         ));
     }

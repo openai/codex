@@ -61,22 +61,26 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Drag,
         column: 80,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert!(!state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Press,
         column: 20,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
 
     assert!(state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Press,
         column: 70,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Drag,
         column: 10,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert_eq!(
         split_widths(OwnedScreenLayout::new(
@@ -91,6 +95,7 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Release,
         column: 70,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert_eq!(state.preference(), initial_preference);
 
@@ -98,16 +103,19 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Press,
         column: 70,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Drag,
         column: 80,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Release,
         column: 80,
         row: u16::MAX,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert_eq!(
         split_widths(OwnedScreenLayout::new(
@@ -122,6 +130,7 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Drag,
         column: 70,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
 
     let preference = state.preference();
@@ -140,11 +149,13 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Press,
         column: 58,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert!(state.handle_mouse(MousePrimaryEvent {
         kind: MousePrimaryEventKind::Release,
         column: 58,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     assert_eq!(state.preference(), preference);
 
@@ -152,6 +163,7 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Press,
         column: 58,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
     let narrow = Rect::new(
         /*x*/ 10, /*y*/ 2, /*width*/ 82, /*height*/ 20,
@@ -190,5 +202,6 @@ fn drag_lifecycle_clamps_and_preserves_the_preferred_ratio() {
         kind: MousePrimaryEventKind::Press,
         column: 51,
         row: 4,
+        modifiers: crossterm::event::KeyModifiers::NONE,
     }));
 }
