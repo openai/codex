@@ -177,12 +177,16 @@ impl AccountRequestProcessor {
             .set_auth_mode(self.auth_manager.get_api_auth_mode());
     }
 
-    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
-        let auth = self.auth_manager.auth_cached();
+    async fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+        let provider = create_model_provider(
+            self.config.model_provider.clone(),
+            Some(self.auth_manager.clone()),
+        );
+        let auth = provider.auth().await;
         AccountUpdatedNotification {
             auth_mode: auth
                 .as_ref()
-                .map(CodexAuth::api_auth_mode)
+                .map(CodexAuth::auth_mode)
                 .map(auth_mode_to_api),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
@@ -657,7 +661,7 @@ impl AccountRequestProcessor {
 
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
+                self.current_account_updated_notification().await,
             ))
             .await;
     }

@@ -10,6 +10,7 @@
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
@@ -19,6 +20,7 @@ use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_model_provider::create_model_provider;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -423,51 +425,50 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
-    let auth_route_config = config.auth_route_config();
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
+    let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
+    let auth = provider.auth().await;
+    let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
 
-    match CodexAuth::from_auth_storage(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
-    )
-    .await
-    {
-        Ok(Some(auth)) => match auth.auth_mode() {
-            AuthMode::ApiKey => match auth.get_token() {
-                Ok(api_key) => {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Unexpected error retrieving API key: {e}");
-                    std::process::exit(1);
-                }
-            },
-            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+    if config.model_provider.is_amazon_bedrock() {
+        if auth_mode == Some(AuthMode::BedrockApiKey) {
+            eprintln!("Logged in using Amazon Bedrock API key");
+        } else {
+            eprintln!("Using Amazon Bedrock AWS SDK credential chain");
+        }
+        std::process::exit(0);
+    }
+
+    match (auth_mode, auth) {
+        (Some(AuthMode::ApiKey), Some(auth)) => match auth.get_token() {
+            Ok(api_key) => {
+                eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
                 std::process::exit(0);
             }
-            AuthMode::AgentIdentity => {
-                eprintln!("Logged in using access token");
-                std::process::exit(0);
-            }
-            AuthMode::PersonalAccessToken => {
-                eprintln!("Logged in using personal access token");
-                std::process::exit(0);
-            }
-            AuthMode::BedrockApiKey => {
-                eprintln!("Logged in using Amazon Bedrock API key");
-                std::process::exit(0);
+            Err(e) => {
+                eprintln!("Unexpected error retrieving API key: {e}");
+                std::process::exit(1);
             }
         },
-        Ok(None) => {
+        (Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens), Some(_)) => {
+            eprintln!("Logged in using ChatGPT");
+            std::process::exit(0);
+        }
+        (Some(AuthMode::AgentIdentity), Some(_)) => {
+            eprintln!("Logged in using access token");
+            std::process::exit(0);
+        }
+        (Some(AuthMode::PersonalAccessToken), Some(_)) => {
+            eprintln!("Logged in using personal access token");
+            std::process::exit(0);
+        }
+        (None, None) => {
             eprintln!("Not logged in");
             std::process::exit(1);
         }
-        Err(e) => {
-            eprintln!("Error checking login status: {e}");
+        (auth_mode, _) => {
+            eprintln!("Unexpected provider auth state: mode={auth_mode:?}");
             std::process::exit(1);
         }
     }
