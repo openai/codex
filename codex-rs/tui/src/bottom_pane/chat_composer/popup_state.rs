@@ -9,17 +9,35 @@ use std::ops::Range;
 
 /// One token occurrence whose autocomplete popup should remain hidden.
 pub(super) struct DismissedToken {
-    range: Range<usize>,
+    /// Popup query text for the token, excluding its leading sigil.
     query: String,
+    /// Exact token text, including its sigil, captured when the popup was dismissed.
+    token: String,
+    /// Zero-based ordinal among identical token strings in the draft at dismissal time.
+    occurrence: usize,
 }
 
 impl DismissedToken {
-    pub(super) fn new(range: Range<usize>, query: String) -> Self {
-        Self { range, query }
+    /// Captures the stable identity of the token at `range`.
+    pub(super) fn new(text: &str, range: Range<usize>, query: String) -> Self {
+        let token = text[range.clone()].to_string();
+        let occurrence = text[..range.start].match_indices(&token).count();
+        Self {
+            query,
+            token,
+            occurrence,
+        }
     }
 
-    pub(super) fn matches(&self, range: &Range<usize>, query: &str) -> bool {
-        self.range == *range && self.query == query
+    /// Returns whether `range` identifies the same token occurrence in the current draft.
+    ///
+    /// Byte offsets may shift under offset-only edits, while the token text and its ordinal keep
+    /// later identical occurrences distinct.
+    pub(super) fn matches(&self, text: &str, range: &Range<usize>, query: &str) -> bool {
+        if self.query != query || text.get(range.clone()) != Some(self.token.as_str()) {
+            return false;
+        }
+        text[..range.start].match_indices(&self.token).count() == self.occurrence
     }
 }
 

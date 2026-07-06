@@ -17,6 +17,8 @@
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //! Accepted completions leave the cursor after one separator while preserving another before any
 //! existing non-whitespace suffix, including another sigil-prefixed token.
+//! Popup dismissal follows the same token occurrence across offset-only edits without suppressing
+//! a later identical token.
 //!
 //! # History Navigation (↑/↓)
 //!
@@ -1810,7 +1812,11 @@ impl ChatComposer {
                     '@',
                     /*allow_empty*/ false,
                 ) {
-                    self.popups.dismissed_file_token = Some(DismissedToken::new(range, query));
+                    self.popups.dismissed_file_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1887,7 +1893,11 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 if let Some((range, query)) = self.current_mention_token_range() {
-                    self.popups.dismissed_mention_token = Some(DismissedToken::new(range, query));
+                    self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1991,7 +2001,11 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 if let Some((range, query)) = self.current_mentions_v2_token_range() {
-                    self.popups.dismissed_mention_token = Some(DismissedToken::new(range, query));
+                    self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -2114,11 +2128,17 @@ impl ChatComposer {
         }
 
         if prefix == '@' && !self.mentions_v2_enabled {
-            self.popups.dismissed_file_token =
-                Some(DismissedToken::new(current_range, current_token));
+            self.popups.dismissed_file_token = Some(DismissedToken::new(
+                self.draft.textarea.text(),
+                current_range,
+                current_token,
+            ));
         } else {
-            self.popups.dismissed_mention_token =
-                Some(DismissedToken::new(current_range, current_token));
+            self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                self.draft.textarea.text(),
+                current_range,
+                current_token,
+            ));
         }
     }
 
@@ -3658,11 +3678,12 @@ impl ChatComposer {
 
     /// Synchronize the legacy file-search popup with the current `@` token.
     fn sync_file_search_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
         if self
             .popups
             .dismissed_file_token
             .as_ref()
-            .is_some_and(|dismissed| dismissed.matches(&range, &query))
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
         {
             return;
         }
@@ -3703,11 +3724,12 @@ impl ChatComposer {
     }
 
     fn sync_mention_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
         if self
             .popups
             .dismissed_mention_token
             .as_ref()
-            .is_some_and(|dismissed| dismissed.matches(&range, &query))
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
         {
             return;
         }
@@ -3732,11 +3754,12 @@ impl ChatComposer {
     }
 
     fn sync_mentions_v2_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
         if self
             .popups
             .dismissed_mention_token
             .as_ref()
-            .is_some_and(|dismissed| dismissed.matches(&range, &query))
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
         {
             return;
         }
@@ -9186,6 +9209,29 @@ mod tests {
         composer.sync_popups();
 
         assert!(matches!(composer.popups.active, ActivePopup::File(_)));
+    }
+
+    #[test]
+    fn dismissed_file_popup_tracks_token_across_leading_whitespace_edits() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_text_content("@ma".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@ma".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::File(_)));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.insert_str("   ");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        for _ in 0..3 {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+            assert!(matches!(composer.popups.active, ActivePopup::None));
+        }
     }
 
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their
