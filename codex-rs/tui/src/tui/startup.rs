@@ -4,11 +4,14 @@ use std::io::stdin;
 use std::io::stdout;
 use std::time::Duration;
 
+use crossterm::event::DisableBracketedPaste;
+use crossterm::event::EnableBracketedPaste;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 
@@ -30,6 +33,8 @@ impl Drop for PreparedTerminal {
             discard_terminal_input();
             if self.terminal_modes_active {
                 let _ = super::restore_after_exit();
+            } else {
+                let _ = disable_startup_paste_capture();
             }
         }
     }
@@ -145,6 +150,15 @@ pub(crate) fn discard_terminal_input() {
     flush_terminal_input_buffer();
 }
 
+pub(crate) fn abandon_prepared_terminal() {
+    discard_terminal_input();
+    let _ = disable_startup_paste_capture();
+}
+
+fn disable_startup_paste_capture() -> Result<()> {
+    execute!(stdout(), DisableBracketedPaste)
+}
+
 pub(super) fn capture_startup_input(input: &mut StartupInputBuffer) -> Result<()> {
     while crossterm::event::poll(Duration::ZERO)? {
         input.handle_event(crossterm::event::read()?);
@@ -153,7 +167,7 @@ pub(super) fn capture_startup_input(input: &mut StartupInputBuffer) -> Result<()
 }
 
 impl PreparedTerminal {
-    /// Clear stale shell input before slower startup work begins.
+    /// Start preserving terminal paste boundaries before slower startup work begins.
     pub(crate) fn prepare() -> Result<Self> {
         if !stdin().is_terminal() {
             return Err(std::io::Error::other("stdin is not a terminal"));
@@ -161,7 +175,9 @@ impl PreparedTerminal {
         if !stdout().is_terminal() {
             return Err(std::io::Error::other("stdout is not a terminal"));
         }
-        discard_terminal_input();
+        super::ensure_virtual_terminal_processing()?;
+        super::set_panic_hook();
+        execute!(stdout(), EnableBracketedPaste)?;
         Ok(Self {
             active: true,
             terminal_modes_active: false,
@@ -174,7 +190,6 @@ impl PreparedTerminal {
         super::set_base_modes()?;
         let mut startup_input = StartupInputBuffer::default();
         capture_startup_input(&mut startup_input)?;
-        super::set_panic_hook();
 
         #[cfg(unix)]
         let backend = CrosstermBackend::new(stdout());

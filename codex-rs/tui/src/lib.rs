@@ -884,7 +884,7 @@ pub async fn run_main(
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!("Error parsing -c overrides: {e}");
             std::process::exit(1);
         }
@@ -895,7 +895,7 @@ pub async fn run_main(
     let codex_home = match find_codex_home() {
         Ok(codex_home) => codex_home.to_path_buf(),
         Err(err) => {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);
         }
@@ -1018,6 +1018,7 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
+            tui::discard_terminal_input();
             let selection = oss_selection::select_oss_provider().await?;
             let provider = selection.provider;
             if provider == "__CANCELLED__" {
@@ -1148,7 +1149,7 @@ pub async fn run_main(
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
         Ok(None) => {}
         Ok(Some(err)) | Err(err) => {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!(
                 "Error loading rules:\n{}",
                 format_exec_policy_error_with_source(&err)
@@ -1166,7 +1167,7 @@ pub async fn run_main(
     ) {
         #[allow(clippy::print_stderr)]
         {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!("Error adding directories: {warning}");
             std::process::exit(1);
         }
@@ -1186,7 +1187,7 @@ pub async fn run_main(
         })
         .await
         {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!("{err}");
             std::process::exit(1);
         }
@@ -1946,7 +1947,7 @@ async fn load_config_or_exit_with_fallback_cwd(
     {
         Ok(config) => config,
         Err(err) => {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);
         }
@@ -1976,7 +1977,7 @@ async fn load_bootstrap_config_or_exit(
     {
         Ok(config_toml) => config_toml,
         Err(err) => {
-            tui::discard_terminal_input();
+            tui::abandon_prepared_terminal();
             let config_error = err
                 .get_ref()
                 .and_then(|err| err.downcast_ref::<ConfigLoadError>())

@@ -77,6 +77,7 @@ pub(crate) struct InitializedTerminal {
 
 pub(crate) use startup::PreparedTerminal;
 use startup::StartupInputBuffer;
+pub(crate) use startup::abandon_prepared_terminal;
 use startup::capture_startup_input;
 pub(crate) use startup::discard_terminal_input;
 
