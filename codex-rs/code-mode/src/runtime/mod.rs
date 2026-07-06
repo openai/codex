@@ -7,7 +7,6 @@ mod value;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
-use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
@@ -21,6 +20,7 @@ use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
 use crate::TaskFailureHandler;
+use crate::v8_init::ensure_v8_initialized;
 
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
@@ -84,7 +84,7 @@ pub(crate) fn spawn_runtime(
     ),
     String,
 > {
-    initialize_v8()?;
+    ensure_v8_initialized()?;
 
     let (command_tx, command_rx) = std_mpsc::channel();
     let (control_tx, control_rx) = std_mpsc::channel();
@@ -163,22 +163,6 @@ pub(super) enum CompletionState {
         stored_value_writes: HashMap<String, JsonValue>,
         error_text: Option<String>,
     },
-}
-
-fn initialize_v8() -> Result<(), String> {
-    static PLATFORM: OnceLock<Result<v8::SharedRef<v8::Platform>, String>> = OnceLock::new();
-
-    match PLATFORM.get_or_init(|| {
-        v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
-            .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
-        let platform = v8::new_default_platform(0, false).make_shared();
-        v8::V8::initialize_platform(platform.clone());
-        v8::V8::initialize();
-        Ok(platform)
-    }) {
-        Ok(_) => Ok(()),
-        Err(error_text) => Err(error_text.clone()),
-    }
 }
 
 fn run_runtime(
