@@ -99,6 +99,10 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
+use codex_network_proxy::InjectedHeaderConfig;
+use codex_network_proxy::MitmHookActionsConfig;
+use codex_network_proxy::MitmHookConfig;
+use codex_network_proxy::MitmHookMatchConfig;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
@@ -989,6 +993,130 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
             .allowed_domains(),
         Some(vec!["*.example.com".to_string()])
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_network_proxy_runtime_tracks_live_configuration() -> anyhow::Result<()> {
+    let permission_profile = PermissionProfile::workspace_write();
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+    let session = make_session_with_config({
+        let permission_profile = permission_profile.clone();
+        let spec = spec.clone();
+        move |config| {
+            config
+                .permissions
+                .set_permission_profile(permission_profile)
+                .expect("test setup should allow permission profile");
+            config.permissions.network = Some(spec);
+        }
+    })
+    .await?;
+    let initial_runtime = session
+        .current_network_proxy_runtime()
+        .await
+        .expect("managed network proxy should be active");
+    assert!(!initial_runtime.mitm);
+
+    let started_proxy = session
+        .services
+        .network_proxy
+        .load_full()
+        .expect("managed network proxy should be present");
+    let mut mitm_config = NetworkProxyConfig::default();
+    mitm_config.network.mitm = true;
+    let mitm_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        mitm_config,
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+    mitm_spec
+        .apply_to_started_proxy(started_proxy.as_ref())
+        .await?;
+    assert_eq!(
+        session.current_network_proxy_runtime().await,
+        Some(SessionNetworkProxyRuntime {
+            http_addr: started_proxy.proxy().http_addr().to_string(),
+            socks_addr: started_proxy.proxy().socks_addr().to_string(),
+            mitm: true,
+        })
+    );
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(session.current_network_proxy_runtime().await, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_network_proxy_refresh_failure_clears_stale_runtime() -> anyhow::Result<()> {
+    let secret_dir = tempfile::tempdir()?;
+    let secret_path = secret_dir.path().join("proxy-secret");
+    std::fs::write(&secret_path, "secret")?;
+
+    let permission_profile = PermissionProfile::workspace_write();
+    let mut network_config = NetworkProxyConfig::default();
+    network_config.network.mitm = true;
+    network_config.network.mitm_hooks = vec![MitmHookConfig {
+        host: "api.example.com".to_string(),
+        matcher: MitmHookMatchConfig {
+            methods: vec!["POST".to_string()],
+            path_prefixes: vec!["/v1/".to_string()],
+            ..Default::default()
+        },
+        actions: MitmHookActionsConfig {
+            inject_request_headers: vec![InjectedHeaderConfig {
+                name: "authorization".to_string(),
+                secret_file: Some(secret_path.display().to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    }];
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        network_config,
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+    let session = make_session_with_config(move |config| {
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("test setup should allow permission profile");
+        config.permissions.network = Some(spec);
+    })
+    .await?;
+    assert!(session.current_network_proxy_runtime().await.is_some());
+
+    std::fs::remove_file(secret_path)?;
+    session
+        .update_settings(SessionSettingsUpdate {
+            permission_profile: Some(PermissionProfile::read_only()),
+            ..Default::default()
+        })
+        .await?;
+
+    assert!(session.services.network_proxy.load_full().is_none());
+    assert_eq!(session.current_network_proxy_runtime().await, None);
 
     Ok(())
 }

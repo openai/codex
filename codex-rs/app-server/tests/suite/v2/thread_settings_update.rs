@@ -27,6 +27,7 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -291,6 +292,105 @@ async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Res
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn thread_settings_update_reports_current_managed_proxy_runtime() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+default_permissions = ":danger-full-access"
+
+[features]
+network_proxy = true
+
+[permissions.networked.filesystem]
+":root" = "read"
+
+[permissions.networked.network]
+enabled = true
+proxy_url = "http://127.0.0.1:0"
+enable_socks5 = false
+"#,
+    )?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let thread = to_response::<ThreadStartResponse>(response)?.thread;
+    assert_eq!(thread.extra, None);
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            permissions: Some("networked".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let enabled = read_thread_settings_updated(&mut mcp).await?;
+    let enabled_proxy = enabled
+        .network_proxy
+        .context("managed profile should report a live proxy")?;
+    let http_addr = enabled_proxy.http_addr.parse::<SocketAddr>()?;
+    assert!(http_addr.ip().is_loopback());
+    assert_ne!(http_addr.port(), 0);
+    assert!(!enabled_proxy.mitm);
+    tokio::net::TcpStream::connect(http_addr).await?;
+
+    let read = read_thread(&mut mcp, &thread.id).await?;
+    assert_eq!(
+        read.thread.extra.and_then(|extra| extra.network_proxy),
+        Some(enabled_proxy)
+    );
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            permissions: Some(":danger-full-access".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let disabled = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(disabled.network_proxy, None);
+    assert_eq!(read_thread(&mut mcp, &thread.id).await?.thread.extra, None);
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            permissions: Some("networked".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let reenabled = read_thread_settings_updated(&mut mcp).await?;
+    let reenabled_proxy = reenabled
+        .network_proxy
+        .context("restored managed profile should report its current proxy")?;
+    let http_addr = reenabled_proxy.http_addr.parse::<SocketAddr>()?;
+    tokio::net::TcpStream::connect(http_addr).await?;
+    assert_eq!(
+        read_thread(&mut mcp, &thread.id)
+            .await?
+            .thread
+            .extra
+            .and_then(|extra| extra.network_proxy),
+        Some(reenabled_proxy)
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
@@ -399,6 +499,21 @@ async fn read_thread_with_turns(
         .send_thread_read_request(ThreadReadParams {
             thread_id: thread_id.to_string(),
             include_turns: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn read_thread(mcp: &mut TestAppServer, thread_id: &str) -> Result<ThreadReadResponse> {
+    let request_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.to_string(),
+            include_turns: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

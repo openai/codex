@@ -6,6 +6,7 @@ use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadHistoryMode;
 use super::ThreadItem;
+use super::ThreadNetworkProxyRuntime;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
@@ -300,6 +301,8 @@ pub struct ThreadSettings {
 pub struct ThreadSettingsUpdatedNotification {
     pub thread_id: String,
     pub thread_settings: ThreadSettings,
+    /// Latest live managed-proxy runtime, or `null` when the proxy is inactive.
+    pub network_proxy: Option<ThreadNetworkProxyRuntime>,
 }
 
 #[derive(

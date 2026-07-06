@@ -1267,11 +1267,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.note_thread_settings(thread_settings.clone())
             };
             if changed {
+                let network_proxy = conversation
+                    .current_network_proxy_runtime()
+                    .await
+                    .map(Into::into);
                 outgoing
                     .send_server_notification(ServerNotification::ThreadSettingsUpdated(
                         ThreadSettingsUpdatedNotification {
                             thread_id: conversation_id.to_string(),
                             thread_settings,
+                            network_proxy,
                         },
                     ))
                     .await;

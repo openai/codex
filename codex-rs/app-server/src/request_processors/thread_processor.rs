@@ -1220,6 +1220,7 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
+        let thread_extra = thread_extra_from_live_thread(thread.as_ref()).await;
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
@@ -1266,6 +1267,7 @@ impl ThreadRequestProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        thread.extra = thread_extra;
 
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
@@ -2268,6 +2270,11 @@ impl ThreadRequestProcessor {
             thread_status,
             has_live_in_progress_turn,
         );
+        thread.extra = if let Some(loaded_thread) = loaded_thread.as_ref() {
+            thread_extra_from_live_thread(loaded_thread.as_ref()).await
+        } else {
+            None
+        };
         Ok(thread)
     }
 
@@ -2784,6 +2791,7 @@ impl ThreadRequestProcessor {
                     return Ok(());
                 }
                 let instruction_sources = codex_thread.legacy_instruction_sources().await;
+                let thread_extra = thread_extra_from_live_thread(codex_thread.as_ref()).await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     let error =
@@ -2843,6 +2851,7 @@ impl ThreadRequestProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
+                thread.extra = thread_extra;
                 let config_snapshot = codex_thread.config_snapshot().await;
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
@@ -3600,6 +3609,7 @@ impl ThreadRequestProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        thread.extra = thread_extra_from_live_thread(forked_thread.as_ref()).await;
         let config_snapshot = forked_thread.config_snapshot().await;
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,

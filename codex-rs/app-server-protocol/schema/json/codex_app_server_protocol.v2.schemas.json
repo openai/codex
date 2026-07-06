@@ -15009,6 +15009,19 @@
     },
     "ThreadExtra": {
       "description": "Extra app-server data for a thread.",
+      "properties": {
+        "networkProxy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadNetworkProxyRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runtime endpoints for the managed network proxy owned by this live thread."
+        }
+      },
       "type": "object"
     },
     "ThreadForkParams": {
@@ -16438,6 +16451,27 @@
       "title": "ThreadNameUpdatedNotification",
       "type": "object"
     },
+    "ThreadNetworkProxyRuntime": {
+      "description": "Live managed-proxy details for a thread running on the app-server host.",
+      "properties": {
+        "httpAddr": {
+          "type": "string"
+        },
+        "mitm": {
+          "description": "Whether the proxy intercepts TLS with a managed certificate authority.",
+          "type": "boolean"
+        },
+        "socksAddr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "httpAddr",
+        "mitm",
+        "socksAddr"
+      ],
+      "type": "object"
+    },
     "ThreadReadParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -17074,6 +17108,17 @@
     "ThreadSettingsUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "networkProxy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadNetworkProxyRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Latest live managed-proxy runtime, or `null` when the proxy is inactive."
+        },
         "threadId": {
           "type": "string"
         },

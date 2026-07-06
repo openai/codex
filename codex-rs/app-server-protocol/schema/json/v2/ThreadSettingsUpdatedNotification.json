@@ -283,6 +283,27 @@
       ],
       "type": "object"
     },
+    "ThreadNetworkProxyRuntime": {
+      "description": "Live managed-proxy details for a thread running on the app-server host.",
+      "properties": {
+        "httpAddr": {
+          "type": "string"
+        },
+        "mitm": {
+          "description": "Whether the proxy intercepts TLS with a managed certificate authority.",
+          "type": "boolean"
+        },
+        "socksAddr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "httpAddr",
+        "mitm",
+        "socksAddr"
+      ],
+      "type": "object"
+    },
     "ThreadSettings": {
       "properties": {
         "activePermissionProfile": {
@@ -366,6 +387,17 @@
     }
   },
   "properties": {
+    "networkProxy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadNetworkProxyRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Latest live managed-proxy runtime, or `null` when the proxy is inactive."
+    },
     "threadId": {
       "type": "string"
     },

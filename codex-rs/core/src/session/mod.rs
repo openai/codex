@@ -1058,6 +1058,7 @@ impl Session {
             SessionNetworkProxyRuntime {
                 http_addr: proxy.http_addr().to_string(),
                 socks_addr: proxy.socks_addr().to_string(),
+                mitm: spec.mitm_enabled(),
             }
         };
         Ok((network_proxy, session_network_proxy))
@@ -1089,6 +1090,7 @@ impl Session {
             Ok(spec) => spec,
             Err(err) => {
                 warn!("failed to rebuild managed network proxy policy for sandbox change: {err}");
+                self.services.network_proxy.store(None);
                 return;
             }
         };
@@ -1105,6 +1107,7 @@ impl Session {
         if let Some(started_proxy) = self.services.network_proxy.load_full() {
             if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
                 warn!("failed to refresh managed network proxy for sandbox change: {err}");
+                self.services.network_proxy.store(None);
             }
             return;
         }
@@ -1133,6 +1136,39 @@ impl Session {
                 warn!("failed to start managed network proxy for sandbox change: {err}");
             }
         }
+    }
+
+    pub(crate) async fn current_network_proxy_runtime(&self) -> Option<SessionNetworkProxyRuntime> {
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            warn!("managed network proxy refresh semaphore closed while reading runtime");
+            return None;
+        };
+        let permission_profile = {
+            let state = self.state.lock().await;
+            state.session_configuration.permission_profile()
+        };
+        if !Self::managed_network_proxy_active_for_permission_profile(&permission_profile) {
+            return None;
+        }
+
+        let started_proxy = self.services.network_proxy.load_full()?;
+        let proxy = started_proxy.proxy();
+        let config = match proxy.current_cfg().await {
+            Ok(config) => config,
+            Err(err) => {
+                warn!("failed to read managed network proxy runtime config: {err}");
+                return None;
+            }
+        };
+        if !config.network.enabled {
+            return None;
+        }
+
+        Some(SessionNetworkProxyRuntime {
+            http_addr: proxy.http_addr().to_string(),
+            socks_addr: proxy.socks_addr().to_string(),
+            mitm: config.network.mitm,
+        })
     }
 
     #[cfg(test)]

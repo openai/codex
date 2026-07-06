@@ -1186,6 +1186,19 @@
     },
     "ThreadExtra": {
       "description": "Extra app-server data for a thread.",
+      "properties": {
+        "networkProxy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadNetworkProxyRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runtime endpoints for the managed network proxy owned by this live thread."
+        }
+      },
       "type": "object"
     },
     "ThreadHistoryMode": {
@@ -1938,6 +1951,27 @@
           "type": "object"
         }
       ]
+    },
+    "ThreadNetworkProxyRuntime": {
+      "description": "Live managed-proxy details for a thread running on the app-server host.",
+      "properties": {
+        "httpAddr": {
+          "type": "string"
+        },
+        "mitm": {
+          "description": "Whether the proxy intercepts TLS with a managed certificate authority.",
+          "type": "boolean"
+        },
+        "socksAddr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "httpAddr",
+        "mitm",
+        "socksAddr"
+      ],
+      "type": "object"
     },
     "ThreadSource": {
       "type": "string"

@@ -27,6 +27,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -493,6 +494,14 @@ impl CodexThread {
 
     pub fn session_configured(&self) -> SessionConfiguredEvent {
         self.session_configured.clone()
+    }
+
+    /// Returns the managed network proxy runtime currently active for this thread.
+    ///
+    /// Unlike [`Self::session_configured`], this reflects live permission-profile and proxy
+    /// configuration changes made after the thread started.
+    pub async fn current_network_proxy_runtime(&self) -> Option<SessionNetworkProxyRuntime> {
+        self.codex.session.current_network_proxy_runtime().await
     }
 
     pub(crate) fn is_running(&self) -> bool {

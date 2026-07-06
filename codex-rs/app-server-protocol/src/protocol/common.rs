@@ -3632,6 +3632,7 @@ mod tests {
                     multi_agent_mode: Default::default(),
                     personality: None,
                 },
+                network_proxy: None,
             });
 
         assert_eq!(

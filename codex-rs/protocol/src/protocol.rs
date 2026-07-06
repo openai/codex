@@ -3848,6 +3848,9 @@ pub struct SkillToolDependency {
 pub struct SessionNetworkProxyRuntime {
     pub http_addr: String,
     pub socks_addr: String,
+    /// Whether the runtime proxy intercepts TLS with its managed CA.
+    #[serde(default)]
+    pub mitm: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, TS)]

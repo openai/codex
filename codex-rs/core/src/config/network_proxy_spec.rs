@@ -85,6 +85,11 @@ impl NetworkProxySpec {
         self.config.network.enable_socks5
     }
 
+    /// Returns whether this proxy intercepts TLS instead of tunneling it end to end.
+    pub fn mitm_enabled(&self) -> bool {
+        self.config.network.mitm
+    }
+
     pub(crate) fn from_config_and_constraints(
         config: NetworkProxyConfig,
         requirements: Option<NetworkConstraints>,

@@ -3,6 +3,7 @@ use super::ThreadItem;
 use super::ThreadStatus;
 use super::TurnStatus;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::protocol::SessionNetworkProxyRuntime as CoreSessionNetworkProxyRuntime;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode as CoreThreadHistoryMode;
@@ -150,10 +151,34 @@ impl From<ThreadSource> for CoreThreadSource {
 }
 
 /// Extra app-server data for a thread.
+#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadExtra {
+    /// Runtime endpoints for the managed network proxy owned by this live thread.
+    pub network_proxy: Option<ThreadNetworkProxyRuntime>,
+}
+
+/// Live managed-proxy details for a thread running on the app-server host.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct ThreadExtra {}
+pub struct ThreadNetworkProxyRuntime {
+    pub http_addr: String,
+    pub socks_addr: String,
+    /// Whether the proxy intercepts TLS with a managed certificate authority.
+    pub mitm: bool,
+}
+
+impl From<CoreSessionNetworkProxyRuntime> for ThreadNetworkProxyRuntime {
+    fn from(value: CoreSessionNetworkProxyRuntime) -> Self {
+        Self {
+            http_addr: value.http_addr,
+            socks_addr: value.socks_addr,
+            mitm: value.mitm,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

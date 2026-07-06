@@ -37,6 +37,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -73,6 +74,52 @@ async fn start_thread_with_model(
     )
     .await??;
     to_response(response)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn thread_start_returns_live_managed_proxy_in_experimental_extra() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+default_permissions = "workspace"
+
+[features]
+network_proxy = true
+
+[permissions.workspace.network]
+enabled = true
+mode = "full"
+proxy_url = "http://127.0.0.1:0"
+enable_socks5 = false
+"#,
+    )?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ThreadStartResponse = to_response(response)?;
+    let network_proxy = response
+        .thread
+        .extra
+        .and_then(|extra| extra.network_proxy)
+        .context("thread.extra.networkProxy should contain the live managed proxy")?;
+    let http_addr = network_proxy.http_addr.parse::<SocketAddr>()?;
+    let socks_addr = network_proxy.socks_addr.parse::<SocketAddr>()?;
+
+    assert!(http_addr.ip().is_loopback());
+    assert_ne!(http_addr.port(), 0);
+    assert!(socks_addr.ip().is_loopback());
+    assert!(!network_proxy.mitm);
+    Ok(())
 }
 
 #[tokio::test]
