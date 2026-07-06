@@ -137,6 +137,10 @@ impl Drop for StartupGuard<'_> {
 
 impl Inner {
     pub(crate) async fn ensure_session(self: &Arc<Self>, config: SessionConfig) -> Result<()> {
+        anyhow::ensure!(
+            !self.terminated.load(Ordering::SeqCst),
+            "terminal browser has been terminated"
+        );
         let expected_network_policy = config.network_policy.clone();
         let process_exited = self
             .process
@@ -190,6 +194,10 @@ impl Inner {
 
     async fn start_session(self: &Arc<Self>, config: SessionConfig) -> Result<()> {
         let binary = self.validated_binary().await?;
+        anyhow::ensure!(
+            !self.terminated.load(Ordering::SeqCst),
+            "terminal browser has been terminated"
+        );
         self.closing.store(/*val*/ false, Ordering::SeqCst);
         let persistent_profile = self.selected_profile_resources()?;
         let runtime =
@@ -278,6 +286,10 @@ impl Inner {
         });
         startup.set_exit_task(exit_task);
         let mut session_slot = self.session.lock().await;
+        anyhow::ensure!(
+            !self.terminated.load(Ordering::SeqCst),
+            "terminal browser has been terminated"
+        );
         let CommittedStartup {
             profile_lock,
             output_task,
@@ -296,11 +308,17 @@ impl Inner {
         });
         drop(session_slot);
         self.update_view(|view| {
-            view.status = BrowserStatus::Running;
-            if !target.title.is_empty() {
-                view.title = Some(target.title);
+            if !self.terminated.load(Ordering::SeqCst) {
+                view.status = BrowserStatus::Running;
+                if !target.title.is_empty() {
+                    view.title = Some(target.title);
+                }
             }
         });
+        if self.terminated.load(Ordering::SeqCst) {
+            self.close_session().await;
+            anyhow::bail!("terminal browser has been terminated");
+        }
         Ok(())
     }
 
@@ -355,6 +373,52 @@ impl Inner {
             session.exit_task.abort();
             session.navigation_policy_task.abort();
         }
+        let status = if self
+            .binary
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+        {
+            BrowserStatus::Idle
+        } else {
+            self.view
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .status
+                .clone()
+        };
+        self.update_view(|view| {
+            view.status = status;
+            view.visible = false;
+            view.title = None;
+            view.url = None;
+            view.human_control = false;
+        });
+    }
+
+    pub(crate) fn terminate_now(&self) {
+        self.terminated.store(/*val*/ true, Ordering::SeqCst);
+        self.closing.store(/*val*/ true, Ordering::SeqCst);
+        self.human_control.store(/*val*/ false, Ordering::SeqCst);
+        self.human_control_generation
+            .fetch_add(/*val*/ 1, Ordering::SeqCst);
+
+        if let Some(process) = self
+            .process
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            process.terminate();
+        }
+        if let Ok(mut session) = self.session.try_lock()
+            && let Some(session) = session.take()
+        {
+            session.output_task.abort();
+            session.exit_task.abort();
+            session.navigation_policy_task.abort();
+        }
+
         let status = if self
             .binary
             .read()

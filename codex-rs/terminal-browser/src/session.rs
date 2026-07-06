@@ -51,6 +51,7 @@ pub(crate) struct Inner {
     pub(crate) process: Mutex<Option<Arc<ProcessHandle>>>,
     pub(crate) resize_tx: watch::Sender<TerminalSize>,
     pub(crate) closing: AtomicBool,
+    pub(crate) terminated: AtomicBool,
     pub(crate) human_control: AtomicBool,
     pub(crate) human_control_transition: AtomicBool,
     pub(crate) human_control_generation: AtomicU64,
@@ -112,6 +113,7 @@ impl TerminalBrowser {
                 process: Mutex::new(/*t*/ None),
                 resize_tx,
                 closing: AtomicBool::new(/*v*/ false),
+                terminated: AtomicBool::new(/*v*/ false),
                 human_control: AtomicBool::new(/*v*/ false),
                 human_control_transition: AtomicBool::new(/*v*/ false),
                 human_control_generation: AtomicU64::new(/*v*/ 0),
@@ -234,6 +236,13 @@ impl TerminalBrowser {
     pub async fn close(&self) {
         let _operation = self.inner.operation.lock().await;
         self.inner.close_session().await;
+    }
+
+    /// Immediately terminates the browser process during application teardown.
+    ///
+    /// Normal lifecycle paths should prefer [`Self::close`] so Carbonyl can exit gracefully.
+    pub fn terminate(&self) {
+        self.inner.terminate_now();
     }
 }
 

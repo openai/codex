@@ -34,6 +34,26 @@ async fn open_requires_network_enabled_by_the_active_permission_profile() {
 }
 
 #[tokio::test]
+async fn emergency_termination_prevents_future_browser_startup() {
+    let browser = TerminalBrowser::discover();
+    browser
+        .set_network_policy(BrowserNetworkPolicy::Direct)
+        .await;
+
+    browser.terminate();
+
+    let error = browser
+        .execute(
+            "test-session",
+            "open",
+            serde_json::json!({ "url": "https://example.com" }),
+        )
+        .await
+        .expect_err("terminated browser should reject startup");
+    assert_eq!(error.to_string(), "terminal browser has been terminated");
+}
+
+#[tokio::test]
 async fn model_actions_are_rejected_during_human_control() {
     let browser = TerminalBrowser::discover();
     browser
