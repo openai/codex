@@ -10,6 +10,8 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::terminal_browser::TERMINAL_BROWSER_NAMESPACE;
+use crate::terminal_browser::dynamic_tool_response;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
@@ -229,6 +231,53 @@ impl App {
             {
                 tracing::warn!("{err}");
             }
+            return;
+        }
+
+        if let ServerRequest::DynamicToolCall { request_id, params } = &request
+            && params.namespace.as_deref() == Some(TERMINAL_BROWSER_NAMESPACE)
+        {
+            if !self.terminal_browser_request_matches_active_thread(&params.thread_id) {
+                self.app_event_tx
+                    .send(AppEvent::TerminalBrowserToolCompleted {
+                        request_id: request_id.clone(),
+                        response: dynamic_tool_response(Err(anyhow::anyhow!(
+                            "terminal browser permission policy only allows the active TUI thread"
+                        ))),
+                        profile_approval: None,
+                    });
+                return;
+            }
+            let Some(browser) = self.terminal_browser_for_active_request().await else {
+                self.app_event_tx
+                    .send(AppEvent::TerminalBrowserToolCompleted {
+                        request_id: request_id.clone(),
+                        response: dynamic_tool_response(Err(anyhow::anyhow!(
+                            "terminal browser permission policy disables this TUI session"
+                        ))),
+                        profile_approval: None,
+                    });
+                return;
+            };
+            let request_id = request_id.clone();
+            let session_key = params.thread_id.clone();
+            let tool = params.tool.clone();
+            let arguments = params.arguments.clone();
+            let profile_approval = (tool == "profile")
+                .then(|| crate::terminal_browser::requested_profile_command(&arguments))
+                .flatten()
+                .and_then(|command| self.terminal_browser_profile_approval(command));
+            let app_event_tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let result = browser.execute(&session_key, &tool, arguments).await;
+                let profile_approval = result.is_ok().then_some(profile_approval).flatten();
+                let response = dynamic_tool_response(result);
+                app_event_tx.send(AppEvent::TerminalBrowserToolCompleted {
+                    request_id,
+                    response,
+                    profile_approval,
+                });
+            });
             return;
         }
 

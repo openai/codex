@@ -13,6 +13,7 @@ use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
+use crate::terminal_browser::dynamic_tool_specs;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
@@ -110,6 +111,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1405,6 +1407,12 @@ fn thread_start_params_from_config(
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
+    let dynamic_tools = (matches!(thread_params_mode, ThreadParamsMode::Embedded)
+        && cfg!(any(target_os = "macos", target_os = "linux"))
+        && config.features.enabled(Feature::TerminalBrowser)
+        && config.permissions.network_sandbox_policy().is_enabled()
+        && config.permissions.network.is_none())
+    .then(dynamic_tool_specs);
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()
@@ -1432,6 +1440,7 @@ fn thread_start_params_from_config(
         developer_instructions: with_terminal_visualization_instructions(
             config, /*control_instructions*/ None,
         ),
+        dynamic_tools,
         ..ThreadStartParams::default()
     }
 }
@@ -1803,6 +1812,37 @@ mod tests {
             .expect("config should build")
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    async fn build_terminal_browser_config(managed_network: bool) -> Config {
+        let codex_home = tempfile::tempdir().expect("terminal-browser config home");
+        let mut cli_overrides = vec![(
+            "features.terminal_browser".to_string(),
+            toml::Value::Boolean(true),
+        )];
+        if managed_network {
+            cli_overrides.push((
+                "features.network_proxy".to_string(),
+                toml::Value::Boolean(true),
+            ));
+        }
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+            .cli_overrides(cli_overrides)
+            .harness_overrides(ConfigOverrides {
+                permission_profile: Some(PermissionProfile::workspace_write_with(
+                    &[],
+                    NetworkSandboxPolicy::Enabled,
+                    /*exclude_tmpdir_env_var*/ false,
+                    /*exclude_slash_tmp*/ false,
+                )),
+                ..ConfigOverrides::default()
+            })
+            .build()
+            .await
+            .expect("terminal-browser config should build")
+    }
+
     fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {
         RateLimitSnapshot {
             limit_id: Some(limit_id.to_string()),
@@ -1908,6 +1948,73 @@ mod tests {
         );
         assert_eq!(params.model_provider, Some(config.model_provider_id));
         assert_eq!(params.thread_source, Some(ThreadSource::User));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn terminal_browser_dynamic_tools_require_supported_embedded_network_mode() {
+        let direct_config = build_terminal_browser_config(/*managed_network*/ false).await;
+        let managed_config = build_terminal_browser_config(/*managed_network*/ true).await;
+        assert_eq!(
+            direct_config.permissions.network_sandbox_policy(),
+            NetworkSandboxPolicy::Enabled
+        );
+        assert!(direct_config.permissions.network.is_none());
+        assert!(managed_config.permissions.network.is_some());
+
+        let mut feature_disabled_config = direct_config.clone();
+        feature_disabled_config
+            .features
+            .disable(Feature::TerminalBrowser)
+            .expect("terminal-browser feature should be mutable in tests");
+        let mut restricted_config = direct_config.clone();
+        restricted_config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("read-only permission profile should be allowed in tests");
+        assert_eq!(
+            restricted_config.permissions.network_sandbox_policy(),
+            NetworkSandboxPolicy::Restricted
+        );
+
+        let cases = [
+            (
+                "embedded direct",
+                &direct_config,
+                ThreadParamsMode::Embedded,
+                true,
+            ),
+            (
+                "remote direct",
+                &direct_config,
+                ThreadParamsMode::Remote,
+                false,
+            ),
+            (
+                "feature disabled",
+                &feature_disabled_config,
+                ThreadParamsMode::Embedded,
+                false,
+            ),
+            (
+                "network restricted",
+                &restricted_config,
+                ThreadParamsMode::Embedded,
+                false,
+            ),
+            (
+                "managed network",
+                &managed_config,
+                ThreadParamsMode::Embedded,
+                false,
+            ),
+        ];
+        for (name, config, mode, expected) in cases {
+            let params = thread_start_params_from_config(
+                config, mode, /*remote_cwd_override*/ None, /*session_start_source*/ None,
+            );
+            assert_eq!(params.dynamic_tools.is_some(), expected, "{name}");
+        }
     }
 
     #[tokio::test]
