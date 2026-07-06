@@ -8,6 +8,8 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
+use crate::compact_model_fallback::is_model_unavailable_error;
+use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -57,6 +59,7 @@ const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
+    fallback_step_context: Option<Arc<StepContext>>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -65,6 +68,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
+        fallback_step_context.as_ref(),
         Some(client_session),
         initial_context_injection,
         CompactionTrigger::Auto,
@@ -92,6 +96,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
+        /*fallback_step_context*/ None,
         /*client_session*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
@@ -104,6 +109,7 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
+    fallback_step_context: Option<&Arc<StepContext>>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
@@ -149,9 +155,11 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         step_context,
+        fallback_step_context,
         client_session,
         initial_context_injection,
         compaction_metadata,
+        reason,
         &mut analytics_details,
     )
     .await;
@@ -186,9 +194,11 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
-    client_session: Option<&mut ModelClientSession>,
+    fallback_step_context: Option<&Arc<StepContext>>,
+    mut client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    reason: CompactionReason,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
@@ -203,21 +213,51 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
 
+    let attempt = run_remote_compact_v2_attempt(
+        sess,
+        step_context,
+        client_session.as_deref_mut(),
+        &compaction_trace,
+        compaction_metadata,
+        analytics_details,
+    )
+    .await;
+    let (attempt, compaction_turn_context) = match attempt {
+        Ok(attempt) => (attempt, turn_context),
+        Err(error) => {
+            let Some(fallback_step_context) = fallback_step_context else {
+                return Err(error);
+            };
+            if !is_model_unavailable_error(&error, turn_context.model_info.slug.as_str()) {
+                return Err(error);
+            }
+            let fallback_result = run_remote_compact_v2_attempt(
+                sess,
+                fallback_step_context,
+                client_session.as_deref_mut(),
+                &compaction_trace,
+                compaction_metadata,
+                analytics_details,
+            )
+            .await;
+            record_model_fallback(
+                &sess.services.session_telemetry,
+                turn_context.model_info.slug.as_str(),
+                fallback_step_context.turn.model_info.slug.as_str(),
+                reason,
+                CompactionImplementation::ResponsesCompactionV2,
+                fallback_result.is_ok(),
+            );
+            (fallback_result?, &fallback_step_context.turn)
+        }
+    };
     let RemoteCompactV2Attempt {
         trace_input_history,
         prompt_input,
         compaction_output,
         token_usage,
         owned_client_session: _owned_client_session,
-    } = run_remote_compact_v2_attempt(
-        sess,
-        step_context,
-        client_session,
-        &compaction_trace,
-        compaction_metadata,
-        analytics_details,
-    )
-    .await?;
+    } = attempt;
     if let Some(token_usage) = token_usage {
         sess.record_rollout_budget_usage(&token_usage)?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
@@ -230,7 +270,7 @@ async fn run_remote_compact_task_inner_impl(
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
-        turn_context.as_ref(),
+        compaction_turn_context.as_ref(),
         compacted_history,
         &initial_context_injection,
     )
@@ -239,7 +279,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(turn_context.to_turn_context_item())
+            Some(compaction_turn_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {
@@ -255,16 +295,16 @@ async fn run_remote_compact_task_inner_impl(
         replacement_history: &new_history,
     });
     sess.replace_compacted_history(
-        turn_context.as_ref(),
+        compaction_turn_context.as_ref(),
         new_history,
         reference_context_item,
         world_state_baseline,
         compacted_item,
     )
     .await;
-    sess.recompute_token_usage(turn_context).await;
+    sess.recompute_token_usage(compaction_turn_context).await;
 
-    sess.emit_turn_item_completed(turn_context, compaction_item)
+    sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;
     Ok(())
 }
