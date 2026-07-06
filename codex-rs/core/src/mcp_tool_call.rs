@@ -96,6 +96,7 @@ mod telemetry;
 
 use telemetry::McpCallMetricOutcome;
 use telemetry::emit_mcp_call_metrics;
+use telemetry::emit_mcp_ui_resource_uri_without_trusted_connector_id_metric;
 use telemetry::mcp_call_metric_outcome;
 use telemetry::record_mcp_call_outcome_span_telemetry;
 
@@ -154,7 +155,30 @@ pub(crate) async fn handle_mcp_tool_call(
     )
     .await;
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
-    let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let is_codex_apps_server = server == CODEX_APPS_MCP_SERVER_NAME;
+    let has_mcp_app_resource_uri = item_metadata
+        .mcp_app_resource_uri
+        .as_deref()
+        .is_some_and(|resource_uri| !resource_uri.is_empty());
+    let is_missing_trusted_connector_id = item_metadata
+        .connector_id
+        .as_deref()
+        .is_none_or(str::is_empty);
+    // These calls cannot migrate from the deprecated top-level URI to appContext.resourceUri.
+    if has_mcp_app_resource_uri && is_missing_trusted_connector_id {
+        let server_kind = if is_codex_apps_server {
+            "codex_apps"
+        } else if manager.is_selected_plugin_mcp_server(&server) {
+            "selected_plugin"
+        } else {
+            "other"
+        };
+        emit_mcp_ui_resource_uri_without_trusted_connector_id_metric(
+            turn_context.as_ref(),
+            server_kind,
+        );
+    }
+    let app_tool_policy = if is_codex_apps_server {
         let annotations = metadata
             .as_ref()
             .and_then(|metadata| metadata.annotations.as_ref());
@@ -174,7 +198,7 @@ pub(crate) async fn handle_mcp_tool_call(
     } else {
         AppToolPolicy::default()
     };
-    let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let approval_mode = if is_codex_apps_server {
         app_tool_policy.approval
     } else if let Some(approval_mode) = {
         // Selected-plugin registrations are absent from config.toml and the legacy plugin manager,
@@ -196,7 +220,7 @@ pub(crate) async fn handle_mcp_tool_call(
         .as_ref()
         .and_then(|metadata| metadata.connector_name.clone());
 
-    if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
+    if is_codex_apps_server && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
             turn_context.as_ref(),
