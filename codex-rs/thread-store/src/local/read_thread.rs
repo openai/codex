@@ -206,7 +206,7 @@ async fn attach_history_if_requested(
     Ok(())
 }
 
-async fn resolve_rollout_path(
+pub(super) async fn resolve_rollout_path(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
     include_archived: bool,
@@ -291,7 +291,7 @@ async fn read_thread_from_rollout_path(
     Ok(thread)
 }
 
-async fn load_history_items(
+pub(super) async fn load_history_items(
     path: &std::path::Path,
 ) -> ThreadStoreResult<Vec<codex_protocol::protocol::RolloutItem>> {
     let (items, _, _) = RolloutRecorder::load_rollout_items(path)
