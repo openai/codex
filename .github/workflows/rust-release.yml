@@ -89,7 +89,7 @@ jobs:
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
@@ -101,7 +101,7 @@ jobs:
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
@@ -114,7 +114,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
@@ -126,7 +126,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -335,6 +335,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
             if [[ "${{ matrix.target }}" == *linux* ]]; then
               cp "target/${{ matrix.target }}/release/${binary}.sigstore" \
@@ -505,7 +508,7 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
@@ -513,7 +516,7 @@ jobs:
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -624,7 +627,7 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
@@ -634,7 +637,7 @@ jobs:
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -711,6 +714,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
 
@@ -920,7 +926,7 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
@@ -930,7 +936,7 @@ jobs:
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
 
     steps:
@@ -987,6 +993,10 @@ jobs:
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
             verify_signed_binary "$binary_path"
 
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
+
             direct_archive_dir="${RUNNER_TEMP}/direct-archive-${binary}-${target}"
             rm -rf "$direct_archive_dir"
             mkdir -p "$direct_archive_dir"
@@ -1018,6 +1028,7 @@ jobs:
           mkdir -p "$package_dir"
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}"
+          verify_signed_binary "${package_dir}/bin/codex-code-mode-host"
 
           if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
             exit 0

@@ -121,11 +121,9 @@ case "$target" in
     ;;
 esac
 
-if [[ "$bundle" == "primary" ]]; then
-  code_mode_host_bin="${entrypoint_dir%/}/codex-code-mode-host${exe_suffix}"
-  if [[ "$code_mode_host_bin_provided" == "false" && -f "$code_mode_host_bin" ]]; then
-    resource_args+=(--code-mode-host-bin "$code_mode_host_bin")
-  fi
+code_mode_host_bin="${entrypoint_dir%/}/codex-code-mode-host${exe_suffix}"
+if [[ "$code_mode_host_bin_provided" == "false" && -f "$code_mode_host_bin" ]]; then
+  resource_args+=(--code-mode-host-bin "$code_mode_host_bin")
 fi
 
 entrypoint_name="$entrypoint"

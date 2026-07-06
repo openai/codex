@@ -11,7 +11,7 @@ The builder creates a canonical Codex package directory:
 ├── codex-package.json
 ├── bin
 │   ├── <entrypoint>[.exe]
-│   └── codex-code-mode-host[.exe]         # codex variant only
+│   └── codex-code-mode-host[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
@@ -41,8 +41,7 @@ grouped `cargo build` command per package when they are needed and no prebuilt
 override was provided:
 
 - all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
-- all targets, `codex` variant: `codex-code-mode-host`, unless
-  `--code-mode-host-bin` is provided
+- all targets: `codex-code-mode-host`, unless `--code-mode-host-bin` is provided
 - Linux targets: `bwrap`, unless `--bwrap-bin` is provided
 - Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`,
   unless the corresponding prebuilt helper flags are provided
@@ -53,9 +52,8 @@ explicit target. Release jobs that already built and signed/notarized the
 entrypoint should pass `--entrypoint-bin` so the package contains that exact
 binary instead of rebuilding it.
 
-Release jobs should likewise pass `--code-mode-host-bin` for the `codex`
-variant so the package contains the signed host executable beside the signed
-Codex entrypoint.
+Release jobs should likewise pass `--code-mode-host-bin` so the package contains
+the signed host executable beside the signed entrypoint.
 
 Release jobs that already built package resource binaries should also pass the
 corresponding resource flags: `--bwrap-bin` for Linux packages, and

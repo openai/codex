@@ -15,13 +15,13 @@ from codex_package.targets import TARGET_SPECS
 
 
 class PackageLayoutTest(unittest.TestCase):
-    def test_codex_package_places_code_mode_host_beside_entrypoint(self) -> None:
+    def test_app_server_package_places_code_mode_host_beside_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             package_dir = root / "package"
             package_dir.mkdir()
             inputs = PackageInputs(
-                entrypoint_bin=touch_executable(root / "codex"),
+                entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
                 rg_bin=touch_executable(root / "rg"),
                 zsh_bin=None,
@@ -33,13 +33,13 @@ class PackageLayoutTest(unittest.TestCase):
             build_package_dir(
                 package_dir,
                 "1.2.3",
-                PACKAGE_VARIANTS["codex"],
+                PACKAGE_VARIANTS["codex-app-server"],
                 TARGET_SPECS["x86_64-unknown-linux-musl"],
                 inputs,
             )
             validate_package_dir(
                 package_dir,
-                PACKAGE_VARIANTS["codex"],
+                PACKAGE_VARIANTS["codex-app-server"],
                 TARGET_SPECS["x86_64-unknown-linux-musl"],
                 include_zsh=False,
             )

@@ -74,11 +74,11 @@ class SourceBinariesForTargetTest(unittest.TestCase):
             ["codex-command-runner", "codex-windows-sandbox-setup"],
         )
 
-    def test_missing_codex_code_mode_host_is_built(self) -> None:
+    def test_missing_code_mode_host_is_built_for_app_server(self) -> None:
         self.assertEqual(
             source_binaries_for_target(
                 TARGET_SPECS["aarch64-apple-darwin"],
-                PACKAGE_VARIANTS["codex"],
+                PACKAGE_VARIANTS["codex-app-server"],
                 build_entrypoint=False,
                 build_code_mode_host=True,
                 build_bwrap=False,

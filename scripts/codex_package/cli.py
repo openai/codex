@@ -86,8 +86,8 @@ def parse_args() -> argparse.Namespace:
         "--code-mode-host-bin",
         type=Path,
         help=(
-            "Optional prebuilt codex-code-mode-host executable for the codex "
-            "package variant. If omitted, the host is built with Cargo."
+            "Optional prebuilt codex-code-mode-host executable. If omitted, "
+            "the host is built with Cargo."
         ),
     )
     parser.add_argument(

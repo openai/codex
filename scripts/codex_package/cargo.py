@@ -17,7 +17,7 @@ CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
 @dataclass(frozen=True)
 class SourceBuildOutputs:
     entrypoint_bin: Path
-    code_mode_host_bin: Path | None
+    code_mode_host_bin: Path
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
@@ -35,10 +35,8 @@ def build_source_binaries(
     codex_command_runner_bin: Path | None,
     codex_windows_sandbox_setup_bin: Path | None,
 ) -> SourceBuildOutputs:
-    validate_prebuilt_inputs(
+    validate_prebuilt_resource_inputs(
         spec,
-        variant,
-        code_mode_host_bin=code_mode_host_bin,
         bwrap_bin=bwrap_bin,
         codex_command_runner_bin=codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=codex_windows_sandbox_setup_bin,
@@ -47,7 +45,7 @@ def build_source_binaries(
         spec,
         variant,
         build_entrypoint=entrypoint_bin is None,
-        build_code_mode_host=variant.name == "codex" and code_mode_host_bin is None,
+        build_code_mode_host=code_mode_host_bin is None,
         build_bwrap=spec.is_linux and bwrap_bin is None,
         build_codex_command_runner=spec.is_windows and codex_command_runner_bin is None,
         build_codex_windows_sandbox_setup=spec.is_windows
@@ -66,9 +64,7 @@ def build_source_binaries(
             cmd.extend(["--bin", binary])
 
         cargo_env = None
-        if entrypoint_bin is None or (
-            variant.name == "codex" and code_mode_host_bin is None
-        ):
+        if entrypoint_bin is None or code_mode_host_bin is None:
             codex_v8_env = resolve_codex_v8_cargo_env(spec)
             if codex_v8_env:
                 cargo_env = {**os.environ, **codex_v8_env}
@@ -87,11 +83,10 @@ def build_source_binaries(
             entrypoint_bin,
             output_dir / variant.entrypoint_name(spec),
         ),
-        code_mode_host_bin=resolve_output_path(
-            code_mode_host_bin,
-            output_dir / f"codex-code-mode-host{spec.exe_suffix}"
-            if variant.name == "codex"
-            else None,
+        code_mode_host_bin=(
+            code_mode_host_bin.resolve()
+            if code_mode_host_bin is not None
+            else output_dir / f"codex-code-mode-host{spec.exe_suffix}"
         ),
         bwrap_bin=resolve_output_path(
             bwrap_bin,
@@ -134,19 +129,13 @@ def source_binaries_for_target(
     return binaries
 
 
-def validate_prebuilt_inputs(
+def validate_prebuilt_resource_inputs(
     spec: TargetSpec,
-    variant: PackageVariant,
     *,
-    code_mode_host_bin: Path | None,
     bwrap_bin: Path | None,
     codex_command_runner_bin: Path | None,
     codex_windows_sandbox_setup_bin: Path | None,
 ) -> None:
-    if code_mode_host_bin is not None and variant.name != "codex":
-        raise RuntimeError(
-            "--code-mode-host-bin is only supported for the codex package variant."
-        )
     if bwrap_bin is not None and not spec.is_linux:
         raise RuntimeError("--bwrap-bin is only supported for Linux targets.")
     if codex_command_runner_bin is not None and not spec.is_windows:

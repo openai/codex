@@ -56,14 +56,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
