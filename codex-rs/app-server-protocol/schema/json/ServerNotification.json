@@ -2384,6 +2384,12 @@
       ],
       "type": "object"
     },
+    "McpServerStartupFailureReason": {
+      "enum": [
+        "reauthenticationRequired"
+      ],
+      "type": "string"
+    },
     "McpServerStartupState": {
       "enum": [
         "starting",
@@ -2399,6 +2405,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "failureReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStartupFailureReason"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "name": {
@@ -2422,6 +2438,18 @@
     },
     "McpToolCallAppContext": {
       "properties": {
+        "actionName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "connectorId": {
           "type": "string"
         },
@@ -2432,6 +2460,12 @@
           ]
         },
         "resourceUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "templateId": {
           "type": [
             "string",
             "null"
@@ -2679,13 +2713,29 @@
       "type": "object"
     },
     "MultiAgentMode": {
-      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-      "enum": [
-        "none",
-        "explicitRequestOnly",
-        "proactive"
-      ],
-      "type": "string"
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomMultiAgentMode",
+          "type": "object"
+        }
+      ]
     },
     "NetworkAccess": {
       "enum": [
@@ -3882,6 +3932,13 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
+      ],
+      "type": "string"
     },
     "ThreadId": {
       "type": "string"

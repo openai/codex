@@ -56,6 +56,8 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_agent_mode_hint_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
     pub tool_namespace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,16 +143,28 @@ pub enum CurrentTimeSource {
     External,
 }
 
+/// Which inference boundaries may receive current-time reminders.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentTimeReminderDeliveryMode {
+    /// Allow a reminder before any inference request once the interval is due.
+    #[default]
+    AnyInference,
+    /// Allow reminders after user input or tool output; new context windows still force one.
+    AfterUserOrToolOutput,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CurrentTimeReminderConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1))]
     pub reminder_interval_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_source: Option<CurrentTimeSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<CurrentTimeReminderDeliveryMode>,
     /// Expose the input-interruptible `clock.sleep` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sleep_tool: Option<bool>,

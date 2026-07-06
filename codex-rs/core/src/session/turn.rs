@@ -167,12 +167,18 @@ pub(crate) async fn run_turn(
     // run_turn owns the step used to seed context and make the first sampling request.
     let first_step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     // Keep the exact model-visible state used by this turn and its inline compactions.
-    let mut world_state = sess
-        .record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
-        .await;
+    let (mut world_state, display_roots) = tokio::join!(
+        sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
+        turn_diff_display_roots(turn_context.as_ref()),
+    );
 
-    let Some((injection_items, explicitly_enabled_connectors)) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+        &sess,
+        first_step_context.as_ref(),
+        &input,
+        &cancellation_token,
+    )
+    .await
     else {
         return Ok(None);
     };
@@ -204,7 +210,6 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
         TurnDiffTracker::with_environment_display_roots(display_roots),
     ));
@@ -504,10 +509,11 @@ async fn run_hooks_and_record_inputs(
 #[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    let turn_context = step_context.turn.as_ref();
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
@@ -538,17 +544,14 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
+    let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .load_full()
+        match step_context
+            .mcp
+            .manager_arc()
             .list_all_tools()
             .or_cancel(cancellation_token)
             .await
@@ -1177,7 +1180,7 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
-    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
@@ -1189,9 +1192,7 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
+    let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
@@ -1927,6 +1928,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut streamed_items = HashMap::<String, TurnItem>::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1985,18 +1987,44 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                let completes_active_tool_call = active_tool_argument_diff_consumer
+                    .as_ref()
+                    .is_some_and(|(active_call_id, _)| {
+                        matches!(
+                            &item,
+                            ResponseItem::CustomToolCall { call_id, .. }
+                                if call_id == active_call_id
+                        )
+                    });
+                if completes_active_tool_call
+                    && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
-                } else {
-                    None
+                let completed_item_id = item.id().map(str::to_owned);
+                let is_tool_call = matches!(
+                    &item,
+                    ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::FunctionCall { .. }
+                        | ResponseItem::ToolSearchCall { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                );
+                if completed_item_id.is_none() && !is_tool_call {
+                    warn!("dropping non-tool output_item.done event without item ID");
+                    continue;
+                }
+                let completes_active_item = match (&completed_item_id, active_item.as_ref()) {
+                    (Some(completed_item_id), Some(active)) => completed_item_id == &active.id(),
+                    _ => false,
                 };
-                active_item_is_streaming_to_client = false;
+                let previously_streamed_item = completed_item_id
+                    .as_deref()
+                    .and_then(|item_id| streamed_items.remove(item_id));
+                if completes_active_item {
+                    active_item = None;
+                    active_item_is_streaming_to_client = false;
+                }
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2079,8 +2107,14 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
-                    let tool_name = ToolName::plain(name.as_str());
+                if let ResponseItem::CustomToolCall {
+                    call_id,
+                    name,
+                    namespace,
+                    ..
+                } = &item
+                {
+                    let tool_name = ToolName::new(namespace.clone(), name.as_str());
                     active_tool_argument_diff_consumer = tool_runtime
                         .create_diff_consumer(&tool_name)
                         .map(|consumer| (call_id.clone(), consumer));
@@ -2145,6 +2179,7 @@ async fn try_run_sampling_request(
                             )
                             .await;
                         }
+                        streamed_items.insert(turn_item.id(), turn_item.clone());
                     }
                     active_item = Some(turn_item);
                     active_item_is_streaming_to_client = stream_item_to_client;
@@ -2281,39 +2316,47 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
+                item_id,
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
-                        continue;
-                    }
+                if defer_streamed_turn_items_for_contributors {
+                    continue;
+                }
+                if streamed_items.contains_key(&item_id) {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id,
                         delta,
                         summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic(format!(
+                        "ReasoningSummaryDelta without streamed item {item_id}"
+                    ));
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
-                        continue;
-                    }
+            ResponseEvent::ReasoningSummaryPartAdded {
+                item_id,
+                summary_index,
+            } => {
+                if defer_streamed_turn_items_for_contributors {
+                    continue;
+                }
+                if streamed_items.contains_key(&item_id) {
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id,
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    error_or_panic(format!(
+                        "ReasoningSummaryPartAdded without streamed item {item_id}"
+                    ));
                 }
             }
             ResponseEvent::ReasoningContentDelta {

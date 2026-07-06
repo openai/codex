@@ -101,6 +101,7 @@ pub enum ResponseEvent {
         delta: String,
     },
     ReasoningSummaryDelta {
+        item_id: String,
         delta: String,
         summary_index: i64,
     },
@@ -109,6 +110,7 @@ pub enum ResponseEvent {
         content_index: i64,
     },
     ReasoningSummaryPartAdded {
+        item_id: String,
         summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),
@@ -121,21 +123,12 @@ pub struct SafetyBuffering {
     pub reasons: Vec<String>,
     #[serde(skip)]
     pub show_buffering_ui: bool,
-    #[serde(skip)]
+    #[serde(rename = "retry_model")]
     pub faster_model: Option<String>,
-}
-
-impl SafetyBuffering {
-    pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
-        self.show_buffering_ui = treatment.show_buffering_ui;
-        self.faster_model.clone_from(&treatment.faster_model);
-        self
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SafetyBufferingTreatment {
-    pub show_buffering_ui: bool,
     pub faster_model: Option<String>,
 }
 

@@ -718,6 +718,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
+        allow_provider_model_fallback: false,
         user_instructions: Default::default(),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
@@ -726,8 +727,10 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         skills_service,
         plugins_manager,
         mcp_manager,
+        code_mode_session_provider: Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         extensions: codex_extension_api::empty_extension_registry(),
         conversation_history: InitialHistory::New,
+        requested_history_mode: None,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),

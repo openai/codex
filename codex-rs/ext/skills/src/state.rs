@@ -18,6 +18,7 @@ use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSourceKind;
+use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::sources::SkillProviders;
 
@@ -26,21 +27,17 @@ const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
-    selected_roots: Vec<SelectedCapabilityRoot>,
     orchestrator_skills_available: bool,
+    executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
 impl SkillsThreadState {
-    pub(crate) fn new(
-        config: SkillsExtensionConfig,
-        selected_roots: Vec<SelectedCapabilityRoot>,
-        orchestrator_skills_available: bool,
-    ) -> Self {
+    pub(crate) fn new(config: SkillsExtensionConfig, orchestrator_skills_available: bool) -> Self {
         Self {
             config: Mutex::new(config),
-            selected_roots,
             orchestrator_skills_available,
+            executor_cache: Mutex::new(Vec::new()),
             orchestrator_cache: Mutex::new(None),
         }
     }
@@ -59,12 +56,31 @@ impl SkillsThreadState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
     }
 
-    pub(crate) fn selected_roots(&self) -> &[SelectedCapabilityRoot] {
-        &self.selected_roots
-    }
-
     pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
         self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
+    }
+
+    /// Returns catalogs for stable selected roots.
+    ///
+    /// The first catalog returned for a root remains cached until this thread state is dropped.
+    /// Environment availability only controls whether the root is projected into the current
+    /// step; it never invalidates the cache. There is intentionally no filesystem watcher or
+    /// content-based invalidation because selected environment roots are treated as stable.
+    pub(crate) async fn executor_catalog_snapshot(
+        &self,
+        providers: &SkillProviders,
+        mut query: SkillListQuery,
+    ) -> SkillCatalog {
+        let roots = std::mem::take(&mut query.executor_roots);
+        let mut catalog = SkillCatalog::default();
+        for root in roots {
+            query.executor_roots = vec![root.clone()];
+            catalog.extend(
+                self.executor_root_catalog(providers, root, query.clone())
+                    .await,
+            );
+        }
+        catalog
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(
@@ -140,6 +156,42 @@ impl SkillsThreadState {
         *cache = Some(Arc::clone(&next_cache));
         next_cache
     }
+
+    async fn executor_root_catalog(
+        &self,
+        providers: &SkillProviders,
+        root: SelectedCapabilityRoot,
+        query: SkillListQuery,
+    ) -> SkillCatalog {
+        if let Some(cached) = self
+            .executor_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|cached| cached.root == root)
+        {
+            return cached.catalog.clone();
+        }
+
+        let discovered = providers.list_executor_for_turn(query).await;
+        let mut cache = self
+            .executor_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cache.iter().find(|cached| cached.root == root) {
+            return cached.catalog.clone();
+        }
+        cache.push(CachedExecutorCatalog {
+            root,
+            catalog: discovered.clone(),
+        });
+        discovered
+    }
+}
+
+struct CachedExecutorCatalog {
+    root: SelectedCapabilityRoot,
+    catalog: SkillCatalog,
 }
 
 struct OrchestratorGenerationCache {
@@ -204,3 +256,6 @@ pub(crate) struct SkillsTurnState {
     pub(crate) warnings: Vec<String>,
     pub(crate) main_prompts_injected: bool,
 }
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExecutorSkillsStepState(pub(crate) SkillCatalog);

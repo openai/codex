@@ -125,6 +125,21 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("safety_buffering_retry_prompt", popup);
 
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let opened_url = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::OpenUrlInBrowser { url }) => break url,
+            Ok(_) => continue,
+            Err(err) => panic!("expected learn-more URL event: {err}"),
+        }
+    };
+    assert_eq!(opened_url, "https://help.openai.com/en/articles/20001326");
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let (event_thread_id, event_turn_id, model, turn) = loop {
         match rx.try_recv() {
@@ -146,7 +161,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
 }
 
 #[tokio::test]
-async fn safety_buffering_stops_retrying_after_agent_message_starts() {
+async fn safety_buffering_remains_visible_until_turn_completes() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
     chat.handle_server_notification(
@@ -162,6 +177,11 @@ async fn safety_buffering_stops_retrying_after_agent_message_starts() {
     chat.on_agent_message_delta("Visible response".to_string());
 
     assert!(!chat.can_retry_safety_buffered_turn(turn_id));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+
+    handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
+
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
 }
 
 #[tokio::test]
@@ -196,6 +216,9 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
         Some(ReplayKind::ThreadSnapshot),
     );
     assert_eq!(render_popup(&chat), popup);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
 }
 
 #[tokio::test]
@@ -1151,8 +1174,8 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
-    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(rendered.contains("This content can't be shown"));
+    assert!(rendered.contains("extra caution with cybersecurity requests"));
     assert!(!rendered.contains("server fallback message"));
     assert!(!chat.bottom_pane.is_task_running());
 }
@@ -1171,6 +1194,7 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
         assert_eq!(cells.len(), 1);
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
+        assert!(rendered.contains("biological research"));
         assert!(!rendered.contains("Invalid prompt:"));
     }
 }

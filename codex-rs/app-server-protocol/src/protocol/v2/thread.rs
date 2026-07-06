@@ -4,6 +4,7 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadHistoryMode;
 use super::ThreadItem;
 use super::ThreadSource;
 use super::Turn;
@@ -57,6 +58,11 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    /// Allow a provider with an authoritative static model catalog to replace an unavailable
+    /// requested model with its default.
+    #[experimental("thread/start.allowProviderModelFallback")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_provider_model_fallback: bool,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -100,6 +106,10 @@ pub struct ThreadStartParams {
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    /// Persisted thread history contract to use for this new thread.
+    #[experimental("thread/start.historyMode")]
+    #[ts(optional = nullable)]
+    pub history_mode: Option<ThreadHistoryMode>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
     /// Optional client-supplied analytics source classification for this thread.
@@ -483,6 +493,13 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
     pub thread_id: String,
+
+    /// Optional last turn id to fork through, inclusive.
+    ///
+    /// When specified, turns after `last_turn_id` are omitted from the fork.
+    /// The referenced turn cannot be in progress.
+    #[ts(optional = nullable)]
+    pub last_turn_id: Option<String>,
 
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.

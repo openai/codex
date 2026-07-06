@@ -1359,6 +1359,9 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             connector_id: None,
             mcp_app_resource_uri: None,
             link_id: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
             plugin_id: None,
         },
     );
@@ -1648,6 +1651,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,
+                include_skills_usage_instructions: false,
                 supports_reasoning_summaries: false,
                 default_reasoning_summary: ReasoningSummary::Auto,
                 support_verbosity: false,

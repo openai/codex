@@ -448,6 +448,9 @@
             "code_mode": {
               "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
             },
+            "code_mode_host": {
+              "type": "boolean"
+            },
             "code_mode_only": {
               "type": "boolean"
             },
@@ -810,12 +813,15 @@
         "clock_source": {
           "$ref": "#/definitions/CurrentTimeSource"
         },
+        "delivery_mode": {
+          "$ref": "#/definitions/CurrentTimeReminderDeliveryMode"
+        },
         "enabled": {
           "type": "boolean"
         },
         "reminder_interval_seconds": {
           "format": "uint64",
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "sleep_tool": {
@@ -824,6 +830,25 @@
         }
       },
       "type": "object"
+    },
+    "CurrentTimeReminderDeliveryMode": {
+      "description": "Which inference boundaries may receive current-time reminders.",
+      "oneOf": [
+        {
+          "description": "Allow a reminder before any inference request once the interval is due.",
+          "enum": [
+            "any_inference"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Allow reminders after user input or tool output; new context windows still force one.",
+          "enum": [
+            "after_user_or_tool_output"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "CurrentTimeSource": {
       "enum": [
@@ -1724,6 +1749,9 @@
           "maximum": 3600000.0,
           "minimum": 0.0,
           "type": "integer"
+        },
+        "multi_agent_mode_hint_text": {
+          "type": "string"
         },
         "non_code_mode_only": {
           "type": "boolean"
@@ -4788,6 +4816,9 @@
         },
         "code_mode": {
           "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
+        },
+        "code_mode_host": {
+          "type": "boolean"
         },
         "code_mode_only": {
           "type": "boolean"

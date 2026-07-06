@@ -13,6 +13,7 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::telemetry::ExecServerTelemetry;
 
 #[derive(Clone)]
 pub(crate) struct ProcessHandler {
@@ -22,10 +23,11 @@ pub(crate) struct ProcessHandler {
 impl ProcessHandler {
     pub(crate) fn new(
         notifications: RpcNotificationSender,
+        telemetry: ExecServerTelemetry,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
-            process: LocalProcess::new(notifications, runtime_paths),
+            process: LocalProcess::new(notifications, telemetry, runtime_paths),
         }
     }
 
