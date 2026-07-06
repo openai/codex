@@ -162,6 +162,9 @@ pub(super) async fn shutdown_thread(
 ) -> ThreadStoreResult<()> {
     let recorder = store.live_recorder(thread_id).await?;
     let store = store.clone();
+    // The writer can close before this future removes its live-recorder entry. Keep those steps
+    // in one detached task so canceling an arbitrary ThreadStore caller cannot strand a closed
+    // recorder that blocks a later resume.
     tokio::spawn(async move {
         let rollout_path = recorder.rollout_path().to_path_buf();
         recorder.shutdown().await.map_err(thread_store_io_error)?;
@@ -190,6 +193,8 @@ pub(super) async fn discard_thread(
         Err(ThreadStoreError::ThreadNotFound { .. }) => return Ok(()),
         Err(err) => return Err(err),
     };
+    // Discard closes stale recorder clones before removing the lease. Keep that sequence alive if
+    // an arbitrary ThreadStore caller is canceled between the two steps.
     spawn_discard_cleanup(store.clone(), thread_id, recorder)
         .await
         .map_err(|err| ThreadStoreError::Internal {

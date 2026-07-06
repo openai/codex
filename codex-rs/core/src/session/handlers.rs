@@ -630,9 +630,10 @@ async fn shutdown_thread_persistence(
         return ThreadPersistenceShutdown::Closed;
     };
     let failure_context = failure_context.to_owned();
-    // Terminal cleanup must outlive the submission loop. If the loop is canceled while a
-    // graceful shutdown is still waiting on I/O, the same task still reaches the discard
-    // fallback and releases the live-writer lease.
+    // Await a child task so ordinary shutdown still waits for cleanup before completion. If the
+    // submission loop is canceled while graceful shutdown is waiting on I/O, dropping the
+    // JoinHandle detaches the child; it still reaches the discard fallback and releases the
+    // live-writer lease.
     tokio::spawn(async move {
         if let Err(err) = live_thread.shutdown().await {
             warn!("{failure_context}: {err}");
