@@ -179,7 +179,7 @@ impl ReferralClient {
         let description = eligibility
             .description
             .clone()
-            .unwrap_or_else(|| "Invite someone to Codex. Rewards may apply.".to_string());
+            .unwrap_or_else(|| "Invite a friend to Codex.".to_string());
 
         Ok(Some(ReferralOffer {
             description,
