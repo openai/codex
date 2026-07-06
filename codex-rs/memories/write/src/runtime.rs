@@ -261,6 +261,7 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
             config.features.enabled(Feature::ItemIds),
+            config.features.enabled(Feature::ParallelReasoningSummaries),
             /*attestation_provider*/ None,
         );
 
