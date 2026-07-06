@@ -304,28 +304,45 @@ mod imp {
             input: Vec::new(),
         };
         let mut saw_supported_keyboard = false;
+        let mut probe_done = false;
+        let mut input_handoff_deadline = None;
         loop {
             tty.read_available(&mut buffer)?;
-            update_startup_probe(
-                &mut probe,
-                &mut saw_supported_keyboard,
-                &buffer,
-                keyboard_probe,
-            );
-            if startup_probe_complete(&probe, keyboard_probe) {
-                probe.input = extract_plain_input(&buffer);
-                return Ok(probe);
+            if !probe_done {
+                update_startup_probe(
+                    &mut probe,
+                    &mut saw_supported_keyboard,
+                    &buffer,
+                    keyboard_probe,
+                );
+                probe_done = startup_probe_complete(&probe, keyboard_probe);
             }
             let now = Instant::now();
-            if now >= deadline {
+            if !probe_done && now >= deadline {
                 finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
-                probe.input = extract_plain_input(&buffer);
-                return Ok(probe);
+                probe_done = true;
             }
+
+            if probe_done {
+                let extracted = parse_plain_input(&buffer);
+                if extracted.complete {
+                    probe.input = extracted.input;
+                    return Ok(probe);
+                }
+
+                let handoff_deadline = *input_handoff_deadline.get_or_insert_with(|| now + timeout);
+                if now >= handoff_deadline
+                    || !tty.poll_readable(handoff_deadline.saturating_duration_since(now))?
+                {
+                    probe.input = extracted.input;
+                    return Ok(probe);
+                }
+                continue;
+            }
+
             if !tty.poll_readable(deadline.saturating_duration_since(now))? {
                 finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
-                probe.input = extract_plain_input(&buffer);
-                return Ok(probe);
+                probe_done = true;
             }
         }
     }
@@ -383,11 +400,18 @@ mod imp {
         }
     }
 
-    fn extract_plain_input(buffer: &[u8]) -> Vec<u8> {
+    #[derive(Debug, Eq, PartialEq)]
+    struct ExtractedPlainInput {
+        input: Vec<u8>,
+        complete: bool,
+    }
+
+    fn parse_plain_input(buffer: &[u8]) -> ExtractedPlainInput {
         const MAX_INPUT_BYTES: usize = 16 * 1024;
 
         let mut input = Vec::new();
         let mut index = 0;
+        let mut complete = true;
         while index < buffer.len() && input.len() < MAX_INPUT_BYTES {
             if buffer[index] != b'\x1b' {
                 input.push(buffer[index]);
@@ -401,6 +425,7 @@ mod imp {
                         .iter()
                         .position(|byte| (0x40..=0x7e).contains(byte))
                     else {
+                        complete = false;
                         break;
                     };
                     index += end + 3;
@@ -422,24 +447,57 @@ mod imp {
                         end += 1;
                     }
                     if !terminated {
+                        complete = false;
                         break;
                     }
                     index = end;
                 }
                 Some(b'O') => {
                     let Some(final_byte) = buffer.get(index + 2) else {
+                        complete = false;
                         break;
                     };
                     if !(0x40..=0x7e).contains(final_byte) {
+                        complete = false;
                         break;
                     }
                     index += 3;
                 }
                 Some(_) => index += 2,
-                None => break,
+                None => {
+                    complete = false;
+                    break;
+                }
             }
         }
-        input
+
+        if let Some(incomplete_start) = incomplete_utf8_suffix_start(&input) {
+            input.truncate(incomplete_start);
+            complete = false;
+        }
+        ExtractedPlainInput { input, complete }
+    }
+
+    #[cfg(test)]
+    fn extract_plain_input(buffer: &[u8]) -> Vec<u8> {
+        parse_plain_input(buffer).input
+    }
+
+    fn incomplete_utf8_suffix_start(mut input: &[u8]) -> Option<usize> {
+        let mut offset = 0;
+        loop {
+            match std::str::from_utf8(input) {
+                Ok(_) => return None,
+                Err(err) => match err.error_len() {
+                    Some(error_len) => {
+                        let consumed = err.valid_up_to() + error_len;
+                        offset += consumed;
+                        input = &input[consumed..];
+                    }
+                    None => return Some(offset + err.valid_up_to()),
+                },
+            }
+        }
     }
 
     fn parse_cursor_position(buffer: &[u8]) -> Option<Position> {
@@ -639,6 +697,29 @@ mod imp {
         #[test]
         fn extracts_plain_input_around_ss3_key_sequences() {
             assert_eq!(extract_plain_input(b"draft\x1BOP text"), b"draft text");
+        }
+
+        #[test]
+        fn startup_input_stays_owned_until_trailing_sequences_are_complete() {
+            let cases: &[(&[u8], &[u8], bool)] = &[
+                (b"draft\x1B[", b"draft", false),
+                (b"draft\x1B[A", b"draft", true),
+                (b"draft\x1BO", b"draft", false),
+                (b"draft\x1BOP", b"draft", true),
+                (b"draft\x1B[200", b"draft", false),
+                (b"draft\x1B[200~", b"draft", true),
+                (b"draft \xc3", b"draft ", false),
+                (b"draft \xc3\xa9", "draft é".as_bytes(), true),
+            ];
+            for &(buffer, input, complete) in cases {
+                assert_eq!(
+                    parse_plain_input(buffer),
+                    ExtractedPlainInput {
+                        input: input.to_vec(),
+                        complete,
+                    }
+                );
+            }
         }
     }
 }
