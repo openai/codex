@@ -585,6 +585,11 @@ impl Session {
                     let next_permission_profile = next.permission_profile();
                     let permission_profile_changed =
                         previous_permission_profile != next_permission_profile;
+                    // Repeated turns with unchanged settings should not repeat the warning.
+                    let service_tier_configuration_changed = next.service_tier
+                        != state.session_configuration.service_tier
+                        || next.collaboration_mode.model()
+                            != state.session_configuration.collaboration_mode.model();
                     let previous_config = notify_config_contributors.then(|| {
                         Self::build_effective_session_config(&state.session_configuration)
                     });
@@ -599,6 +604,7 @@ impl Session {
                     Ok((
                         next,
                         permission_profile_changed,
+                        service_tier_configuration_changed,
                         previous_config,
                         new_config,
                     ))
@@ -607,22 +613,27 @@ impl Session {
             }
         };
 
-        let (session_configuration, permission_profile_changed, previous_config, new_config) =
-            match update_result {
-                Ok(update) => update,
-                Err(err) => {
-                    let message = err.to_string();
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: message.clone(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(CodexErr::InvalidRequest(message));
-                }
-            };
+        let (
+            session_configuration,
+            permission_profile_changed,
+            service_tier_configuration_changed,
+            previous_config,
+            new_config,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                let message = err.to_string();
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(CodexErr::InvalidRequest(message));
+            }
+        };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
         if permission_profile_changed {
@@ -630,13 +641,28 @@ impl Session {
                 .await;
         }
 
-        Ok(self
+        let configured_service_tier = session_configuration.service_tier.clone();
+        let turn_context = self
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
             )
-            .await)
+            .await;
+        if service_tier_configuration_changed
+            && let Some(message) = unsupported_service_tier_warning(
+                configured_service_tier.as_deref(),
+                turn_context.config.features.enabled(Feature::FastMode),
+                &turn_context.model_info,
+            )
+        {
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent { message }),
+            )
+            .await;
+        }
+        Ok(turn_context)
     }
 
     async fn new_turn_from_configuration(
