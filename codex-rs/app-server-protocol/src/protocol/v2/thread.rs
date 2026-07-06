@@ -173,9 +173,6 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
-    /// Names of the effective MCP servers in the thread's initial runtime.
-    #[serde(default)]
-    pub mcp_server_names: Option<Vec<String>>,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]

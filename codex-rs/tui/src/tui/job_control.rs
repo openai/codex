@@ -61,18 +61,25 @@ impl SuspendContext {
     /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
+        let _lifecycle = super::terminal_lifecycle_guard();
+        self.suspend_locked(alt_screen_active)
+    }
+
+    /// Suspend while the caller holds the terminal lifecycle lock.
+    pub(super) fn suspend_locked(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = execute!(stdout(), DisableAlternateScroll);
-            let _ = execute!(stdout(), LeaveAlternateScreen);
+            execute!(stdout(), DisableAlternateScroll)?;
+            execute!(stdout(), LeaveAlternateScreen)?;
+            super::note_alt_screen_left();
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
             self.set_resume_action(ResumeAction::RealignInline);
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
-        suspend_process()?;
-        super::reapply_raw_mode_after_resume()?;
+        suspend_process_locked()?;
+        super::reapply_raw_mode_after_continue_unlocked()?;
 
         // The shell writes its job-control status and the resumed command after `fg`, so the
         // cursor may no longer be on the row cached before suspending. The event stream remains
@@ -184,9 +191,13 @@ impl PreparedResumeAction {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                {
+                    let _lifecycle = super::terminal_lifecycle_guard();
+                    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                    super::note_alt_screen_entered();
+                    // Enable "alternate scroll" so terminals may translate wheel to arrows
+                    execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                }
                 if let Ok(size) = terminal.size() {
                     terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
                     terminal.clear()?;
@@ -198,14 +209,41 @@ impl PreparedResumeAction {
 }
 
 /// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
-fn suspend_process() -> Result<()> {
-    super::restore()?;
-    super::terminal_stderr::pause()?;
-    unsafe {
-        libc::kill(/*pid*/ 0, libc::SIGTSTP)
-    };
-    // After the process resumes, reapply terminal modes so drawing can continue.
-    super::terminal_stderr::resume()?;
-    super::set_modes()?;
-    Ok(())
+fn suspend_process_locked() -> Result<()> {
+    let mut first_error = (|| {
+        super::restore_common(
+            super::RawModeRestore::Disable,
+            super::KeyboardRestore::PopStack,
+        )?;
+        super::startup::temporarily_restore_startup_capture_mode_locked()?;
+        super::terminal_stderr::pause()
+    })()
+    .err();
+    if first_error.is_none() {
+        super::startup::expect_managed_continue();
+        if unsafe {
+            libc::kill(/*pid*/ 0, libc::SIGSTOP)
+        } == -1
+        {
+            super::startup::cancel_managed_continue();
+            first_error = Some(std::io::Error::last_os_error());
+        }
+    }
+
+    // Whether preparation failed, SIGTSTP failed, or the process resumed normally, restore every
+    // layer independently so the live event loop never continues in a partially restored mode.
+    for result in [
+        super::terminal_stderr::resume(),
+        super::startup::reapply_startup_capture_mode_locked(),
+        super::set_modes_unlocked(),
+    ] {
+        if let Err(err) = result {
+            first_error.get_or_insert(err);
+        }
+    }
+
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }

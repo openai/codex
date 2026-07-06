@@ -1626,6 +1626,41 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        self.handle_enabled_key_event(key_event)
+    }
+
+    pub(crate) fn handle_startup_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if matches!(key_event.kind, KeyEventKind::Release) {
+            return (InputResult::None, false);
+        }
+        match key_event.code {
+            KeyCode::Char(ch) => {
+                self.insert_str(&ch.to_string());
+                (InputResult::None, true)
+            }
+            KeyCode::Backspace => {
+                let elements_before =
+                    if self.draft.pending_pastes.is_empty() && self.attachments.is_empty() {
+                        None
+                    } else {
+                        Some(self.draft.textarea.element_payloads())
+                    };
+                self.draft.textarea.delete_backward(/*n*/ 1);
+                self.sync_bash_mode_from_text();
+                if let Some(elements_before) = elements_before {
+                    self.reconcile_deleted_elements(elements_before);
+                }
+                self.sync_popups();
+                (InputResult::None, true)
+            }
+            _ => {
+                debug_assert!(false, "startup composer key must be text-like");
+                (InputResult::None, false)
+            }
+        }
+    }
+
+    fn handle_enabled_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if matches!(key_event.kind, KeyEventKind::Release) {
             return (InputResult::None, false);
         }
@@ -5399,6 +5434,29 @@ mod tests {
         );
         assert_eq!(composer.footer.mode, FooterMode::ComposerEmpty);
         assert!(!composer.footer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn startup_backspace_edits_text_literally_in_vim_normal_mode() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+        composer.handle_startup_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        composer.handle_startup_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+
+        let result = composer
+            .handle_startup_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(result, (InputResult::None, true));
+        assert_eq!(composer.current_text(), "a");
+        assert!(composer.draft.textarea.is_vim_normal_mode());
     }
 
     #[test]

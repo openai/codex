@@ -47,11 +47,7 @@ pub(crate) async fn run_update_prompt_if_needed(
 
     let mut screen =
         UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);
-    tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&screen, frame.area());
-    })?;
-
-    let events = tui.event_stream();
+    let events = tui.event_stream()?;
     tokio::pin!(events);
 
     while !screen.is_done() {
@@ -59,6 +55,10 @@ pub(crate) async fn run_update_prompt_if_needed(
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
+                TuiEvent::StartupComposerKey(_)
+                | TuiEvent::StartupComposerAction(_)
+                | TuiEvent::StartupComposerPaste(_)
+                | TuiEvent::StartupInputSettled => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());

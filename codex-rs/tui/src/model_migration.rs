@@ -138,28 +138,41 @@ pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
     copy: ModelMigrationCopy,
 ) -> ModelMigrationOutcome {
+    let Ok(events) = tui.event_stream() else {
+        return ModelMigrationOutcome::Exit;
+    };
+    tokio::pin!(events);
+
     let alt = AltScreenGuard::enter(tui);
     let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
-
-    let _ = alt.tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&screen, frame.area());
-    });
-
-    let events = alt.tui.event_stream();
-    tokio::pin!(events);
+    let mut rendered = false;
 
     while !screen.is_done() {
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
+                TuiEvent::StartupComposerKey(_)
+                | TuiEvent::StartupComposerAction(_)
+                | TuiEvent::StartupComposerPaste(_) => {}
+                TuiEvent::StartupInputSettled => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
-                    let _ = alt.tui.draw(u16::MAX, |frame| {
-                        frame.render_widget_ref(&screen, frame.area());
-                    });
+                    if alt
+                        .tui
+                        .draw(u16::MAX, |frame| {
+                            frame.render_widget_ref(&screen, frame.area());
+                        })
+                        .is_err()
+                    {
+                        return ModelMigrationOutcome::Exit;
+                    }
+                    rendered = true;
                 }
             }
         } else {
+            if !rendered {
+                return ModelMigrationOutcome::Exit;
+            }
             screen.accept();
             break;
         }

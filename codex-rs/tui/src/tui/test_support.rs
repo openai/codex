@@ -25,5 +25,6 @@ pub(crate) fn make_test_tui() -> io::Result<Tui> {
         /*enhanced_keys_supported*/ false,
         stderr_guard,
         /*startup_input*/ None,
+        /*startup_capture_active*/ false,
     ))
 }

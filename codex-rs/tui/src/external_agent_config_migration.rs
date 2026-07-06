@@ -88,11 +88,21 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
         error.map(str::to_owned),
     );
 
-    let _ = tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&screen, frame.area());
-    });
+    // Render before polling input so queued keys cannot choose an action before the user sees
+    // this screen. The flow calls this function again after an import failure, so retries get the
+    // same first-frame guarantee.
+    if tui
+        .draw(u16::MAX, |frame| {
+            frame.render_widget_ref(&screen, frame.area());
+        })
+        .is_err()
+    {
+        return ExternalAgentConfigMigrationOutcome::Skip;
+    }
 
-    let events = tui.event_stream();
+    let Ok(events) = tui.event_stream() else {
+        return ExternalAgentConfigMigrationOutcome::Skip;
+    };
     tokio::pin!(events);
 
     while !screen.is_done() {
@@ -100,6 +110,10 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
+                TuiEvent::StartupComposerKey(_)
+                | TuiEvent::StartupComposerAction(_)
+                | TuiEvent::StartupComposerPaste(_) => {}
+                TuiEvent::StartupInputSettled => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());

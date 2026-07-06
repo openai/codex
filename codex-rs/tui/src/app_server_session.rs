@@ -203,7 +203,6 @@ impl ThreadParamsMode {
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
-    pub(crate) mcp_server_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1532,7 +1531,6 @@ async fn started_thread_from_start_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
-        mcp_server_names: response.mcp_server_names,
     })
 }
 
@@ -1548,7 +1546,6 @@ async fn started_thread_from_resume_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
-        mcp_server_names: None,
     })
 }
 
@@ -1564,7 +1561,6 @@ async fn started_thread_from_fork_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
-        mcp_server_names: None,
     })
 }
 

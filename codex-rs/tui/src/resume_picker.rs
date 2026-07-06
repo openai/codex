@@ -435,6 +435,7 @@ async fn run_session_picker_with_loader(
     picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
+    let mut tui_events = tui.event_stream()?.fuse();
     let alt = AltScreenGuard::enter(tui);
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
@@ -453,7 +454,6 @@ async fn run_session_picker_with_loader(
     state.start_initial_load();
     state.request_frame();
 
-    let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
 
     loop {
@@ -475,6 +475,10 @@ async fn run_session_picker_with_loader(
                     TuiEvent::Paste(pasted) => {
                         state.handle_paste(pasted);
                     }
+                    TuiEvent::StartupComposerKey(_)
+                    | TuiEvent::StartupComposerAction(_)
+                    | TuiEvent::StartupComposerPaste(_) => {}
+                    TuiEvent::StartupInputSettled => {}
                     TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
                             let list_height =

@@ -1213,14 +1213,6 @@ impl ThreadRequestProcessor {
         .await?;
 
         let instruction_sources = thread.legacy_instruction_sources().await;
-        let mut mcp_server_names = thread
-            .current_mcp_runtime()
-            .await
-            .manager()
-            .server_names()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        mcp_server_names.sort();
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1290,7 +1282,6 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd,
-            mcp_server_names: Some(mcp_server_names),
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),

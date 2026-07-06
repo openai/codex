@@ -19531,17 +19531,6 @@
             },
             "type": "array"
           },
-          "mcpServerNames": {
-            "default": null,
-            "description": "Names of the effective MCP servers in the thread's initial runtime.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "model": {
             "type": "string"
           },

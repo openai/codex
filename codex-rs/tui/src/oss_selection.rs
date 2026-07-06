@@ -13,12 +13,11 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+#[cfg(not(unix))]
 use crossterm::event::{self};
 use crossterm::execute;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::disable_raw_mode;
-use crossterm::terminal::enable_raw_mode;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
@@ -38,6 +37,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use std::cell::RefCell;
+#[cfg(unix)]
+use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -312,9 +314,12 @@ fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color)
 pub(crate) struct OssProviderSelection {
     pub(crate) provider: String,
     pub(crate) manually_selected: bool,
+    pub(crate) active_keys: Vec<KeyEvent>,
 }
 
-pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
+pub async fn select_oss_provider(
+    prepared_terminal: &mut crate::tui::PreparedTerminal,
+) -> io::Result<OssProviderSelection> {
     // Check provider statuses first
     let lmstudio_status = check_lmstudio_status().await;
     let ollama_status = check_ollama_status().await;
@@ -326,6 +331,7 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
             return Ok(OssProviderSelection {
                 provider,
                 manually_selected: false,
+                active_keys: Vec::new(),
             });
         }
         (ProviderStatus::NotRunning, ProviderStatus::Running) => {
@@ -333,6 +339,7 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
             return Ok(OssProviderSelection {
                 provider,
                 manually_selected: false,
+                active_keys: Vec::new(),
             });
         }
         _ => {
@@ -342,32 +349,53 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
 
     let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
-    enable_raw_mode()?;
+    #[cfg(any(unix, windows))]
+    prepared_terminal.pause_input_capture()?;
+    crate::tui::set_modes()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = (|| {
+    let mut alternate_screen_active = false;
+    let result = (|| -> io::Result<OssProviderSelection> {
+        {
+            let _lifecycle = crate::tui::terminal_lifecycle_guard();
+            execute!(stdout, EnterAlternateScreen)?;
+            crate::tui::note_alt_screen_entered();
+        }
+        alternate_screen_active = true;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
         terminal.draw(|f| {
             (&widget).render_ref(f.area(), f.buffer_mut());
         })?;
-
-        if discard_startup_events_until_quiet()? {
-            return Ok(OssProviderSelection {
-                provider: "__CANCELLED__".to_string(),
-                manually_selected: true,
-            });
-        }
+        let mut event_reader = StartupEventReader::default();
+        let mut startup_keys = match discard_startup_events_until_quiet(&mut event_reader)? {
+            StartupInputDrain::Cancelled => {
+                return Ok(OssProviderSelection {
+                    provider: "__CANCELLED__".to_string(),
+                    manually_selected: true,
+                    active_keys: Vec::new(),
+                });
+            }
+            StartupInputDrain::Settled(startup_keys) => startup_keys,
+        };
 
         loop {
-            if let Event::Key(key_event) = event::read()?
+            let event = if let Some(timeout) = startup_keys.poll_timeout(Instant::now()) {
+                if !event_reader.poll(timeout)? {
+                    startup_keys.expire_after_quiet();
+                    continue;
+                }
+                event_reader.read()?
+            } else {
+                event_reader.read()?
+            };
+            if let Event::Key(key_event) = event
+                && !startup_keys.should_discard(key_event, Instant::now())
                 && let Some(selection) = widget.handle_key_event(key_event)
             {
                 break Ok(OssProviderSelection {
                     provider: selection,
                     manually_selected: true,
+                    active_keys: startup_keys.active_keys(),
                 });
             }
             terminal.draw(|f| {
@@ -376,44 +404,201 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
         }
     })();
 
-    let disable_raw_result = disable_raw_mode();
-    let leave_screen_result = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-    disable_raw_result?;
-    leave_screen_result?;
-
-    result
+    let mut cleanup_error = None;
+    if alternate_screen_active {
+        let _lifecycle = crate::tui::terminal_lifecycle_guard();
+        let alternate_scroll_disabled =
+            match execute!(io::stdout(), crate::tui::DisableAlternateScroll) {
+                Ok(()) => true,
+                Err(err) => {
+                    cleanup_error = Some(err);
+                    false
+                }
+            };
+        match execute!(io::stdout(), LeaveAlternateScreen) {
+            Ok(()) if alternate_scroll_disabled => crate::tui::note_alt_screen_left(),
+            Ok(()) => {}
+            Err(err) => {
+                cleanup_error.get_or_insert(err);
+            }
+        }
+    }
+    if let Err(err) = crate::tui::restore_startup_screen() {
+        cleanup_error.get_or_insert(err);
+    }
+    #[cfg(any(unix, windows))]
+    if let Err(err) = prepared_terminal.resume_input_capture() {
+        cleanup_error.get_or_insert(err);
+    }
+    match (result, cleanup_error) {
+        (Err(err), _) | (Ok(_), Some(err)) => Err(err),
+        (Ok(selection), None) => Ok(selection),
+    }
 }
 
-fn discard_startup_events_until_quiet() -> io::Result<bool> {
-    discard_startup_events_until_quiet_with(event::poll, event::read, Instant::now)
+fn discard_startup_events_until_quiet(
+    event_reader: &mut StartupEventReader,
+) -> io::Result<StartupInputDrain> {
+    let event_reader = RefCell::new(event_reader);
+    discard_startup_events_until_quiet_with(
+        |timeout| event_reader.borrow().poll(timeout),
+        || event_reader.borrow_mut().read(),
+        Instant::now,
+    )
+}
+
+#[derive(Default)]
+struct StartupEventReader {
+    #[cfg(unix)]
+    pending: VecDeque<Event>,
+}
+
+impl StartupEventReader {
+    fn poll(&self, timeout: Duration) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            if !self.pending.is_empty() {
+                return Ok(true);
+            }
+            crate::terminal_probe::startup_event_available(timeout)
+        }
+        #[cfg(not(unix))]
+        {
+            event::poll(timeout)
+        }
+    }
+
+    fn read(&mut self) -> io::Result<Event> {
+        #[cfg(unix)]
+        {
+            if let Some(event) = self.pending.pop_front() {
+                return Ok(event);
+            }
+            self.pending
+                .extend(crate::terminal_probe::read_startup_events()?);
+            self.pending.pop_front().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "startup input did not decode to an event",
+                )
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            event::read()
+        }
+    }
+}
+
+enum StartupInputDrain {
+    Cancelled,
+    Settled(StartupKeyLatch),
+}
+
+#[derive(Default)]
+struct StartupKeyLatch {
+    blocked: Vec<KeyEvent>,
+    quiet_deadline: Option<Instant>,
+}
+
+impl StartupKeyLatch {
+    fn record(&mut self, key_event: KeyEvent, now: Instant) {
+        let binding = KeyBinding::from_event(key_event);
+        match key_event.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => {
+                if let Some(existing) = self
+                    .blocked
+                    .iter_mut()
+                    .find(|existing| KeyBinding::from_event(**existing) == binding)
+                {
+                    *existing = key_event;
+                } else {
+                    self.blocked.push(key_event);
+                }
+                self.quiet_deadline = Some(now + crate::tui::STARTUP_INPUT_QUIET_PERIOD);
+            }
+            KeyEventKind::Release => {
+                self.blocked
+                    .retain(|blocked| KeyBinding::from_event(*blocked) != binding);
+                if self.blocked.is_empty() {
+                    self.quiet_deadline = None;
+                }
+            }
+        }
+    }
+
+    fn should_discard(&mut self, key_event: KeyEvent, now: Instant) -> bool {
+        let binding = KeyBinding::from_event(key_event);
+        if key_event.kind == KeyEventKind::Release {
+            self.record(key_event, now);
+            return true;
+        }
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return true;
+        }
+        if self
+            .blocked
+            .iter()
+            .any(|blocked| KeyBinding::from_event(*blocked) == binding)
+        {
+            self.quiet_deadline = Some(now + crate::tui::STARTUP_INPUT_QUIET_PERIOD);
+            return true;
+        }
+        self.record(key_event, now);
+        false
+    }
+
+    fn finish_initial_drain(&mut self) {
+        self.quiet_deadline = None;
+    }
+
+    fn poll_timeout(&self, now: Instant) -> Option<Duration> {
+        self.quiet_deadline
+            .map(|deadline| deadline.saturating_duration_since(now))
+    }
+
+    fn expire_after_quiet(&mut self) {
+        self.blocked.clear();
+        self.quiet_deadline = None;
+    }
+
+    fn active_keys(&self) -> Vec<KeyEvent> {
+        self.blocked.clone()
+    }
 }
 
 fn discard_startup_events_until_quiet_with(
     mut poll: impl FnMut(Duration) -> io::Result<bool>,
     mut read: impl FnMut() -> io::Result<Event>,
     mut now: impl FnMut() -> Instant,
-) -> io::Result<bool> {
+) -> io::Result<StartupInputDrain> {
     let mut quiet_deadline = None;
+    let mut startup_keys = StartupKeyLatch::default();
     loop {
         let timeout = quiet_deadline
             .map(|deadline: Instant| deadline.saturating_duration_since(now()))
             .unwrap_or(Duration::ZERO);
         if !poll(timeout)? {
-            return Ok(false);
+            startup_keys.finish_initial_drain();
+            return Ok(StartupInputDrain::Settled(startup_keys));
         }
         let event = read()?;
         if matches!(
-            event,
+            &event,
             Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            }) if modifiers.contains(KeyModifiers::CONTROL)
+            }) if modifiers.contains(KeyModifiers::CONTROL) && !key_hint::is_altgr(*modifiers)
         ) {
-            return Ok(true);
+            return Ok(StartupInputDrain::Cancelled);
         }
-        quiet_deadline = Some(now() + crate::tui::STARTUP_INPUT_QUIET_PERIOD);
+        if let Event::Key(key_event) = event {
+            startup_keys.record(key_event, now());
+        }
+        quiet_deadline = (!startup_keys.blocked.is_empty())
+            .then(|| now() + crate::tui::STARTUP_INPUT_QUIET_PERIOD);
     }
 }
 
@@ -469,6 +654,20 @@ mod tests {
         assert_eq!(widget.selected_option, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn startup_reader_preserves_all_events_from_one_decoded_unit() {
+        let first = Event::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
+        let second = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let mut reader = StartupEventReader {
+            pending: VecDeque::from([first.clone(), second.clone()]),
+        };
+
+        assert!(reader.poll(Duration::ZERO).expect("queued event"));
+        assert_eq!(reader.read().expect("first event"), first);
+        assert_eq!(reader.read().expect("second event"), second);
+    }
+
     #[test]
     fn startup_drain_waits_for_repeated_enter_to_settle() {
         let now = Cell::new(Instant::now());
@@ -479,7 +678,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         ]));
 
-        let cancelled = discard_startup_events_until_quiet_with(
+        let result = discard_startup_events_until_quiet_with(
             |timeout| {
                 poll_timeouts.borrow_mut().push(timeout);
                 let count = poll_count.get();
@@ -496,7 +695,17 @@ mod tests {
         )
         .expect("startup drain");
 
-        assert!(!cancelled);
+        let StartupInputDrain::Settled(mut startup_keys) = result else {
+            panic!("expected settled startup input");
+        };
+        assert!(
+            startup_keys
+                .should_discard(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now.get())
+        );
+        assert!(
+            !startup_keys
+                .should_discard(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), now.get())
+        );
         assert_eq!(
             poll_timeouts.into_inner(),
             vec![
@@ -515,13 +724,119 @@ mod tests {
             KeyEventKind::Repeat,
         ))));
 
-        let cancelled = discard_startup_events_until_quiet_with(
+        let result = discard_startup_events_until_quiet_with(
             |_| Ok(true),
             || Ok(event.borrow_mut().take().expect("queued event")),
             Instant::now,
         )
         .expect("startup drain");
 
-        assert!(cancelled);
+        assert!(matches!(result, StartupInputDrain::Cancelled));
+    }
+
+    #[test]
+    fn startup_key_latch_blocks_delayed_repeat_until_release() {
+        let now = Instant::now();
+        let mut startup_keys = StartupKeyLatch::default();
+        startup_keys.record(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now);
+        startup_keys.finish_initial_drain();
+
+        assert!(startup_keys.should_discard(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat,),
+            now
+        ));
+        assert!(startup_keys.should_discard(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release,),
+            now
+        ));
+        assert!(
+            !startup_keys.should_discard(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now)
+        );
+    }
+
+    #[test]
+    fn startup_key_latch_rearms_until_a_full_quiet_interval() {
+        let now = Instant::now();
+        let mut startup_keys = StartupKeyLatch::default();
+        startup_keys.record(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now);
+        startup_keys.finish_initial_drain();
+
+        assert!(startup_keys.should_discard(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            now + crate::tui::STARTUP_INPUT_QUIET_PERIOD / 2,
+        ));
+        assert!(startup_keys.should_discard(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            now + crate::tui::STARTUP_INPUT_QUIET_PERIOD,
+        ));
+        assert_eq!(
+            startup_keys.poll_timeout(now + crate::tui::STARTUP_INPUT_QUIET_PERIOD),
+            Some(crate::tui::STARTUP_INPUT_QUIET_PERIOD)
+        );
+        assert_eq!(
+            startup_keys.poll_timeout(now + crate::tui::STARTUP_INPUT_QUIET_PERIOD * 2),
+            Some(Duration::ZERO)
+        );
+        startup_keys.expire_after_quiet();
+        assert!(!startup_keys.should_discard(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            now + crate::tui::STARTUP_INPUT_QUIET_PERIOD * 2,
+        ));
+    }
+
+    #[test]
+    fn startup_key_latch_keeps_all_unreleased_drained_keys() {
+        let mut startup_keys = StartupKeyLatch::default();
+        let now = Instant::now();
+        startup_keys.record(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now);
+        startup_keys.record(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), now);
+
+        assert!(startup_keys.should_discard(
+            KeyEvent::new_with_kind(KeyCode::Right, KeyModifiers::NONE, KeyEventKind::Repeat,),
+            now
+        ));
+        assert!(startup_keys.should_discard(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat,),
+            now
+        ));
+        assert_eq!(startup_keys.active_keys().len(), 2);
+    }
+
+    #[test]
+    fn startup_key_latch_records_release_during_drain() {
+        let mut startup_keys = StartupKeyLatch::default();
+        let now = Instant::now();
+        startup_keys.record(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now);
+        startup_keys.record(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release),
+            now,
+        );
+
+        assert!(
+            !startup_keys.should_discard(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), now)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_drain_does_not_treat_altgr_c_as_cancellation() {
+        let poll_count = Cell::new(0);
+        let event = RefCell::new(Some(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ))));
+
+        let result = discard_startup_events_until_quiet_with(
+            |_| {
+                let count = poll_count.get();
+                poll_count.set(count + 1);
+                Ok(count == 0)
+            },
+            || Ok(event.borrow_mut().take().expect("queued event")),
+            Instant::now,
+        )
+        .expect("startup drain");
+
+        assert!(matches!(result, StartupInputDrain::Settled(_)));
     }
 }

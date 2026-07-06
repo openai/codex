@@ -373,6 +373,14 @@ impl RuntimeKeymap {
         Self::built_in_defaults()
     }
 
+    pub(crate) fn startup_submission_bindings(&self) -> Vec<KeyBinding> {
+        // View-specific accept keys remain ordinary composer text. Newly opened views are
+        // protected at their first-render boundary instead of deleting those characters here.
+        let mut bindings = self.composer.submit.clone();
+        bindings.extend(self.composer.queue.iter().copied());
+        bindings
+    }
+
     /// Resolve a runtime keymap from config, applying precedence and validation.
     ///
     /// Returns an error when:

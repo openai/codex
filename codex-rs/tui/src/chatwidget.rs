@@ -598,13 +598,10 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
-    /// Initial MCP servers that must settle before a restored startup draft can be submitted.
-    ///
-    /// `Some(_)` also records that startup text was actually restored. The set may become empty
-    /// before session configuration arrives, but protection remains until startup has rendered and
-    /// both conditions settle.
-    startup_draft_pending_mcp_servers: Option<HashSet<String>>,
+    /// Whether a restored startup draft has appeared in a rendered chat frame.
     startup_draft_rendered: bool,
+    /// Whether startup input filtering has finished handing stdin to the live event stream.
+    startup_input_settled: bool,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
     mcp_startup_ignore_updates_until_next_start: bool,
     /// A lag signal for the next round means terminal-only updates are enough to settle it.
@@ -1790,7 +1787,6 @@ impl ChatWidget {
         self.bottom_pane.pending_thread_approvals()
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active_view(&self) -> bool {
         self.bottom_pane.has_active_view()
     }

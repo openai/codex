@@ -618,40 +618,60 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow the
-            // configured action to interrupt even while the composer has focus.
-            // When a popup is active, prefer dismissing it over interrupting the task.
-            if self.should_interrupt_running_task(key_event)
-                && let Some(status) = &self.status
-            {
-                // Send Op::Interrupt
-                status.interrupt();
-                self.request_redraw();
-                return InputResult::None;
-            }
-            let records_composer_activity =
-                matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                    && !key_hint::has_ctrl_or_alt(key_event.modifiers)
-                    && matches!(
-                        key_event.code,
-                        KeyCode::Char(_)
-                            | KeyCode::Backspace
-                            | KeyCode::Delete
-                            | KeyCode::Enter
-                            | KeyCode::Tab
-                    );
-            let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
-            if records_composer_activity {
-                self.record_composer_activity_at(Instant::now());
-            }
-            if needs_redraw {
-                self.request_redraw();
-            }
-            if self.composer.is_in_paste_burst() {
-                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
-            }
-            input_result
+            self.handle_composer_key_event(key_event)
         }
+    }
+
+    pub(crate) fn handle_startup_composer_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        let result = self.composer.handle_startup_key_event(key_event);
+        self.finish_composer_key_event(key_event, result)
+    }
+
+    pub(crate) fn handle_startup_composer_action(&mut self, key_event: KeyEvent) -> InputResult {
+        let result = self.composer.handle_key_event(key_event);
+        self.finish_composer_key_event(key_event, result)
+    }
+
+    fn handle_composer_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        // If a task is running and a status line is visible, allow the configured action to
+        // interrupt even while the composer has focus.
+        if self.should_interrupt_running_task(key_event)
+            && let Some(status) = &self.status
+        {
+            status.interrupt();
+            self.request_redraw();
+            return InputResult::None;
+        }
+        let result = self.composer.handle_key_event(key_event);
+        self.finish_composer_key_event(key_event, result)
+    }
+
+    fn finish_composer_key_event(
+        &mut self,
+        key_event: KeyEvent,
+        (input_result, needs_redraw): (InputResult, bool),
+    ) -> InputResult {
+        let records_composer_activity =
+            matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && !key_hint::has_ctrl_or_alt(key_event.modifiers)
+                && matches!(
+                    key_event.code,
+                    KeyCode::Char(_)
+                        | KeyCode::Backspace
+                        | KeyCode::Delete
+                        | KeyCode::Enter
+                        | KeyCode::Tab
+                );
+        if records_composer_activity {
+            self.record_composer_activity_at(Instant::now());
+        }
+        if needs_redraw {
+            self.request_redraw();
+        }
+        if self.composer.is_in_paste_burst() {
+            self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+        }
+        input_result
     }
 
     /// Handles a Ctrl+C press within the bottom pane.
@@ -691,7 +711,6 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             let view_complete = view.is_complete();
@@ -703,13 +722,22 @@ impl BottomPane {
                 self.request_redraw();
             }
         } else {
-            let needs_redraw = self.composer.handle_paste(pasted);
-            if has_pasted_text {
-                self.record_composer_activity_at(Instant::now());
-            }
-            if needs_redraw {
-                self.request_redraw();
-            }
+            self.handle_composer_paste(pasted);
+        }
+    }
+
+    pub(crate) fn handle_startup_composer_paste(&mut self, pasted: String) {
+        self.handle_composer_paste(pasted);
+    }
+
+    fn handle_composer_paste(&mut self, pasted: String) {
+        let has_pasted_text = !pasted.is_empty();
+        let needs_redraw = self.composer.handle_paste(pasted);
+        if has_pasted_text {
+            self.record_composer_activity_at(Instant::now());
+        }
+        if needs_redraw {
+            self.request_redraw();
         }
     }
 
@@ -1833,7 +1861,7 @@ impl Renderable for ChatComposerRightReserveRenderable<'_> {
 
 impl Renderable for BottomPane {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.as_renderable().render(area, buf);
+        self.render_with_composer_right_reserve(area, buf, /*composer_right_reserve*/ 0);
     }
     fn desired_height(&self, width: u16) -> u16 {
         self.as_renderable().desired_height(width)

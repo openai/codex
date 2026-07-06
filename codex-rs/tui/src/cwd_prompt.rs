@@ -85,25 +85,31 @@ pub(crate) async fn run_cwd_selection_prompt(
         current_cwd.display().to_string(),
         session_cwd.display().to_string(),
     );
-    tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&screen, frame.area());
-    })?;
-
-    let events = tui.event_stream();
+    let events = tui.event_stream()?;
     tokio::pin!(events);
+    tui.frame_requester().schedule_frame();
+    let mut rendered = false;
 
     while !screen.is_done() {
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
+                TuiEvent::StartupComposerKey(_)
+                | TuiEvent::StartupComposerAction(_)
+                | TuiEvent::StartupComposerPaste(_) => {}
+                TuiEvent::StartupInputSettled => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     })?;
+                    rendered = true;
                 }
             }
         } else {
+            if !rendered {
+                return Ok(CwdPromptOutcome::Exit);
+            }
             break;
         }
     }

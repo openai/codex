@@ -3978,7 +3978,6 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         serde_json::from_value(response.clone()).expect("thread/fork response");
 
     assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());
-    assert_eq!(start.mcp_server_names, None);
     assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(start.thread.recency_at, None);
     assert_eq!(

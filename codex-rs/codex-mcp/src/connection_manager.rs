@@ -370,10 +370,6 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
-    pub fn server_names(&self) -> impl Iterator<Item = &str> {
-        self.clients.keys().map(String::as_str)
-    }
-
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.clients.contains_key(server_name)
     }

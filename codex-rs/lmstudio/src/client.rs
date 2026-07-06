@@ -171,6 +171,7 @@ impl LMStudioClient {
 
         let status = std::process::Command::new(&lms)
             .args(["get", "--yes", model])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::null())
             .status()

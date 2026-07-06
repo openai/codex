@@ -9,53 +9,47 @@ use super::*;
 impl ChatWidget {
     pub(crate) fn restore_startup_draft(&mut self, text: &str) {
         self.insert_str(text);
-        self.startup_draft_pending_mcp_servers = Some(HashSet::new());
+        self.begin_startup_input_protection();
+    }
+
+    pub(crate) fn begin_startup_input_protection(&mut self) {
         self.startup_draft_rendered = false;
+        self.startup_input_settled = false;
         self.bottom_pane
             .set_startup_draft_submission_blocked(/*blocked*/ true);
     }
 
-    pub(crate) fn set_startup_draft_expected_mcp_servers<I>(&mut self, server_names: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        let Some(pending) = &mut self.startup_draft_pending_mcp_servers else {
-            return;
-        };
-        *pending = server_names.into_iter().collect();
-        self.finish_startup_draft_protection_if_ready();
-    }
-
     pub(super) fn finish_startup_draft_protection_if_ready(&mut self) {
-        let startup_ready = self.startup_draft_rendered
-            && self.is_session_configured()
-            && self
-                .startup_draft_pending_mcp_servers
-                .as_ref()
-                .is_some_and(HashSet::is_empty);
-        if startup_ready {
+        if self.startup_draft_rendered && self.startup_input_settled {
             self.clear_startup_draft_protection();
         }
     }
 
     pub(super) fn clear_startup_draft_protection(&mut self) {
-        if self.startup_draft_pending_mcp_servers.take().is_some() {
-            self.startup_draft_rendered = false;
-            self.bottom_pane
-                .set_startup_draft_submission_blocked(/*blocked*/ false);
-        }
+        self.startup_draft_rendered = true;
+        self.startup_input_settled = true;
+        self.bottom_pane
+            .set_startup_draft_submission_blocked(/*blocked*/ false);
     }
 
     pub(super) fn clear_startup_draft_protection_if_discarded(&mut self) {
-        if self.startup_draft_pending_mcp_servers.is_some() && self.bottom_pane.composer_is_empty()
+        if (!self.startup_draft_rendered || !self.startup_input_settled)
+            && self.bottom_pane.composer_is_empty()
         {
             self.clear_startup_draft_protection();
         }
     }
 
     pub(crate) fn mark_startup_draft_rendered(&mut self) {
-        if self.startup_draft_pending_mcp_servers.is_some() {
+        if !self.bottom_pane.has_active_view() && !self.startup_draft_rendered {
             self.startup_draft_rendered = true;
+            self.finish_startup_draft_protection_if_ready();
+        }
+    }
+
+    pub(crate) fn mark_startup_input_settled(&mut self) {
+        if !self.startup_input_settled {
+            self.startup_input_settled = true;
             self.finish_startup_draft_protection_if_ready();
         }
     }

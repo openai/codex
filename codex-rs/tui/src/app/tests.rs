@@ -3529,7 +3529,6 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
         AppServerStartedThread {
             session: test_thread_session(child_thread_id, test_path_buf("/tmp/child")),
             turns: Vec::new(),
-            mcp_server_names: None,
         },
         &mut child_snapshot,
     )
@@ -5496,7 +5495,6 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         AppServerStartedThread {
             session: resumed_session.clone(),
             turns: resumed_turns.clone(),
-            mcp_server_names: None,
         },
         &mut snapshot,
     )

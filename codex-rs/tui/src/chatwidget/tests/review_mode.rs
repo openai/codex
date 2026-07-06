@@ -1044,14 +1044,16 @@ async fn ctrl_c_clears_startup_draft_protection_only_with_the_composer() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
     assert_eq!(chat.bottom_pane.composer_text(), "captured during startup");
-    assert!(chat.startup_draft_pending_mcp_servers.is_some());
+    assert!(!chat.startup_draft_rendered);
+    assert!(!chat.startup_input_settled);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     assert!(!chat.bottom_pane.no_modal_or_popup_active());
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
     assert_eq!(chat.bottom_pane.composer_text(), "captured during startup");
-    assert!(chat.startup_draft_pending_mcp_servers.is_some());
+    assert!(!chat.startup_draft_rendered);
+    assert!(!chat.startup_input_settled);
     assert_eq!(
         chat.bottom_pane
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
@@ -1061,12 +1063,39 @@ async fn ctrl_c_clears_startup_draft_protection_only_with_the_composer() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
     assert!(chat.bottom_pane.composer_is_empty());
-    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+    assert!(chat.startup_draft_rendered);
+    assert!(chat.startup_input_settled);
     chat.bottom_pane.insert_str("replacement draft");
     assert_matches!(
         chat.bottom_pane
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         InputResult::Submitted { .. }
+    );
+}
+
+#[tokio::test]
+async fn active_view_does_not_mark_the_hidden_startup_draft_rendered() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.restore_startup_draft("captured during startup");
+    chat.show_selection_view(SelectionViewParams {
+        title: Some("Resume paused goal?".to_string()),
+        items: vec![SelectionItem {
+            name: "Resume".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    chat.mark_startup_draft_rendered();
+    chat.mark_startup_input_settled();
+
+    assert!(!chat.startup_draft_rendered);
+    assert!(chat.startup_input_settled);
+    assert_eq!(chat.bottom_pane.composer_text(), "captured during startup");
+    assert_eq!(
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        InputResult::None
     );
 }
 
@@ -1078,7 +1107,8 @@ async fn editing_away_startup_draft_clears_submission_protection() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
 
     assert!(chat.bottom_pane.composer_is_empty());
-    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+    assert!(chat.startup_draft_rendered);
+    assert!(chat.startup_input_settled);
     chat.bottom_pane.insert_str("replacement draft");
     assert_matches!(
         chat.bottom_pane
@@ -1088,7 +1118,8 @@ async fn editing_away_startup_draft_clears_submission_protection() {
 
     chat.restore_startup_draft("external editor draft");
     chat.apply_external_edit(String::new());
-    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+    assert!(chat.startup_draft_rendered);
+    assert!(chat.startup_input_settled);
 }
 
 /// Selecting the custom prompt option from the review popup sends

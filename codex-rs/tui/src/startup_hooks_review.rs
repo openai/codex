@@ -98,10 +98,7 @@ async fn run_startup_hooks_review_app(
         app_event_tx.clone(),
         &keymap,
     );
-    draw_view(tui, &view)?;
-
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
+    let mut tui_events = tui.event_stream()?;
 
     loop {
         let Some(event) = tui_events.next().await else {
@@ -132,6 +129,8 @@ async fn run_startup_hooks_review_app(
                             &keymap,
                         );
                         draw_view(tui, &view)?;
+                        // Return to startup capture while the unpolled request runs.
+                        drop(tui_events);
                         let result = write_hook_trusts(
                             app_server.request_handle(),
                             entry
@@ -160,13 +159,17 @@ async fn run_startup_hooks_review_app(
                                     app_event_tx.clone(),
                                     &keymap,
                                 );
-                                draw_view(tui, &view)?;
+                                tui_events = tui.event_stream()?;
                             }
                         }
                     }
                 }
             }
             TuiEvent::Paste(_) => {}
+            TuiEvent::StartupComposerKey(_)
+            | TuiEvent::StartupComposerAction(_)
+            | TuiEvent::StartupComposerPaste(_) => {}
+            TuiEvent::StartupInputSettled => {}
             TuiEvent::Draw | TuiEvent::Resize => draw_view(tui, &view)?,
         }
     }

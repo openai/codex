@@ -345,6 +345,25 @@ impl ChatWidget {
         self.refresh_plan_mode_nudge();
     }
 
+    pub(crate) fn handle_startup_composer_key_event(&mut self, key_event: KeyEvent) {
+        let input_result = self
+            .bottom_pane
+            .handle_startup_composer_key_event(key_event);
+        self.handle_composer_input_result(input_result, /*had_modal_or_popup*/ false);
+        self.clear_startup_draft_protection_if_discarded();
+    }
+
+    pub(crate) fn handle_startup_composer_action(&mut self, key_event: KeyEvent) {
+        let input_result = self.bottom_pane.handle_startup_composer_action(key_event);
+        self.handle_composer_input_result(input_result, /*had_modal_or_popup*/ false);
+        self.clear_startup_draft_protection_if_discarded();
+    }
+
+    pub(crate) fn handle_startup_composer_paste(&mut self, text: String) {
+        self.bottom_pane.handle_startup_composer_paste(text);
+        self.refresh_plan_mode_nudge();
+    }
+
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {

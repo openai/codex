@@ -484,12 +484,7 @@ pub(crate) async fn run_onboarding_app(
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 
-    tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&onboarding_screen, frame.area());
-    })?;
-
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
+    let mut tui_events = tui.event_stream()?;
 
     while !onboarding_screen.is_done() {
         tokio::select! {
@@ -498,17 +493,36 @@ pub(crate) async fn run_onboarding_app(
                     match event {
                         TuiEvent::Key(key_event) => {
                             onboarding_screen.handle_key_event(key_event);
-                            if !directory_trust_persisted {
+                            let should_persist_trust = !directory_trust_persisted
+                                && onboarding_screen.steps.iter().any(|step| {
+                                    matches!(
+                                        step,
+                                        Step::TrustDirectory(widget)
+                                            if widget.selection
+                                                == Some(TrustDirectorySelection::Trust)
+                                    )
+                                });
+                            if should_persist_trust {
+                                // Return to startup capture while the unpolled request runs.
+                                drop(tui_events);
                                 directory_trust_persisted = persist_selected_trust(
                                     &mut onboarding_screen,
                                     app_server_request_handle.clone(),
                                 )
                                 .await;
+                                if onboarding_screen.is_done() {
+                                    break;
+                                }
+                                tui_events = tui.event_stream()?;
                             }
                         }
                         TuiEvent::Paste(text) => {
                             onboarding_screen.handle_paste(text);
                         }
+                        TuiEvent::StartupComposerKey(_)
+                        | TuiEvent::StartupComposerAction(_)
+                        | TuiEvent::StartupComposerPaste(_) => {}
+                        TuiEvent::StartupInputSettled => {}
                         TuiEvent::Draw | TuiEvent::Resize => {
                             if !did_full_clear_after_success
                                 && onboarding_screen.steps.iter().any(|step| {
@@ -540,9 +554,9 @@ pub(crate) async fn run_onboarding_app(
                                 let _ = tui.terminal.clear();
                                 did_full_clear_after_success = true;
                             }
-                            let _ = tui.draw(u16::MAX, |frame| {
+                            tui.draw(u16::MAX, |frame| {
                                 frame.render_widget_ref(&onboarding_screen, frame.area());
-                            });
+                            })?;
                         }
                     }
                 }

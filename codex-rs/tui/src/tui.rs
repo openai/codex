@@ -7,6 +7,7 @@ use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -66,6 +67,22 @@ pub(crate) mod test_support;
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
 pub(crate) const STARTUP_INPUT_QUIET_PERIOD: Duration = Duration::from_secs(/*secs*/ 1);
+static TERMINAL_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+static ALT_SCREEN_OWNED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn terminal_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
+    TERMINAL_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn note_alt_screen_entered() {
+    ALT_SCREEN_OWNED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn note_alt_screen_left() {
+    ALT_SCREEN_OWNED.store(false, Ordering::SeqCst);
+}
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -75,9 +92,11 @@ pub(crate) struct InitializedTerminal {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
     pub(crate) startup_input: StartupInputBuffer,
+    pub(crate) startup_capture_active: bool,
 }
 
 pub(crate) use startup::PreparedTerminal;
+use startup::StartupActionLatch;
 use startup::StartupInputBuffer;
 use startup::StartupInputHandoff;
 pub(crate) use startup::abandon_prepared_terminal;
@@ -100,6 +119,9 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        self.pause_events();
+        #[cfg(unix)]
+        self.deactivate_signal_suspend_context();
         if let Err(err) = self.clear_ambient_pet_image() {
             tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
         }
@@ -116,6 +138,7 @@ mod tests {
     use tokio_stream::StreamExt;
 
     use super::StartupInputBuffer;
+    use super::StartupInputTarget;
     use super::clear_for_viewport_change;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
@@ -133,31 +156,97 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn panic_restore_does_not_recursively_lock_a_terminal_transition() {
+        let lifecycle = super::terminal_lifecycle_guard();
+        super::restore_after_panic_best_effort();
+        drop(lifecycle);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn startup_input_remains_owned_until_event_stream_creation() -> std::io::Result<()> {
         let mut tui = make_test_tui()?;
 
-        let _ = tui.take_startup_text_with_capture(|_| Ok(()))?;
+        let _ = tui.take_startup_text_with_capture_and_bindings(&[], |_| Ok(()))?;
         assert!(tui.startup_input_active);
 
-        let _events = tui.event_stream();
+        let _events = tui.event_stream()?;
         assert!(!tui.startup_input_active);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_text_captures_input_between_startup_screens() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+        tui.startup_capture_active = true;
+        tui.startup_input_active = false;
+        let mut capture_called = false;
+
+        let startup_text = tui.take_startup_text_with_capture_and_bindings(&[], |input| {
+            capture_called = true;
+            input.push_text("later");
+            Ok(())
+        })?;
+
+        assert_eq!(startup_text.as_deref(), Some("later"));
+        assert!(capture_called);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_pre_composer_screen_claims_a_protected_handoff() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+
+        assert!(
+            tui.claim_startup_screen_input(/*startup_screen_active*/ true)
+                .claimed
+        );
+        assert!(
+            tui.claim_startup_screen_input(/*startup_screen_active*/ true)
+                .claimed
+        );
+        assert!(
+            !tui.claim_startup_screen_input(/*startup_screen_active*/ false)
+                .claimed
+        );
         Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn startup_input_keeps_pending_whitespace_until_final_capture() -> std::io::Result<()> {
         let mut tui = make_test_tui()?;
+        tui.startup_capture_active = true;
         let mut startup_input = StartupInputBuffer::default();
         startup_input.handle_probe_input(b"a\n");
         tui.startup_input = Some(startup_input);
 
-        let startup_text = tui.take_startup_text_with_capture(|input| {
+        let startup_text = tui.take_startup_text_with_capture_and_bindings(&[], |input| {
             input.handle_probe_input(b"b");
             Ok(())
         })?;
 
         assert_eq!(startup_text.as_deref(), Some("a\nb"));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_text_uses_final_submission_bindings() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+        let submit = crate::key_hint::plain(KeyCode::Char('x'));
+        let mut startup_input = StartupInputBuffer::default();
+        startup_input.handle_probe_input(b"axb");
+        tui.startup_input = Some(startup_input);
+
+        let startup_text =
+            tui.take_startup_text_with_capture_and_bindings(&[submit], |_| Ok(()))?;
+
+        assert_eq!(startup_text.as_deref(), Some("ab"));
+        assert!(
+            tui.claim_startup_input()
+                .quarantined_actions
+                .iter()
+                .any(|action| action.binding == submit)
+        );
         Ok(())
     }
 
@@ -169,10 +258,15 @@ mod tests {
         tui.startup_input = Some(startup_input);
 
         assert_eq!(
-            tui.take_startup_text_with_capture(|_| Ok(()))?.as_deref(),
+            tui.take_startup_text_with_capture_and_bindings(&[], |_| Ok(()))?
+                .as_deref(),
             Some("draft")
         );
-        let mut events = tui.startup_event_stream();
+        let mut events = tui.startup_event_stream(
+            &[],
+            StartupInputTarget::Composer,
+            super::StartupTextPolicy::Preserve,
+        )?;
         assert!(matches!(
             events.next().await,
             Some(super::TuiEvent::Key(key)) if key == KeyEvent::new(
@@ -242,8 +336,15 @@ mod tests {
 }
 
 pub fn set_modes() -> Result<()> {
+    let _lifecycle = terminal_lifecycle_guard();
+    set_modes_unlocked()
+}
+
+fn set_modes_unlocked() -> Result<()> {
+    startup::pause_startup_input_capture_for_full_modes();
     set_base_modes()?;
     set_event_modes();
+    startup::note_full_terminal_modes();
     Ok(())
 }
 
@@ -290,7 +391,7 @@ impl Command for EnableAlternateScroll {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableAlternateScroll;
+pub(crate) struct DisableAlternateScroll;
 
 impl Command for DisableAlternateScroll {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
@@ -342,6 +443,9 @@ fn restore_common(
     {
         first_error.get_or_insert(err);
     }
+    if matches!(raw_mode_restore, RawModeRestore::Disable) {
+        startup::note_capture_terminal_mode();
+    }
     if let Err(err) = execute!(
         stdout(),
         SetCursorStyle::DefaultUserShape,
@@ -358,19 +462,32 @@ fn restore_common(
 /// Restore the terminal to its original state.
 /// Inverse of `set_modes`.
 pub fn restore() -> Result<()> {
+    let _lifecycle = terminal_lifecycle_guard();
     restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
 }
 
-/// Force crossterm's cached raw-mode state back in sync with the terminal after `fg`.
-///
-/// A shell may restore the job's saved termios after the process receives `SIGCONT`. When that
-/// races with [`set_modes`], crossterm still believes raw mode is enabled even though the terminal
-/// has returned to canonical, echoing mode. Clearing crossterm's saved state before enabling raw
-/// mode again makes the kernel state authoritative once the shell has completed its handoff.
+/// Leave a temporary startup screen while keeping the early capture phase active.
+pub(super) fn restore_startup_screen() -> Result<()> {
+    let _lifecycle = terminal_lifecycle_guard();
+    let mut first_error = restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack).err();
+    if let Err(err) = execute!(stdout(), EnableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
+    #[cfg(windows)]
+    if let Err(err) = startup::reapply_startup_capture_mode_locked() {
+        first_error.get_or_insert(err);
+    }
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 #[cfg(unix)]
-pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
+fn reapply_raw_mode_after_continue_unlocked() -> Result<()> {
     disable_raw_mode()?;
-    enable_raw_mode()
+    enable_raw_mode()?;
+    execute!(stdout(), EnableBracketedPaste)
 }
 
 /// Restore the terminal after Codex is exiting.
@@ -378,22 +495,84 @@ pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
 /// terminal missed the stack pop that normally pairs with [`set_modes`]. Queued input is flushed
 /// only after restoration so late key repeats cannot escape to the parent shell.
-pub fn restore_after_exit() -> Result<()> {
+pub(crate) fn restore_after_exit_best_effort() -> Result<()> {
+    let _lifecycle = terminal_lifecycle_guard();
+    restore_after_exit_best_effort_unlocked()
+}
+
+fn restore_after_panic_best_effort() {
+    match TERMINAL_LIFECYCLE_LOCK.try_lock() {
+        Ok(_lifecycle) => {
+            let _ = restore_after_exit_best_effort_unlocked();
+        }
+        Err(std::sync::TryLockError::Poisoned(err)) => {
+            let _lifecycle = err.into_inner();
+            let _ = restore_after_exit_best_effort_unlocked();
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            // The panic interrupted another terminal transition. Avoid recursively waiting on
+            // this non-reentrant lock; normal stack unwinding releases it before the outer
+            // terminal restore guard runs.
+        }
+    }
+}
+
+fn restore_after_exit_best_effort_unlocked() -> Result<()> {
+    match restore_after_exit_unlocked() {
+        Ok(()) => Ok(()),
+        Err(_) => restore_after_exit_unlocked(),
+    }
+}
+
+fn restore_after_exit_unlocked() -> Result<()> {
+    if !startup::has_startup_capture_mode() {
+        flush_terminal_input_buffer();
+        return Ok(());
+    }
     let mut first_error =
         restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
+    if ALT_SCREEN_OWNED.load(Ordering::SeqCst) {
+        let alternate_scroll_disabled = match execute!(stdout(), DisableAlternateScroll) {
+            Ok(()) => true,
+            Err(err) => {
+                first_error.get_or_insert(err);
+                false
+            }
+        };
+        match execute!(stdout(), LeaveAlternateScreen) {
+            Ok(()) if alternate_scroll_disabled => note_alt_screen_left(),
+            Ok(()) => {}
+            Err(err) => {
+                first_error.get_or_insert(err);
+            }
+        }
+    }
     if let Err(err) = terminal_stderr::finish() {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = startup::restore_startup_capture_mode() {
         first_error.get_or_insert(err);
     }
     flush_terminal_input_buffer();
 
     match first_error {
         Some(err) => Err(err),
-        None => Ok(()),
+        None => {
+            startup::finish_startup_capture_restore();
+            Ok(())
+        }
     }
+}
+
+pub(super) fn exit_after_terminal_signal(code: i32) -> ! {
+    let _lifecycle = terminal_lifecycle_guard();
+    let _ = restore_after_exit_best_effort_unlocked();
+    std::process::exit(code);
 }
 
 /// Restore the terminal to its original state, but keep raw mode enabled.
 pub fn restore_keep_raw() -> Result<()> {
+    let _lifecycle = terminal_lifecycle_guard();
     restore_common(RawModeRestore::Keep, KeyboardRestore::PopStack)
 }
 
@@ -453,7 +632,7 @@ fn probe_windows_default_colors() {
 fn set_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        let _ = restore_after_exit(); // ignore any errors as we are already failing
+        restore_after_panic_best_effort();
         hook(panic_info);
     }));
 }
@@ -464,6 +643,12 @@ pub enum TuiEvent {
     Key(KeyEvent),
     /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// Text-like key input captured by the startup handoff for the composer specifically.
+    StartupComposerKey(KeyEvent),
+    /// A non-submitting composer action captured by the startup handoff.
+    StartupComposerAction(KeyEvent),
+    /// A paste captured by the startup handoff for the composer specifically.
+    StartupComposerPaste(String),
     /// A terminal size notification that should be handled as resize-sensitive draw work.
     ///
     /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
@@ -471,6 +656,20 @@ pub enum TuiEvent {
     Resize,
     /// A scheduled repaint that does not necessarily correspond to a terminal size change.
     Draw,
+    /// The startup event stream has finished protecting the terminal ownership handoff.
+    StartupInputSettled,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum StartupInputTarget {
+    Composer,
+    ActiveView,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum StartupTextPolicy {
+    Preserve,
+    Discard,
 }
 
 pub struct Tui {
@@ -484,6 +683,8 @@ pub struct Tui {
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
+    #[cfg(unix)]
+    signal_suspend_registration: Option<startup::SignalSuspendRegistration>,
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
@@ -493,6 +694,9 @@ pub struct Tui {
     notification_condition: NotificationCondition,
     startup_input: Option<StartupInputBuffer>,
     startup_input_active: bool,
+    startup_capture_active: bool,
+    startup_crossterm_input_active: bool,
+    startup_action_latch: Arc<Mutex<StartupActionLatch>>,
     // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
@@ -524,9 +728,21 @@ impl Tui {
         enhanced_keys_supported: bool,
         stderr_guard: terminal_stderr::TerminalStderrGuard,
         startup_input: Option<StartupInputBuffer>,
+        startup_capture_active: bool,
     ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
+        let event_broker = Arc::new(EventBroker::new());
+        #[cfg(unix)]
+        let suspend_context = SuspendContext::new();
+        let alt_screen_active = Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        let signal_suspend_registration = startup::register_signal_suspend_context(
+            event_broker.clone(),
+            suspend_context.clone(),
+            alt_screen_active.clone(),
+            frame_requester.clone(),
+        );
 
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
@@ -536,21 +752,26 @@ impl Tui {
         Self {
             frame_requester,
             draw_tx,
-            event_broker: Arc::new(EventBroker::new()),
+            event_broker,
             terminal,
             pending_history_lines: vec![],
             ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
             pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
             alt_saved_viewport: None,
             #[cfg(unix)]
-            suspend_context: SuspendContext::new(),
-            alt_screen_active: Arc::new(AtomicBool::new(false)),
+            suspend_context,
+            #[cfg(unix)]
+            signal_suspend_registration: Some(signal_suspend_registration),
+            alt_screen_active,
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             startup_input,
             startup_input_active: true,
+            startup_capture_active,
+            startup_crossterm_input_active: false,
+            startup_action_latch: Arc::new(Mutex::new(StartupActionLatch::default())),
             is_zellij,
             alt_screen_enabled: true,
             _stderr_guard: stderr_guard,
@@ -583,6 +804,19 @@ impl Tui {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
 
+    #[cfg(unix)]
+    pub(crate) fn deactivate_signal_suspend_context(&mut self) {
+        if let Some(registration) = self.signal_suspend_registration.take() {
+            startup::unregister_signal_suspend_context(registration);
+        }
+    }
+
+    pub(crate) fn prepare_for_terminal_restore(&mut self) {
+        self.pause_events();
+        #[cfg(unix)]
+        self.deactivate_signal_suspend_context();
+    }
+
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
     pub fn pause_events(&mut self) {
         self.event_broker.pause_events();
@@ -604,6 +838,18 @@ impl Tui {
         F: FnOnce() -> Fut,
         Fut: Future<Output = R>,
     {
+        #[cfg(unix)]
+        let signal_synchronization = self
+            .signal_suspend_registration
+            .as_ref()
+            .map(startup::SignalSuspendRegistration::synchronization);
+        #[cfg(unix)]
+        let signal_transition = signal_synchronization.as_ref().map(|(operation, _)| {
+            operation
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+
         // Pause crossterm events to avoid stdin conflicts with external program `f`.
         self.pause_events();
 
@@ -616,14 +862,35 @@ impl Tui {
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
+        let restore_startup_capture = matches!(mode, RestoreMode::Full);
+        if restore_startup_capture
+            && let Err(err) = startup::temporarily_restore_startup_capture_mode()
+        {
+            tracing::warn!("failed to restore startup capture before external program: {err}");
+        }
         if let Err(err) = terminal_stderr::pause() {
             tracing::warn!("failed to restore terminal stderr before external program: {err}");
         }
+        #[cfg(unix)]
+        if let Some((_, external_owner)) = &signal_synchronization {
+            external_owner.store(true, Ordering::SeqCst);
+        }
+        #[cfg(unix)]
+        drop(signal_transition);
 
         let output = f().await;
 
+        #[cfg(unix)]
+        let signal_transition = signal_synchronization.as_ref().map(|(operation, _)| {
+            operation
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
         if let Err(err) = terminal_stderr::resume() {
             tracing::warn!("failed to suppress terminal stderr after external program: {err}");
+        }
+        if restore_startup_capture && let Err(err) = startup::reapply_startup_capture_mode() {
+            tracing::warn!("failed to re-enable startup capture after external program: {err}");
         }
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
@@ -636,6 +903,12 @@ impl Tui {
         }
 
         self.resume_events();
+        #[cfg(unix)]
+        if let Some((_, external_owner)) = &signal_synchronization {
+            external_owner.store(false, Ordering::SeqCst);
+        }
+        #[cfg(unix)]
+        drop(signal_transition);
         output
     }
 
@@ -671,24 +944,95 @@ impl Tui {
     ///
     /// A screen that requests events becomes the new input owner, so text captured before the TUI
     /// was ready must not survive through it and later appear in the composer.
-    pub fn event_stream(&mut self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        let startup_input = self.claim_startup_input();
-        self.build_event_stream(InitialInputPolicy::DiscardAll, startup_input)
+    pub fn event_stream(
+        &mut self,
+    ) -> Result<Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>>> {
+        let startup_screen_active = self.startup_capture_active;
+        if startup_screen_active {
+            if self.startup_crossterm_input_active {
+                set_modes()?;
+            } else {
+                self.capture_startup_input_for_full_modes()?;
+                self.startup_crossterm_input_active = true;
+            }
+        }
+        let startup_input = self.claim_startup_screen_input(startup_screen_active);
+        self.event_broker.resume_events();
+        let mut stream = self.build_event_stream(InitialInputPolicy::DiscardAll, startup_input);
+        if startup_screen_active {
+            stream = stream
+                .recording_startup_actions(self.startup_action_latch.clone())
+                .restoring_startup_capture_on_drop();
+        }
+        Ok(Box::pin(stream))
     }
 
     pub(crate) fn startup_event_stream(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        let startup_input = self.claim_startup_input();
-        self.build_event_stream(InitialInputPolicy::PreserveText, startup_input)
+        submission_bindings: &[crate::key_hint::KeyBinding],
+        target: StartupInputTarget,
+        text_policy: StartupTextPolicy,
+    ) -> Result<Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>>> {
+        if self.startup_capture_active && !self.startup_crossterm_input_active {
+            self.capture_startup_input_for_full_modes()?;
+        } else if self.startup_capture_active {
+            set_modes()?;
+        }
+        let startup_text = match (target, text_policy) {
+            (StartupInputTarget::Composer, StartupTextPolicy::Preserve) => {
+                self.startup_input.as_mut().and_then(|input| {
+                    input.take_text_excluding_submission_bindings(submission_bindings)
+                })
+            }
+            (StartupInputTarget::Composer, StartupTextPolicy::Discard)
+            | (StartupInputTarget::ActiveView, _) => None,
+        };
+        let mut startup_input = self.claim_startup_input();
+        if self.startup_capture_active {
+            startup::finish_startup_input_capture()?;
+            self.startup_capture_active = false;
+        }
+        self.event_broker.resume_events();
+        // A startup screen may already have discarded the original buffer. The composer still
+        // needs one protected handoff for anything crossterm accumulated during later startup.
+        startup_input.claimed = true;
+        startup_input.submission_bindings = submission_bindings.to_vec();
+        Ok(Box::pin(
+            self.build_event_stream(
+                match (target, text_policy) {
+                    (StartupInputTarget::Composer, StartupTextPolicy::Preserve) => {
+                        InitialInputPolicy::PreserveText
+                    }
+                    (StartupInputTarget::Composer, StartupTextPolicy::Discard)
+                    | (StartupInputTarget::ActiveView, _) => InitialInputPolicy::DiscardAll,
+                },
+                startup_input,
+            )
+            .restoring_startup_composer_text(startup_text),
+        ))
+    }
+
+    fn capture_startup_input_for_full_modes(&mut self) -> Result<()> {
+        let input = self.startup_input.get_or_insert_default();
+        startup::capture_startup_input_for_full_modes(input)?;
+        self.startup_input_active = true;
+        Ok(())
     }
 
     fn claim_startup_input(&mut self) -> StartupInputHandoff {
-        if !self.startup_input_active {
-            return StartupInputHandoff::default();
-        }
+        let claimed = self.startup_input_active;
+        let mut input = self.startup_input.take().unwrap_or_default();
+        let latched_input = self
+            .startup_action_latch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain_into(&mut input);
+        let mut startup_input = if claimed || latched_input {
+            input.into_handoff()
+        } else {
+            StartupInputHandoff::default()
+        };
         self.startup_input_active = false;
-        let startup_input = self.startup_input.take().unwrap_or_default().into_handoff();
         #[cfg(unix)]
         if startup_input.suspend_requested {
             self.event_broker.pause_events();
@@ -701,6 +1045,21 @@ impl Tui {
                     "failed to suspend TUI process during startup"
                 );
             }
+            startup_input.resume_draw_requested = true;
+        }
+        startup_input
+    }
+
+    fn claim_startup_screen_input(&mut self, startup_screen_active: bool) -> StartupInputHandoff {
+        let mut startup_input = self.claim_startup_input();
+        if startup_screen_active {
+            // Each pre-composer screen owns a distinct handoff. Input typed during a slow gap
+            // must not bypass protection merely because an earlier screen claimed the original
+            // startup buffer.
+            startup_input.claimed = true;
+            // The filter drains stale input before this synthetic draw, then accepts keys only
+            // after the screen has rendered.
+            startup_input.resume_draw_requested = true;
         }
         startup_input
     }
@@ -709,7 +1068,7 @@ impl Tui {
         &self,
         initial_input_policy: InitialInputPolicy,
         startup_input: StartupInputHandoff,
-    ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
+    ) -> TuiEventStream {
         #[cfg(unix)]
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
@@ -717,43 +1076,51 @@ impl Tui {
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
             self.alt_screen_active.clone(),
-        );
+        )
+        .with_enhanced_key_events(self.enhanced_keys_supported);
         #[cfg(not(unix))]
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
-        );
-        let start_quiet = match initial_input_policy {
-            InitialInputPolicy::DiscardAll => startup_input.had_input,
-            InitialInputPolicy::PreserveText => startup_input.suppress_repeats,
-        };
-        let stream = stream.filtering_initial_input(
-            initial_input_policy,
-            start_quiet,
-            startup_input.interrupt_requested,
-            startup_input.suspend_requested,
-        );
-        Box::pin(stream)
+        )
+        .with_enhanced_key_events(self.enhanced_keys_supported);
+        configure_initial_input(stream, initial_input_policy, startup_input)
     }
 
-    pub(crate) fn take_startup_text(&mut self) -> Result<Option<String>> {
-        self.take_startup_text_with_capture(capture_startup_input)
-    }
-
-    fn take_startup_text_with_capture(
+    pub(crate) fn take_startup_text(
         &mut self,
+        submission_bindings: &[crate::key_hint::KeyBinding],
+    ) -> Result<Option<String>> {
+        self.take_startup_text_with_capture_and_bindings(submission_bindings, capture_startup_input)
+    }
+
+    fn take_startup_text_with_capture_and_bindings(
+        &mut self,
+        submission_bindings: &[crate::key_hint::KeyBinding],
         capture: impl FnOnce(&mut StartupInputBuffer) -> Result<()>,
     ) -> Result<Option<String>> {
-        if !self.startup_input_active {
+        let mut input = self.startup_input.take().unwrap_or_default();
+        let latched_input = self
+            .startup_action_latch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain_into(&mut input);
+        if self.startup_capture_active && !self.startup_crossterm_input_active {
+            capture(&mut input)?;
+            // The bounded reader may have captured new input after an earlier startup screen
+            // claimed the previous buffer. Keep its action provenance alive for the final
+            // protected handoff even when there is no printable text to restore.
+            self.startup_input_active = true;
+        }
+        if !self.startup_input_active && !latched_input {
+            self.startup_input = Some(input);
             return Ok(None);
         }
-
-        let mut input = self.startup_input.take().unwrap_or_default();
-        capture(&mut input)?;
         // Keep action/control state until `event_stream()` hands input to crossterm.
-        let text = input.take_text();
+        let text = input.take_text_excluding_submission_bindings(submission_bindings);
         self.startup_input = Some(input);
+        self.startup_input_active = true;
         Ok(text)
     }
 
@@ -763,9 +1130,11 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
-        let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+        let _lifecycle = terminal_lifecycle_guard();
+        execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+        note_alt_screen_entered();
         // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        execute!(self.terminal.backend_mut(), EnableAlternateScroll)?;
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -785,9 +1154,11 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+        let _lifecycle = terminal_lifecycle_guard();
         // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        execute!(self.terminal.backend_mut(), DisableAlternateScroll)?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        note_alt_screen_left();
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
         }
@@ -1113,6 +1484,117 @@ impl Tui {
         }
         Ok(None)
     }
+}
+
+fn configure_initial_input<S>(
+    stream: TuiEventStream<S>,
+    policy: InitialInputPolicy,
+    mut startup_input: StartupInputHandoff,
+) -> TuiEventStream<S>
+where
+    S: event_stream::EventSource + Default + Unpin,
+{
+    if !startup_input.claimed {
+        return stream;
+    }
+    let mut startup_repeat_actions = std::mem::take(&mut startup_input.repeat_actions);
+    let pending_plain_whitespace = std::mem::take(&mut startup_input.pending_plain_whitespace);
+    let pending_plain_whitespace_actions =
+        std::mem::take(&mut startup_input.pending_plain_whitespace_actions);
+    debug_assert_eq!(
+        pending_plain_whitespace.chars().count(),
+        pending_plain_whitespace_actions.len()
+    );
+    for (ch, action) in pending_plain_whitespace
+        .chars()
+        .zip(pending_plain_whitespace_actions)
+    {
+        if !action.release_observed
+            && !startup_repeat_actions.iter().any(|existing| {
+                existing.binding == action.binding
+                    && existing.from_raw_probe == action.from_raw_probe
+            })
+        {
+            startup_repeat_actions.push(action);
+        }
+        // Keep ambiguous trailing whitespace in the handoff filter: it is discarded if startup
+        // settles here, but becomes ordinary draft data if later text makes it internal.
+        startup_input.pending_plain_whitespace.push(ch);
+    }
+    for action in &startup_input.quarantined_actions {
+        if !startup_repeat_actions.iter().any(|existing| {
+            existing.binding == action.binding && existing.from_raw_probe == action.from_raw_probe
+        }) {
+            startup_repeat_actions.push(*action);
+        }
+    }
+    if let Some((binding, from_raw_probe)) = startup_input.trailing_printable_action
+        && !startup_repeat_actions.iter().any(|action| {
+            startup::startup_action_matches(action.binding, action.from_raw_probe, binding)
+        })
+    {
+        startup_repeat_actions.push(startup::StartupBlockedAction::captured(
+            binding,
+            from_raw_probe,
+        ));
+    }
+    let trailing_action = match policy {
+        InitialInputPolicy::DiscardAll => startup_input.trailing_printable_action,
+        InitialInputPolicy::PreserveText => {
+            startup_input
+                .trailing_printable_action
+                .filter(|(action, from_raw_probe)| {
+                    startup_input
+                        .submission_bindings
+                        .iter()
+                        .copied()
+                        .any(|binding| {
+                            startup::startup_action_matches(*action, *from_raw_probe, binding)
+                        })
+                })
+        }
+    };
+    if matches!(policy, InitialInputPolicy::PreserveText) {
+        let submission_bindings = &startup_input.submission_bindings;
+        startup_input.quarantined_actions.retain(|action| {
+            !action.quiet_elapsed
+                || !action.preserve_after_quiet
+                || submission_bindings.iter().copied().any(|binding| {
+                    startup::startup_action_matches(action.binding, action.from_raw_probe, binding)
+                })
+        });
+    }
+    let unquiet_action = startup_input
+        .quarantined_actions
+        .iter()
+        .any(|action| !action.quiet_elapsed);
+    let start_quiet = match policy {
+        // Confirmation screens are already visible when they claim input. Always establish a
+        // quiet boundary so a key arriving just after an initially empty poll cannot confirm one.
+        InitialInputPolicy::DiscardAll => {
+            startup_input.unknown_action_seen || trailing_action.is_some() || unquiet_action
+        }
+        InitialInputPolicy::PreserveText => {
+            startup_input.restored_text
+                || startup_input.unknown_action_seen
+                || trailing_action.is_some()
+                || unquiet_action
+        }
+    };
+    stream
+        .filtering_initial_input(event_stream::InitialInputConfig {
+            start_quiet,
+            pending_interrupt: startup_input.interrupt_requested,
+            pending_draw: startup_input.resume_draw_requested,
+            pending_plain_whitespace: startup_input.pending_plain_whitespace,
+            trailing_action: trailing_action.map(|(binding, _)| binding),
+            trailing_action_from_raw_probe: trailing_action
+                .is_some_and(|(_, from_raw_probe)| from_raw_probe),
+            ..event_stream::InitialInputConfig::new(policy)
+        })
+        .protecting_initial_submission_bindings(startup_input.submission_bindings)
+        .blocking_initial_actions(startup_input.quarantined_actions)
+        .blocking_startup_repeats(startup_repeat_actions)
 }
 
 #[cfg(windows)]

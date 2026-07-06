@@ -853,7 +853,7 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    let prepared_terminal = tui::PreparedTerminal::prepare()?;
+    let mut prepared_terminal = tui::PreparedTerminal::prepare()?;
     let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
@@ -1018,7 +1018,10 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            let selection = oss_selection::select_oss_provider().await?;
+            let selection = oss_selection::select_oss_provider(&mut prepared_terminal).await?;
+            for key_event in selection.active_keys.iter().copied() {
+                prepared_terminal.quarantine_action_repeats(key_event);
+            }
             let provider = selection.provider;
             if provider == "__CANCELLED__" {
                 return Err(std::io::Error::other(
@@ -1327,6 +1330,7 @@ async fn run_ratatui_app(
         initialized_terminal.enhanced_keys_supported,
         initialized_terminal.stderr_guard,
         Some(initialized_terminal.startup_input),
+        initialized_terminal.startup_capture_active,
     );
 
     #[cfg(not(debug_assertions))]
@@ -1338,6 +1342,7 @@ async fn run_ratatui_app(
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
+                    tui.prepare_for_terminal_restore();
                     terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
@@ -1371,6 +1376,7 @@ async fn run_ratatui_app(
     {
         Ok(app_server) => AppServerSession::new(app_server, app_server_target.thread_params_mode()),
         Err(err) => {
+            tui.prepare_for_terminal_restore();
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             return Err(err);
@@ -1429,6 +1435,7 @@ async fn run_ratatui_app(
         .await?;
         if onboarding_result.should_exit {
             shutdown_app_server_if_present(app_server.take()).await;
+            tui.prepare_for_terminal_restore();
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
@@ -1481,6 +1488,7 @@ async fn run_ratatui_app(
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
+        tui.prepare_for_terminal_restore();
         terminal_restore_guard.restore_silently();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
@@ -1539,6 +1547,7 @@ async fn run_ratatui_app(
             .await?
             {
                 resume_picker::SessionSelection::Exit => {
+                    tui.prepare_for_terminal_restore();
                     terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
@@ -1600,6 +1609,7 @@ async fn run_ratatui_app(
         .await?
         {
             resume_picker::SessionSelection::Exit => {
+                tui.prepare_for_terminal_restore();
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
@@ -1645,6 +1655,7 @@ async fn run_ratatui_app(
                 {
                     ResolveCwdOutcome::Continue(cwd) => cwd,
                     ResolveCwdOutcome::Exit => {
+                        tui.prepare_for_terminal_restore();
                         terminal_restore_guard.restore_silently();
                         session_log::log_session_end();
                         return Ok(AppExitInfo {
@@ -1754,6 +1765,7 @@ async fn run_ratatui_app(
                     .with_remote_cwd_override(remote_cwd_override.clone())
             }
             Err(err) => {
+                tui.prepare_for_terminal_restore();
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Err(err);
@@ -1814,6 +1826,7 @@ async fn run_ratatui_app(
     )
     .await;
 
+    tui.prepare_for_terminal_restore();
     terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
     session_log::log_session_end();
@@ -1825,11 +1838,15 @@ async fn run_ratatui_app(
     clippy::print_stderr,
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
-fn restore() {
-    if let Err(err) = tui::restore_after_exit() {
-        eprintln!(
-            "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
-        );
+fn restore() -> bool {
+    match tui::restore_after_exit_best_effort() {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!(
+                "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
+            );
+            false
+        }
     }
 }
 
@@ -1845,15 +1862,14 @@ impl TerminalRestoreGuard {
     #[cfg_attr(debug_assertions, allow(dead_code))]
     fn restore(&mut self) -> color_eyre::Result<()> {
         if self.active {
-            crate::tui::restore_after_exit()?;
+            crate::tui::restore_after_exit_best_effort()?;
             self.active = false;
         }
         Ok(())
     }
 
     fn restore_silently(&mut self) {
-        if self.active {
-            restore();
+        if self.active && restore() {
             self.active = false;
         }
     }
