@@ -20,6 +20,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -107,6 +108,121 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
 
     test.codex.shutdown_and_wait().await?;
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_denial_rejects_tool_call_with_rationale() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let output_file = test.cwd.path().join("guardian-denied.txt");
+    let command = format!("printf should-not-run > {}", output_file.display());
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise Guardian denial routing.",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-tool-denied"),
+                ev_function_call(
+                    "exec-call-denied",
+                    "exec_command",
+                    &serde_json::to_string(&tool_args)?,
+                ),
+                ev_completed("resp-parent-tool-denied"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-denied"),
+                ev_assistant_message(
+                    "msg-guardian-denied",
+                    &json!({
+                        "risk_level": "high",
+                        "user_authorization": "low",
+                        "outcome": "deny",
+                        "rationale": "The requested write has unacceptable test risk.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-denied"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-after-denial"),
+                ev_assistant_message("msg-parent-after-denial", "denied"),
+                ev_completed("resp-parent-after-denial"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that Guardian should deny".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    let guardian_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("Exercise Guardian denial routing."))
+        .expect("expected Guardian review request");
+    assert!(guardian_request.body_contains_text(&command));
+
+    let tool_output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text("exec-call-denied"))
+        .expect("expected rejected tool output to be returned to the parent model");
+    assert!(
+        tool_output.contains("The requested write has unacceptable test risk."),
+        "Guardian rationale missing from rejected tool output: {tool_output}"
+    );
+    assert!(
+        !output_file.exists(),
+        "Guardian-denied command unexpectedly executed"
+    );
+
     Ok(())
 }
 

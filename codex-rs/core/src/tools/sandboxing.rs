@@ -133,6 +133,8 @@ pub(crate) struct ApprovalCtx<'a> {
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
+pub(crate) type ApprovalAction = crate::guardian::GuardianApprovalRequest;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionRequestPayload {
     pub tool_name: HookToolName,
@@ -368,6 +370,8 @@ pub(crate) trait Approvable<Req> {
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision>;
+
+    fn approval_action(&self, req: &Req, ctx: &ApprovalCtx<'_>) -> std::io::Result<ApprovalAction>;
 }
 
 pub(crate) trait Sandboxable {
