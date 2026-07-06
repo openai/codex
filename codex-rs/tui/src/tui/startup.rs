@@ -73,8 +73,19 @@ impl StartupInputBuffer {
     }
 
     pub(super) fn push_text(&mut self, text: &str) {
-        for ch in text.chars().filter(|ch| !ch.is_control()) {
-            self.push_char(ch);
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    self.push_char('\n');
+                }
+                '\n' | '\t' => self.push_char(ch),
+                ch if !ch.is_control() => self.push_char(ch),
+                _ => {}
+            }
         }
     }
 

@@ -16,8 +16,9 @@ fn startup_input_keeps_text_without_replaying_actions() {
         Event::Key(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT)),
         Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
-        Event::Paste("ello\nworld".to_string()),
+        Event::Paste("ello\r\n\tworld".to_string()),
         Event::Key(KeyEvent::new_with_kind(
             KeyCode::Char('!'),
             KeyModifiers::NONE,
@@ -27,7 +28,7 @@ fn startup_input_keeps_text_without_replaying_actions() {
         input.handle_event(event);
     }
 
-    assert_eq!(input.into_text(), Some("helloworld".to_string()));
+    assert_eq!(input.into_text(), Some("hello\n\tworld".to_string()));
 }
 
 #[test]
