@@ -131,7 +131,15 @@ async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> 
 
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("configWarning"),
+        mcp.read_stream_until_matching_notification("exec-policy configWarning", |notification| {
+            notification.method == "configWarning"
+                && notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("summary"))
+                    .and_then(Value::as_str)
+                    == Some("Error parsing rules; custom rules not applied.")
+        }),
     )
     .await??;
     let notification: ServerNotification = notification.try_into()?;
