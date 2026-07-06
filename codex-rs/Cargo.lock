@@ -2526,6 +2526,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "pretty_assertions",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
