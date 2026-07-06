@@ -798,7 +798,10 @@ pub(super) async fn consume_rate_limit_reset_credit_request(
     request_handle
         .request_typed(ClientRequest::ConsumeAccountRateLimitResetCredit {
             request_id,
-            params: ConsumeAccountRateLimitResetCreditParams { idempotency_key },
+            params: ConsumeAccountRateLimitResetCreditParams {
+                idempotency_key,
+                credit_id: None,
+            },
         })
         .await
         .wrap_err("account/rateLimitResetCredit/consume failed in TUI")
