@@ -399,7 +399,7 @@ mod tests {
         let handler = ToolSearchHandler::new(search_infos);
 
         let debug = handler
-            .search_with_debug("Calendar events", 8)
+            .search_with_debug("Calendar events", /*limit*/ 8)
             .expect("debug search should succeed");
         assert_eq!(debug.indexed_tool_count, 10);
         assert_eq!(debug.matching_tool_count, 10);
@@ -439,7 +439,7 @@ mod tests {
         let handler = ToolSearchHandler::new(search_infos);
 
         let debug = handler
-            .search_with_debug("openai_topics list_topics", 8)
+            .search_with_debug("openai_topics list_topics", /*limit*/ 8)
             .expect("debug search should succeed");
 
         assert_eq!(
@@ -471,7 +471,7 @@ mod tests {
         let handler = ToolSearchHandler::new(search_infos);
 
         let debug = handler
-            .search_with_debug("api_token", 8)
+            .search_with_debug("api_token", /*limit*/ 8)
             .expect("debug search should succeed");
         let serialized = format!("{debug:?}");
 
