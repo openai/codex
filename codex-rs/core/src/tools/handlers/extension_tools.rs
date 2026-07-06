@@ -18,7 +18,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
-use crate::stream_events_utils::apply_turn_item_contributors;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -109,16 +108,7 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
                 ExtensionTurnItem::Extension {
                     item,
                     legacy_events,
-                } => {
-                    let mut item = TurnItem::Extension(item);
-                    apply_turn_item_contributors(
-                        session.as_ref(),
-                        turn.extension_data.as_ref(),
-                        &mut item,
-                    )
-                    .await;
-                    (item, legacy_events)
-                }
+                } => (TurnItem::Extension(item), legacy_events),
                 ExtensionTurnItem::WebSearch(item) => {
                     let mut item = TurnItem::WebSearch(item);
                     finalize_turn_item(
@@ -189,8 +179,6 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
 mod tests {
     use std::sync::Arc;
 
-    use codex_extension_api::ExtensionData;
-    use codex_extension_api::TurnItemContributor;
     use codex_extension_items::ExtensionItem;
     use codex_extension_items::image_generation::ImageGenerationItem;
     use codex_protocol::items::TurnItem;
@@ -465,60 +453,6 @@ mod tests {
         assert_eq!(end.call_id, expected.id);
         assert_eq!(end.query, expected.query);
         assert_eq!(end.action, expected.action);
-    }
-
-    #[derive(Debug)]
-    struct ExtensionTurnItemContributorRan;
-
-    struct RecordExtensionTurnItemContributor;
-
-    impl TurnItemContributor for RecordExtensionTurnItemContributor {
-        fn contribute<'a>(
-            &'a self,
-            _thread_store: &'a ExtensionData,
-            turn_store: &'a ExtensionData,
-            _item: &'a mut TurnItem,
-        ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
-            Box::pin(async move {
-                turn_store.insert(ExtensionTurnItemContributorRan);
-                Ok(())
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn extension_completion_runs_turn_item_contributors() {
-        let (mut session, turn) = crate::session::tests::make_session_and_context().await;
-        let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-        builder.turn_item_contributor(Arc::new(RecordExtensionTurnItemContributor));
-        session.services.extensions = Arc::new(builder.build());
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let emitter = CoreTurnItemEmitter {
-            session: Arc::downgrade(&session),
-            turn: Arc::downgrade(&turn),
-        };
-
-        codex_tools::TurnItemEmitter::emit_completed(
-            &emitter,
-            ExtensionTurnItem::Extension {
-                item: ExtensionItem::ImageGeneration(ImageGenerationItem {
-                    id: "image-1".to_string(),
-                    status: "completed".to_string(),
-                    revised_prompt: None,
-                    result: "cG5n".to_string(),
-                    saved_path: None,
-                }),
-                legacy_events: Vec::new(),
-            },
-        )
-        .await;
-
-        assert!(
-            turn.extension_data
-                .get::<ExtensionTurnItemContributorRan>()
-                .is_some()
-        );
     }
 
     #[tokio::test]

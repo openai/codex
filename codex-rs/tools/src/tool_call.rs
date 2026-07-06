@@ -42,7 +42,9 @@ pub enum ExtensionTurnItem {
     ///
     /// Core intentionally does not inspect extension-owned payloads, so it
     /// cannot derive their legacy fanout. It emits the canonical lifecycle
-    /// event first, then these extension-provided events.
+    /// event first, then these extension-provided events. Core also skips
+    /// global turn-item contributors here so extensions cannot mutate items
+    /// owned by other extensions.
     Extension {
         item: ExtensionItem,
         legacy_events: Vec<EventMsg>,
