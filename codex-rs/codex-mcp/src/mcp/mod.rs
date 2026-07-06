@@ -477,14 +477,12 @@ fn normalize_codex_apps_base_url(base_url: &str) -> String {
 
 fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
     let base_url = normalize_codex_apps_base_url(base_url);
-    let (base_url, default_path) = if base_url.contains("/backend-api") {
-        (base_url, "wham/apps")
-    } else if base_url.contains("/api/codex") {
-        (base_url, "apps")
+    let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
+        base_url
     } else {
-        (format!("{base_url}/api/codex"), "apps")
+        format!("{base_url}/api/codex")
     };
-    format!("{base_url}/{default_path}")
+    format!("{base_url}/ps/mcp")
 }
 
 pub fn codex_apps_mcp_server_config(
@@ -503,17 +501,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
 ) -> McpServerConfig {
-    let base_url = normalize_codex_apps_base_url(chatgpt_base_url);
-    let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
-        base_url
-    } else {
-        format!("{base_url}/api/codex")
-    };
-    mcp_server_config_for_url(
-        format!("{base_url}/ps/mcp"),
-        apps_mcp_product_sku,
-        McpServerAuth::ChatGpt,
-    )
+    codex_apps_mcp_server_config(chatgpt_base_url, apps_mcp_product_sku)
 }
 
 fn mcp_server_config_for_url(

@@ -267,7 +267,7 @@ pub async fn recorded_apps_tool_calls(server: &MockServer) -> Vec<Value> {
         .into_iter()
         .filter_map(|request| {
             let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/apps"
+            (request.url.path() == "/api/codex/ps/mcp"
                 && body.get("method").and_then(Value::as_str) == Some("tools/call"))
             .then_some(body)
         })
@@ -384,7 +384,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
 ) {
     Mock::given(method("POST"))
-        .and(path_regex("^/api/codex/apps/?$"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
         .respond_with(CodexAppsJsonRpcResponder {
             connector_name,
             connector_description,
