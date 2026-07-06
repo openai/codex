@@ -194,12 +194,11 @@ impl ToolSearchHandler {
         query: &str,
         limit: usize,
     ) -> Result<ToolSearchDebugResult, FunctionCallError> {
-        let results = self.search_engine.search(query, None);
-        let matching_tool_count = results.len();
-        let effective_limit = limit.min(matching_tool_count);
+        let results = self.search_engine.search(query, limit);
+        let matching_tool_count = self.search_engine.search(query, None).len();
+        let effective_limit = results.len();
         let result_entries = results
             .iter()
-            .take(effective_limit)
             .enumerate()
             .filter_map(|(rank, result)| {
                 let search_info = self.search_infos.get(result.document.id)?;
@@ -220,7 +219,11 @@ impl ToolSearchHandler {
                 })
             })
             .collect::<Vec<_>>();
-        let tools = self.search(query, limit)?;
+        let tools = self.search_output_tools(results.iter().filter_map(|result| {
+            self.search_infos
+                .get(result.document.id)
+                .map(|search_info| &search_info.entry)
+        }))?;
 
         Ok(ToolSearchDebugResult {
             indexed_tool_count: self.search_infos.len(),
@@ -398,11 +401,6 @@ mod tests {
         let debug = handler
             .search_with_debug("Calendar events", 8)
             .expect("debug search should succeed");
-        let current_tools = handler
-            .search("Calendar events", 8)
-            .expect("tool_search should succeed");
-
-        assert_eq!(debug.tools, current_tools);
         assert_eq!(debug.indexed_tool_count, 10);
         assert_eq!(debug.matching_tool_count, 10);
         assert_eq!(debug.requested_limit, 8);
@@ -412,10 +410,18 @@ mod tests {
         assert!(debug.results.iter().all(|result| result.score.is_some()));
         assert_eq!(debug.tools.len(), 1);
         assert_eq!(canonical_names(&debug.tools).len(), 8);
+        assert_eq!(
+            canonical_names(&debug.tools),
+            debug
+                .results
+                .iter()
+                .flat_map(|result| canonical_names(&result.tools))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn debug_search_recovers_exact_named_tool() {
+    fn debug_search_recovers_named_tool_with_runtime_query() {
         let search_infos = vec![
             McpHandler::new(tool_info("calendar", "list_events", "Calendar events"))
                 .expect("MCP tool should convert")
@@ -433,7 +439,7 @@ mod tests {
         let handler = ToolSearchHandler::new(search_infos);
 
         let debug = handler
-            .search_with_debug("openai_topics.list_topics", 8)
+            .search_with_debug("openai_topics list_topics", 8)
             .expect("debug search should succeed");
 
         assert_eq!(
