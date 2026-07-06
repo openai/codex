@@ -270,6 +270,10 @@ prefix_rules = [
             ),
         )
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
             let policy_path = config.codex_home.join("rules").join("broken.rules");
             fs::create_dir_all(
                 policy_path
@@ -283,15 +287,15 @@ prefix_rules = [
     let test = builder.build_with_auto_env(&server).await?;
     let call_id = "managed-shell-forbidden";
     let args = json!({
-        "command": "echo blocked",
-        "timeout_ms": 1_000,
+        "cmd": "echo blocked",
+        "yield_time_ms": 1_000,
     });
 
     mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-managed-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
             ev_completed("resp-managed-1"),
         ]),
     )
