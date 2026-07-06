@@ -102,6 +102,7 @@ mod fuzzy_file_search;
 mod image_url;
 pub mod in_process;
 mod mcp_refresh;
+mod mcp_resource_origin;
 mod message_processor;
 mod models;
 mod models_refresh_worker;

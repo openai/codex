@@ -115,7 +115,8 @@ async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
                 .expect("create in-process RMCP client"),
         ),
         server_info: create_test_server_info("Ready"),
-        tools,
+        tools: Arc::new(arc_swap::ArcSwap::from_pointee(tools)),
+        tool_refresh_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         tool_filter: ToolFilter::default(),
         tool_timeout: None,
         server_instructions: None,
@@ -771,11 +772,16 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
     );
     cache_context.store_current_tools_for_test(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
+        "cached_tool",
     )]);
-    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
-        .boxed()
-        .shared();
+    let (live_tx, live_rx) = tokio::sync::oneshot::channel();
+    let pending_client = async move {
+        Ok(live_rx
+            .await
+            .expect("live client sender should remain available"))
+    }
+    .boxed()
+    .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
@@ -788,7 +794,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
-            cached_server_info: None,
+            cached_server_info: Some(create_test_server_info("Cached")),
             codex_apps_tools_cache_context: Some(cache_context),
             tool_filter: ToolFilter::default(),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -802,12 +808,50 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
     let tool = tools
         .iter()
         .find(|tool| {
-            tool.canonical_tool_name()
-                == ToolName::namespaced("mcp__codex_apps", "calendar_create_event")
+            tool.canonical_tool_name() == ToolName::namespaced("mcp__codex_apps", "cached_tool")
         })
         .expect("tool from shared cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(tool.callable_name, "calendar_create_event");
+    assert_eq!(tool.callable_name, "cached_tool");
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(10),
+            manager.server_connection(CODEX_APPS_MCP_SERVER_NAME),
+        )
+        .await
+        .is_err()
+    );
+
+    let mut live_client = create_test_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "live_tool",
+    )])
+    .await;
+    live_client.server_info = create_test_server_info("Live");
+    let live_client_for_refresh = live_client.clone();
+    assert!(live_tx.send(live_client).is_ok());
+
+    let connection = manager
+        .server_connection(CODEX_APPS_MCP_SERVER_NAME)
+        .await
+        .expect("live connection");
+    assert_eq!(connection.server_info().title.as_deref(), Some("Live"));
+    assert!(connection.tool_info("live_tool").is_some());
+    assert!(connection.tool_info("cached_tool").is_none());
+
+    live_client_for_refresh.replace_tools(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "refreshed_tool",
+    )]);
+    let refreshed = manager
+        .server_connection(CODEX_APPS_MCP_SERVER_NAME)
+        .await
+        .expect("refreshed connection");
+    assert!(connection.tool_info("live_tool").is_some());
+    assert!(connection.tool_info("refreshed_tool").is_none());
+    assert!(refreshed.tool_info("live_tool").is_none());
+    assert!(refreshed.tool_info("refreshed_tool").is_some());
 }
 
 #[tokio::test]
@@ -1144,6 +1188,13 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
             .await
             .get(CODEX_APPS_MCP_SERVER_NAME),
         Some(&server_info)
+    );
+    assert!(
+        manager
+            .server_connection(CODEX_APPS_MCP_SERVER_NAME)
+            .await
+            .is_err(),
+        "authoritative connections must not fall back to cached startup data"
     );
 }
 
