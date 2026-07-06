@@ -12,7 +12,6 @@ mod client_common;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_prompt;
-mod response_event_buffer;
 mod responses_metadata;
 mod responses_retry;
 pub(crate) mod session;

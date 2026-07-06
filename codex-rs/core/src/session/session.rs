@@ -1111,9 +1111,9 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
-                    /*parallel_reasoning_summaries_enabled*/ config
+                    /*concurrent_reasoning_summaries_enabled*/ config
                         .features
-                        .enabled(Feature::ParallelReasoningSummaries),
+                        .enabled(Feature::ConcurrentReasoningSummaries),
                     attestation_provider,
                 )
                 .with_prompt_cache_key_override(

@@ -205,7 +205,7 @@ pub enum Feature {
     /// Generate Responses API item IDs for client-created history items.
     ItemIds,
     /// Request concurrent cutoff reasoning summary delivery.
-    ParallelReasoningSummaries,
+    ConcurrentReasoningSummaries,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1187,8 +1187,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelReasoningSummaries,
-        key: "parallel_reasoning_summaries",
+        id: Feature::ConcurrentReasoningSummaries,
+        key: "concurrent_reasoning_summaries",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

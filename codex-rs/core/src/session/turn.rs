@@ -1938,7 +1938,7 @@ async fn try_run_sampling_request(
     // Concurrent cutoff can complete an older reasoning item after a newer item starts.
     // Keep only the IDs needed to avoid emitting a second start when those done events
     // are reordered back into response order.
-    let mut streamed_response_item_ids = HashSet::<String>::new();
+    let mut streamed_response_item_ids = HashSet::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1998,11 +1998,16 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone { item, .. } => {
                 let completed_item_id = item.id().map(str::to_owned);
-                let is_current_response_item = response_item_ids_match_when_present(
-                    completed_item_id.as_deref(),
-                    current_response_item_id.as_deref(),
-                );
-                if is_current_response_item
+                let completes_active_tool_call = active_tool_argument_diff_consumer
+                    .as_ref()
+                    .is_some_and(|(active_call_id, _)| {
+                        matches!(
+                            &item,
+                            ResponseItem::CustomToolCall { call_id, .. }
+                                if call_id == active_call_id
+                        )
+                    });
+                if completes_active_tool_call
                     && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
@@ -2011,10 +2016,18 @@ async fn try_run_sampling_request(
 
                 let active_item_id = active_item.as_ref().map(TurnItem::id);
                 let matches_active_item = active_item.is_some()
-                    && response_item_ids_match_when_present(
-                        completed_item_id.as_deref(),
-                        active_item_id.as_deref(),
-                    );
+                    && if uses_concurrent_reasoning_summaries {
+                        completed_item_id
+                            .as_deref()
+                            .is_some_and(|completed_item_id| {
+                                active_item_id.as_deref() == Some(completed_item_id)
+                            })
+                    } else {
+                        response_item_ids_match_when_present(
+                            completed_item_id.as_deref(),
+                            active_item_id.as_deref(),
+                        )
+                    };
                 let item_was_streamed_to_client = match completed_item_id.as_deref() {
                     Some(item_id) => streamed_response_item_ids.remove(item_id),
                     None => matches_active_item && active_item_is_streaming_to_client,
@@ -2155,11 +2168,9 @@ async fn try_run_sampling_request(
                         seeded_item_id = Some(item_id);
                     }
                     if stream_item_to_client {
-                        streamed_response_item_ids.insert(
-                            item.id()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| turn_item.id()),
-                        );
+                        if let Some(item_id) = item.id() {
+                            streamed_response_item_ids.insert(item_id.to_owned());
+                        }
                         if let Some(state) = plan_mode_state.as_mut()
                             && matches!(turn_item, TurnItem::AgentMessage(_))
                         {
@@ -2369,7 +2380,6 @@ async fn try_run_sampling_request(
                 // Concurrent cutoff can cancel a partial summary at the next output-item
                 // boundary. Present only atomic parts that finish while their item is current.
                 if !uses_concurrent_reasoning_summaries
-                    || defer_streamed_turn_items_for_contributors
                     || current_response_item_id.as_deref() != Some(item_id.as_str())
                 {
                     continue;

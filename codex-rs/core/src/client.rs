@@ -23,6 +23,7 @@
 //! WebSocket prewarm is treated as the first websocket connection attempt for a turn. If it
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -112,7 +113,6 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
-use crate::response_event_buffer::OutputItemDoneBuffer;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::subagent_header_value;
@@ -206,7 +206,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     item_ids_enabled: bool,
-    parallel_reasoning_summaries_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -417,7 +417,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         item_ids_enabled: bool,
-        parallel_reasoning_summaries_enabled: bool,
+        concurrent_reasoning_summaries_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -440,7 +440,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 item_ids_enabled,
-                parallel_reasoning_summaries_enabled,
+                concurrent_reasoning_summaries_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -858,7 +858,7 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let stream_options = (self.state.parallel_reasoning_summaries_enabled
+        let stream_options = (self.state.concurrent_reasoning_summaries_enabled
             && matches!(
                 responses_metadata.request_kind,
                 Some(CodexResponsesRequestKind::Turn)
@@ -1098,7 +1098,7 @@ impl ModelClientSession {
     }
 
     pub(crate) fn uses_concurrent_reasoning_summaries(&self) -> bool {
-        self.client.state.parallel_reasoning_summaries_enabled
+        self.client.state.concurrent_reasoning_summaries_enabled
     }
 
     fn reset_websocket_session(&mut self) {
@@ -1899,7 +1899,51 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
 
-async fn send_output_item_done_events(
+/// Restores response order for completed items without delaying incremental events.
+#[derive(Default)]
+struct OutputItemDoneBuffer {
+    next_output_index: usize,
+    pending: BTreeMap<usize, ResponseItem>,
+}
+
+impl OutputItemDoneBuffer {
+    fn push(
+        &mut self,
+        item: ResponseItem,
+        output_index: Option<usize>,
+    ) -> Vec<(ResponseItem, Option<usize>)> {
+        let Some(output_index) = output_index else {
+            return vec![(item, None)];
+        };
+
+        if output_index < self.next_output_index {
+            return Vec::new();
+        }
+
+        self.pending.insert(output_index, item);
+        self.take_ready()
+    }
+
+    fn finish(&mut self) -> Vec<(ResponseItem, Option<usize>)> {
+        let pending = std::mem::take(&mut self.pending);
+        pending
+            .into_iter()
+            .map(|(output_index, item)| (item, Some(output_index)))
+            .collect()
+    }
+
+    fn take_ready(&mut self) -> Vec<(ResponseItem, Option<usize>)> {
+        let mut ready = Vec::new();
+        while let Some(item) = self.pending.remove(&self.next_output_index) {
+            ready.push((item, Some(self.next_output_index)));
+            self.next_output_index += 1;
+        }
+        ready
+    }
+}
+
+/// Keep completed-item history and downstream events in the same order.
+async fn forward_completed_items(
     tx_event: &mpsc::Sender<Result<ResponseEvent>>,
     items_added: &mut Vec<ResponseItem>,
     ready: Vec<(ResponseItem, Option<usize>)>,
@@ -1994,7 +2038,7 @@ where
                         Some(buffer) => buffer.push(item, output_index),
                         None => vec![(item, output_index)],
                     };
-                    if !send_output_item_done_events(&tx_event, &mut items_added, ready).await {
+                    if !forward_completed_items(&tx_event, &mut items_added, ready).await {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
                             upstream_request_id,
@@ -2009,12 +2053,8 @@ where
                     end_turn,
                 }) => {
                     if let Some(buffer) = output_item_done_buffer.as_mut() {
-                        if !send_output_item_done_events(
-                            &tx_event,
-                            &mut items_added,
-                            buffer.finish(),
-                        )
-                        .await
+                        if !forward_completed_items(&tx_event, &mut items_added, buffer.finish())
+                            .await
                         {
                             inference_trace_attempt.record_cancelled(
                                 STREAM_DROPPED_REASON,
@@ -2076,12 +2116,8 @@ where
                 }
                 Err(err) => {
                     if let Some(buffer) = output_item_done_buffer.as_mut()
-                        && !send_output_item_done_events(
-                            &tx_event,
-                            &mut items_added,
-                            buffer.finish(),
-                        )
-                        .await
+                        && !forward_completed_items(&tx_event, &mut items_added, buffer.finish())
+                            .await
                     {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
@@ -2114,7 +2150,7 @@ where
             }
         }
         if let Some(buffer) = output_item_done_buffer.as_mut()
-            && !send_output_item_done_events(&tx_event, &mut items_added, buffer.finish()).await
+            && !forward_completed_items(&tx_event, &mut items_added, buffer.finish()).await
         {
             inference_trace_attempt.record_cancelled(
                 STREAM_DROPPED_REASON,

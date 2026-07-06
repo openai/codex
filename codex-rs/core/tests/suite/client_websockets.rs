@@ -386,11 +386,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let mut provider = websocket_provider(&server);
-    provider.name = "OpenAI".to_string();
     let harness = websocket_harness_with_provider_options(
-        provider, /*runtime_metrics_enabled*/ true,
-        /*parallel_reasoning_summaries_enabled*/ true,
+        websocket_provider(&server),
+        /*runtime_metrics_enabled*/ true,
+        /*concurrent_reasoning_summaries_enabled*/ true,
     )
     .await;
     let mut client_session = harness.client.new_session();
@@ -1002,7 +1001,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
     let harness = websocket_harness_with_provider_options(
         provider, /*runtime_metrics_enabled*/ false,
-        /*parallel_reasoning_summaries_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
     )
     .await;
 
@@ -2211,7 +2210,7 @@ async fn websocket_harness_with_options(
     websocket_harness_with_provider_options(
         websocket_provider(server),
         runtime_metrics_enabled,
-        /*parallel_reasoning_summaries_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
     )
     .await
 }
@@ -2219,7 +2218,7 @@ async fn websocket_harness_with_options(
 async fn websocket_harness_with_provider_options(
     provider: ModelProviderInfo,
     runtime_metrics_enabled: bool,
-    parallel_reasoning_summaries_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -2230,10 +2229,10 @@ async fn websocket_harness_with_provider_options(
             .enable(Feature::RuntimeMetrics)
             .expect("test config should allow feature update");
     }
-    if parallel_reasoning_summaries_enabled {
+    if concurrent_reasoning_summaries_enabled {
         config
             .features
-            .enable(Feature::ParallelReasoningSummaries)
+            .enable(Feature::ConcurrentReasoningSummaries)
             .expect("test config should allow feature update");
     }
     let config = Arc::new(config);
@@ -2275,8 +2274,10 @@ async fn websocket_harness_with_provider_options(
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
-        /*parallel_reasoning_summaries_enabled*/
-        config.features.enabled(Feature::ParallelReasoningSummaries),
+        /*concurrent_reasoning_summaries_enabled*/
+        config
+            .features
+            .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
     );
 

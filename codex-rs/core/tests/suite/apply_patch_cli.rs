@@ -41,6 +41,8 @@ use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
@@ -1167,18 +1169,27 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
                 .features
                 .enable(Feature::ApplyPatchStreamingEvents)
                 .expect("enable apply_patch streaming events");
+            config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries)
+                .expect("enable concurrent reasoning summaries");
         })
     })
     .await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let call_id = "apply-patch-streaming";
+    let with_output_index = |mut event: serde_json::Value, output_index: usize| {
+        event["output_index"] = serde_json::json!(output_index);
+        event
+    };
     let patch = "*** Begin Patch\n*** Add File: streamed.txt\n+hello\n+world\n*** End Patch";
     mount_sse_sequence(
         harness.server(),
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_reasoning_item_added("reasoning-1", &[""]),
                 json!({
                     "type": "response.output_item.added",
                     "item": {
@@ -1198,12 +1209,20 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
                     "call_id": call_id,
                     "delta": "*** Add File: streamed.txt\n+hello",
                 }),
+                // The earlier reasoning item can complete while tool input keeps streaming.
+                with_output_index(
+                    ev_reasoning_item("reasoning-1", &[], &[]),
+                    /*output_index*/ 0,
+                ),
                 json!({
                     "type": "response.custom_tool_call_input.delta",
                     "call_id": call_id,
                     "delta": "\n+world\n*** End Patch",
                 }),
-                ev_apply_patch_custom_tool_call(call_id, patch),
+                with_output_index(
+                    ev_apply_patch_custom_tool_call(call_id, patch),
+                    /*output_index*/ 1,
+                ),
                 ev_completed("resp-1"),
             ]),
             sse(vec![

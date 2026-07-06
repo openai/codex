@@ -1101,7 +1101,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         ev_reasoning_item("reasoning-1", &["step one"], &[]),
         ev_completed("resp-1"),
     ]);
-    let response_mock = mount_sse_once(&server, stream).await;
+    mount_sse_once(&server, stream).await;
 
     codex
         .submit(Op::UserInput {
@@ -1132,14 +1132,6 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     .await;
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
-    assert_eq!(
-        response_mock
-            .single_request()
-            .body_json()
-            .get("stream_options"),
-        None
-    );
-
     Ok(())
 }
 
@@ -1155,7 +1147,9 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
         })
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Auto);
-            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -1171,7 +1165,7 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
         event["output_index"] = serde_json::json!(output_index);
         event
     };
-    let response_mock = mount_sse_once(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
@@ -1252,12 +1246,6 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
     assert_eq!(started_item_ids, vec!["reasoning-1", "message-1"]);
     assert_eq!(completed_item_ids, vec!["reasoning-1", "message-1"]);
     assert_eq!(summary_sections, Vec::new());
-    assert_eq!(
-        response_mock.single_request().body_json()["stream_options"]["reasoning_summary_delivery"]
-            .as_str(),
-        Some("concurrent_cutoff")
-    );
-
     Ok(())
 }
 
