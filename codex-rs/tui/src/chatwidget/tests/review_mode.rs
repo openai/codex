@@ -1035,6 +1035,41 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
 }
 
+#[tokio::test]
+async fn ctrl_c_clears_startup_draft_protection_only_with_the_composer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.restore_startup_draft("captured during startup");
+
+    chat.open_review_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "captured during startup");
+    assert!(chat.startup_draft_pending_mcp_servers.is_some());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "captured during startup");
+    assert!(chat.startup_draft_pending_mcp_servers.is_some());
+    assert_eq!(
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        InputResult::None
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert!(chat.bottom_pane.composer_is_empty());
+    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+    chat.bottom_pane.insert_str("replacement draft");
+    assert_matches!(
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        InputResult::Submitted { .. }
+    );
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[tokio::test]

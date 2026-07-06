@@ -373,6 +373,7 @@ impl ChatWidget {
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
+        let composer_had_input = !self.bottom_pane.composer_is_empty();
         let should_pause_active_goal = self
             .bottom_pane
             .active_view_will_interrupt_turn_on_key_event(KeyEvent::new(
@@ -380,6 +381,9 @@ impl ChatWidget {
                 KeyModifiers::CONTROL,
             ));
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            if composer_had_input && self.bottom_pane.composer_is_empty() {
+                self.clear_startup_draft_protection();
+            }
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
                 if modal_or_popup_active {
                     self.quit_shortcut_expires_at = None;

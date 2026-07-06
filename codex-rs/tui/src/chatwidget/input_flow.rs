@@ -36,7 +36,12 @@ impl ChatWidget {
                 .as_ref()
                 .is_some_and(HashSet::is_empty);
         if startup_ready {
-            self.startup_draft_pending_mcp_servers = None;
+            self.clear_startup_draft_protection();
+        }
+    }
+
+    pub(super) fn clear_startup_draft_protection(&mut self) {
+        if self.startup_draft_pending_mcp_servers.take().is_some() {
             self.bottom_pane
                 .set_startup_draft_submission_blocked(/*blocked*/ false);
         }
