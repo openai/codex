@@ -26,7 +26,7 @@ fn image_generation_item_preserves_stable_wire_shape() {
         value,
         json!({
             "id": "image-1",
-            "kind": "image_gen.image_generation",
+            "kind": "image_gen.generation",
             "payload": {
                 "status": "completed",
                 "revised_prompt": "A blue square",
@@ -56,7 +56,7 @@ fn unknown_extension_kind_is_rejected() {
 fn malformed_known_extension_payload_is_rejected() {
     let value = json!({
         "id": "image-1",
-        "kind": "image_gen.image_generation",
+        "kind": "image_gen.generation",
         "payload": {
             "status": "completed",
         },
