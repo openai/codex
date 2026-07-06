@@ -190,10 +190,10 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
         force_state: Some("streamlined_state".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
-        login_success_page: LoginSuccessPage::hosted_at(
-            "http://localhost:3000/codex/open-app?source=old",
-            LoginSuccessPageBrand::Chatgpt,
-        )?,
+        login_success_page: LoginSuccessPage::Hosted {
+            url: Url::parse("http://localhost:3000/codex/open-app?source=old")?,
+            app_brand: LoginSuccessPageBrand::Chatgpt,
+        },
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
     })?;
     let login_port = server.actual_port;

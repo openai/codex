@@ -491,8 +491,8 @@ impl TestAppServer {
             chatgpt_account_id,
             chatgpt_plan_type,
         };
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/start", params).await
+        self.send_login_account_request(serde_json::to_value(params)?)
+            .await
     }
 
     /// Send a `feedback/upload` JSON-RPC request.
@@ -1325,6 +1325,14 @@ impl TestAppServer {
         self.send_request("account/logout", /*params*/ None).await
     }
 
+    /// Send an `account/login/start` JSON-RPC request.
+    pub async fn send_login_account_request(
+        &mut self,
+        params: serde_json::Value,
+    ) -> anyhow::Result<i64> {
+        self.send_request("account/login/start", Some(params)).await
+    }
+
     /// Send an `account/login/start` JSON-RPC request for API key login.
     pub async fn send_login_account_api_key_request(
         &mut self,
@@ -1334,7 +1342,7 @@ impl TestAppServer {
             "type": "apiKey",
             "apiKey": api_key,
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
@@ -1342,7 +1350,7 @@ impl TestAppServer {
         let params = serde_json::json!({
             "type": "chatgpt"
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/start` JSON-RPC request for ChatGPT device code login.
@@ -1350,7 +1358,7 @@ impl TestAppServer {
         let params = serde_json::json!({
             "type": "chatgptDeviceCode"
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/cancel` JSON-RPC request.

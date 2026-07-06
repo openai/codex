@@ -1464,7 +1464,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "default": null
             },
             "codexStreamlinedLogin": {
               "type": "boolean"

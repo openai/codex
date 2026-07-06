@@ -32,6 +32,10 @@ use crate::default_client::originator;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
+use crate::success_page::LoginSuccessPage;
+use crate::success_page::LoginSuccessRedirect;
+use crate::success_page::compose_success_url;
+use crate::success_page::jwt_auth_claims;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use base64::Engine;
@@ -50,57 +54,14 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-const DEFAULT_ISSUER: &str = "https://auth.openai.com";
+pub(super) const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
 // Keep in sync with the Codex CLI Hydra redirect URI allow-list.
 const FALLBACK_PORT: u16 = 1457;
-const CODEX_OPEN_APP_URL: &str = "https://chatgpt.com/codex/open-app";
 static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(include_str!("assets/error.html"))
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum LoginSuccessPage {
-    Local,
-    Hosted {
-        url: url::Url,
-        app_brand: LoginSuccessPageBrand,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum LoginSuccessPageBrand {
-    Codex,
-    Chatgpt,
-}
-
-impl LoginSuccessPageBrand {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Chatgpt => "chatgpt",
-        }
-    }
-}
-
-impl LoginSuccessPage {
-    pub fn hosted(app_brand: LoginSuccessPageBrand) -> Self {
-        Self::hosted_at(CODEX_OPEN_APP_URL, app_brand)
-            .unwrap_or_else(|err| panic!("default Codex open app URL must parse: {err}"))
-    }
-
-    pub fn hosted_at(url: &str, app_brand: LoginSuccessPageBrand) -> io::Result<Self> {
-        url::Url::parse(url)
-            .map(|url| Self::Hosted { url, app_brand })
-            .map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid Codex open app URL: {err}"),
-                )
-            })
-    }
-}
 
 /// Options for launching the local login callback server.
 #[derive(Debug, Clone)]
@@ -138,7 +99,7 @@ impl ServerOptions {
             force_state: None,
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
-            login_success_page: LoginSuccessPage::Local,
+            login_success_page: LoginSuccessPage::default(),
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
             auth_route_config,
@@ -343,12 +304,6 @@ enum HandledRequest {
         body: Vec<u8>,
         result: io::Result<()>,
     },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum LoginSuccessRedirect {
-    Local(String),
-    Hosted(String),
 }
 
 async fn process_request(
@@ -947,105 +902,6 @@ pub(crate) async fn persist_tokens_async(
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
-fn compose_success_url(
-    port: u16,
-    issuer: &str,
-    id_token: &str,
-    access_token: &str,
-    codex_streamlined_login: bool,
-    login_success_page: &LoginSuccessPage,
-) -> LoginSuccessRedirect {
-    let token_claims = jwt_auth_claims(id_token);
-
-    let org_id = token_claims
-        .get("organization_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let project_id = token_claims
-        .get("project_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let completed_onboarding = token_claims
-        .get("completed_platform_onboarding")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let is_org_owner = token_claims
-        .get("is_org_owner")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let needs_setup = (!completed_onboarding) && is_org_owner;
-    if !needs_setup && let LoginSuccessPage::Hosted { url, app_brand } = login_success_page {
-        let mut success_url = url.clone();
-        success_url.set_query(None);
-        success_url
-            .query_pairs_mut()
-            .append_pair("source", "login")
-            .append_pair("app_brand", app_brand.as_str());
-        return LoginSuccessRedirect::Hosted(success_url.into());
-    }
-
-    let access_claims = jwt_auth_claims(access_token);
-    let plan_type = access_claims
-        .get("chatgpt_plan_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let platform_url = if issuer == DEFAULT_ISSUER {
-        "https://platform.openai.com"
-    } else {
-        "https://platform.api.openai.org"
-    };
-
-    let mut params = vec![
-        ("id_token", id_token.to_string()),
-        ("needs_setup", needs_setup.to_string()),
-        ("org_id", org_id.to_string()),
-        ("project_id", project_id.to_string()),
-        ("plan_type", plan_type.to_string()),
-        ("platform_url", platform_url.to_string()),
-    ];
-    if codex_streamlined_login {
-        params.push(("codex_streamlined_login", "true".to_string()));
-    }
-    let qs = params
-        .drain(..)
-        .map(|(key, value)| format!("{key}={}", urlencoding::encode(&value)))
-        .collect::<Vec<_>>()
-        .join("&");
-    LoginSuccessRedirect::Local(format!("http://localhost:{port}/success?{qs}"))
-}
-
-fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
-    let mut parts = jwt.split('.');
-    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
-        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
-        _ => {
-            eprintln!("Invalid JWT format while extracting claims");
-            return serde_json::Map::new();
-        }
-    };
-    match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
-        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(mut v) => {
-                if let Some(obj) = v
-                    .get_mut("https://api.openai.com/auth")
-                    .and_then(|x| x.as_object_mut())
-                {
-                    return obj.clone();
-                }
-                eprintln!("JWT payload missing expected 'https://api.openai.com/auth' object");
-            }
-            Err(e) => {
-                eprintln!("Failed to parse JWT JSON payload: {e}");
-            }
-        },
-        Err(e) => {
-            eprintln!("Failed to base64url-decode JWT payload: {e}");
-        }
-    }
-    serde_json::Map::new()
-}
-
 /// Validates the ID token against an optional workspace restriction.
 pub(crate) fn ensure_workspace_allowed(
     expected: Option<&[String]>,
@@ -1290,16 +1146,9 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
-    use base64::Engine;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
 
-    use super::DEFAULT_ISSUER;
-    use super::LoginSuccessPage;
-    use super::LoginSuccessPageBrand;
-    use super::LoginSuccessRedirect;
     use super::TokenEndpointErrorDetail;
-    use super::compose_success_url;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
@@ -1403,115 +1252,6 @@ mod tests {
         assert_eq!(
             redacted,
             "https://example.com/base?token=%3Credacted%3E&env=prod".to_string()
-        );
-    }
-
-    #[test]
-    fn compose_success_url_uses_local_page_by_default() {
-        let LoginSuccessRedirect::Local(url) = compose_success_url(
-            /*port*/ 1455,
-            DEFAULT_ISSUER,
-            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-            /*codex_streamlined_login*/ false,
-            &LoginSuccessPage::Local,
-        ) else {
-            panic!("expected local success redirect");
-        };
-        let url = url::Url::parse(&url).expect("success URL should parse");
-
-        assert_eq!(url.host_str(), Some("localhost"));
-        assert_eq!(url.path(), "/success");
-        assert_eq!(
-            url.query_pairs()
-                .find(|(key, _)| key == "codex_streamlined_login"),
-            None
-        );
-    }
-
-    #[test]
-    fn compose_success_url_uses_streamlined_local_page_when_requested() {
-        let LoginSuccessRedirect::Local(url) = compose_success_url(
-            /*port*/ 1455,
-            DEFAULT_ISSUER,
-            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-            /*codex_streamlined_login*/ true,
-            &LoginSuccessPage::Local,
-        ) else {
-            panic!("expected local success redirect");
-        };
-        let url = url::Url::parse(&url).expect("success URL should parse");
-
-        assert_eq!(
-            url.query_pairs()
-                .find(|(key, _)| key == "codex_streamlined_login")
-                .map(|(_, value)| value.into_owned()),
-            Some("true".to_string())
-        );
-    }
-
-    #[test]
-    fn compose_success_url_uses_hosted_page_when_requested() {
-        assert_eq!(
-            compose_success_url(
-                /*port*/ 1455,
-                DEFAULT_ISSUER,
-                "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-                "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
-                /*codex_streamlined_login*/ false,
-                &LoginSuccessPage::hosted(LoginSuccessPageBrand::Chatgpt),
-            ),
-            LoginSuccessRedirect::Hosted(
-                "https://chatgpt.com/codex/open-app?source=login&app_brand=chatgpt".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn compose_success_url_keeps_setup_on_local_page() {
-        let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-        let payload = encode(
-            serde_json::to_string(&json!({
-                "https://api.openai.com/auth": {
-                    "completed_platform_onboarding": false,
-                    "is_org_owner": true,
-                    "organization_id": "org_123",
-                    "project_id": "proj_123",
-                }
-            }))
-            .expect("payload should serialize")
-            .as_bytes(),
-        );
-        let access_payload = encode(
-            serde_json::to_string(&json!({
-                "https://api.openai.com/auth": {
-                    "chatgpt_plan_type": "team",
-                }
-            }))
-            .expect("payload should serialize")
-            .as_bytes(),
-        );
-        let id_token = format!("e30.{payload}.sig");
-        let LoginSuccessRedirect::Local(url) = compose_success_url(
-            /*port*/ 1455,
-            DEFAULT_ISSUER,
-            &id_token,
-            &format!("e30.{access_payload}.sig"),
-            /*codex_streamlined_login*/ true,
-            &LoginSuccessPage::hosted(LoginSuccessPageBrand::Codex),
-        ) else {
-            panic!("expected local success redirect");
-        };
-        let url = url::Url::parse(&url).expect("success URL should parse");
-
-        assert_eq!(url.host_str(), Some("localhost"));
-        assert_eq!(url.path(), "/success");
-        assert_eq!(
-            url.query_pairs()
-                .find(|(key, _)| key == "needs_setup")
-                .map(|(_, value)| value.into_owned()),
-            Some("true".to_string())
         );
     }
 
