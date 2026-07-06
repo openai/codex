@@ -3889,6 +3889,41 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
 }
 
 #[tokio::test]
+async fn long_hook_context_is_truncated_with_transcript_hint_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "session-start:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::SessionStart,
+            codex_app_server_protocol::HookRunStatus::Stopped,
+            vec![
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                    text: "This hook context is intentionally long enough to wrap across several terminal rows while keeping the complete value available in the transcript overlay. The main conversation should stay compact even when a hook injects a large block of instructions for the model."
+                        .to_string(),
+                },
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Stop,
+                    text: "The hook stopped this turn for an important reason.\nThis second line must remain visible in full."
+                        .to_string(),
+                },
+            ],
+        ),
+    );
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "long_hook_context_is_truncated_with_transcript_hint",
+        history
+    );
+}
+
+#[tokio::test]
 async fn session_start_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
         codex_app_server_protocol::HookEventName::SessionStart,
