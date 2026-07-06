@@ -5,6 +5,7 @@ use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnRuntime;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -109,6 +110,7 @@ pub(crate) fn prepare_exec_request(
             workspace_roots,
             windows_sandbox_proxy_settings_mode:
                 codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+            runtime: SandboxDirectSpawnRuntime::default(),
             transform: SandboxTransformRequest {
                 // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
                 // wrapper, or reject sandboxed requests with a custom arg0.

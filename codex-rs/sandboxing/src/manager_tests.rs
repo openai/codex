@@ -1,10 +1,13 @@
 use super::SandboxCommand;
+use super::SandboxDirectSpawnRuntime;
 #[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
+use super::SandboxRuntimeProxyArgument;
 use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
+use super::encode_linux_direct_spawn_runtime;
 use super::get_platform_sandbox;
 use super::with_managed_mitm_ca_readable_root;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -71,6 +74,42 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
         /*has_managed_network_requirements*/ false,
     );
     assert_eq!(sandbox, expected);
+}
+
+#[test]
+fn linux_direct_spawn_runtime_is_encoded_before_the_inner_command() {
+    let mut command = vec![
+        "codex-linux-sandbox".to_string(),
+        "--sandbox-policy-cwd".to_string(),
+        "/workspace".to_string(),
+        "--".to_string(),
+        "carbonyl".to_string(),
+        "--proxy-server=http://127.0.0.1:43128".to_string(),
+    ];
+
+    encode_linux_direct_spawn_runtime(
+        &mut command,
+        SandboxDirectSpawnRuntime {
+            proxy_argument: SandboxRuntimeProxyArgument::RewriteFromHttpProxy {
+                argument_prefix: "--proxy-server=".to_string(),
+            },
+        },
+    )
+    .expect("encode runtime requirements");
+
+    assert_eq!(
+        command,
+        vec![
+            "codex-linux-sandbox".to_string(),
+            "--sandbox-policy-cwd".to_string(),
+            "/workspace".to_string(),
+            "--rewrite-http-proxy-argument-prefix".to_string(),
+            "--proxy-server=".to_string(),
+            "--".to_string(),
+            "carbonyl".to_string(),
+            "--proxy-server=http://127.0.0.1:43128".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -501,6 +540,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                 workspace_roots: workspace_roots.as_slice(),
                 windows_sandbox_proxy_settings_mode:
                     codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
+                runtime: SandboxDirectSpawnRuntime::default(),
                 transform: SandboxTransformRequest {
                     command: SandboxCommand {
                         program: configured_helper.as_os_str().to_owned(),

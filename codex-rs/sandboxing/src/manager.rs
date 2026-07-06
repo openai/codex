@@ -153,6 +153,26 @@ pub struct SandboxDirectSpawnTransformRequest<'a> {
     pub transform: SandboxTransformRequest<'a>,
     pub workspace_roots: &'a [AbsolutePathBuf],
     pub windows_sandbox_proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
+    /// Runtime-only process requirements that platform wrappers must preserve.
+    pub runtime: SandboxDirectSpawnRuntime,
+}
+
+/// Runtime requirements for commands spawned directly through a platform sandbox wrapper.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SandboxDirectSpawnRuntime {
+    pub proxy_argument: SandboxRuntimeProxyArgument,
+}
+
+/// A command argument whose endpoint must follow a sandbox runtime proxy rewrite.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SandboxRuntimeProxyArgument {
+    #[default]
+    Unchanged,
+    /// Replace one existing argument with `argument_prefix` using the effective `HTTP_PROXY`.
+    ///
+    /// The Linux helper validates that the rewritten endpoint remains loopback-only and replaces
+    /// exactly one non-program argument. It never evaluates the argument through a shell.
+    RewriteFromHttpProxy { argument_prefix: String },
 }
 
 // TODO(anp): Revisit this preparation type once this module's PathUri migration is complete.
@@ -213,6 +233,7 @@ pub enum SandboxTransformError {
     },
     MissingLinuxSandboxExecutable,
     EnvironmentNetworkProxy(String),
+    InvalidDirectSpawnRuntime(String),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -240,6 +261,9 @@ impl std::fmt::Display for SandboxTransformError {
             Self::EnvironmentNetworkProxy(err) => {
                 write!(f, "failed to prepare environment network proxy: {err}")
             }
+            Self::InvalidDirectSpawnRuntime(err) => {
+                write!(f, "invalid direct-spawn runtime requirements: {err}")
+            }
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -259,6 +283,7 @@ impl std::error::Error for SandboxTransformError {
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
             Self::EnvironmentNetworkProxy(_) => None,
+            Self::InvalidDirectSpawnRuntime(_) => None,
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
@@ -474,7 +499,20 @@ impl SandboxManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            self.transform(request.transform)
+            let transformed = self.transform(request.transform)?;
+            #[cfg(target_os = "linux")]
+            {
+                let mut transformed = transformed;
+                if transformed.sandbox == SandboxType::LinuxSeccomp {
+                    encode_linux_direct_spawn_runtime(&mut transformed.command, request.runtime)?;
+                }
+                Ok(transformed)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = request.runtime;
+                Ok(transformed)
+            }
         }
     }
 
@@ -486,6 +524,7 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let workspace_roots = request.workspace_roots;
         let proxy_settings_mode = request.windows_sandbox_proxy_settings_mode;
+        let _runtime = request.runtime;
         let mut request = self.transform(request.transform)?;
         if request.sandbox == SandboxType::WindowsRestrictedToken {
             wrap_windows_sandbox_exec_request_for_direct_spawn(
@@ -497,6 +536,36 @@ impl SandboxManager {
         }
         Ok(request)
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn encode_linux_direct_spawn_runtime(
+    command: &mut Vec<String>,
+    runtime: SandboxDirectSpawnRuntime,
+) -> Result<(), SandboxTransformError> {
+    if runtime == SandboxDirectSpawnRuntime::default() {
+        return Ok(());
+    }
+    let separator_index = command.iter().position(|arg| arg == "--").ok_or_else(|| {
+        SandboxTransformError::InvalidDirectSpawnRuntime(
+            "Linux sandbox command is missing its argument separator".to_string(),
+        )
+    })?;
+    let mut runtime_args = Vec::new();
+    match runtime.proxy_argument {
+        SandboxRuntimeProxyArgument::Unchanged => {}
+        SandboxRuntimeProxyArgument::RewriteFromHttpProxy { argument_prefix } => {
+            if argument_prefix.is_empty() {
+                return Err(SandboxTransformError::InvalidDirectSpawnRuntime(
+                    "runtime proxy argument prefix must not be empty".to_string(),
+                ));
+            }
+            runtime_args.push("--rewrite-http-proxy-argument-prefix".to_string());
+            runtime_args.push(argument_prefix);
+        }
+    }
+    command.splice(separator_index..separator_index, runtime_args);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

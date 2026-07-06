@@ -25,10 +25,13 @@ use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use crate::runtime_proxy_argument::rewrite_http_proxy_argument_from_env;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
+use codex_sandboxing::SandboxDirectSpawnRuntime;
+use codex_sandboxing::SandboxRuntimeProxyArgument;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
 static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
@@ -126,6 +129,14 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Internal: rewrite one command argument from the effective in-namespace HTTP proxy.
+    #[arg(
+        long = "rewrite-http-proxy-argument-prefix",
+        hide = true,
+        allow_hyphen_values = true
+    )]
+    pub rewrite_http_proxy_argument_prefix: Option<String>,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -153,6 +164,7 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
+        rewrite_http_proxy_argument_prefix,
         no_proc,
         command,
     } = LandlockCommand::parse();
@@ -161,6 +173,15 @@ pub fn run_main() -> ! {
         panic!("No command specified to execute.");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
+    let runtime = SandboxDirectSpawnRuntime {
+        proxy_argument: match rewrite_http_proxy_argument_prefix {
+            Some(argument_prefix) => {
+                SandboxRuntimeProxyArgument::RewriteFromHttpProxy { argument_prefix }
+            }
+            None => SandboxRuntimeProxyArgument::Unchanged,
+        },
+    };
+    ensure_direct_spawn_runtime_is_valid(&runtime, allow_network_for_proxy);
     let EffectivePermissions {
         permission_profile,
         file_system_sandbox_policy,
@@ -176,12 +197,20 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
+        let mut command = command;
         if allow_network_for_proxy {
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
             if let Err(err) = activate_proxy_routes_in_netns(spec) {
                 panic!("error activating Linux proxy routing bridge: {err}");
+            }
+            if let SandboxRuntimeProxyArgument::RewriteFromHttpProxy { argument_prefix } =
+                &runtime.proxy_argument
+                && let Err(err) =
+                    rewrite_http_proxy_argument_from_env(&mut command, argument_prefix)
+            {
+                panic!("error applying effective proxy endpoint to command: {err}");
             }
         }
         let proxy_routing_active = allow_network_for_proxy;
@@ -228,6 +257,7 @@ pub fn run_main() -> ! {
             permission_profile: &permission_profile,
             allow_network_for_proxy,
             proxy_route_spec,
+            runtime: runtime.clone(),
             command,
         });
         run_bwrap_with_proc_fallback(
@@ -252,6 +282,20 @@ pub fn run_main() -> ! {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
     exec_or_panic(command);
+}
+
+fn ensure_direct_spawn_runtime_is_valid(
+    runtime: &SandboxDirectSpawnRuntime,
+    allow_network_for_proxy: bool,
+) {
+    if !allow_network_for_proxy
+        && !matches!(
+            &runtime.proxy_argument,
+            SandboxRuntimeProxyArgument::Unchanged
+        )
+    {
+        panic!("runtime proxy argument rewrite requires managed proxy routing");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1394,6 +1438,7 @@ struct InnerSeccompCommandArgs<'a> {
     permission_profile: &'a PermissionProfile,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
+    runtime: SandboxDirectSpawnRuntime,
     command: Vec<String>,
 }
 
@@ -1405,6 +1450,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         permission_profile,
         allow_network_for_proxy,
         proxy_route_spec,
+        runtime,
         command,
     } = args;
     let current_exe = match std::env::current_exe() {
@@ -1436,6 +1482,12 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
             .unwrap_or_else(|| panic!("managed proxy mode requires a proxy route spec"));
         inner.push("--proxy-route-spec".to_string());
         inner.push(proxy_route_spec);
+    }
+    if let SandboxRuntimeProxyArgument::RewriteFromHttpProxy { argument_prefix } =
+        runtime.proxy_argument
+    {
+        inner.push("--rewrite-http-proxy-argument-prefix".to_string());
+        inner.push(argument_prefix);
     }
     inner.push("--".to_string());
     inner.extend(command);

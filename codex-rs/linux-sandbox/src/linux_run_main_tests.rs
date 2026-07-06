@@ -5,6 +5,8 @@ use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
 use crate::linux_run_main::wait_for_bwrap_child;
 #[cfg(test)]
+use clap::Parser as _;
+#[cfg(test)]
 use codex_protocol::models::PermissionProfile;
 #[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -468,11 +470,49 @@ fn managed_proxy_inner_command_includes_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+        runtime: SandboxDirectSpawnRuntime {
+            proxy_argument: SandboxRuntimeProxyArgument::RewriteFromHttpProxy {
+                argument_prefix: "--proxy-server=".to_string(),
+            },
+        },
         command: vec!["/bin/true".to_string()],
     });
 
     assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
     assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
+    assert!(
+        args.windows(2).any(|window| {
+            window == ["--rewrite-http-proxy-argument-prefix", "--proxy-server="]
+        })
+    );
+}
+
+#[test]
+fn helper_cli_accepts_hyphen_prefixed_runtime_proxy_argument_prefix() {
+    let parsed = LandlockCommand::try_parse_from([
+        "codex-linux-sandbox",
+        "--sandbox-policy-cwd",
+        "/tmp",
+        "--allow-network-for-proxy",
+        "--rewrite-http-proxy-argument-prefix",
+        "--proxy-server=",
+        "--",
+        "carbonyl",
+        "--proxy-server=http://127.0.0.1:43128",
+    ])
+    .expect("parse Linux sandbox helper arguments");
+
+    assert_eq!(
+        parsed.rewrite_http_proxy_argument_prefix.as_deref(),
+        Some("--proxy-server=")
+    );
+    assert_eq!(
+        parsed.command,
+        vec![
+            "carbonyl".to_string(),
+            "--proxy-server=http://127.0.0.1:43128".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -484,6 +524,7 @@ fn inner_command_includes_permission_profile_flag() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        runtime: SandboxDirectSpawnRuntime::default(),
         command: vec!["/bin/true".to_string()],
     });
 
@@ -503,6 +544,7 @@ fn non_managed_inner_command_omits_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        runtime: SandboxDirectSpawnRuntime::default(),
         command: vec!["/bin/true".to_string()],
     });
 
@@ -519,6 +561,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             permission_profile: &permission_profile,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
+            runtime: SandboxDirectSpawnRuntime::default(),
             command: vec!["/bin/true".to_string()],
         })
     });

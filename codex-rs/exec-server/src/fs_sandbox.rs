@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnRuntime;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
@@ -133,6 +134,7 @@ impl FileSystemSandboxRunner {
                 workspace_roots,
                 windows_sandbox_proxy_settings_mode:
                     codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
+                runtime: SandboxDirectSpawnRuntime::default(),
                 transform: SandboxTransformRequest {
                     command,
                     permissions: permission_profile,

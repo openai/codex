@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -13,8 +14,10 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnRuntime;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxRuntimeProxyArgument;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -45,6 +48,13 @@ pub(crate) struct PreparedBrowserLaunch {
     pub(crate) arg0: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct BrowserNetworkSandbox {
+    policy: NetworkSandboxPolicy,
+    enforce_managed_network: bool,
+    managed_network: Option<ManagedNetworkSandboxContext>,
+}
+
 pub(crate) fn prepare_browser_launch(
     binary: &Path,
     args: Vec<String>,
@@ -54,12 +64,6 @@ pub(crate) fn prepare_browser_launch(
     network_policy: &BrowserNetworkPolicy,
     context: &BrowserLaunchContext,
 ) -> Result<PreparedBrowserLaunch> {
-    if matches!(network_policy, BrowserNetworkPolicy::ManagedProxy { .. }) {
-        anyhow::bail!(
-            "managed terminal-browser networking is not yet supported because Carbonyl needs a loopback CDP listener that the current sandbox cannot permit without bypassing the managed proxy"
-        );
-    }
-
     let binary = AbsolutePathBuf::from_absolute_path(binary)
         .context("resolve Carbonyl executable path")?
         .canonicalize()
@@ -70,15 +74,13 @@ pub(crate) fn prepare_browser_launch(
     ensure_isolated_binary_root(&binary_root, browser_root, profile_root, context)?;
     let file_system_policy =
         browser_file_system_policy(browser_root, profile_root, &binary_root, &env)?;
-    let network_sandbox_policy = match network_policy {
-        BrowserNetworkPolicy::Disabled | BrowserNetworkPolicy::ManagedProxy { .. } => {
-            NetworkSandboxPolicy::Restricted
-        }
-        BrowserNetworkPolicy::Direct => NetworkSandboxPolicy::Enabled,
-    };
+    let BrowserNetworkSandbox {
+        policy: network_sandbox_policy,
+        enforce_managed_network,
+        managed_network,
+    } = browser_network_sandbox(network_policy)?;
     let permissions =
         PermissionProfile::from_runtime_permissions(&file_system_policy, network_sandbox_policy);
-    let enforce_managed_network = false;
     let manager = SandboxManager::new();
     let sandbox = manager.select_initial(
         &file_system_policy,
@@ -100,7 +102,7 @@ pub(crate) fn prepare_browser_launch(
                     args,
                     cwd: browser_root_uri.clone(),
                     env,
-                    managed_network: None,
+                    managed_network,
                     additional_permissions: None,
                 },
                 permissions: &permissions,
@@ -119,6 +121,7 @@ pub(crate) fn prepare_browser_launch(
             },
             workspace_roots: &[],
             windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+            runtime: browser_direct_spawn_runtime(network_policy),
         })
         .context("prepare Carbonyl sandbox")?;
     #[cfg(target_os = "macos")]
@@ -155,6 +158,55 @@ pub(crate) fn prepare_browser_launch(
         env: request.env,
         arg0: request.arg0,
     })
+}
+
+fn browser_direct_spawn_runtime(
+    network_policy: &BrowserNetworkPolicy,
+) -> SandboxDirectSpawnRuntime {
+    let proxy_argument = match network_policy {
+        BrowserNetworkPolicy::ManagedProxy { .. } => {
+            SandboxRuntimeProxyArgument::RewriteFromHttpProxy {
+                argument_prefix: "--proxy-server=".to_string(),
+            }
+        }
+        BrowserNetworkPolicy::Disabled | BrowserNetworkPolicy::Direct => {
+            SandboxRuntimeProxyArgument::Unchanged
+        }
+    };
+    SandboxDirectSpawnRuntime { proxy_argument }
+}
+
+fn browser_network_sandbox(network_policy: &BrowserNetworkPolicy) -> Result<BrowserNetworkSandbox> {
+    match network_policy {
+        BrowserNetworkPolicy::Disabled => Ok(BrowserNetworkSandbox {
+            policy: NetworkSandboxPolicy::Restricted,
+            enforce_managed_network: false,
+            managed_network: None,
+        }),
+        BrowserNetworkPolicy::Direct => Ok(BrowserNetworkSandbox {
+            policy: NetworkSandboxPolicy::Enabled,
+            enforce_managed_network: false,
+            managed_network: None,
+        }),
+        BrowserNetworkPolicy::ManagedProxy { http_addr } => {
+            anyhow::ensure!(
+                http_addr.ip().is_loopback(),
+                "managed terminal-browser proxy must use a loopback address"
+            );
+            anyhow::ensure!(
+                http_addr.port() != 0,
+                "managed terminal-browser proxy must use a nonzero port"
+            );
+            Ok(BrowserNetworkSandbox {
+                policy: NetworkSandboxPolicy::Restricted,
+                enforce_managed_network: true,
+                managed_network: Some(ManagedNetworkSandboxContext {
+                    loopback_ports: vec![http_addr.port()],
+                    allow_local_binding: false,
+                }),
+            })
+        }
+    }
 }
 
 fn ensure_isolated_binary_root(

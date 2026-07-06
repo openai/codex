@@ -15,9 +15,11 @@ pub use bwrap::system_bwrap_warning;
 pub use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
 pub use denial::is_likely_sandbox_denied;
 pub use manager::SandboxCommand;
+pub use manager::SandboxDirectSpawnRuntime;
 pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
 pub use manager::SandboxManager;
+pub use manager::SandboxRuntimeProxyArgument;
 pub use manager::SandboxTransformError;
 pub use manager::SandboxTransformRequest;
 pub use manager::SandboxType;
@@ -52,6 +54,9 @@ impl From<SandboxTransformError> for CodexErr {
                 CodexErr::LandlockSandboxExecutableNotProvided
             }
             SandboxTransformError::EnvironmentNetworkProxy(message) => {
+                CodexErr::UnsupportedOperation(message)
+            }
+            SandboxTransformError::InvalidDirectSpawnRuntime(message) => {
                 CodexErr::UnsupportedOperation(message)
             }
             #[cfg(target_os = "linux")]
