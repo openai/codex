@@ -85,6 +85,25 @@ test *args:
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
+# Run deterministic coverage for the Carbonyl panel and managed-proxy lifecycle.
+# Keep unrelated shell integration and wall-clock concurrency tests out of this target.
+[unix]
+test-terminal-browser-panel *args:
+    just test \
+        -p codex-utils-pty \
+        -p codex-terminal-browser \
+        -p codex-sandboxing \
+        -p codex-linux-sandbox \
+        -p codex-exec-server \
+        -p codex-features \
+        -p codex-protocol \
+        -p codex-app-server-protocol \
+        -p codex-core \
+        -p codex-app-server \
+        -p codex-tui \
+        -E 'package(codex-utils-pty) | package(codex-terminal-browser) | package(codex-sandboxing) | package(codex-linux-sandbox) | package(codex-features) | package(codex-protocol) | package(codex-app-server-protocol) | (package(codex-exec-server) & test(/sandbox_request_allows_prepared_managed_proxy_port|sandbox_exec_request_carries_helper_env/)) | (package(codex-core) & test(/config_schema_matches_fixture|active_profile_update_rebuilds_network_proxy_config|current_network_proxy_runtime|managed_network_proxy_decider_survives_full_access_start|managed_network_proxy_refresh_failure|new_turn_refreshes_managed_network_proxy_for_sandbox_change|danger_full_access_turns_do_not_expose_managed_network_proxy|workspace_write_turns_continue_to_expose_managed_network_proxy/)) | (package(codex-app-server) & test(/thread_start_returns_live_managed_proxy_in_experimental_extra|thread_settings_update_reports_current_managed_proxy_runtime/)) | (package(codex-tui) & test(/terminal_browser|bare_browser|browser_show_alias|network_reconciliation|inactive_thread_settings_notification|proxy_runtime|thread_read_fallback_uses_active_permission_settings/))' \
+        "$@"
+
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
 [no-cd]
