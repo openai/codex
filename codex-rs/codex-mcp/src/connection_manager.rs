@@ -538,7 +538,7 @@ impl McpConnectionManager {
         let managed_client = self.client_by_name(server).await?;
         Ok(McpServerConnection {
             server_name: server.to_string(),
-            tools: managed_client.tools.clone(),
+            tools: managed_client.listed_tools(),
             managed_client,
         })
     }

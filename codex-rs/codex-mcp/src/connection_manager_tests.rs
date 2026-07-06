@@ -794,7 +794,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
             client: pending_client,
             is_codex_apps_mcp_server: true,
             cached_server_info: Some(create_test_server_info("Cached")),
-            codex_apps_tools_cache_context: Some(cache_context),
+            codex_apps_tools_cache_context: Some(cache_context.clone()),
             tool_filter: ToolFilter::default(),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_reconnect: None,
@@ -828,14 +828,21 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
     )])
     .await;
     live_client.server_info = create_test_server_info("Live");
+    live_client.codex_apps_tools_cache_context = Some(cache_context.clone());
     assert!(live_tx.send(live_client).is_ok());
+
+    cache_context.store_current_tools_for_test(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "refreshed_tool",
+    )]);
 
     let connection = manager
         .server_connection(CODEX_APPS_MCP_SERVER_NAME)
         .await
         .expect("live connection");
     assert_eq!(connection.server_info().title.as_deref(), Some("Live"));
-    assert!(connection.tool_info("live_tool").is_some());
+    assert!(connection.tool_info("refreshed_tool").is_some());
+    assert!(connection.tool_info("live_tool").is_none());
     assert!(connection.tool_info("cached_tool").is_none());
 }
 

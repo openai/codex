@@ -109,7 +109,7 @@ pub(crate) struct ManagedClient {
 }
 
 impl ManagedClient {
-    fn listed_tools(&self) -> Vec<ToolInfo> {
+    pub(crate) fn listed_tools(&self) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(tools) = self
             .codex_apps_tools_cache_context
