@@ -393,6 +393,9 @@ impl App {
     }
 
     pub(super) async fn discard_thread_local_state(&mut self, thread_id: ThreadId) {
+        if self.terminal_browser_owner_thread_id == Some(thread_id) {
+            self.reset_terminal_browser_for_thread_change().await;
+        }
         let remove_side_pane = self.installed_side_thread_id() == Some(thread_id);
         if remove_side_pane || self.side_threads.contains_key(&thread_id) {
             self.retire_thread(thread_id);
@@ -435,7 +438,7 @@ impl App {
         thread_id: ThreadId,
     ) {
         if self.installed_side_thread_id() == Some(thread_id) {
-            self.chat_widget.focus(PaneSlot::Side);
+            self.focus_installed_conversation_pane(PaneSlot::Side);
             tui.frame_requester().schedule_frame();
         }
     }
@@ -560,7 +563,7 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self.installed_side_thread_id() == Some(thread_id) {
-            self.chat_widget.focus(PaneSlot::Side);
+            self.focus_installed_conversation_pane(PaneSlot::Side);
             tui.frame_requester().schedule_frame();
             return Ok(());
         }
@@ -569,7 +572,7 @@ impl App {
             .prepare_agent_thread_selection(app_server, thread_id)
             .await
         else {
-            self.chat_widget.focus(PaneSlot::Side);
+            self.focus_installed_conversation_pane(PaneSlot::Side);
             tui.frame_requester().schedule_frame();
             return Ok(());
         };
@@ -581,7 +584,7 @@ impl App {
             self.keep_side_thread_visible_after_cleanup_failure(tui, side_thread_id);
             return Ok(());
         }
-        self.chat_widget.focus(PaneSlot::Parent);
+        self.focus_installed_conversation_pane(PaneSlot::Parent);
         self.apply_prepared_agent_thread_selection(tui, app_server, selection)
             .await?;
         self.surface_pending_inactive_thread_interactive_requests()
@@ -698,7 +701,7 @@ impl App {
                     .await;
                     return Ok(AppRunControl::Continue);
                 }
-                self.chat_widget.focus(PaneSlot::Side);
+                self.focus_installed_conversation_pane(PaneSlot::Side);
                 self.sync_side_thread_ui();
 
                 if let Err(err) = app_server

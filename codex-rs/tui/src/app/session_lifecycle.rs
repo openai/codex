@@ -429,7 +429,7 @@ impl App {
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
-        self.reset_for_thread_switch(tui)?;
+        self.reset_for_thread_switch(tui).await?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
         if is_replay_only {
             let message = if attached_replay_only {
@@ -455,7 +455,8 @@ impl App {
                 .is_none_or(|entry| !entry.is_closed)
     }
 
-    pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) async fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.reset_terminal_browser_for_thread_change().await;
         self.reset_app_ui_state_after_clear(tui);
         tui.clear_pending_history_lines();
         if !self.has_owned_screen() {
@@ -544,6 +545,7 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
+        self.reset_terminal_browser_for_thread_change().await;
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
@@ -618,6 +620,7 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
+        self.reset_terminal_browser_for_thread_change().await;
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,

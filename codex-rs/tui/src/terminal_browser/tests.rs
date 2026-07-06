@@ -30,6 +30,7 @@ use ratatui::style::Stylize;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
+use crate::app_event::TerminalBrowserProfileApproval;
 use crate::app_event::TerminalBrowserProfileCommand;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ListSelectionView;
@@ -310,6 +311,19 @@ fn human_control_maps_keyboard_and_mouse_input() {
     );
 
     assert_eq!(
+        browser_key_input(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)),
+        Some(BrowserKeyInput {
+            key: "?".to_string(),
+            code: "Slash".to_string(),
+            text: Some("?".to_string()),
+            modifiers: BrowserInputModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        })
+    );
+
+    assert_eq!(
         browser_mouse_input(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -381,7 +395,11 @@ fn terminal_browser_unavailable_panel_wraps_reason_snapshot() {
 fn terminal_browser_profile_forget_approval_snapshot() {
     let (tx, _rx) = unbounded_channel::<AppEvent>();
     let view = ListSelectionView::new(
-        profile_approval_view_params(TerminalBrowserProfileCommand::Forget("work".to_string())),
+        profile_approval_view_params(TerminalBrowserProfileApproval {
+            command: TerminalBrowserProfileCommand::Forget("work".to_string()),
+            thread_id: codex_protocol::ThreadId::new(),
+            generation: 1,
+        }),
         AppEventSender::new(tx),
         crate::keymap::RuntimeKeymap::defaults().list,
     );

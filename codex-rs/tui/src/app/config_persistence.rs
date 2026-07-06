@@ -519,6 +519,13 @@ impl App {
                     &feature_updates_to_apply,
                 )
                 .await;
+                if feature_updates_to_apply
+                    .iter()
+                    .any(|(feature, _)| *feature == Feature::TerminalBrowser)
+                    && !self.config.features.enabled(Feature::TerminalBrowser)
+                {
+                    self.reset_terminal_browser_for_thread_change().await;
+                }
                 if windows_sandbox_changed {
                     self.propagate_windows_sandbox_turn_context();
                 }
@@ -528,6 +535,9 @@ impl App {
 
         let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
+        let terminal_browser_disabled = feature_updates_to_apply
+            .iter()
+            .any(|(feature, enabled)| *feature == Feature::TerminalBrowser && !enabled);
         let show_memory_enable_notice =
             feature_updates_to_apply.iter().any(|(feature, enabled)| {
                 *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
@@ -537,6 +547,9 @@ impl App {
                 pane.chat_widget
                     .set_feature_enabled(feature, effective_enabled);
             });
+        }
+        if terminal_browser_disabled {
+            self.reset_terminal_browser_for_thread_change().await;
         }
         if show_memory_enable_notice {
             self.chat_widget.add_memories_enable_notice();

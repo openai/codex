@@ -73,7 +73,7 @@ impl App {
                 /*hint*/ None,
             );
         }
-        self.chat_widget.focus(PaneSlot::Side);
+        self.focus_installed_conversation_pane(PaneSlot::Side);
         tui.frame_requester().schedule_frame();
     }
 }

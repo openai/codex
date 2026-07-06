@@ -161,6 +161,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
+use codex_terminal_browser::TerminalBrowser;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
@@ -226,6 +227,7 @@ mod resize_reflow;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
+mod terminal_browser;
 mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
@@ -531,6 +533,12 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    /// Carbonyl runtime shared by the active conversation and the browser panel.
+    pub(crate) terminal_browser: Option<Arc<TerminalBrowser>>,
+    /// Conversation currently allowed to drive `terminal_browser`.
+    pub(crate) terminal_browser_owner_thread_id: Option<ThreadId>,
+    /// Invalidates delayed browser-profile approvals when the owned runtime changes.
+    pub(crate) terminal_browser_generation: u64,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     pub(crate) enhanced_keys_supported: bool,
@@ -1048,6 +1056,9 @@ See the Codex keymap documentation for supported actions and examples."
             enhanced_keys_supported,
             keymap: runtime_keymap,
             overlay: None,
+            terminal_browser: None,
+            terminal_browser_owner_thread_id: None,
+            terminal_browser_generation: 0,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
@@ -1231,6 +1242,8 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
         };
+        app.reset_terminal_browser_for_thread_change().await;
+        tui.set_raw_mouse_events(/*raw_mouse_events*/ false);
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
@@ -1290,6 +1303,7 @@ See the Codex keymap documentation for supported actions and examples."
             | TuiEvent::Paste(_)
             | TuiEvent::MouseScroll(_)
             | TuiEvent::MousePrimary(_)
+            | TuiEvent::MouseOther(_)
             | TuiEvent::Draw => {}
         }
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
@@ -1339,6 +1353,9 @@ See the Codex keymap documentation for supported actions and examples."
                 TuiEvent::MousePrimary(event) => {
                     self.handle_owned_screen_mouse_primary(tui, event);
                 }
+                // Raw browser input is routed after the browser panel is integrated into the
+                // owned-screen frame. Other app surfaces intentionally ignore these events.
+                TuiEvent::MouseOther(_) => {}
                 TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
@@ -1420,6 +1437,9 @@ See the Codex keymap documentation for supported actions and examples."
 
 impl Drop for App {
     fn drop(&mut self) {
+        if let Some(browser) = self.terminal_browser.as_ref() {
+            browser.terminate();
+        }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

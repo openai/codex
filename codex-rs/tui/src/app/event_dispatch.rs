@@ -428,6 +428,102 @@ impl App {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::ToggleTerminalBrowser => {
+                self.toggle_terminal_browser().await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CloseTerminalBrowser => {
+                self.close_terminal_browser();
+            }
+            AppEvent::DoctorTerminalBrowser => {
+                self.doctor_terminal_browser().await;
+            }
+            AppEvent::TerminalBrowserDoctorCompleted { healthy, summary } => {
+                if healthy {
+                    self.chat_widget.add_info_message(summary, /*hint*/ None);
+                } else {
+                    self.chat_widget.add_error_message(summary);
+                }
+            }
+            AppEvent::ManageTerminalBrowserProfile(command) => {
+                self.manage_terminal_browser_profile(command).await;
+            }
+            AppEvent::ApproveTerminalBrowserProfile(approval) => {
+                self.approve_terminal_browser_profile(approval).await;
+            }
+            AppEvent::ToggleTerminalBrowserControl => {
+                self.toggle_terminal_browser_control().await;
+            }
+            AppEvent::TerminalBrowserControlCompleted { error } => {
+                let active = self.terminal_browser_owned_by_current_thread()
+                    && self
+                        .terminal_browser
+                        .as_ref()
+                        .is_some_and(|browser| browser.is_human_control_active());
+                tui.set_raw_mouse_events(/*raw_mouse_events*/ active);
+                if let Some(error) = error {
+                    self.chat_widget
+                        .add_error_message(format!("Browser control failed: {error}"));
+                } else {
+                    let message = if active {
+                        "You control the browser now. Press Ctrl+] to return control to Codex."
+                    } else {
+                        "Browser control returned to Codex; previous node handles were invalidated."
+                    };
+                    self.chat_widget
+                        .add_info_message(message.to_string(), /*hint*/ None);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::TerminalBrowserClosed => {
+                let raw_mouse_events = self.terminal_browser_owned_by_current_thread()
+                    && self
+                        .terminal_browser
+                        .as_ref()
+                        .is_some_and(|browser| browser.is_human_control_active());
+                tui.set_raw_mouse_events(raw_mouse_events);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::TerminalBrowserUpdated => {
+                let raw_mouse_events = self.terminal_browser_owned_by_current_thread()
+                    && self
+                        .terminal_browser
+                        .as_ref()
+                        .is_some_and(|browser| browser.is_human_control_active());
+                tui.set_raw_mouse_events(raw_mouse_events);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::TerminalBrowserToolCompleted {
+                request_id,
+                response,
+                profile_approval,
+            } => {
+                match serde_json::to_value(response) {
+                    Ok(result) => {
+                        if let Err(err) =
+                            app_server.resolve_server_request(request_id, result).await
+                        {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to resolve terminal browser tool request: {err}"
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        let message =
+                            format!("Failed to serialize terminal browser response: {err}");
+                        self.chat_widget.add_error_message(message.clone());
+                        if let Err(reject_err) = self
+                            .reject_app_server_request(app_server, request_id, message)
+                            .await
+                        {
+                            tracing::warn!(%reject_err, "failed to reject terminal-browser request");
+                        }
+                    }
+                }
+                if let Some(approval) = profile_approval {
+                    self.show_terminal_browser_profile_approval(approval);
+                }
+            }
             AppEvent::ConversationOp { target, op } => {
                 self.submit_thread_op(app_server, target.thread_id, op)
                     .await?;

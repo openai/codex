@@ -309,6 +309,16 @@ impl App {
         if self.chat_widget.focused_slot() == target {
             return true;
         }
+        self.focus_installed_conversation_pane(target)
+    }
+
+    pub(super) fn focus_installed_conversation_pane(&mut self, target: PaneSlot) -> bool {
+        if self.chat_widget.by_slot(target).is_none() {
+            return false;
+        }
+        if self.chat_widget.focused_slot() != target {
+            self.reset_terminal_browser_for_focus_change();
+        }
         self.chat_widget.focus(target)
     }
 
@@ -442,6 +452,26 @@ mod tests {
 
         assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
         assert!(!app.backtrack.primed);
+    }
+
+    #[tokio::test]
+    async fn pane_focus_change_detaches_the_previous_terminal_browser() {
+        let mut app = make_test_app().await;
+        install_side_pane(&mut app).await;
+        let browser = Arc::new(codex_terminal_browser::TerminalBrowser::discover());
+        app.terminal_browser = Some(browser);
+        app.terminal_browser_owner_thread_id = Some(ThreadId::new());
+        app.terminal_browser_generation = 7;
+
+        assert!(app.handle_conversation_pane_focus_key(KeyEvent::new(
+            KeyCode::Char('2'),
+            KeyModifiers::ALT,
+        )));
+
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+        assert!(app.terminal_browser.is_none());
+        assert_eq!(app.terminal_browser_owner_thread_id, None);
+        assert_eq!(app.terminal_browser_generation, 8);
     }
 
     #[cfg(target_os = "macos")]

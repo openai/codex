@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
@@ -54,6 +56,22 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::history_cell::HistoryCell;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalBrowserProfileCommand {
+    List,
+    Create(String),
+    Use(String),
+    Ephemeral,
+    Forget(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalBrowserProfileApproval {
+    pub(crate) command: TerminalBrowserProfileCommand,
+    pub(crate) thread_id: ThreadId,
+    pub(crate) generation: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadGoalSetMode {
@@ -339,6 +357,48 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
+
+    /// Show or hide the terminal-browser panel.
+    ToggleTerminalBrowser,
+
+    /// Close the terminal-browser process without forgetting a named profile.
+    CloseTerminalBrowser,
+
+    /// Validate the configured Carbonyl executable and report its compatibility.
+    DoctorTerminalBrowser,
+
+    /// The asynchronous Carbonyl validation probe completed.
+    TerminalBrowserDoctorCompleted {
+        healthy: bool,
+        summary: String,
+    },
+
+    /// Apply a user-entered or user-approved named-profile command.
+    ManageTerminalBrowserProfile(TerminalBrowserProfileCommand),
+
+    /// Apply a model-requested profile command after confirming it still targets this browser.
+    ApproveTerminalBrowserProfile(TerminalBrowserProfileApproval),
+
+    /// Enter or leave exclusive keyboard-and-mouse browser control.
+    ToggleTerminalBrowserControl,
+
+    /// A human-control transition completed.
+    TerminalBrowserControlCompleted {
+        error: Option<String>,
+    },
+
+    /// The terminal-browser process finished closing.
+    TerminalBrowserClosed,
+
+    /// The browser's terminal frame, status, or visibility changed.
+    TerminalBrowserUpdated,
+
+    /// Complete an app-server dynamic-tool request after browser work finishes.
+    TerminalBrowserToolCompleted {
+        request_id: AppServerRequestId,
+        response: DynamicToolCallResponse,
+        profile_approval: Option<TerminalBrowserProfileApproval>,
+    },
 
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),

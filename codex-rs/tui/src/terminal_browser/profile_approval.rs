@@ -1,3 +1,4 @@
+use crate::app_event::TerminalBrowserProfileApproval;
 use crate::app_event::TerminalBrowserProfileCommand;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -37,9 +38,9 @@ fn valid_profile_name(name: &str) -> bool {
 }
 
 pub(crate) fn profile_approval_view_params(
-    command: TerminalBrowserProfileCommand,
+    approval: TerminalBrowserProfileApproval,
 ) -> SelectionViewParams {
-    let (subtitle, approve_name, approve_description) = match &command {
+    let (subtitle, approve_name, approve_description) = match &approval.command {
         TerminalBrowserProfileCommand::Create(name) => (
             format!("The model wants to create and select browser profile `{name}`."),
             "Create and select profile",
@@ -69,8 +70,8 @@ pub(crate) fn profile_approval_view_params(
         ),
     };
     let approve_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-        tx.send(crate::app_event::AppEvent::ManageTerminalBrowserProfile(
-            command.clone(),
+        tx.send(crate::app_event::AppEvent::ApproveTerminalBrowserProfile(
+            approval.clone(),
         ));
     })];
     SelectionViewParams {
