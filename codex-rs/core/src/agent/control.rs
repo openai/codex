@@ -4,6 +4,8 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
@@ -139,12 +141,12 @@ impl AgentControl {
     pub(crate) async fn send_input(
         &self,
         agent_id: ThreadId,
-        initial_operation: Op,
+        input: Vec<UserInput>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
+        self.ensure_execution_capacity_for_turn_start(agent_id, /*starts_turn*/ true)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, initial_operation)
+        self.send_input_after_capacity_check(agent_id, &state, input)
             .await
     }
 
@@ -152,19 +154,14 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
-        initial_operation: Op,
+        input: Vec<UserInput>,
     ) -> CodexResult<String> {
-        let last_task_message = match &initial_operation {
-            Op::InterAgentCommunication { communication } => {
-                last_task_message_from_communication(communication)
-            }
-            _ => non_empty_task_message(render_input_preview(&initial_operation)),
-        };
+        let last_task_message = non_empty_task_message(render_input_preview(&input));
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 state,
-                state.send_op(agent_id, initial_operation).await,
+                state.send_op(agent_id, input.into()).await,
             )
             .await;
         if result.is_ok() {
@@ -182,14 +179,60 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.ensure_execution_capacity_for_turn_start(agent_id, communication.trigger_turn)
+            .await?;
+        self.send_inter_agent_communication_after_capacity_check(
+            agent_id,
+            &state,
+            communication,
+            agent_communication_context,
+        )
+        .await
+    }
+
+    async fn send_inter_agent_communication_after_capacity_check(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
+    ) -> CodexResult<String> {
+        self.submit_inter_agent_communication(agent_id, state, communication, context)
+            .await
+    }
+
+    async fn submit_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let last_task_message = last_task_message_from_communication(&communication);
-        let state = self.upgrade()?;
-        let op = Op::InterAgentCommunication { communication };
-        self.ensure_execution_capacity_for_op(agent_id, &op).await?;
+        let communication_for_log =
+            crate::agent_communication::logging_enabled().then(|| communication.clone());
         let result = self
-            .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
+            .handle_thread_request_result(
+                agent_id,
+                state,
+                state
+                    .send_op(agent_id, Op::InterAgentCommunication { communication })
+                    .await,
+            )
             .await;
+        if let (Some(communication), Ok(communication_id)) =
+            (communication_for_log, result.as_ref())
+        {
+            crate::agent_communication::emit_agent_communication_send(
+                communication_id,
+                &context,
+                &communication,
+                agent_id,
+            );
+        }
         if result.is_ok() {
             match last_task_message {
                 Some(last_task_message) => self
@@ -480,8 +523,10 @@ impl AgentControl {
                     message,
                     /*trigger_turn*/ false,
                 );
+                let context =
+                    AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication)
+                    .send_inter_agent_communication(parent_thread_id, communication, context)
                     .await;
                 return;
             }
@@ -706,27 +751,23 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
     })
 }
 
-pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
-    match initial_operation {
-        Op::UserInput { items, .. } => items
-            .iter()
-            .map(|item| match item {
-                UserInput::Text { text, .. } => text.clone(),
-                UserInput::Image { .. } => "[image]".to_string(),
-                UserInput::LocalImage { path, .. } => {
-                    format!("[local_image:{}]", path.display())
-                }
-                UserInput::Skill { name, path, .. } => {
-                    format!("[skill:${name}]({})", path.display())
-                }
-                UserInput::Mention { name, path, .. } => format!("[mention:${name}]({path})"),
-                _ => "[input]".to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Op::InterAgentCommunication { communication } => communication.content.clone(),
-        _ => String::new(),
-    }
+pub(crate) fn render_input_preview(input: &[UserInput]) -> String {
+    input
+        .iter()
+        .map(|item| match item {
+            UserInput::Text { text, .. } => text.clone(),
+            UserInput::Image { .. } => "[image]".to_string(),
+            UserInput::LocalImage { path, .. } => {
+                format!("[local_image:{}]", path.display())
+            }
+            UserInput::Skill { name, path, .. } => {
+                format!("[skill:${name}]({})", path.display())
+            }
+            UserInput::Mention { name, path, .. } => format!("[mention:${name}]({path})"),
+            _ => "[input]".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn last_task_message_from_communication(communication: &InterAgentCommunication) -> Option<String> {

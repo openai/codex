@@ -1439,6 +1439,7 @@ async fn host_owned_codex_apps_manager(
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;

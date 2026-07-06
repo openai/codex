@@ -777,6 +777,7 @@ fn remote_installed_plugin_in_marketplace(
     RemoteInstalledPlugin {
         marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
+        version: None,
         name: name.to_string(),
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
