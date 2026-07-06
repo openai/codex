@@ -11,6 +11,10 @@ use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
 use crate::git_config_sources::ensure_no_worktree_config_sources;
 
+// Path discovery must not turn a repository's whitespace policy into an
+// API-level parser failure before the real apply can report its status.
+const APPLY_NUMSTAT_ARGS: [&str; 3] = ["--numstat", "--whitespace=nowarn", "-z"];
+
 /// Extract paths with Git from a cwd whose config sources have already been
 /// authorized for `git_config_args`.
 pub(crate) fn extract_effective_paths_from_patch(
@@ -63,11 +67,18 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
     };
     let paths = (|| -> io::Result<Vec<String>> {
         let git = GitRunner::for_cwd_io(cwd)?;
-        let git_root = crate::get_git_repo_root(cwd)
-            .ok_or_else(|| io::Error::other("not a Git repository"))?;
-        let git_root = std::fs::canonicalize(git_root)?;
-        ensure_no_worktree_config_sources(&git, &git_root, &[])?;
-        extract_effective_paths_from_patch(&git, &git_root, &patch_path, /*revert*/ false, &[])
+        let authorized_cwd = crate::get_git_repo_root(cwd)
+            .map(std::fs::canonicalize)
+            .transpose()?
+            .unwrap_or(std::fs::canonicalize(cwd)?);
+        ensure_no_worktree_config_sources(&git, &authorized_cwd, &[])?;
+        extract_effective_paths_from_patch(
+            &git,
+            &authorized_cwd,
+            &patch_path,
+            /*revert*/ false,
+            &[],
+        )
     })()
     .unwrap_or_default();
     drop(tmpdir);
@@ -83,7 +94,7 @@ fn git_apply_numstat_paths(
 ) -> io::Result<Vec<String>> {
     let mut cmd = git.command_for_cwd(authorized_cwd)?;
     cmd.args(git_config_args);
-    cmd.args(["apply", "--numstat", "-z"]);
+    cmd.arg("apply").args(APPLY_NUMSTAT_ARGS);
     if revert {
         cmd.arg("-R");
     }

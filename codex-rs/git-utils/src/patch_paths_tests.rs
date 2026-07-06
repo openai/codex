@@ -75,8 +75,8 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
 }
 
 fn best_effort_paths(diff: &str) -> Vec<String> {
-    let repo = init_repo();
-    extract_paths_from_patch_from_cwd(diff, repo.path())
+    let cwd = tempfile::tempdir().expect("non-repository cwd");
+    extract_paths_from_patch_from_cwd(diff, cwd.path())
 }
 
 #[test]
@@ -145,6 +145,31 @@ fn effective_paths_cover_supported_patch_headers() {
     assert_eq!(
         nul_rename_paths,
         vec!["old name.txt".to_string(), "new name.txt".to_string()]
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn best_effort_parser_returns_empty_for_process_relative_primary_config() {
+    const TEST_NAME: &str =
+        "patch_paths::tests::best_effort_parser_returns_empty_for_process_relative_primary_config";
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                (
+                    "GIT_CONFIG_GLOBAL",
+                    OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                ),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+        );
+        return;
+    }
+
+    assert_eq!(
+        extract_paths_from_patch(&new_file_diff("safe.txt")),
+        Vec::<String>::new()
     );
 }
 

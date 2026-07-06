@@ -41,6 +41,12 @@ impl RepositoryAuthority {
         if !path.is_absolute() {
             return Err(worktree_controlled_config_source(path, description));
         }
+        if self
+            .route_boundaries
+            .route_contains_process_relative_procfs_path(path)?
+        {
+            return Err(process_relative_config_source(path, description));
+        }
         let inspection = self.route_boundaries.inspect_route(path)?;
         if inspection.crosses_worktree {
             return Err(worktree_controlled_config_source(path, description));
@@ -174,6 +180,16 @@ fn worktree_controlled_config_source(path: &Path, description: &str) -> io::Erro
         io::ErrorKind::PermissionDenied,
         format!(
             "refusing to use worktree-controlled {description}: {}",
+            path.display()
+        ),
+    )
+}
+
+fn process_relative_config_source(path: &Path, description: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "refusing to use process-relative {description}: {}",
             path.display()
         ),
     )
