@@ -1928,7 +1928,6 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-    let mut streamed_items = HashMap::<String, TurnItem>::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1987,44 +1986,18 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let completes_active_tool_call = active_tool_argument_diff_consumer
-                    .as_ref()
-                    .is_some_and(|(active_call_id, _)| {
-                        matches!(
-                            &item,
-                            ResponseItem::CustomToolCall { call_id, .. }
-                                if call_id == active_call_id
-                        )
-                    });
-                if completes_active_tool_call
-                    && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let completed_item_id = item.id().map(str::to_owned);
-                let is_tool_call = matches!(
-                    &item,
-                    ResponseItem::LocalShellCall { .. }
-                        | ResponseItem::FunctionCall { .. }
-                        | ResponseItem::ToolSearchCall { .. }
-                        | ResponseItem::CustomToolCall { .. }
-                );
-                if completed_item_id.is_none() && !is_tool_call {
-                    warn!("dropping non-tool output_item.done event without item ID");
-                    continue;
-                }
-                let completes_active_item = match (&completed_item_id, active_item.as_ref()) {
-                    (Some(completed_item_id), Some(active)) => completed_item_id == &active.id(),
-                    _ => false,
+                let previously_active_item = active_item.take();
+                let previously_streamed_item = if active_item_is_streaming_to_client {
+                    previously_active_item
+                } else {
+                    None
                 };
-                let previously_streamed_item = completed_item_id
-                    .as_deref()
-                    .and_then(|item_id| streamed_items.remove(item_id));
-                if completes_active_item {
-                    active_item = None;
-                    active_item_is_streaming_to_client = false;
-                }
+                active_item_is_streaming_to_client = false;
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2179,7 +2152,6 @@ async fn try_run_sampling_request(
                             )
                             .await;
                         }
-                        streamed_items.insert(turn_item.id(), turn_item.clone());
                     }
                     active_item = Some(turn_item);
                     active_item_is_streaming_to_client = stream_item_to_client;
@@ -2316,47 +2288,39 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
-                item_id,
                 delta,
                 summary_index,
             } => {
-                if defer_streamed_turn_items_for_contributors {
-                    continue;
-                }
-                if streamed_items.contains_key(&item_id) {
+                if let Some(active) = active_item.as_ref() {
+                    if !active_item_is_streaming_to_client {
+                        continue;
+                    }
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id,
+                        item_id: active.id(),
                         delta,
                         summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic(format!(
-                        "ReasoningSummaryDelta without streamed item {item_id}"
-                    ));
+                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded {
-                item_id,
-                summary_index,
-            } => {
-                if defer_streamed_turn_items_for_contributors {
-                    continue;
-                }
-                if streamed_items.contains_key(&item_id) {
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if let Some(active) = active_item.as_ref() {
+                    if !active_item_is_streaming_to_client {
+                        continue;
+                    }
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id,
+                            item_id: active.id(),
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic(format!(
-                        "ReasoningSummaryPartAdded without streamed item {item_id}"
-                    ));
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningContentDelta {
