@@ -2069,9 +2069,6 @@ Field notes:
 - `rateLimitResetCredits` contains the available earned-reset count when the backend provides it; otherwise it is `null`.
 - `rateLimitResetCredits.credits` is `null` when only the count is available. An empty array means details were fetched and no available credits were returned.
 - The backend may cap `rateLimitResetCredits.credits`, so `availableCount` is the authoritative total and can be greater than the number of detail rows.
-- Reset-credit `id` values are opaque strings. `grantedAt` and `expiresAt` are Unix timestamps in seconds; `expiresAt` is `null` for a credit that does not expire.
-- `title` and `description` are backend-provided display text. Either field can be `null` when the backend does not provide it.
-- `resetType` is currently `codexRateLimits`. `status` reports the credit lifecycle state: `available`, `redeeming`, or `redeemed`.
 - Refetch `account/rateLimits/read` after consuming a reset.
 
 ### 8) Earned rate-limit resets (ChatGPT)

@@ -200,8 +200,8 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 },
                 {
                     "id": "credit-2",
-                    "reset_type": "codex_rate_limits",
-                    "status": "available",
+                    "reset_type": "future_reset_type",
+                    "status": "future_status",
                     "granted_at": "2026-06-18T00:00:00Z",
                     "expires_at": null
                 }
@@ -316,8 +316,8 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 },
                 RateLimitResetCredit {
                     id: "credit-2".to_string(),
-                    reset_type: RateLimitResetType::CodexRateLimits,
-                    status: RateLimitResetCreditStatus::Available,
+                    reset_type: RateLimitResetType::Unknown,
+                    status: RateLimitResetCreditStatus::Unknown,
                     granted_at: second_reset_credit_granted_at,
                     expires_at: None,
                     title: None,

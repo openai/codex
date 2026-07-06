@@ -14592,7 +14592,8 @@
         "enum": [
           "available",
           "redeeming",
-          "redeemed"
+          "redeemed",
+          "unknown"
         ],
         "type": "string"
       },
@@ -14620,7 +14621,8 @@
       },
       "RateLimitResetType": {
         "enum": [
-          "codexRateLimits"
+          "codexRateLimits",
+          "unknown"
         ],
         "type": "string"
       },

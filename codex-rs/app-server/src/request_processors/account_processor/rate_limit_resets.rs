@@ -133,23 +133,13 @@ fn rate_limit_reset_credit_from_backend(
 ) -> Result<RateLimitResetCredit, String> {
     let reset_type = match credit.reset_type.as_str() {
         "codex_rate_limits" => RateLimitResetType::CodexRateLimits,
-        unknown => {
-            return Err(format!(
-                "unknown reset type `{unknown}` for credit `{}`",
-                credit.id
-            ));
-        }
+        _ => RateLimitResetType::Unknown,
     };
     let status = match credit.status.as_str() {
         "available" => RateLimitResetCreditStatus::Available,
         "redeeming" => RateLimitResetCreditStatus::Redeeming,
         "redeemed" => RateLimitResetCreditStatus::Redeemed,
-        unknown => {
-            return Err(format!(
-                "unknown status `{unknown}` for credit `{}`",
-                credit.id
-            ));
-        }
+        _ => RateLimitResetCreditStatus::Unknown,
     };
     let granted_at = rate_limit_reset_credit_timestamp(&credit.granted_at)
         .map_err(|err| format!("invalid granted_at for credit `{}`: {err}", credit.id))?;

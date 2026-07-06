@@ -317,6 +317,8 @@ pub struct RateLimitResetCredit {
 #[ts(export_to = "v2/", rename_all = "camelCase")]
 pub enum RateLimitResetType {
     CodexRateLimits,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -326,6 +328,8 @@ pub enum RateLimitResetCreditStatus {
     Available,
     Redeeming,
     Redeemed,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
