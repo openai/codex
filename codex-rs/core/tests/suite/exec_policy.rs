@@ -18,6 +18,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -258,6 +259,11 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
 
 #[tokio::test]
 async fn malformed_custom_rules_preserve_managed_forbidden_prefix() -> Result<()> {
+    skip_if_target_windows!(
+        Ok(()),
+        "managed prefix fixture uses POSIX executable semantics"
+    );
+
     let mut builder = test_codex()
         .with_cloud_config_bundle(
             CloudConfigBundleFixture::loader_with_enterprise_requirement(
