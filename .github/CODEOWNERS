@@ -5,6 +5,47 @@
 /codex-rs/prompts/ @openai/codex-core-agent-team
 /codex-rs/utils/path-uri/ @openai/codex-core-agent-team
 
+# Public CLI grammar and startup environment loading.
+/codex-rs/arg0/ @openai/codex-core-agent-team
+/codex-rs/cli/ @openai/codex-core-agent-team
+/codex-rs/tui/ @openai/codex-core-agent-team
+/codex-rs/exec/ @openai/codex-core-agent-team
+/codex-rs/utils/cli/ @openai/codex-core-agent-team
+/codex-rs/cloud-tasks/ @openai/codex-core-agent-team
+/codex-rs/chatgpt/ @openai/codex-core-agent-team
+/codex-rs/execpolicy/ @openai/codex-core-agent-team
+/codex-rs/responses-api-proxy/ @openai/codex-core-agent-team
+
+# User-, project-, and managed-config file formats.
+/codex-rs/config/ @openai/codex-core-agent-team
+/codex-rs/features/ @openai/codex-core-agent-team
+/codex-rs/protocol/ @openai/codex-core-agent-team
+
+# App-server and exec-server JSON-RPC surfaces.
+/codex-rs/app-server/ @openai/codex-core-agent-team
+/codex-rs/app-server-client/ @openai/codex-core-agent-team
+/codex-rs/app-server-daemon/ @openai/codex-core-agent-team
+/codex-rs/app-server-protocol/ @openai/codex-core-agent-team
+/codex-rs/app-server-transport/ @openai/codex-core-agent-team
+/codex-rs/exec-server/ @openai/codex-core-agent-team
+
+# Public Rust facade and persisted session compatibility.
+/codex-rs/core-api/ @openai/codex-core-agent-team
+/codex-rs/rollout/ @openai/codex-core-agent-team
+/codex-rs/state/ @openai/codex-core-agent-team
+/codex-rs/thread-store/ @openai/codex-core-agent-team
+
+# MCP, plugin, skill, and hook contracts.
+/codex-rs/codex-mcp/ @openai/codex-core-agent-team
+/codex-rs/mcp-server/ @openai/codex-core-agent-team
+/codex-rs/plugin/ @openai/codex-core-agent-team
+/codex-rs/core-plugins/ @openai/codex-core-agent-team
+/codex-rs/core-skills/ @openai/codex-core-agent-team
+/codex-rs/hooks/ @openai/codex-core-agent-team
+
+# Published language SDK APIs.
+/sdk/ @openai/codex-core-agent-team
+
 # Keep macOS AKV signing changes reviewed by Codex maintainers.
 /.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
 /.github/scripts/macos-signing/ @openai/codex-core-agent-team
