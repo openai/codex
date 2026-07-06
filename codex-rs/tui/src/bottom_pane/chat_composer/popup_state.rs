@@ -21,7 +21,7 @@ impl DismissedToken {
     /// Captures the stable identity of the token at `range`.
     pub(super) fn new(text: &str, range: Range<usize>, query: String) -> Self {
         let token = text[range.clone()].to_string();
-        let occurrence = text[..range.start].match_indices(&token).count();
+        let occurrence = complete_token_occurrences_before(text, &token, range.start);
         Self {
             query,
             token,
@@ -37,8 +37,15 @@ impl DismissedToken {
         if self.query != query || text.get(range.clone()) != Some(self.token.as_str()) {
             return false;
         }
-        text[..range.start].match_indices(&self.token).count() == self.occurrence
+        complete_token_occurrences_before(text, &self.token, range.start) == self.occurrence
     }
+}
+
+fn complete_token_occurrences_before(text: &str, token: &str, before: usize) -> usize {
+    text[..before]
+        .split_whitespace()
+        .filter(|candidate| *candidate == token)
+        .count()
 }
 
 #[derive(Default)]

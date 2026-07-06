@@ -9234,6 +9234,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dismissed_file_popup_ignores_token_substrings_in_leading_paste() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_text_content("@ma".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@ma".len());
+        composer.sync_popups();
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.handle_paste("email@ma.com ".to_string());
+
+        assert_eq!(composer.current_text(), "email@ma.com @ma");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+    }
+
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their
     /// original content on submission.
     #[test]
