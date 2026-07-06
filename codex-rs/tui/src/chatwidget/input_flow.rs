@@ -10,6 +10,7 @@ impl ChatWidget {
     pub(crate) fn restore_startup_draft(&mut self, text: &str) {
         self.insert_str(text);
         self.startup_draft_pending_mcp_servers = Some(HashSet::new());
+        self.startup_draft_rendered = false;
         self.bottom_pane
             .set_startup_draft_submission_blocked(/*blocked*/ true);
     }
@@ -30,7 +31,8 @@ impl ChatWidget {
     }
 
     pub(super) fn finish_startup_draft_protection_if_ready(&mut self) {
-        let startup_ready = self.is_session_configured()
+        let startup_ready = self.startup_draft_rendered
+            && self.is_session_configured()
             && self
                 .startup_draft_pending_mcp_servers
                 .as_ref()
@@ -42,8 +44,16 @@ impl ChatWidget {
 
     pub(super) fn clear_startup_draft_protection(&mut self) {
         if self.startup_draft_pending_mcp_servers.take().is_some() {
+            self.startup_draft_rendered = false;
             self.bottom_pane
                 .set_startup_draft_submission_blocked(/*blocked*/ false);
+        }
+    }
+
+    pub(crate) fn mark_startup_draft_rendered(&mut self) {
+        if self.startup_draft_pending_mcp_servers.is_some() {
+            self.startup_draft_rendered = true;
+            self.finish_startup_draft_protection_if_ready();
         }
     }
 

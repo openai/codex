@@ -205,6 +205,12 @@ async fn restored_startup_draft_waits_for_effective_mcp_settlement() {
     ));
 
     app.chat_widget.handle_key_event(enter);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "captured during startup"
+    );
+    app.chat_widget.mark_startup_draft_rendered();
+    app.chat_widget.handle_key_event(enter);
     match next_user_turn_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
@@ -253,6 +259,13 @@ async fn restored_startup_draft_loads_mcp_names_from_older_app_servers() {
     app.handle_startup_thread_started(&mut app_server, Ok(started))
         .await
         .expect("older app-server startup should attach");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "captured during startup"
+    );
+    app.chat_widget.mark_startup_draft_rendered();
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
