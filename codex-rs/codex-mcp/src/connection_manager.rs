@@ -120,6 +120,54 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
+/// A live connection with server identity, tools, and calls pinned to one client.
+pub struct McpServerConnection {
+    server_name: String,
+    managed_client: ManagedClient,
+    tools: Vec<ToolInfo>,
+}
+
+impl McpServerConnection {
+    /// Returns authoritative server implementation metadata from initialization.
+    pub fn server_info(&self) -> &McpServerInfo {
+        &self.managed_client.server_info
+    }
+
+    /// Returns the filtered metadata for a currently available raw MCP tool.
+    pub fn tool_info(&self, tool: &str) -> Option<&ToolInfo> {
+        self.tools
+            .iter()
+            .find(|tool_info| tool_info.tool.name.as_ref() == tool)
+    }
+
+    /// Invoke a tool through this pinned server connection.
+    pub async fn call_tool(
+        &self,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<CallToolResult> {
+        call_tool_with_client(
+            &self.managed_client,
+            &self.server_name,
+            tool,
+            arguments,
+            meta,
+        )
+        .await
+    }
+
+    /// Read a resource through this pinned server connection.
+    pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult> {
+        read_resource_with_client(
+            &self.managed_client,
+            &self.server_name,
+            ReadResourceRequestParams::new(uri),
+        )
+        .await
+    }
+}
+
 impl McpConnectionManager {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
@@ -479,6 +527,19 @@ impl McpConnectionManager {
         }
     }
 
+    /// Acquires a live connection to `server` and snapshots its filtered tools.
+    ///
+    /// Unlike presentation-oriented APIs, this waits for authoritative server
+    /// initialization and never falls back to cached startup metadata.
+    pub async fn server_connection(&self, server: &str) -> Result<McpServerConnection> {
+        let managed_client = self.client_by_name(server).await?;
+        Ok(McpServerConnection {
+            server_name: server.to_string(),
+            tools: managed_client.current_tools(),
+            managed_client,
+        })
+    }
+
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
@@ -534,6 +595,11 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")?;
+        let _tool_refresh_permit = managed_client
+            .tool_refresh_semaphore
+            .acquire()
+            .await
+            .context("tool refresh semaphore closed")?;
 
         let list_start = Instant::now();
         let fetch_start = Instant::now();
@@ -541,7 +607,7 @@ impl McpConnectionManager {
             .codex_apps_tools_cache_context
             .as_ref()
             .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh));
-        let tools = list_tools_for_client_uncached(
+        let fetched_tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
             &managed_client.client,
@@ -558,16 +624,23 @@ impl McpConnectionManager {
             &[],
         );
 
-        let tools =
-            match (
-                managed_client.codex_apps_tools_cache_context.as_ref(),
+        managed_client.replace_tools(filter_tools(
+            fetched_tools.clone(),
+            &managed_client.tool_filter,
+        ));
+
+        let tools = match (
+            managed_client.codex_apps_tools_cache_context.as_ref(),
+            fetch_ticket,
+        ) {
+            (Some(cache_context), Some(fetch_ticket)) => cache_context.publish_if_newest_accepted(
                 fetch_ticket,
-            ) {
-                (Some(cache_context), Some(fetch_ticket)) => cache_context
-                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools),
-                (None, None) => tools,
-                _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-            };
+                &managed_client.server_info,
+                fetched_tools,
+            ),
+            (None, None) => fetched_tools,
+            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+        };
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
@@ -740,33 +813,7 @@ impl McpConnectionManager {
         meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
-        if !client.tool_filter.allows(tool) {
-            return Err(anyhow!(
-                "tool '{tool}' is disabled for MCP server '{server}'"
-            ));
-        }
-
-        let result: rmcp::model::CallToolResult = client
-            .client
-            .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
-            .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
-
-        let content = result
-            .content
-            .into_iter()
-            .map(|content| {
-                serde_json::to_value(content)
-                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
-            })
-            .collect();
-
-        Ok(CallToolResult {
-            content,
-            structured_content: result.structured_content,
-            is_error: result.is_error,
-            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
-        })
+        call_tool_with_client(&client, server, tool, arguments, meta).await
     }
 
     pub async fn server_supports_sandbox_state_meta_capability(
@@ -818,14 +865,7 @@ impl McpConnectionManager {
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
-        let client = managed.client.clone();
-        let timeout = managed.tool_timeout;
-        let uri = params.uri.clone();
-
-        client
-            .read_resource(params, timeout)
-            .await
-            .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
+        read_resource_with_client(&managed, server, params).await
     }
 
     /// Returns presentation metadata without waiting for uncached clients still initializing.
@@ -894,6 +934,55 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
         )
     }
+}
+
+async fn call_tool_with_client(
+    client: &ManagedClient,
+    server: &str,
+    tool: &str,
+    arguments: Option<serde_json::Value>,
+    meta: Option<serde_json::Value>,
+) -> Result<CallToolResult> {
+    if !client.tool_filter.allows(tool) {
+        return Err(anyhow!(
+            "tool '{tool}' is disabled for MCP server '{server}'"
+        ));
+    }
+
+    let result: rmcp::model::CallToolResult = client
+        .client
+        .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
+        .await
+        .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+
+    let content = result
+        .content
+        .into_iter()
+        .map(|content| {
+            serde_json::to_value(content)
+                .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
+        })
+        .collect();
+
+    Ok(CallToolResult {
+        content,
+        structured_content: result.structured_content,
+        is_error: result.is_error,
+        meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
+    })
+}
+
+async fn read_resource_with_client(
+    managed: &ManagedClient,
+    server: &str,
+    params: ReadResourceRequestParams,
+) -> Result<ReadResourceResult> {
+    let uri = params.uri.clone();
+    managed
+        .client
+        .read_resource(params, managed.tool_timeout)
+        .await
+        .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
 }
 
 impl Drop for McpConnectionManager {

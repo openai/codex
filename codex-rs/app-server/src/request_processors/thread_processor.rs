@@ -3537,6 +3537,16 @@ impl ThreadRequestProcessor {
 
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
 
+        if session_configured.rollout_path.is_none() {
+            let turns = build_api_turns_from_rollout_items(&history_items);
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            thread_state
+                .lock()
+                .await
+                .mcp_resource_origins
+                .seed(turns.iter().flat_map(|turn| &turn.items));
+        }
+
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(
             self.ensure_conversation_listener(

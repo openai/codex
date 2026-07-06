@@ -1,3 +1,5 @@
+use crate::mcp_resource_origin::McpResourceOrigin;
+use crate::mcp_resource_origin::McpResourceOriginIndex;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
@@ -86,6 +88,7 @@ pub(crate) struct ThreadState {
     last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    pub(crate) mcp_resource_origins: McpResourceOriginIndex,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -141,9 +144,25 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn mcp_resource_origin(&self, call_id: &str) -> Option<McpResourceOrigin> {
+        self.active_turn_snapshot()
+            .as_ref()
+            .and_then(|turn| McpResourceOrigin::find(&turn.items, call_id))
+            .or_else(|| self.mcp_resource_origins.get(call_id))
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
+        }
+        match event {
+            EventMsg::ThreadRolledBack(_) => self.mcp_resource_origins = Default::default(),
+            EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_) => {
+                if let Some(turn) = self.active_turn_snapshot() {
+                    self.mcp_resource_origins.seed(&turn.items);
+                }
+            }
+            _ => {}
         }
         self.current_turn_history.handle_event(event);
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))

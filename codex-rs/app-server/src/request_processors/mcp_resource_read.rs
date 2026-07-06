@@ -1,5 +1,6 @@
 use super::mcp_processor::with_mcp_tool_call_thread_id_meta;
 use super::*;
+use crate::mcp_resource_origin::McpResourceOrigin;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::ToolInfo;
@@ -24,12 +25,13 @@ pub(super) async fn read_thread_mcp_resource(
         return thread.read_mcp_resource(server, uri).await;
     }
 
-    let server_info = thread
-        .mcp_server_info(server)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("unable to identify codex_apps MCP server"))?;
-    match server_info.name.as_str() {
-        LEGACY_CODEX_APPS_MCP_SERVER_NAME => return thread.read_mcp_resource(server, uri).await,
+    let runtime = thread.current_mcp_runtime().await;
+    let connection = runtime.manager().server_connection(server).await?;
+    match connection.server_info().name.as_str() {
+        LEGACY_CODEX_APPS_MCP_SERVER_NAME => {
+            let result = connection.read_resource(uri).await?;
+            return Ok(serde_json::to_value(result)?);
+        }
         PLUGIN_RUNTIME_MCP_SERVER_NAME => {}
         implementation => {
             anyhow::bail!("unsupported codex_apps MCP server implementation `{implementation}`")
@@ -39,6 +41,9 @@ pub(super) async fn read_thread_mcp_resource(
     let origin =
         resolve_mcp_resource_origin(thread_state_manager, thread_id, thread, origin_call_id)
             .await?;
+    if origin.connector_id.is_none() {
+        anyhow::bail!("originating MCP tool call `{origin_call_id}` has no app context");
+    }
     if origin.server != server {
         anyhow::bail!(
             "originating MCP tool call server `{}` does not match resource server `{server}`",
@@ -52,20 +57,16 @@ pub(super) async fn read_thread_mcp_resource(
         );
     }
 
-    let tool_info = thread
-        .mcp_tool_info(server, &origin.tool)
-        .await
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "originating MCP tool `{}` is not available on server `{server}`",
-                origin.tool
-            )
-        })?;
-    let meta = build_plugin_runtime_fetch_resource_meta(&origin, uri, &tool_info)?;
+    let tool_info = connection.tool_info(&origin.tool).ok_or_else(|| {
+        anyhow::anyhow!(
+            "originating MCP tool `{}` is not available on server `{server}`",
+            origin.tool
+        )
+    })?;
+    let meta = build_plugin_runtime_fetch_resource_meta(&origin, uri, tool_info)?;
     let meta = with_mcp_tool_call_thread_id_meta(Some(meta), thread_id_string);
-    let result = thread
-        .call_mcp_tool(
-            server,
+    let result = connection
+        .call_tool(
             FETCH_RESOURCE_TOOL_NAME,
             Some(serde_json::json!({ "uri": uri })),
             meta,
@@ -80,70 +81,39 @@ async fn resolve_mcp_resource_origin(
     thread: &Arc<CodexThread>,
     origin_call_id: &str,
 ) -> anyhow::Result<McpResourceOrigin> {
-    let active_turn = {
-        let thread_state = thread_state_manager.thread_state(thread_id).await;
-        thread_state.lock().await.active_turn_snapshot()
-    };
-    if let Some(origin) = active_turn
-        .as_ref()
-        .and_then(|turn| find_mcp_resource_origin(&turn.items, origin_call_id))
+    let thread_state = thread_state_manager.thread_state(thread_id).await;
+    if let Some(origin) = thread_state
+        .lock()
+        .await
+        .mcp_resource_origin(origin_call_id)
     {
-        return origin;
+        return Ok(origin);
     }
 
-    let history = thread.load_history(/*include_archived*/ true).await?;
-    let turns = build_api_turns_from_rollout_items(&history.items);
-    turns
+    let history = thread.load_history(/*include_archived*/ true).await;
+    if let Some(origin) = thread_state
+        .lock()
+        .await
+        .mcp_resource_origin(origin_call_id)
+    {
+        return Ok(origin);
+    }
+    let history = history?;
+    let history_origin = build_api_turns_from_rollout_items(&history.items)
         .iter()
         .rev()
-        .find_map(|turn| find_mcp_resource_origin(&turn.items, origin_call_id))
-        .unwrap_or_else(|| {
-            Err(anyhow::anyhow!(
-                "originating MCP tool call `{origin_call_id}` was not found"
-            ))
+        .find_map(|turn| McpResourceOrigin::find(&turn.items, origin_call_id));
+    let mut thread_state = thread_state.lock().await;
+    history_origin
+        .map(|origin| {
+            thread_state
+                .mcp_resource_origins
+                .insert_if_absent(origin_call_id, origin)
         })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct McpResourceOrigin {
-    server: String,
-    tool: String,
-    connector_id: String,
-    link_id: Option<String>,
-    resource_uri: Option<String>,
-}
-
-fn find_mcp_resource_origin(
-    items: &[ThreadItem],
-    origin_call_id: &str,
-) -> Option<anyhow::Result<McpResourceOrigin>> {
-    items.iter().find_map(|item| {
-        let ThreadItem::McpToolCall {
-            id,
-            server,
-            tool,
-            app_context,
-            ..
-        } = item
-        else {
-            return None;
-        };
-        if id != origin_call_id {
-            return None;
-        }
-        Some(match app_context {
-            Some(app_context) => Ok(McpResourceOrigin {
-                server: server.clone(),
-                tool: tool.clone(),
-                connector_id: app_context.connector_id.clone(),
-                link_id: app_context.link_id.clone(),
-                resource_uri: app_context.resource_uri.clone(),
-            }),
-            None => Err(anyhow::anyhow!(
-                "originating MCP tool call `{origin_call_id}` has no app context"
-            )),
+        .or_else(|| thread_state.mcp_resource_origin(origin_call_id))
+        .ok_or_else(|| {
+            anyhow::anyhow!("originating MCP tool call `{origin_call_id}` was not found")
         })
-    })
 }
 
 fn build_plugin_runtime_fetch_resource_meta(
@@ -177,9 +147,9 @@ fn build_plugin_runtime_fetch_resource_meta(
             "originating MCP tool resource URI `{resource_uri}` does not match requested URI `{uri}`"
         );
     }
-    if connector_id != origin.connector_id {
+    if Some(connector_id) != origin.connector_id.as_deref() {
         anyhow::bail!(
-            "originating MCP tool connector `{connector_id}` does not match app context connector `{}`",
+            "originating MCP tool connector `{connector_id}` does not match app context connector {:?}",
             origin.connector_id
         );
     }
@@ -298,3 +268,7 @@ fn plugin_runtime_fetch_resource_response(
     let response = serde_json::from_value::<McpResourceReadResponse>(structured_content)?;
     Ok(serde_json::to_value(response)?)
 }
+
+#[cfg(test)]
+#[path = "mcp_resource_read_tests.rs"]
+mod tests;

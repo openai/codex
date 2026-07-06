@@ -9,13 +9,13 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Router;
-use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpResourceContent;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -26,7 +26,6 @@ use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::Content;
 use rmcp::model::Implementation;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
@@ -49,36 +48,144 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
-const CONNECTOR_ID: &str = "walmart";
-const CONNECTOR_NAME: &str = "Walmart";
-const LINK_ID: &str = "link_walmart";
-const ORIGIN_CALL_ID: &str = "walmart-product-search-call";
-const PRODUCT_SEARCH_TOOL: &str = "walmart_product_search";
-const PRODUCT_SEARCH_MODEL_NAMESPACE: &str = "mcp__codex_apps__walmart";
+const CONNECTOR_DESCRIPTION: &str = "Search catalog.";
 const PRODUCT_SEARCH_MODEL_TOOL: &str = "_product_search";
 const RESOURCE_URI: &str = "ui://widget/product-search.html";
+const WRONG_RESOURCE_URI: &str = "ui://widget/wrong-product-search.html";
+
+#[derive(Clone, Copy)]
+struct AppFixture {
+    connector_id: &'static str,
+    link_id: &'static str,
+    origin_call_id: &'static str,
+    product_search_tool: &'static str,
+    model_namespace: &'static str,
+    html: &'static str,
+}
+
+const CATALOG_A: AppFixture = AppFixture {
+    connector_id: "catalog-a",
+    link_id: "link-catalog-a",
+    origin_call_id: "catalog-a-search-call",
+    product_search_tool: "catalog_a_product_search",
+    model_namespace: "mcp__codex_apps__catalog_a",
+    html: "<html>Catalog A</html>",
+};
+
+const CATALOG_B: AppFixture = AppFixture {
+    connector_id: "catalog-b",
+    link_id: "link-catalog-b",
+    origin_call_id: "catalog-b-search-call",
+    product_search_tool: "catalog_b_product_search",
+    model_namespace: "mcp__codex_apps__catalog_b",
+    html: "<html>Catalog B</html>",
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_with_origin_calls_plugin_runtime_fetch_resource() -> Result<()> {
+async fn reopened_mcp_resource_reads_are_scoped_to_the_originating_app() -> Result<()> {
+    let mut scenario = start_origin_test_scenario(/*ephemeral*/ false).await?;
+
+    let catalog_a_response = read_mcp_resource(
+        &mut scenario.mcp,
+        &scenario.thread_id,
+        RESOURCE_URI,
+        CATALOG_A.origin_call_id,
+    )
+    .await?;
+    assert_eq!(
+        catalog_a_response,
+        expected_resource_response(CATALOG_A),
+        "catalog A's call must render catalog A's HTML"
+    );
+    let catalog_b_response = read_mcp_resource(
+        &mut scenario.mcp,
+        &scenario.thread_id,
+        RESOURCE_URI,
+        CATALOG_B.origin_call_id,
+    )
+    .await?;
+    assert_eq!(
+        catalog_b_response,
+        expected_resource_response(CATALOG_B),
+        "catalog B's call must render catalog B's HTML"
+    );
+
+    assert_fetch_resource_calls(
+        &scenario.recorded_calls,
+        &[CATALOG_A, CATALOG_B],
+        &scenario.thread_id,
+    );
+
+    scenario.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_ephemeral_origin_is_retained_and_identity_mismatches_fail_closed() -> Result<()>
+{
+    let mut scenario = start_origin_test_scenario(/*ephemeral*/ true).await?;
+
+    let response = read_mcp_resource(
+        &mut scenario.mcp,
+        &scenario.thread_id,
+        RESOURCE_URI,
+        CATALOG_A.origin_call_id,
+    )
+    .await?;
+    assert_eq!(response, expected_resource_response(CATALOG_A));
+
+    let wrong_uri_error = read_mcp_resource_error(
+        &mut scenario.mcp,
+        &scenario.thread_id,
+        WRONG_RESOURCE_URI,
+        CATALOG_A.origin_call_id,
+    )
+    .await?;
+    assert!(
+        wrong_uri_error.error.message.contains("does not match"),
+        "unexpected wrong-URI error: {wrong_uri_error:?}"
+    );
+
+    read_mcp_resource_error(
+        &mut scenario.mcp,
+        &scenario.thread_id,
+        RESOURCE_URI,
+        "unknown-product-search-call",
+    )
+    .await?;
+    assert_fetch_resource_calls(&scenario.recorded_calls, &[CATALOG_A], &scenario.thread_id);
+
+    scenario.stop().await;
+    Ok(())
+}
+
+struct OriginTestScenario {
+    _codex_home: TempDir,
+    mcp: TestAppServer,
+    thread_id: String,
+    recorded_calls: Arc<Mutex<Vec<Value>>>,
+    apps_server_handle: JoinHandle<()>,
+}
+
+impl OriginTestScenario {
+    async fn stop(self) {
+        self.apps_server_handle.abort();
+        let _ = self.apps_server_handle.await;
+    }
+}
+
+async fn start_origin_test_scenario(ephemeral: bool) -> Result<OriginTestScenario> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, recorded_calls, apps_server_handle) =
         start_plugin_runtime_mcp_server().await?;
-    let (_codex_home, mut mcp) =
+    let (codex_home, mut mcp) =
         start_test_app_server(&apps_server_url, &responses_server.uri()).await?;
 
     let response_mock = responses::mount_sse_sequence(
         &responses_server,
         vec![
-            responses::sse(vec![
-                responses::ev_response_created("resp-product-search"),
-                responses::ev_function_call_with_namespace(
-                    ORIGIN_CALL_ID,
-                    PRODUCT_SEARCH_MODEL_NAMESPACE,
-                    PRODUCT_SEARCH_MODEL_TOOL,
-                    &json!({ "query": "bed lamps" }).to_string(),
-                ),
-                responses::ev_completed("resp-product-search"),
-            ]),
+            product_search_response("resp-catalog-a-search", CATALOG_A),
+            product_search_response("resp-catalog-b-search", CATALOG_B),
             responses::sse(vec![
                 responses::ev_response_created("resp-done"),
                 responses::ev_assistant_message("msg-done", "Done"),
@@ -91,6 +198,7 @@ async fn mcp_resource_read_with_origin_calls_plugin_runtime_fetch_resource() -> 
     let thread_start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            ephemeral: Some(ephemeral),
             ..Default::default()
         })
         .await?;
@@ -105,7 +213,7 @@ async fn mcp_resource_read_with_origin_calls_plugin_runtime_fetch_resource() -> 
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
-                text: "Find bed lamps".to_string(),
+                text: "Compare product results".to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
@@ -117,81 +225,141 @@ async fn mcp_resource_read_with_origin_calls_plugin_runtime_fetch_resource() -> 
     )
     .await??;
 
-    let completed = wait_for_mcp_tool_call_completed(&mut mcp, ORIGIN_CALL_ID).await?;
-    let ThreadItem::McpToolCall {
-        app_context: Some(app_context),
-        ..
-    } = completed.item
-    else {
-        anyhow::bail!("originating MCP tool call should include app context");
-    };
-    assert_eq!(app_context.connector_id, CONNECTOR_ID);
-    assert_eq!(app_context.link_id.as_deref(), Some(LINK_ID));
-    assert_eq!(app_context.resource_uri.as_deref(), Some(RESOURCE_URI));
-
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
-    let read_request_id = mcp
-        .send_mcp_resource_read_request(McpResourceReadParams {
-            thread_id: Some(thread.id.clone()),
-            server: "codex_apps".to_string(),
-            uri: RESOURCE_URI.to_string(),
-            origin_call_id: Some(ORIGIN_CALL_ID.to_string()),
-        })
-        .await?;
-    let read_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
-    )
-    .await??;
-
-    assert_eq!(
-        to_response::<McpResourceReadResponse>(read_response)?,
-        McpResourceReadResponse {
-            contents: vec![McpResourceContent::Text {
-                uri: RESOURCE_URI.to_string(),
-                mime_type: Some("text/html".to_string()),
-                text: "<html>Walmart</html>".to_string(),
-                meta: Some(json!({ "app": CONNECTOR_ID })),
-            }],
-        }
-    );
-
-    {
-        let calls = recorded_calls
-            .lock()
-            .expect("recorded tool calls lock poisoned");
-        let fetch_resource_call = calls
-            .iter()
-            .find(|call| call["name"] == "fetch_resource")
-            .expect("resource read should call fetch_resource");
-        assert_eq!(
-            fetch_resource_call["arguments"],
-            json!({ "uri": RESOURCE_URI })
-        );
-        assert_eq!(
-            fetch_resource_call.pointer("/meta/_codex_apps"),
-            Some(&json!({
-                "resource_uri": format!("/{CONNECTOR_ID}/{LINK_ID}/fetch_resource"),
-                "contains_mcp_source": true,
-            }))
-        );
-        assert_eq!(
-            fetch_resource_call
-                .pointer("/meta/x-codex-turn-metadata/mcp_request_meta/selected_connector_ids"),
-            Some(&json!([CONNECTOR_ID]))
-        );
-        assert_eq!(fetch_resource_call["meta"]["threadId"], thread.id);
+    if !ephemeral {
+        drop(mcp);
+        mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: thread.id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        )
+        .await??;
     }
 
-    assert_eq!(response_mock.requests().len(), 2);
-    apps_server_handle.abort();
-    let _ = apps_server_handle.await;
-    Ok(())
+    assert_eq!(response_mock.requests().len(), 3);
+    Ok(OriginTestScenario {
+        _codex_home: codex_home,
+        mcp,
+        thread_id: thread.id,
+        recorded_calls,
+        apps_server_handle,
+    })
+}
+
+fn product_search_response(response_id: &str, app: AppFixture) -> String {
+    responses::sse(vec![
+        responses::ev_response_created(response_id),
+        responses::ev_function_call_with_namespace(
+            app.origin_call_id,
+            app.model_namespace,
+            PRODUCT_SEARCH_MODEL_TOOL,
+            &json!({ "query": "bed lamps" }).to_string(),
+        ),
+        responses::ev_completed(response_id),
+    ])
+}
+
+async fn read_mcp_resource(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    uri: &str,
+    origin_call_id: &str,
+) -> Result<McpResourceReadResponse> {
+    let request_id = send_read_request(mcp, thread_id, uri, origin_call_id).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn read_mcp_resource_error(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    uri: &str,
+    origin_call_id: &str,
+) -> Result<JSONRPCError> {
+    let request_id = send_read_request(mcp, thread_id, uri, origin_call_id).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await?
+}
+
+async fn send_read_request(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    uri: &str,
+    origin_call_id: &str,
+) -> Result<i64> {
+    mcp.send_mcp_resource_read_request(McpResourceReadParams {
+        thread_id: Some(thread_id.to_string()),
+        server: "codex_apps".to_string(),
+        uri: uri.to_string(),
+        origin_call_id: Some(origin_call_id.to_string()),
+    })
+    .await
+}
+
+fn expected_resource_response(app: AppFixture) -> McpResourceReadResponse {
+    McpResourceReadResponse {
+        contents: vec![McpResourceContent::Text {
+            uri: RESOURCE_URI.to_string(),
+            mime_type: Some("text/html".to_string()),
+            text: app.html.to_string(),
+            meta: Some(json!({ "app": app.connector_id })),
+        }],
+    }
+}
+
+fn assert_fetch_resource_calls(
+    recorded_calls: &Arc<Mutex<Vec<Value>>>,
+    apps: &[AppFixture],
+    thread_id: &str,
+) {
+    let actual = recorded_calls
+        .lock()
+        .expect("recorded tool calls lock poisoned")
+        .iter()
+        .filter(|call| call["name"] == "fetch_resource")
+        .cloned()
+        .collect::<Vec<_>>();
+    let expected = apps
+        .iter()
+        .map(|app| {
+            json!({
+                "name": "fetch_resource",
+                "arguments": { "uri": RESOURCE_URI },
+                "meta": {
+                    "_codex_apps": {
+                        "resource_uri": format!("/{}/{}/fetch_resource", app.connector_id, app.link_id),
+                        "contains_mcp_source": true,
+                    },
+                    "connector_name": app.connector_id,
+                    "connector_description": CONNECTOR_DESCRIPTION,
+                    "x-codex-turn-metadata": {
+                        "mcp_request_meta": { "selected_connector_ids": [app.connector_id] },
+                    },
+                    "threadId": thread_id,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
 }
 
 async fn start_test_app_server(
@@ -278,41 +446,11 @@ impl ServerHandler for PluginRuntimeMcpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        let input_schema: JsonObject = serde_json::from_value(json!({
-            "type": "object",
-            "properties": { "query": { "type": "string" } },
-            "required": ["query"],
-            "additionalProperties": false
-        }))
-        .map_err(|error| rmcp::ErrorData::internal_error(error.to_string(), None))?;
-        let mut tool = Tool::new(
-            Cow::Borrowed(PRODUCT_SEARCH_TOOL),
-            Cow::Borrowed("Search Walmart products."),
-            Arc::new(input_schema),
-        );
-        tool.annotations = Some(ToolAnnotations::new().read_only(true));
-        tool.meta = Some(Meta(serde_json::Map::from_iter([
-            ("connector_id".to_string(), json!(CONNECTOR_ID)),
-            ("connector_name".to_string(), json!(CONNECTOR_NAME)),
-            (
-                "connector_description".to_string(),
-                json!("Search Walmart products."),
-            ),
-            ("link_id".to_string(), json!(LINK_ID)),
-            ("openai/outputTemplate".to_string(), json!(RESOURCE_URI)),
-            (
-                "_codex_apps".to_string(),
-                json!({
-                    "resource_uri": format!(
-                        "/{CONNECTOR_ID}/{LINK_ID}/{PRODUCT_SEARCH_TOOL}"
-                    ),
-                    "contains_mcp_source": true,
-                }),
-            ),
-        ])));
-
         Ok(ListToolsResult {
-            tools: vec![tool],
+            tools: [CATALOG_A, CATALOG_B]
+                .into_iter()
+                .map(product_search_tool)
+                .collect(),
             next_cursor: None,
             meta: None,
         })
@@ -325,6 +463,13 @@ impl ServerHandler for PluginRuntimeMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut meta = context.meta;
         meta.0.remove("progressToken");
+        let resource_route = meta
+            .0
+            .get("_codex_apps")
+            .and_then(Value::as_object)
+            .and_then(|codex_apps| codex_apps.get("resource_uri"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         self.calls
             .lock()
             .expect("recorded tool calls lock poisoned")
@@ -335,19 +480,12 @@ impl ServerHandler for PluginRuntimeMcpServer {
             }));
 
         match request.name.as_ref() {
-            PRODUCT_SEARCH_TOOL => Ok(CallToolResult::structured(json!({ "products": [] }))),
-            "fetch_resource" => {
-                let mut result = CallToolResult::structured(json!({
-                    "contents": [{
-                        "uri": RESOURCE_URI,
-                        "mimeType": "text/html",
-                        "text": "<html>Walmart</html>",
-                        "meta": { "app": CONNECTOR_ID },
-                    }]
-                }));
-                result.content = vec![Content::text("Fetched Walmart resource")];
-                Ok(result)
+            name if [CATALOG_A.product_search_tool, CATALOG_B.product_search_tool]
+                .contains(&name) =>
+            {
+                Ok(CallToolResult::structured(json!({ "products": [] })))
             }
+            "fetch_resource" => fetch_resource_result(resource_route.as_deref()),
             name => Err(rmcp::ErrorData::invalid_params(
                 format!("unknown tool: {name}"),
                 None,
@@ -356,22 +494,55 @@ impl ServerHandler for PluginRuntimeMcpServer {
     }
 }
 
-async fn wait_for_mcp_tool_call_completed(
-    mcp: &mut TestAppServer,
-    call_id: &str,
-) -> Result<ItemCompletedNotification> {
-    loop {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/completed"),
-        )
-        .await??;
-        let Some(params) = notification.params else {
-            continue;
-        };
-        let completed: ItemCompletedNotification = serde_json::from_value(params)?;
-        if matches!(&completed.item, ThreadItem::McpToolCall { id, .. } if id == call_id) {
-            return Ok(completed);
-        }
-    }
+fn product_search_tool(app: AppFixture) -> Tool {
+    let mut tool = Tool::new(
+        Cow::Borrowed(app.product_search_tool),
+        Cow::Borrowed(CONNECTOR_DESCRIPTION),
+        Arc::new(JsonObject::new()),
+    );
+    tool.annotations = Some(ToolAnnotations::new().read_only(true));
+    tool.meta = Some(Meta(serde_json::Map::from_iter([
+        ("connector_id".to_string(), json!(app.connector_id)),
+        ("connector_name".to_string(), json!(app.connector_id)),
+        (
+            "connector_description".to_string(),
+            json!(CONNECTOR_DESCRIPTION),
+        ),
+        ("link_id".to_string(), json!(app.link_id)),
+        ("openai/outputTemplate".to_string(), json!(RESOURCE_URI)),
+        (
+            "_codex_apps".to_string(),
+            json!({
+                "resource_uri": format!(
+                    "/{}/{}/{}",
+                    app.connector_id, app.link_id, app.product_search_tool
+                ),
+                "contains_mcp_source": true,
+            }),
+        ),
+    ])));
+    tool
+}
+
+fn fetch_resource_result(resource_route: Option<&str>) -> Result<CallToolResult, rmcp::ErrorData> {
+    let app = [CATALOG_A, CATALOG_B]
+        .into_iter()
+        .find(|app| {
+            resource_route
+                == Some(format!("/{}/{}/fetch_resource", app.connector_id, app.link_id).as_str())
+        })
+        .ok_or_else(|| {
+            rmcp::ErrorData::invalid_params(
+                format!("unknown fetch_resource route: {resource_route:?}"),
+                None,
+            )
+        })?;
+    Ok(CallToolResult::structured(json!({
+        "contents": [{
+            "uri": RESOURCE_URI,
+            "mimeType": "text/html",
+            "text": app.html,
+            "meta": { "app": app.connector_id },
+        }]
+    })))
 }
