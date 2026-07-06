@@ -104,14 +104,14 @@ fn legacy_end_event(payload: &ImageGenerationPayload, call_id: String) -> EventM
 fn extension_turn_item(
     id: String,
     payload: ImageGenerationPayload,
-    legacy_events: Vec<EventMsg>,
+    legacy_event: EventMsg,
 ) -> ExtensionTurnItem {
     ExtensionTurnItem::Extension {
         item: ExtensionItem {
             id,
             payload: ExtensionItemPayload::ImageGeneration(payload),
         },
-        legacy_events,
+        legacy_events: vec![legacy_event],
     }
 }
 
@@ -152,9 +152,9 @@ impl ImageGenerationTool {
                     result: String::new(),
                     saved_path: None,
                 },
-                vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
+                EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
                     call_id: call.call_id.clone(),
-                })],
+                }),
             ))
             .await;
         let result = match request {
@@ -184,7 +184,7 @@ impl ImageGenerationTool {
                     .emit_completed(extension_turn_item(
                         call.call_id.clone(),
                         payload,
-                        vec![legacy_event],
+                        legacy_event,
                     ))
                     .await;
                 return Err(FunctionCallError::RespondToModel(message));
@@ -226,7 +226,7 @@ impl ImageGenerationTool {
             .emit_completed(extension_turn_item(
                 call.call_id.clone(),
                 payload,
-                vec![legacy_event],
+                legacy_event,
             ))
             .await;
         let output_hint = saved_path.as_ref().and_then(|output_path| {

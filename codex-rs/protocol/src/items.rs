@@ -20,7 +20,7 @@ use crate::protocol::SubAgentActivityKind;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
-pub use codex_extension_items::ExtensionItem;
+use codex_extension_items::ExtensionItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use quick_xml::de::from_str as from_xml_str;
@@ -50,7 +50,15 @@ pub enum TurnItem {
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
+    /// Item whose schema and lifecycle details are owned by an extension.
+    ///
+    /// Standalone image generation uses this path. App-server projects its
+    /// typed extension payload back into the public image-generation item.
     Extension(ExtensionItem),
+    /// Hosted Responses API image-generation item handled directly by core.
+    ///
+    /// This remains separate from [`Self::Extension`] because core still owns
+    /// hosted image persistence and legacy-event fanout.
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),

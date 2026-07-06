@@ -38,6 +38,11 @@ pub type TurnItemEmissionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + '
 #[derive(Clone, Debug)]
 pub enum ExtensionTurnItem {
     WebSearch(WebSearchItem),
+    /// Canonical extension item plus compatibility events derived by its owner.
+    ///
+    /// Core intentionally does not inspect extension-owned payloads, so it
+    /// cannot derive their legacy fanout. It emits the canonical lifecycle
+    /// event first, then these extension-provided events.
     Extension {
         item: ExtensionItem,
         legacy_events: Vec<EventMsg>,

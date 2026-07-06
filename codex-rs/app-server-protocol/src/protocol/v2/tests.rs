@@ -1,8 +1,5 @@
 use super::*;
 use crate::ServerNotification;
-use codex_extension_items::ExtensionItem;
-use codex_extension_items::ExtensionItemPayload;
-use codex_extension_items::image_generation::ImageGenerationPayload;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
@@ -2919,31 +2916,6 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             })),
             error: None,
             duration_ms: Some(42),
-        }
-    );
-}
-
-#[test]
-fn core_extension_image_generation_projects_to_typed_thread_item() {
-    let saved_path = absolute_path("generated/image.png");
-    let item = TurnItem::Extension(ExtensionItem {
-        id: "image-1".to_string(),
-        payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
-            status: "completed".to_string(),
-            revised_prompt: Some("A blue square".to_string()),
-            result: "cG5n".to_string(),
-            saved_path: Some(saved_path.clone()),
-        }),
-    });
-
-    assert_eq!(
-        ThreadItem::from(item),
-        ThreadItem::ImageGeneration {
-            id: "image-1".to_string(),
-            status: "completed".to_string(),
-            revised_prompt: Some("A blue square".to_string()),
-            result: "cG5n".to_string(),
-            saved_path: Some(saved_path),
         }
     );
 }

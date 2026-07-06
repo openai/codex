@@ -1854,6 +1854,7 @@ mod tests {
     fn rebuilds_extension_image_generation_item_from_persisted_completion() {
         let turn_id = "turn-1";
         let thread_id = ThreadId::new();
+        let saved_path = test_path_buf("/tmp/image-1.png").abs();
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
@@ -1871,7 +1872,7 @@ mod tests {
                         status: "completed".to_string(),
                         revised_prompt: Some("A blue square".to_string()),
                         result: "cG5n".to_string(),
-                        saved_path: None,
+                        saved_path: Some(saved_path.clone()),
                     }),
                 }),
                 completed_at_ms: 1_000,
@@ -1898,7 +1899,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A blue square".to_string()),
                 result: "cG5n".to_string(),
-                saved_path: None,
+                saved_path: Some(saved_path),
             }]
         );
     }
