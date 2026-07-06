@@ -115,8 +115,7 @@ async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
                 .expect("create in-process RMCP client"),
         ),
         server_info: create_test_server_info("Ready"),
-        tools: Arc::new(arc_swap::ArcSwap::from_pointee(tools)),
-        tool_refresh_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        tools,
         tool_filter: ToolFilter::default(),
         tool_timeout: None,
         server_instructions: None,
@@ -829,7 +828,6 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
     )])
     .await;
     live_client.server_info = create_test_server_info("Live");
-    let live_client_for_refresh = live_client.clone();
     assert!(live_tx.send(live_client).is_ok());
 
     let connection = manager
@@ -839,19 +837,6 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
     assert_eq!(connection.server_info().title.as_deref(), Some("Live"));
     assert!(connection.tool_info("live_tool").is_some());
     assert!(connection.tool_info("cached_tool").is_none());
-
-    live_client_for_refresh.replace_tools(vec![create_test_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "refreshed_tool",
-    )]);
-    let refreshed = manager
-        .server_connection(CODEX_APPS_MCP_SERVER_NAME)
-        .await
-        .expect("refreshed connection");
-    assert!(connection.tool_info("live_tool").is_some());
-    assert!(connection.tool_info("refreshed_tool").is_none());
-    assert!(refreshed.tool_info("live_tool").is_none());
-    assert!(refreshed.tool_info("refreshed_tool").is_some());
 }
 
 #[tokio::test]
