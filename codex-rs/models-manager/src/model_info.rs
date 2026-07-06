@@ -52,8 +52,19 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         };
     }
 
-    if config.base_instructions.is_some() || !config.personality_enabled {
+    if config.base_instructions.is_some() {
         model.model_messages = None;
+    } else if !config.personality_enabled
+        && let Some(model_messages) = model.model_messages.as_mut()
+    {
+        let personality_default = model_messages
+            .get_personality_message(/*personality*/ None)
+            .unwrap_or_default();
+        if let Some(instructions_template) = model_messages.instructions_template.as_mut() {
+            *instructions_template =
+                instructions_template.replace(PERSONALITY_PLACEHOLDER, &personality_default);
+        }
+        model_messages.instructions_variables = None;
     }
 
     model

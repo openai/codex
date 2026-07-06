@@ -90,8 +90,16 @@ fn base_instructions_override_disables_model_messages() {
 }
 
 #[test]
-fn disabled_personality_clears_model_messages() {
-    let model = model_info_from_slug("gpt-5.2-codex");
+fn disabled_personality_uses_default_model_messages() {
+    let mut model = model_info_from_slug("gpt-5.2-codex");
+    model
+        .model_messages
+        .as_mut()
+        .expect("model messages")
+        .instructions_variables
+        .as_mut()
+        .expect("instruction variables")
+        .personality_default = Some("default personality".to_string());
     let config = ModelsManagerConfig {
         personality_enabled: false,
         ..Default::default()
@@ -99,7 +107,12 @@ fn disabled_personality_clears_model_messages() {
 
     let updated = with_config_overrides(model.clone(), &config);
     let mut expected = model;
-    expected.model_messages = None;
+    expected.model_messages = Some(ModelMessages {
+        instructions_template: Some(format!(
+            "{DEFAULT_PERSONALITY_HEADER}\n\ndefault personality\n\n{BASE_INSTRUCTIONS}"
+        )),
+        instructions_variables: None,
+    });
 
     assert_eq!(updated, expected);
 }

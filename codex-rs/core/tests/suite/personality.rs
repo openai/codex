@@ -114,7 +114,7 @@ async fn base_instructions_override_disables_personality_template() {
     config.base_instructions = Some("override instructions".to_string());
 
     let model_info =
-        codex_core::test_support::construct_model_info_offline("gpt-5.3-codex", &config);
+        codex_core::test_support::construct_model_info_offline("exp-codex-personality", &config);
 
     assert_eq!(model_info.model_messages, None);
     assert_eq!(model_info.get_model_instructions(config.personality), "");
@@ -443,7 +443,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_are_empty_if_feature_disabled() -> anyhow::Result<()> {
+async fn instructions_use_default_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config
@@ -453,8 +453,13 @@ async fn instructions_are_empty_if_feature_disabled() -> anyhow::Result<()> {
     config.personality = Some(Personality::Friendly);
 
     let model_info =
-        codex_core::test_support::construct_model_info_offline("gpt-5.3-codex", &config);
-    assert_eq!(model_info.get_model_instructions(config.personality), "");
+        codex_core::test_support::construct_model_info_offline("exp-codex-personality", &config);
+    let default_instructions = model_info.get_model_instructions(/*personality*/ None);
+    assert!(!default_instructions.is_empty());
+    assert_eq!(
+        model_info.get_model_instructions(config.personality),
+        default_instructions
+    );
 
     Ok(())
 }
@@ -512,6 +517,11 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 2, "expected two requests");
+    assert!(!requests[0].instructions_text().is_empty());
+    assert_eq!(
+        requests[0].instructions_text(),
+        requests[1].instructions_text()
+    );
     let request = requests
         .last()
         .expect("expected personality update request");
