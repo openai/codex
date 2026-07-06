@@ -452,6 +452,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
             plugins: vec![PluginSummary {
                 id: "valid-plugin@valid-marketplace".to_string(),
                 remote_plugin_id: None,
+                version: None,
                 local_version: None,
                 name: "valid-plugin".to_string(),
                 share_context: None,
@@ -743,6 +744,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                 PluginSummary {
                     id: "valid-plugin@alternate-marketplace".to_string(),
                     remote_plugin_id: None,
+                    version: None,
                     local_version: None,
                     name: "valid-plugin".to_string(),
                     share_context: None,
@@ -780,6 +782,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                 PluginSummary {
                     id: "missing-plugin@alternate-marketplace".to_string(),
                     remote_plugin_id: None,
+                    version: None,
                     local_version: None,
                     name: "missing-plugin".to_string(),
                     share_context: None,
@@ -1683,6 +1686,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
       "authentication_policy": "ON_USE",
       "status": "ENABLED",
       "release": {
+        "version": "1.2.3",
         "display_name": "Linear",
         "description": "Track work in Linear",
         "app_ids": [],
@@ -1831,6 +1835,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     );
     assert_eq!(remote_marketplace.plugins[0].name, "linear");
     assert_eq!(remote_marketplace.plugins[0].source, PluginSource::Remote);
+    assert_eq!(
+        remote_marketplace.plugins[0].version.as_deref(),
+        Some("1.2.3")
+    );
     assert_eq!(
         remote_marketplace.plugins[0].local_version.as_deref(),
         Some("1.2.3")
@@ -2030,6 +2038,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_remote_plugi
       "authentication_policy": "ON_USE",
       "status": "ENABLED",
       "release": {
+        "version": "1.2.3",
         "display_name": "Linear",
         "description": "Track work in Linear",
         "app_ids": [],
@@ -2090,6 +2099,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_remote_plugi
     );
     assert_eq!(plugin.name, "linear");
     assert_eq!(plugin.source, PluginSource::Remote);
+    assert_eq!(plugin.version.as_deref(), Some("1.2.3"));
     assert_eq!(plugin.installed, false);
     assert_eq!(plugin.enabled, false);
 
@@ -2492,16 +2502,25 @@ plugin_sharing = true
         marketplace
             .plugins
             .iter()
-            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .map(|plugin| {
+                (
+                    plugin.id.clone(),
+                    plugin.version.clone(),
+                    plugin.installed,
+                    plugin.enabled,
+                )
+            })
             .collect::<Vec<_>>(),
         vec![
             (
                 "shared-linear@workspace-shared-with-me".to_string(),
+                Some("1.2.3".to_string()),
                 true,
                 true
             ),
             (
                 "unlisted-linear@workspace-shared-with-me".to_string(),
+                Some("1.2.3".to_string()),
                 true,
                 false
             )

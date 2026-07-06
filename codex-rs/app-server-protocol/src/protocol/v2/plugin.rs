@@ -600,6 +600,9 @@ pub struct PluginSummary {
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
+    /// Version advertised by the remote marketplace backend when available.
+    #[serde(default)]
+    pub version: Option<String>,
     /// Version of the locally materialized plugin package when available.
     #[serde(default)]
     pub local_version: Option<String>,

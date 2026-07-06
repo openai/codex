@@ -40,6 +40,7 @@ pub mod connectors;
 pub mod context;
 mod context_manager;
 mod current_time;
+mod elicitation;
 mod environment_selection;
 pub mod exec;
 pub mod exec_env;
