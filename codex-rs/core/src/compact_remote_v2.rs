@@ -10,19 +10,16 @@ use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
-use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
-use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -44,8 +41,11 @@ use codex_rollout_trace::InferenceTraceContext;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::StreamExt;
-use tokio_util::sync::CancellationToken;
-use tracing::info;
+
+#[path = "compact_remote_v2_attempt.rs"]
+mod attempt;
+use attempt::RemoteCompactV2Attempt;
+use attempt::run_remote_compact_v2_attempt;
 
 // Mirror the current /responses/compact retained-message default while the
 // server-side path remains the reference implementation.
@@ -193,74 +193,10 @@ async fn run_remote_compact_task_inner_impl(
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
-    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
-        turn_context.sub_id.as_str(),
-        context_compaction_item.id.as_str(),
-        turn_context.model_info.slug.as_str(),
-        turn_context.provider.info().name.as_str(),
-    );
+    let compaction_item_id = context_compaction_item.id.clone();
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-
-    let mut history = sess.clone_history().await;
-    let base_instructions = sess.get_base_instructions().await;
-    let (rewritten_outputs, estimated_deleted_tokens) =
-        trim_function_call_history_to_fit_context_window(
-            &mut history,
-            turn_context.as_ref(),
-            &base_instructions,
-        );
-    if rewritten_outputs > 0 {
-        info!(
-            turn_id = %turn_context.sub_id,
-            rewritten_outputs,
-            "rewrote history outputs before remote compaction v2"
-        );
-    }
-    if estimated_deleted_tokens > 0 {
-        let max_local_deleted_tokens = sess
-            .estimated_tokens_after_last_model_generated_item()
-            .await;
-        analytics_details.active_context_tokens_before = analytics_details
-            .active_context_tokens_before
-            .map(|active_context_tokens_before| {
-                active_context_tokens_before
-                    .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens))
-            });
-    }
-
-    let trace_input_history = history.raw_items().to_vec();
-    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
-        sess.as_ref(),
-        step_context.as_ref(),
-        &CancellationToken::new(),
-    )
-    .await?;
-    let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger {});
-    let prompt = Prompt {
-        input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
-        output_schema: None,
-        output_schema_strict: true,
-    };
-
-    let window_id = sess.current_window_id().await;
-    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-        sess.installation_id.clone(),
-        window_id,
-        CodexResponsesRequestKind::Compaction(compaction_metadata),
-    );
-    let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": turn_context.model_info.slug.as_str(),
-        "instructions": prompt.base_instructions.text.as_str(),
-        "input": &prompt.input,
-        "parallel_tool_calls": prompt.parallel_tool_calls,
-    }));
 
     let mut owned_client_session;
     let client_session = match client_session {
@@ -270,24 +206,24 @@ async fn run_remote_compact_task_inner_impl(
             &mut owned_client_session
         }
     };
-    let compaction_output_result = run_remote_compaction_request_v2(
-        sess,
+    let active_context_tokens_before = analytics_details.active_context_tokens_before;
+    let RemoteCompactV2Attempt {
         turn_context,
-        client_session,
-        &prompt,
-        &responses_metadata,
-    )
-    .await;
-
-    trace_attempt.record_result(
-        compaction_output_result
-            .as_ref()
-            .map(|output| std::slice::from_ref(&output.compaction_output)),
-    );
-    let RemoteCompactionV2Output {
+        trace_input_history,
+        prompt_input,
         compaction_output,
         token_usage,
-    } = compaction_output_result?;
+        compaction_trace,
+    } = run_remote_compact_v2_attempt(
+        sess,
+        step_context,
+        client_session,
+        compaction_item_id.as_str(),
+        compaction_metadata,
+        active_context_tokens_before,
+        analytics_details,
+    )
+    .await?;
     if let Some(token_usage) = token_usage {
         sess.record_rollout_budget_usage(&token_usage)?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
@@ -332,9 +268,9 @@ async fn run_remote_compact_task_inner_impl(
         compacted_item,
     )
     .await;
-    sess.recompute_token_usage(turn_context).await;
+    sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(turn_context, compaction_item)
+    sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;
     Ok(())
 }
