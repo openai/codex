@@ -321,6 +321,116 @@ mod tests {
     }
 
     #[test]
+    fn apply_resolves_relative_primary_config_from_repository_root() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            run_isolated_test(
+                "apply::tests::apply_resolves_relative_primary_config_from_repository_root",
+                &[("GIT_CONFIG_GLOBAL", OsStr::new("../external/config"))],
+            );
+            return;
+        }
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("repo");
+        let nested_cwd = root.join("nested");
+        let external_config = fixture.path().join("external/config");
+        let mismatched_nested_config = root.join("external/config");
+        std::fs::create_dir_all(&nested_cwd).expect("nested cwd");
+        std::fs::create_dir_all(external_config.parent().expect("config parent"))
+            .expect("external config directory");
+        std::fs::create_dir_all(
+            mismatched_nested_config
+                .parent()
+                .expect("mismatched config parent"),
+        )
+        .expect("mismatched config directory");
+        std::fs::write(&external_config, "[codex]\n\tprobe = loaded\n").expect("external config");
+        std::fs::write(&mismatched_nested_config, "[invalid\n")
+            .expect("mismatched nested-cwd config");
+        let (init_code, _, init_err) = run(&root, &["git", "init"]);
+        assert_eq!(init_code, 0, "init repository: {init_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: nested_cwd,
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply with root-relative primary config");
+        assert_eq!(result.exit_code, 0, "apply result: {result:?}");
+        assert_eq!(read_file_normalized(&root.join("hello.txt")), "hello\n");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn apply_refuses_process_relative_primary_config_before_mutating_the_repository() {
+        const TEST_NAME: &str = "apply::tests::apply_refuses_process_relative_primary_config_before_mutating_the_repository";
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            run_isolated_test(
+                TEST_NAME,
+                &[
+                    (
+                        "GIT_CONFIG_GLOBAL",
+                        OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                    ),
+                    ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ],
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(
+            root.join("codex-process-relative.gitconfig"),
+            "[filter \"unsafe\"]\nclean = false\n",
+        )
+        .expect("worktree config");
+        let before_index = run(root, &["git", "ls-files", "--stage", "-z"]).1;
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: false,
+        };
+
+        let error = apply_git_patch(&request).expect_err("process-relative primary config");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert!(error.to_string().contains("process-relative"), "{error}");
+        assert!(!root.join("hello.txt").exists());
+        assert_eq!(
+            run(root, &["git", "ls-files", "--stage", "-z"]).1,
+            before_index
+        );
+    }
+
+    #[test]
+    fn numstat_path_discovery_does_not_preempt_apply_whitespace_result() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let (config_code, _, config_err) =
+            run(root, &["git", "config", "apply.whitespace", "error"]);
+        assert_eq!(config_code, 0, "configure whitespace policy: {config_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/trailing.txt b/trailing.txt\nnew file mode 100644\n--- /dev/null\n+++ b/trailing.txt\n@@ -0,0 +1 @@\n+trailing \n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("path discovery must leave apply failure in the structured result");
+        assert_ne!(result.exit_code, 0);
+        assert!(
+            result.stderr.contains("trailing whitespace"),
+            "apply result: {result:?}"
+        );
+        assert!(!root.join("trailing.txt").exists());
+    }
+
+    #[test]
     fn apply_uses_cwd_repo_despite_inherited_repository_selectors() {
         let _g = env_lock().lock().unwrap();
         if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
