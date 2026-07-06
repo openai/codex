@@ -37,7 +37,7 @@ fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only
 fn installation_policy_source_is_preserved_across_remote_summary_paths() {
     let mut directory_plugin = directory_plugin("plugin-linear", "linear");
     directory_plugin.installation_policy_source =
-        Some(PluginInstallPolicySource::ImplicitCanonicalApp);
+        Some(RemotePluginInstallPolicySource::ImplicitCanonicalApp);
     let installed_plugin = RemotePluginInstalledItem {
         plugin: directory_plugin.clone(),
         enabled: true,
@@ -64,7 +64,7 @@ fn installation_policy_source_is_preserved_across_remote_summary_paths() {
 
     let mut installed_plugin = installed_plugin;
     installed_plugin.plugin.installation_policy_source =
-        Some(PluginInstallPolicySource::WorkspaceSetting);
+        Some(RemotePluginInstallPolicySource::WorkspaceSetting);
     let installed_plugin = remote_installed_plugin_to_cache_entry(&installed_plugin)
         .expect("installed plugin should be valid");
     let marketplaces = group_remote_installed_plugins_by_marketplaces(
@@ -79,6 +79,20 @@ fn installation_policy_source_is_preserved_across_remote_summary_paths() {
             .collect::<Vec<_>>(),
         vec![Some(PluginInstallPolicySource::WorkspaceSetting)]
     );
+}
+
+#[test]
+fn unknown_installation_policy_source_maps_to_none() {
+    let plugin = directory_plugin("plugin-linear", "linear");
+    let mut plugin_json = serde_json::to_value(plugin).expect("plugin should serialize");
+    plugin_json["installation_policy_source"] =
+        serde_json::Value::String("FUTURE_POLICY_SOURCE".to_string());
+    let plugin: RemotePluginDirectoryItem =
+        serde_json::from_value(plugin_json).expect("unknown source should deserialize");
+
+    let summary = build_remote_plugin_summary(&plugin, None).expect("summary should be valid");
+
+    assert_eq!(summary.install_policy_source, None);
 }
 
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
