@@ -3070,12 +3070,14 @@ impl Config {
                 WindowsSandboxLevel::Disabled => None,
             }
         });
-        apply_requirement_constrained_value(
-            "windows.sandbox",
-            selected_windows_sandbox_mode,
-            &mut constrained_windows_sandbox_mode,
-            &mut startup_warnings,
-        )?;
+        if let Some(selected_windows_sandbox_mode) = selected_windows_sandbox_mode {
+            apply_requirement_constrained_value(
+                "windows.sandbox",
+                Some(selected_windows_sandbox_mode),
+                &mut constrained_windows_sandbox_mode,
+                &mut startup_warnings,
+            )?;
+        }
         let effective_windows_sandbox_mode = *constrained_windows_sandbox_mode.get();
         let windows_sandbox_mode = if constrained_windows_sandbox_mode.source.is_some() {
             effective_windows_sandbox_mode

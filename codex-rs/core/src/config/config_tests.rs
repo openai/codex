@@ -9541,6 +9541,37 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 }
 
 #[tokio::test]
+async fn unset_windows_sandbox_mode_uses_requirements_default_without_warning()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[windows]
+allowed_sandbox_implementations = ["elevated"]
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.windows_sandbox_mode,
+        Some(codex_config::types::WindowsSandboxModeToml::Elevated)
+    );
+    assert!(
+        config.startup_warnings.iter().all(|warning| !warning
+            .contains("Configured value for `windows.sandbox` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn windows_sandbox_mode_falls_back_when_disallowed_by_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
