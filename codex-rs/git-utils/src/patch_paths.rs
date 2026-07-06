@@ -9,6 +9,10 @@ use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
 use crate::guarded_config::GuardedGitConfig;
 
+// Path discovery must not turn a repository's whitespace policy into an
+// API-level parser failure before the real apply can report its status.
+const APPLY_NUMSTAT_ARGS: [&str; 3] = ["--numstat", "--whitespace=nowarn", "-z"];
+
 /// Extract effective patch paths through a bound operation configuration.
 pub(crate) fn extract_effective_paths_from_patch_guarded(
     config: &GuardedGitConfig<'_>,
@@ -50,7 +54,7 @@ fn git_apply_numstat_paths_guarded(
     revert: bool,
 ) -> io::Result<Vec<String>> {
     let mut command = config.apply_command()?;
-    command.args(["--numstat", "-z"]);
+    command.args(APPLY_NUMSTAT_ARGS);
     if revert {
         command.arg("-R");
     }
@@ -85,10 +89,11 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
     };
     let paths = (|| -> io::Result<Vec<String>> {
         let git = GitRunner::for_cwd_io(cwd)?;
-        let git_root = crate::get_git_repo_root(cwd)
-            .ok_or_else(|| io::Error::other("not a Git repository"))?;
-        let git_root = std::fs::canonicalize(git_root)?;
-        let config = GuardedGitConfig::authorize(&git, &git_root, Vec::new())?;
+        let authorized_cwd = crate::get_git_repo_root(cwd)
+            .map(std::fs::canonicalize)
+            .transpose()?
+            .unwrap_or(std::fs::canonicalize(cwd)?);
+        let config = GuardedGitConfig::authorize(&git, &authorized_cwd, Vec::new())?;
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ false)
     })()
     .unwrap_or_default();
