@@ -995,30 +995,34 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
 
-    handle_turn_started(&mut chat, "turn-1");
-    while rx.try_recv().is_ok() {}
-
-    handle_agent_reasoning_delta(&mut chat, "**Step one**\nFirst summary");
-    handle_agent_message_delta(&mut chat, "Final answer");
-    complete_assistant_message(
-        &mut chat,
-        "msg-1",
-        "Final answer",
-        Some(MessagePhase::FinalAnswer),
-    );
     chat.handle_server_notification(
-        ServerNotification::ReasoningSummaryPartAdded(
-            codex_app_server_protocol::ReasoningSummaryPartAddedNotification {
-                thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
-                turn_id: "turn-1".to_string(),
-                item_id: "reasoning-1".to_string(),
-                summary_index: 1,
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
             },
-        ),
+        }),
         /*replay_kind*/ None,
     );
-    handle_agent_reasoning_delta(&mut chat, "**Step two**\nSecond summary");
-    handle_agent_reasoning_final(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "Summary only".to_string(),
+            summary_index: 0,
+        }),
+        /*replay_kind*/ None,
+    );
 
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -1027,35 +1031,20 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             completed_at_ms: 0,
             item: AppServerThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
-                summary: vec![
-                    "**Step one**\nFirst summary".to_string(),
-                    "**Step two**\nSecond summary".to_string(),
-                ],
+                summary: vec!["Summary only".to_string()],
                 content: Vec::new(),
             },
         }),
         /*replay_kind*/ None,
     );
 
-    let mut consolidated_answer = None;
-    let mut inserted_history = String::new();
-    while let Ok(event) = rx.try_recv() {
-        match event {
-            AppEvent::ConsolidateAgentMessage { source, .. } => {
-                consolidated_answer = Some(source);
-            }
-            AppEvent::InsertHistoryCell(cell) => {
-                inserted_history.push_str(&lines_to_single_string(
-                    &cell.transcript_lines(/*width*/ 80),
-                ));
-            }
-            _ => {}
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
         }
-    }
-
-    assert_eq!(consolidated_answer.as_deref(), Some("Final answer"));
-    assert_eq!(inserted_history.matches("First summary").count(), 1);
-    assert_eq!(inserted_history.matches("Second summary").count(), 1);
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert_eq!(rendered.matches("Summary only").count(), 1);
 }
 
 #[tokio::test]

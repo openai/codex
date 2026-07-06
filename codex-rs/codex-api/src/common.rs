@@ -101,7 +101,6 @@ pub enum ResponseEvent {
         delta: String,
     },
     ReasoningSummaryDelta {
-        item_id: String,
         delta: String,
         summary_index: i64,
     },
@@ -110,7 +109,6 @@ pub enum ResponseEvent {
         content_index: i64,
     },
     ReasoningSummaryPartAdded {
-        item_id: String,
         summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),
