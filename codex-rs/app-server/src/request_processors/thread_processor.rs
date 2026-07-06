@@ -178,12 +178,18 @@ fn merge_persisted_approvals_reviewer(
     let InitialHistory::Resumed(resumed_history) = thread_history else {
         return;
     };
-    typesafe_overrides.approvals_reviewer = resumed_history.history.iter().rev().find_map(|item| {
-        let RolloutItem::TurnContext(turn_context) = item else {
-            return None;
-        };
-        turn_context.approvals_reviewer
-    });
+    typesafe_overrides.approvals_reviewer =
+        resumed_history
+            .history
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                    Some(event.thread_settings.approvals_reviewer)
+                }
+                _ => None,
+            });
 }
 
 fn normalize_thread_list_cwd_filters(

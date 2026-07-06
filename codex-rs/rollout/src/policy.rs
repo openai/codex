@@ -95,6 +95,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
+        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_)
         | EventMsg::SubAgentActivity(_) => true,
@@ -132,7 +133,6 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
