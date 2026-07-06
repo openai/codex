@@ -7730,6 +7730,91 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
 }
 
 #[tokio::test]
+async fn plugin_availability_change_reuses_the_mcp_manager() {
+    struct ReadyPluginContributor;
+
+    impl codex_extension_api::McpServerContributor<Config> for ReadyPluginContributor {
+        fn id(&self) -> &'static str {
+            "ready_plugin_test"
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async move {
+                let available = context
+                    .available_environment_ids()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "executor"));
+                available
+                    .then(
+                        || codex_extension_api::McpServerContribution::SelectedPluginPackage {
+                            plugin_id: "skill-only".to_string(),
+                            plugin_display_name: "Skill Only".to_string(),
+                            connector_ids: Vec::new(),
+                        },
+                    )
+                    .into_iter()
+                    .collect()
+            })
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut registry = codex_extension_api::ExtensionRegistryBuilder::new();
+    registry.mcp_server_contributor(Arc::new(ReadyPluginContributor));
+    let registry = Arc::new(registry.build());
+    session.services.extensions = Arc::clone(&registry);
+    session.services.mcp_manager = Arc::new(McpManager::new_with_extensions(
+        Arc::clone(&session.services.plugins_manager),
+        registry,
+    ));
+    let session = Arc::new(session);
+    session
+        .refresh_mcp_servers_now(
+            &turn_context,
+            &turn_context.config,
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+    let old_runtime = session.services.latest_mcp_runtime();
+    let old_manager = old_runtime.manager_arc();
+
+    let selected_root = codex_protocol::capabilities::SelectedCapabilityRoot {
+        id: "skill-only".to_string(),
+        location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+            environment_id: "executor".to_string(),
+            path: PathUri::from_host_native_path(turn_context.config.cwd.as_path())
+                .expect("selected capability root URI"),
+        },
+    };
+    let environment = Arc::clone(
+        &turn_context
+            .environments
+            .primary()
+            .expect("ready test environment")
+            .environment,
+    );
+    let captured_environments = HashMap::from([("executor".to_string(), Some(environment))]);
+    let resolved_roots = session
+        .services
+        .turn_environments
+        .environment_manager()
+        .resolve_selected_capability_roots(&[selected_root], &captured_environments)
+        .await;
+
+    let new_runtime = session
+        .mcp_runtime_for_step(&turn_context, &turn_context.environments, &resolved_roots)
+        .await;
+
+    assert!(!old_runtime.plugins_available());
+    assert!(new_runtime.plugins_available());
+    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
+    assert!(Arc::ptr_eq(&old_manager, &new_runtime.manager_arc()));
+}
+
+#[tokio::test]
 async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);

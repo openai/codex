@@ -25,6 +25,12 @@ use codex_plugin::AppConnectorId;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
+/// MCP configuration and capability availability derived from the same inputs.
+pub(crate) struct McpRuntimeProjection {
+    pub(crate) config: McpConfig,
+    pub(crate) plugins_available: bool,
+}
+
 enum OrderedMcpOverlay {
     Set {
         contributor_id: &'static str,
@@ -75,6 +81,7 @@ impl McpManager {
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         self.runtime_config_with_context(McpServerContributionContext::global(config))
             .await
+            .config
     }
 
     pub(crate) async fn runtime_config_for_step(
@@ -83,7 +90,7 @@ impl McpManager {
         thread_init: &ExtensionDataInit,
         thread_store: &ExtensionData,
         available_environment_ids: &[String],
-    ) -> McpConfig {
+    ) -> McpRuntimeProjection {
         self.runtime_config_with_context(McpServerContributionContext::for_step(
             config,
             thread_init,
@@ -96,8 +103,9 @@ impl McpManager {
     async fn runtime_config_with_context(
         &self,
         context: McpServerContributionContext<'_, Config>,
-    ) -> McpConfig {
+    ) -> McpRuntimeProjection {
         let config = context.config();
+        let mut selected_plugin_available = false;
         let mut selected_plugin_connector_sources = Vec::new();
         let mut selected_plugin_registrations = Vec::new();
         let mut overlays = Vec::new();
@@ -129,17 +137,22 @@ impl McpManager {
                             *config,
                         ),
                     ),
-                    McpServerContribution::SelectedPluginConnectors {
+                    McpServerContribution::SelectedPluginPackage {
                         plugin_id,
                         plugin_display_name,
                         connector_ids,
-                    } => selected_plugin_connector_sources.push(
-                        PluginConnectorSource::from_connector_ids(
-                            plugin_id,
-                            plugin_display_name,
-                            connector_ids.into_iter().map(AppConnectorId),
-                        ),
-                    ),
+                    } => {
+                        selected_plugin_available = true;
+                        if !connector_ids.is_empty() {
+                            selected_plugin_connector_sources.push(
+                                PluginConnectorSource::from_connector_ids(
+                                    plugin_id,
+                                    plugin_display_name,
+                                    connector_ids.into_iter().map(AppConnectorId),
+                                ),
+                            );
+                        }
+                    }
                     McpServerContribution::Remove { name } => {
                         overlays.push(OrderedMcpOverlay::Remove {
                             contributor_id: contributor.id(),
@@ -152,12 +165,14 @@ impl McpManager {
             }
         }
 
-        let mut mcp_config = config
-            .to_mcp_config_with_plugin_registrations(
-                self.plugins_manager.as_ref(),
-                selected_plugin_registrations,
-            )
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
             .await;
+        let plugins_available =
+            selected_plugin_available || !loaded_plugins.capability_summaries().is_empty();
+        let mut mcp_config = config
+            .to_mcp_config_with_loaded_plugins(&loaded_plugins, selected_plugin_registrations);
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
             catalog.register(McpServerRegistration::from_compatibility(
@@ -211,7 +226,10 @@ impl McpManager {
                 .merged_with(&ConnectorSnapshot::from_plugin_sources(
                     selected_plugin_connector_sources,
                 ));
-        mcp_config
+        McpRuntimeProjection {
+            config: mcp_config,
+            plugins_available,
+        }
     }
 
     /// Returns config- and plugin-backed servers without runtime contributions.

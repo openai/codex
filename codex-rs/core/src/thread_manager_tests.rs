@@ -699,11 +699,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
-        selected_servers(&first_resolved),
+        selected_servers(&first_resolved.config),
         std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
     );
     assert_eq!(
-        selected_servers(&second_resolved),
+        selected_servers(&second_resolved.config),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
 }

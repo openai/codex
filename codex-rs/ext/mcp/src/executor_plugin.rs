@@ -186,13 +186,12 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                         config: Box::new(config),
                     }
                 }));
-                if !plugin.connector_ids.is_empty() {
-                    contributions.push(McpServerContribution::SelectedPluginConnectors {
-                        plugin_id: plugin.plugin_id,
-                        plugin_display_name: plugin.plugin_display_name,
-                        connector_ids: plugin.connector_ids,
-                    });
-                }
+                // Keep the package visible even when it contributes only skills.
+                contributions.push(McpServerContribution::SelectedPluginPackage {
+                    plugin_id: plugin.plugin_id,
+                    plugin_display_name: plugin.plugin_display_name,
+                    connector_ids: plugin.connector_ids,
+                });
             }
 
             contributions

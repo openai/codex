@@ -2,6 +2,7 @@ use super::session::Session;
 use super::step_context::StepContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
 
@@ -35,6 +36,9 @@ impl Session {
                 .with_subagents(environment_subagents),
             );
         }
+        world_state.add_section(PluginsInstructionsState::new(
+            step_context.mcp.plugins_available(),
+        ));
         let environments = step_context.environments.to_selections();
         let ready_selected_capability_roots = step_context
             .selected_capability_roots

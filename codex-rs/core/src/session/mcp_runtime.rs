@@ -5,9 +5,10 @@ use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 
-/// MCP config, exact environment bindings, and manager used by one model request.
+/// MCP config, plugin availability, exact environment bindings, and manager for one request.
 pub struct McpRuntimeSnapshot {
     config: Arc<McpConfig>,
+    plugins_available: bool,
     manager: Arc<McpConnectionManager>,
     runtime_context: McpRuntimeContext,
     available_environment_ids: Vec<String>,
@@ -16,12 +17,14 @@ pub struct McpRuntimeSnapshot {
 impl McpRuntimeSnapshot {
     pub(crate) fn new(
         config: Arc<McpConfig>,
+        plugins_available: bool,
         manager: Arc<McpConnectionManager>,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
     ) -> Self {
         Self {
             config,
+            plugins_available,
             manager,
             runtime_context,
             available_environment_ids,
@@ -30,6 +33,10 @@ impl McpRuntimeSnapshot {
 
     pub fn config(&self) -> &McpConfig {
         self.config.as_ref()
+    }
+
+    pub(crate) fn plugins_available(&self) -> bool {
+        self.plugins_available
     }
 
     pub fn manager(&self) -> &McpConnectionManager {
@@ -86,6 +93,7 @@ impl McpRuntimeSnapshot {
         );
         Arc::new(Self::new(
             Arc::new(mcp_config),
+            /*plugins_available*/ false,
             Arc::new(manager),
             runtime_context,
             Vec::new(),
