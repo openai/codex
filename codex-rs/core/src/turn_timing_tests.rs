@@ -112,7 +112,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     ));
     assert!(response_item_records_turn_ttft(
@@ -121,8 +121,9 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             status: None,
             call_id: "call-2".to_string(),
             name: "custom".to_string(),
+            namespace: None,
             input: "echo hi".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     ));
     assert!(response_item_records_turn_ttft(&ResponseItem::Message {
@@ -132,7 +133,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             text: "hello".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }));
 }
 
@@ -145,14 +146,14 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
             text: String::new(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }));
     assert!(!response_item_records_turn_ttft(
         &ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     ));
 }

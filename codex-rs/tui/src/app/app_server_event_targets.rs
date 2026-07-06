@@ -123,6 +123,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ModelVerification(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ModelSafetyBufferingUpdated(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::TurnModerationMetadata(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -230,6 +233,7 @@ mod tests {
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: Default::default(),
             personality: None,
         }
     }
@@ -281,6 +285,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);
@@ -296,6 +301,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);

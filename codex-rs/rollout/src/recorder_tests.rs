@@ -3,6 +3,7 @@
 use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -14,6 +15,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
@@ -45,6 +47,7 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": ".",
@@ -83,6 +86,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             forked_from_id: None,
             parent_thread_id: None,
@@ -98,8 +102,11 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            selected_capability_roots: Vec::new(),
             memory_mode: None,
+            history_mode: Default::default(),
             multi_agent_version: None,
+            context_window: None,
         },
         git: None,
     };
@@ -145,7 +152,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Result<()> {
+async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
     let mut file = File::create(&rollout_path)?;
@@ -210,12 +217,52 @@ async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Resu
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 2);
-    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    let RolloutItem::SessionMeta(session_meta) = &items[0] else {
+        panic!("expected session metadata");
+    };
+    assert_eq!(session_meta.meta.session_id, SessionId::from(thread_id));
     assert!(matches!(
         items[1],
         RolloutItem::ResponseItem(ResponseItem::Message { .. })
     ));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_ignores_unknown_fork_source_history_mode() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let rollout_path = write_session_file(home.path(), "2025-01-03T12-00-00", uuid)?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    let source_uuid = Uuid::new_v4();
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": "2025-01-03T12:00:01Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": source_uuid,
+                "id": source_uuid,
+                "timestamp": "2025-01-03T12:00:01Z",
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "test-provider",
+                "history_mode": "future",
+            },
+        })
+    )?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 1);
+    assert_eq!(items.len(), 2);
     Ok(())
 }
 
@@ -234,6 +281,7 @@ async fn load_rollout_items_preserves_legacy_guardian_assessment_lines() -> std:
             "timestamp": ts,
             "type": "session_meta",
             "payload": {
+                "session_id": thread_id,
                 "id": thread_id,
                 "timestamp": ts,
                 "cwd": ".",
@@ -297,6 +345,7 @@ async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_histo
             "timestamp": ts,
             "type": "session_meta",
             "payload": {
+                "session_id": thread_id,
                 "id": thread_id,
                 "timestamp": ts,
                 "cwd": ".",
@@ -365,7 +414,9 @@ async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_histo
 async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
+    let session_id = SessionId::default();
     let thread_id = ThreadId::new();
+    let initial_window_id = Uuid::now_v7().to_string();
     let recorder = RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
@@ -374,9 +425,13 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
-        ),
+        )
+        .with_session_id(session_id)
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_initial_window_id(initial_window_id.clone()),
     )
     .await?;
 
@@ -421,9 +476,19 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     assert!(rollout_path.exists(), "rollout file should be materialized");
 
     let text = std::fs::read_to_string(&rollout_path)?;
-    assert!(
-        text.contains("\"type\":\"session_meta\""),
-        "expected session metadata in rollout"
+    let first_line = text.lines().next().expect("session metadata line");
+    let session_meta: RolloutLine = serde_json::from_str(first_line)?;
+    let RolloutItem::SessionMeta(session_meta) = session_meta.item else {
+        panic!("expected session metadata in rollout");
+    };
+    assert_eq!(session_meta.meta.session_id, session_id);
+    assert_eq!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated);
+    assert_eq!(
+        session_meta
+            .meta
+            .context_window
+            .map(|window| window.window_id),
+        Some(initial_window_id)
     );
     let buffered_idx = text
         .find("buffered-event")
@@ -455,6 +520,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         ),
@@ -732,6 +798,7 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": home.path().display().to_string(),
@@ -978,6 +1045,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("filesystem-sha".to_string()),
         git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
@@ -997,6 +1065,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("state-sha".to_string()),
         git_origin_url: Some("https://example.com/state.git".to_string()),
         source: Some(SessionSource::Exec),
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),
@@ -1152,6 +1221,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,

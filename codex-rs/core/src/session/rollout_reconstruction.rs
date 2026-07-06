@@ -1,5 +1,8 @@
 use super::*;
+use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
+use codex_protocol::protocol::SessionContextWindow;
+use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -8,7 +11,19 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
-    pub(super) window_id: u64,
+    pub(super) world_state_baseline: Option<WorldStateSnapshot>,
+    pub(super) window_number: u64,
+    pub(super) first_window_id: Option<Uuid>,
+    pub(super) previous_window_id: Option<Uuid>,
+    pub(super) window_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReconstructedWindow {
+    number: u64,
+    first_id: Option<Uuid>,
+    previous_id: Option<Uuid>,
+    id: Option<Uuid>,
 }
 
 #[derive(Debug, Default)]
@@ -33,8 +48,9 @@ struct ActiveReplaySegment<'a> {
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
+    world_state_replay: Vec<&'a RolloutItem>,
     base_replacement_history: Option<&'a [ResponseItem]>,
-    window_id: Option<u64>,
+    window: Option<ReconstructedWindow>,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -47,7 +63,8 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
-    window_id: &mut Option<u64>,
+    world_state_replay: &mut Vec<&'a RolloutItem>,
+    window: &mut Option<ReconstructedWindow>,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -60,6 +77,8 @@ fn finalize_active_segment<'a>(
         return;
     }
 
+    world_state_replay.extend(active_segment.world_state_replay);
+
     // A surviving replacement-history checkpoint is a complete history base. Once we
     // know the newest surviving one, older rollout items do not affect rebuilt history.
     if base_replacement_history.is_none()
@@ -68,8 +87,8 @@ fn finalize_active_segment<'a>(
         *base_replacement_history = Some(segment_base_replacement_history);
     }
 
-    if window_id.is_none() {
-        *window_id = active_segment.window_id;
+    if window.is_none() {
+        *window = active_segment.window;
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
@@ -101,10 +120,27 @@ impl Session {
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
+        let has_legacy_compaction_without_window_number =
+            rollout_items.iter().any(|item| {
+                matches!(item, RolloutItem::Compacted(compacted) if compacted.window_number.is_none())
+            });
+        let initial_window = if has_legacy_compaction_without_window_number {
+            None
+        } else {
+            rollout_items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(session_meta) => session_meta
+                    .meta
+                    .context_window
+                    .as_ref()
+                    .and_then(reconstructed_window_from_session_context_window),
+                _ => None,
+            })
+        };
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
-        let mut window_id = None;
+        let mut world_state_replay = Vec::new();
+        let mut window = None;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -120,8 +156,19 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
-                    if active_segment.window_id.is_none() {
-                        active_segment.window_id = compacted.window_id;
+                    active_segment.world_state_replay.push(item);
+                    if active_segment.window.is_none()
+                        && let Some(window_number) = compacted.window_number
+                    {
+                        active_segment.window = Some(ReconstructedWindow {
+                            number: window_number,
+                            first_id: compacted.first_window_id.as_deref().and_then(parse_uuid_v7),
+                            previous_id: compacted
+                                .previous_window_id
+                                .as_deref()
+                                .and_then(parse_uuid_v7),
+                            id: compacted.window_id.as_deref().and_then(parse_uuid_v7),
+                        });
                     }
                     // Looking backward, compaction clears any older baseline unless a newer
                     // `TurnContextItem` in this same segment has already re-established it.
@@ -196,6 +243,11 @@ impl Session {
                         }
                     }
                 }
+                RolloutItem::WorldState(_) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.world_state_replay.push(item);
+                }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     // `TurnStarted` is the oldest boundary of the active reverse segment.
                     if active_segment.as_ref().is_some_and(|active_segment| {
@@ -210,7 +262,8 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
-                            &mut window_id,
+                            &mut world_state_replay,
+                            &mut window,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -225,7 +278,9 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn = true;
                 }
-                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::EventMsg(_)
+                | RolloutItem::SessionMeta(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             }
 
             if base_replacement_history.is_some()
@@ -245,12 +300,13 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
-                &mut window_id,
+                &mut world_state_replay,
+                &mut window,
                 &mut pending_rollback_turns,
             );
         }
 
-        let fallback_window_id = u64::try_from(
+        let fallback_window_number = u64::try_from(
             rollout_items
                 .iter()
                 .filter(|item| matches!(item, RolloutItem::Compacted(_)))
@@ -281,6 +337,7 @@ impl Session {
                         turn_context.model_info.truncation_policy.into(),
                     );
                 }
+                RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
                         // This should actually never happen, because the reverse loop above (to build rollout_suffix)
@@ -310,6 +367,7 @@ impl Session {
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
+                | RolloutItem::WorldState(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
         }
@@ -326,11 +384,76 @@ impl Session {
             reference_context_item
         };
 
+        // Segments and their contents were collected newest-first; replay the surviving records
+        // chronologically so compaction resets and merge patches have their original meaning.
+        world_state_replay.reverse();
+        let mut world_state_baseline: Option<WorldStateSnapshot> = None;
+        for item in world_state_replay {
+            match item {
+                RolloutItem::Compacted(_) => world_state_baseline = None,
+                RolloutItem::WorldState(world_state) if world_state.full => {
+                    world_state_baseline = match serde_json::from_value(world_state.state.clone()) {
+                        Ok(snapshot) => Some(snapshot),
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to restore world-state snapshot");
+                            None
+                        }
+                    };
+                }
+                RolloutItem::WorldState(world_state) => {
+                    let Some(baseline) = world_state_baseline.as_mut() else {
+                        tracing::warn!("ignored world-state patch without a full snapshot");
+                        continue;
+                    };
+                    if let Err(err) = baseline.apply_merge_patch(&world_state.state) {
+                        tracing::warn!(%err, "failed to apply world-state patch");
+                        world_state_baseline = None;
+                    }
+                }
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => {
+                    unreachable!("only world-state replay items are collected")
+                }
+            }
+        }
+
+        let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
+            number: fallback_window_number,
+            first_id: None,
+            previous_id: None,
+            id: None,
+        });
         RolloutReconstruction {
-            history: history.raw_items().to_vec(),
+            history: history.into_raw_items(),
             previous_turn_settings,
             reference_context_item,
-            window_id: window_id.unwrap_or(fallback_window_id),
+            world_state_baseline,
+            window_number: window.number,
+            first_window_id: window.first_id,
+            previous_window_id: window.previous_id,
+            window_id: window.id,
         }
     }
+}
+
+fn parse_uuid_v7(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value)
+        .ok()
+        .filter(|uuid| uuid.get_version_num() == 7)
+}
+
+fn reconstructed_window_from_session_context_window(
+    context_window: &SessionContextWindow,
+) -> Option<ReconstructedWindow> {
+    let id = parse_uuid_v7(&context_window.window_id)?;
+    Some(ReconstructedWindow {
+        number: 0,
+        first_id: Some(id),
+        previous_id: None,
+        id: Some(id),
+    })
 }

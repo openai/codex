@@ -59,6 +59,7 @@ use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
+use codex_core_api::local_agent_graph_store_from_state_db;
 use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
@@ -133,7 +134,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         user_instructions_provider,
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
-        state_db,
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
@@ -197,6 +198,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         include_apps_instructions: false,
         include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
+        orchestrator_skills_enabled: false,
+        orchestrator_mcp_enabled: false,
         include_environment_context: false,
         compact_prompt: None,
         notify: None,
@@ -278,6 +281,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         background_terminal_max_timeout: 300_000,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        token_budget: None,
         rollout_budget: None,
         current_time_reminder: None,
         features: Default::default(),

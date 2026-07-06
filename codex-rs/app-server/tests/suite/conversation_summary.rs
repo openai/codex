@@ -121,15 +121,20 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
     let thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000125")?;
     store
         .create_thread(CreateThreadParams {
+            session_id: thread_id.into(),
             thread_id,
             extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Cli,
             thread_source: None,
+            originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
+            initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

@@ -57,7 +57,6 @@ mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
-mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
 #[cfg(not(target_os = "windows"))]
@@ -66,6 +65,8 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+#[cfg(unix)]
+mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;
 mod mcp_turn_metadata;
 mod model_overrides;
@@ -74,6 +75,8 @@ mod model_switching;
 mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
+mod multi_agent_mode;
+mod network_approval;
 mod openai_file_mcp;
 mod otel;
 mod override_updates;
@@ -103,6 +106,7 @@ mod review;
 mod rmcp_client;
 mod rollout_budget;
 mod rollout_list_find;
+mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;
 mod shell_command;
@@ -122,6 +126,7 @@ mod tools;
 mod truncation;
 mod turn_state;
 mod unified_exec;
+mod unified_exec_process_events;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;

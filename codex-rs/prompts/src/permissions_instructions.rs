@@ -18,12 +18,8 @@ const APPROVAL_POLICY_NEVER: &str =
     include_str!("../templates/permissions/approval_policy/never.md");
 const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
     include_str!("../templates/permissions/approval_policy/unless_trusted.md");
-const APPROVAL_POLICY_ON_FAILURE: &str =
-    include_str!("../templates/permissions/approval_policy/on_failure.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("../templates/permissions/approval_policy/on_request.md");
-const APPROVAL_POLICY_ON_REQUEST_AUTO_REVIEW: &str =
-    include_str!("../templates/permissions/approval_policy/on_request_auto_review.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
 const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
@@ -210,8 +206,6 @@ fn approval_text(
     let on_request_instructions = || {
         let on_request_rule = if exec_permission_approvals_enabled {
             APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string()
-        } else if approvals_reviewer == ApprovalsReviewer::AutoReview {
-            APPROVAL_POLICY_ON_REQUEST_AUTO_REVIEW.to_string()
         } else {
             APPROVAL_POLICY_ON_REQUEST_RULE.to_string()
         };
@@ -231,7 +225,6 @@ fn approval_text(
         AskForApproval::UnlessTrusted => {
             with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
         }
-        AskForApproval::OnFailure => with_request_permissions_tool(APPROVAL_POLICY_ON_FAILURE),
         AskForApproval::OnRequest => on_request_instructions(),
         AskForApproval::Granular(granular_config) => granular_instructions(
             granular_config,

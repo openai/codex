@@ -24,9 +24,11 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
+use codex_app_server_protocol::ModelsRequirements;
 use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
+use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_config::ConfigRequirementsToml;
@@ -295,15 +297,14 @@ impl ConfigRequestProcessor {
         &self,
         pending_changes: std::collections::BTreeMap<String, bool>,
     ) {
+        let plugins_manager = self.thread_manager.plugins_manager();
         for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
                 continue;
             };
-            let metadata = codex_core_plugins::loader::installed_plugin_telemetry_metadata(
-                self.config_manager.codex_home(),
-                &plugin_id,
-            )
-            .await;
+            let metadata = plugins_manager
+                .telemetry_metadata_for_installed_plugin(&plugin_id)
+                .await;
             if enabled {
                 self.analytics_events_client.track_plugin_enabled(metadata);
             } else {
@@ -376,6 +377,13 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        models: requirements.models.map(|models| ModelsRequirements {
+            new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
+                model: new_thread.model,
+                model_reasoning_effort: new_thread.model_reasoning_effort,
+                service_tier: new_thread.service_tier,
+            }),
+        }),
     }
 }
 
@@ -569,7 +577,10 @@ mod tests {
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::ModelsRequirementsToml;
+    use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
@@ -627,6 +638,31 @@ mod tests {
         });
 
         assert_eq!(mapped.allow_remote_control, Some(false));
+    }
+
+    #[test]
+    fn requirements_api_includes_new_thread_model_defaults() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            models: Some(ModelsRequirementsToml {
+                new_thread: Some(NewThreadModelDefaultsToml {
+                    model: Some("gpt-managed".to_string()),
+                    model_reasoning_effort: Some(ReasoningEffort::Medium),
+                    service_tier: Some("fast".to_string()),
+                }),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        let defaults = mapped
+            .models
+            .and_then(|models| models.new_thread)
+            .expect("new-thread defaults");
+        assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
+        assert_eq!(
+            defaults.model_reasoning_effort,
+            Some(ReasoningEffort::Medium)
+        );
+        assert_eq!(defaults.service_tier.as_deref(), Some("fast"));
     }
 
     #[test]

@@ -1,13 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::CellId;
 use super::CodeModeNestedToolCall;
-use super::CodeModeService;
 use super::CodeModeSessionDelegate;
+use super::InProcessCodeModeSession;
 use super::NotificationFuture;
-use super::ObserveMode;
 use super::RuntimeResponse;
 use super::ToolInvocationFuture;
 use super::WaitOutcome;
@@ -88,7 +86,7 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
-async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeResponse {
+async fn execute(service: &InProcessCodeModeSession, request: ExecuteRequest) -> RuntimeResponse {
     service
         .execute(request)
         .await
@@ -100,7 +98,7 @@ async fn execute(service: &CodeModeService, request: ExecuteRequest) -> RuntimeR
 
 #[tokio::test]
 async fn synchronous_exit_returns_successfully() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -126,8 +124,8 @@ async fn synchronous_exit_returns_successfully() {
 
 #[tokio::test]
 async fn stored_values_are_shared_between_cells_but_not_sessions() {
-    let first_session = CodeModeService::new();
-    let second_session = CodeModeService::new();
+    let first_session = InProcessCodeModeSession::new();
+    let second_session = InProcessCodeModeSession::new();
 
     let write_response = execute(
         &first_session,
@@ -190,7 +188,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
 
 #[tokio::test]
 async fn shutdown_interrupts_cpu_bound_cells() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let cell = service
         .execute(ExecuteRequest {
@@ -215,26 +213,21 @@ async fn shutdown_interrupts_cpu_bound_cells() {
 
 #[tokio::test]
 async fn start_cell_rejects_new_cell_after_shutdown_begins() {
-    let service = CodeModeService::new();
-    service.inner.shutting_down.store(true, Ordering::Release);
+    let service = InProcessCodeModeSession::new();
+    service.shutdown().await.unwrap();
 
     let error = service
-        .start_cell(
-            cell_id("late-cell"),
-            execute_request(""),
-            ObserveMode::YieldAfter(Duration::from_millis(1)),
-        )
+        .execute(execute_request("text('late');"))
         .await
         .err()
         .unwrap();
 
     assert_eq!(error, "code mode session is shutting down".to_string());
-    assert!(service.inner.cells.lock().await.is_empty());
 }
 
 #[tokio::test]
 async fn execute_to_pending_returns_completed_for_synchronous_results() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = service
         .execute_to_pending(ExecuteRequest {
@@ -259,7 +252,7 @@ async fn execute_to_pending_returns_completed_for_synchronous_results() {
 
 #[tokio::test]
 async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = tokio::time::timeout(
         Duration::from_secs(1),
@@ -297,7 +290,7 @@ async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
 
 #[tokio::test]
 async fn execute_to_pending_identifies_tool_calls_in_paused_frontier() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = service
         .execute_to_pending(ExecuteRequest {
@@ -337,7 +330,7 @@ await Promise.all([
 
 #[tokio::test]
 async fn execute_to_pending_excludes_delayed_timeout_tool_calls_until_wait() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let initial_response = service
         .execute_to_pending(ExecuteRequest {
@@ -367,7 +360,7 @@ await Promise.all([
         }
     );
 
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     let resumed_response = tokio::time::timeout(
         Duration::from_secs(1),
@@ -402,7 +395,7 @@ await Promise.all([
 #[tokio::test]
 async fn wait_to_pending_returns_after_resumed_runtime_becomes_quiescent_again() {
     let delegate = Arc::new(ReleasableToolDelegate::default());
-    let service = CodeModeService::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
 
     let initial_response = service
         .execute_to_pending(ExecuteRequest {
@@ -465,7 +458,7 @@ await new Promise(() => {});
 #[tokio::test]
 async fn wait_to_pending_returns_completed_after_resumed_runtime_finishes() {
     let delegate = Arc::new(ReleasableToolDelegate::default());
-    let service = CodeModeService::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
 
     let initial_response = service
         .execute_to_pending(ExecuteRequest {
@@ -518,7 +511,7 @@ text("done");
 
 #[tokio::test]
 async fn v8_console_is_not_exposed_on_global_this() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -544,7 +537,7 @@ async fn v8_console_is_not_exposed_on_global_this() {
 
 #[tokio::test]
 async fn date_locale_string_formats_with_icu_data() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -584,7 +577,7 @@ text(value);
 
 #[tokio::test]
 async fn intl_date_time_format_formats_with_icu_data() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -623,7 +616,7 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
 
 #[tokio::test]
 async fn output_helpers_return_undefined() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -666,7 +659,7 @@ text(JSON.stringify(returnsUndefined));
 
 #[tokio::test]
 async fn image_helper_accepts_raw_mcp_image_block_with_original_detail() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
             &service,
@@ -701,7 +694,7 @@ image({
 
 #[tokio::test]
 async fn generated_image_helper_appends_image_and_output_hint() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -739,7 +732,7 @@ generatedImage({
 
 #[tokio::test]
 async fn image_helper_second_arg_overrides_explicit_object_detail() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -775,7 +768,7 @@ image(
 
 #[tokio::test]
 async fn image_helper_second_arg_overrides_raw_mcp_image_detail() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
             &service,
@@ -813,7 +806,7 @@ image(
 
 #[tokio::test]
 async fn image_helper_accepts_low_detail() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -854,7 +847,7 @@ async fn image_helpers_reject_remote_urls() {
             format!("image({image_url:?});"),
             format!("generatedImage({{ image_url: {image_url:?} }});"),
         ] {
-            let service = CodeModeService::new();
+            let service = InProcessCodeModeSession::new();
 
             let response = execute(
                 &service,
@@ -882,7 +875,7 @@ async fn image_helpers_reject_remote_urls() {
 
 #[tokio::test]
 async fn image_helper_rejects_unsupported_detail() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
         &service,
@@ -912,7 +905,7 @@ image({
 
 #[tokio::test]
 async fn image_helper_rejects_raw_mcp_result_container() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = execute(
             &service,
@@ -951,7 +944,7 @@ image({
 
 #[tokio::test]
 async fn wait_reports_missing_cell_separately_from_runtime_results() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
 
     let response = service
         .wait(WaitRequest {

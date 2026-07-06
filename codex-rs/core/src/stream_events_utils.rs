@@ -321,7 +321,7 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
-async fn apply_turn_item_contributors(
+pub(crate) async fn apply_turn_item_contributors(
     sess: &Session,
     turn_store: &ExtensionData,
     item: &mut TurnItem,
@@ -627,7 +627,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 id: None,
                 call_id: call_id.clone(),
                 output: output.clone(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             })
         }
         ResponseInputItem::CustomToolCallOutput {
@@ -639,7 +639,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
@@ -647,7 +647,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 id: None,
                 call_id: call_id.clone(),
                 output,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             })
         }
         ResponseInputItem::ToolSearchOutput {
@@ -661,7 +661,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             status: status.clone(),
             execution: execution.clone(),
             tools: tools.clone(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }),
         _ => None,
     }

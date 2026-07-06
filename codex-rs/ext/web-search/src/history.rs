@@ -29,12 +29,14 @@ pub(crate) fn recent_input(items: &[ResponseItem]) -> Option<SearchInput> {
 fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
     match item {
         ResponseItem::Message { role, .. } if role == ASSISTANT_ROLE => {
-            messages.push(item.clone());
+            let mut message = item.clone();
+            message.set_id(/*new_id*/ None);
+            messages.push(message);
         }
         ResponseItem::AgentMessage {
             author,
             content,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
             ..
         } => {
             if let Some(text) = plaintext_agent_message_content(content) {
@@ -45,16 +47,16 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
                         text: format!("Agent message from {author}:\n{text}"),
                     }],
                     phase: None,
-                    metadata: metadata.clone(),
+                    internal_chat_message_metadata_passthrough: metadata.clone(),
                 });
             }
         }
         ResponseItem::Message {
-            id,
+            id: _,
             role,
             content,
             phase,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
         } if role == USER_ROLE
             && matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_))) =>
         {
@@ -65,11 +67,11 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
                 .collect::<Vec<_>>();
             if !content.is_empty() {
                 messages.push(ResponseItem::Message {
-                    id: id.clone(),
+                    id: None,
                     role: role.clone(),
                     content,
                     phase: phase.clone(),
-                    metadata: metadata.clone(),
+                    internal_chat_message_metadata_passthrough: metadata.clone(),
                 });
             }
         }
@@ -102,26 +104,30 @@ mod tests {
                 }
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
     #[test]
     fn keeps_current_user_and_previous_visible_turn() {
+        let mut previous_user = message(USER_ROLE, "previous user");
+        previous_user.set_id(Some("msg_previous_user".to_string()));
+        let mut previous_assistant = message(ASSISTANT_ROLE, "previous assistant");
+        previous_assistant.set_id(Some("msg_previous_assistant".to_string()));
         let items = vec![
             message("system", "system"),
             message(USER_ROLE, "old user"),
             message(ASSISTANT_ROLE, "old assistant"),
-            message(USER_ROLE, "previous user"),
+            previous_user,
             ResponseItem::FunctionCall {
                 id: None,
                 name: "tool".to_string(),
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
-            message(ASSISTANT_ROLE, "previous assistant"),
+            previous_assistant,
             message("developer", "developer"),
             message(USER_ROLE, "current user"),
             message(ASSISTANT_ROLE, "current commentary"),
@@ -152,7 +158,7 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let items = vec![
             previous_user,

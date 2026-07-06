@@ -10,13 +10,11 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
-use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
-use tokio::time::Duration;
 
 struct MockExecProcess {
     process_id: ProcessId,
@@ -40,6 +38,7 @@ impl MockExecProcess {
                 exit_code: None,
                 closed: false,
                 failure: None,
+                sandbox_denied: false,
             }))
     }
 
@@ -103,7 +102,7 @@ async fn remote_process(
         }),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started)
         .await
         .expect("remote process should start")
 }
@@ -172,39 +171,4 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
         .expect("terminate should succeed");
 
     assert!(process.has_exited());
-}
-
-#[tokio::test]
-async fn remote_process_waits_for_early_exit_event() {
-    let (wake_tx, _wake_rx) = watch::channel(0);
-    let started = StartedExecProcess {
-        process: Arc::new(MockExecProcess {
-            process_id: "test-process".to_string().into(),
-            write_response: WriteResponse {
-                status: WriteStatus::Accepted,
-            },
-            read_responses: Mutex::new(VecDeque::from([ReadResponse {
-                chunks: Vec::new(),
-                next_seq: 2,
-                exited: true,
-                exit_code: Some(17),
-                closed: true,
-                failure: None,
-            }])),
-            terminate_error: None,
-            wake_tx: wake_tx.clone(),
-        }),
-    };
-
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let _ = wake_tx.send(1);
-    });
-
-    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
-        .await
-        .expect("remote process should observe early exit");
-
-    assert!(process.has_exited());
-    assert_eq!(process.exit_code(), Some(17));
 }

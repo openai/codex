@@ -14,6 +14,15 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
     chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
 
+fn take_workspace_headline_request_id(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> u64 {
+    match rx.try_recv() {
+        Ok(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id }) => request_id,
+        event => panic!("expected workspace headline refresh, got {event:?}"),
+    }
+}
+
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
@@ -45,8 +54,8 @@ async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
-    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(rendered.contains("This content can't be shown"));
+    assert!(rendered.contains("extra caution with cybersecurity requests"));
     assert!(!rendered.contains("server fallback message"));
 }
 
@@ -1001,6 +1010,82 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 }
 
 #[tokio::test]
+async fn rate_limit_usage_warnings_show_when_workspace_credits_zero_balance() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
+    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: Some("0".to_string()),
+    });
+
+    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+
+    assert!(
+        !drain_insert_history(&mut rx).is_empty(),
+        "zero-balance workspace credits should not suppress proactive usage warnings"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_skip_when_workspace_credits_are_available() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
+    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: Some("25.00".to_string()),
+    });
+
+    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace credits should suppress proactive usage warnings"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert_eq!(
+        chat.rate_limit_warnings.primary_index, 0,
+        "suppressed warnings should not consume warning thresholds"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_skip_with_unlimited_workspace_credits() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
+    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: true,
+        balance: None,
+    });
+
+    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "unlimited workspace credits should suppress proactive usage warnings"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
@@ -1021,6 +1106,39 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Shown
     ));
+}
+
+#[tokio::test]
+async fn account_update_clears_derived_usage_limit_state_and_prompt() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    set_chatgpt_auth(&mut chat);
+    let mut limits = snapshot(/*percent*/ 95.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(chat.rate_limit_warnings.primary_index > 0);
+    assert!(chat.codex_rate_limit_reached_type.is_some());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert_eq!(chat.rate_limit_warnings.secondary_index, 0);
+    assert_eq!(chat.codex_rate_limit_reached_type, None);
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert!(chat.rate_limit_snapshots_by_limit_id.is_empty());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
 }
 
 #[tokio::test]
@@ -2038,6 +2156,22 @@ async fn warning_event_adds_warning_history_cell() {
 }
 
 #[tokio::test]
+async fn unsupported_code_mode_warning_renders_as_warning_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_warning(
+        &mut chat,
+        "Code Mode is enabled in configuration, but model `gpt-5.4` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    insta::assert_snapshot!(
+        "unsupported_code_mode_warning",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
 async fn repeated_model_metadata_warning_is_hidden_for_same_slug() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let warning = "Model metadata for `unknown-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
@@ -2138,6 +2272,192 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-usage should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_renders_cached_value() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
+
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Workspace maintenance starts at 5pm".to_string())
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_workspace_headline_omits_when_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec![
+        "workspace-headline".to_string(),
+        "run-state".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Ready".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace-headline should be omitted without warning when no headline is cached"
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_feature_disabled_result() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old headline".to_string());
+    let request_id = 3;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+
+    assert_eq!(status_line_text(&chat), None);
+    assert!(chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn workspace_headline_update_applies_available_headline() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    let request_id = 4;
+    chat.status_line_workspace_headline_pending_request_id = Some(request_id);
+
+    assert!(chat.set_status_line_workspace_headline(
+        request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Fresh workspace headline".to_string(),
+            ))
+        ),
+    ));
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Fresh workspace headline".to_string())
+    );
+    assert!(!chat.status_line_workspace_messages_disabled);
+}
+
+#[tokio::test]
+async fn account_update_clears_workspace_headline_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+    chat.status_line_workspace_headline = Some("Old workspace headline".to_string());
+    chat.status_line_workspace_headline_pending_request_id = Some(5);
+    chat.status_line_workspace_headline_last_requested_at = Some(Instant::now());
+    chat.status_line_workspace_messages_disabled = true;
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ false,
+    );
+
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_headline_last_requested_at,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, None, None, false)
+    );
+}
+
+#[tokio::test]
+async fn workspace_headline_fetch_allows_backend_auth_without_chatgpt_account() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+
+    let request_id = take_workspace_headline_request_id(&mut rx);
+    assert_eq!(
+        chat.status_line_workspace_headline_pending_request_id,
+        Some(request_id)
+    );
+}
+
+#[tokio::test]
+async fn account_update_discards_stale_workspace_headline_results() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["workspace-headline".to_string()]);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("first@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let stale_request_id = take_workspace_headline_request_id(&mut rx);
+
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("second@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    let current_request_id = take_workspace_headline_request_id(&mut rx);
+
+    assert_ne!(stale_request_id, current_request_id);
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "First account headline".to_string(),
+            ))
+        ),
+    ));
+    assert_eq!(
+        (
+            chat.status_line_workspace_headline.clone(),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (None, Some(current_request_id), false)
+    );
+
+    assert!(chat.set_status_line_workspace_headline(
+        current_request_id,
+        Ok(
+            crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(Some(
+                "Second account headline".to_string(),
+            ))
+        ),
+    ));
+    assert!(!chat.set_status_line_workspace_headline(
+        stale_request_id,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+    assert_eq!(
+        (
+            status_line_text(&chat),
+            chat.status_line_workspace_headline_pending_request_id,
+            chat.status_line_workspace_messages_disabled,
+        ),
+        (Some("Second account headline".to_string()), None, false,)
     );
 }
 

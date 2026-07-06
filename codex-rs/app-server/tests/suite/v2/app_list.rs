@@ -27,7 +27,6 @@ use codex_app_server_protocol::AppReview;
 use codex_app_server_protocol::AppScreenshot;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
-use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -38,6 +37,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::save_auth;
+use codex_protocol::auth::AuthMode;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -97,6 +97,8 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
         description: Some("Beta connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -162,6 +164,8 @@ async fn list_apps_returns_empty_when_workspace_codex_plugins_disabled() -> Resu
         description: Some("Beta connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -268,6 +272,8 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         description: Some("Beta connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -292,11 +298,11 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let start_request = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -372,6 +378,8 @@ async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
         description: Some("Formerly blocked connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -439,6 +447,8 @@ async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
         description: Some("Beta connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -549,6 +559,8 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: alpha_branding.clone(),
             app_metadata: alpha_app_metadata.clone(),
@@ -564,6 +576,8 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -613,6 +627,8 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -633,6 +649,8 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -648,6 +666,8 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: alpha_branding,
             app_metadata: alpha_app_metadata,
@@ -689,6 +709,8 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -704,6 +726,8 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -754,6 +778,8 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -769,6 +795,8 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -813,6 +841,8 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         description: Some("Alpha connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -869,6 +899,8 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         description: Some("Alpha connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -904,6 +936,8 @@ async fn list_apps_paginates_results() -> Result<()> {
             description: Some("Alpha connector".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -919,6 +953,8 @@ async fn list_apps_paginates_results() -> Result<()> {
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -977,6 +1013,8 @@ async fn list_apps_paginates_results() -> Result<()> {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1021,6 +1059,8 @@ async fn list_apps_paginates_results() -> Result<()> {
         description: Some("Alpha connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1046,6 +1086,8 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         description: Some("Beta connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1151,6 +1193,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             description: Some("Alpha v1".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1166,6 +1210,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             description: Some("Beta v1".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1216,6 +1262,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1237,6 +1285,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 description: Some("Beta v1".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -1252,6 +1302,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 description: Some("Alpha v1".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -1282,6 +1334,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         description: Some("Alpha v2".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1312,6 +1366,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 description: Some("Beta v1".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -1327,6 +1383,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 description: Some("Alpha v1".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -1355,6 +1413,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         description: Some("Alpha v2".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -1473,7 +1533,7 @@ impl ServerHandler for AppListMcpServer {
     }
 }
 
-async fn start_apps_server_with_delays(
+pub(super) async fn start_apps_server_with_delays(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
     directory_delay: Duration,
@@ -1633,7 +1693,7 @@ async fn list_directory_connectors(
     }
 }
 
-fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
+pub(super) fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
     let schema: JsonObject = serde_json::from_value(json!({
         "type": "object",
         "additionalProperties": false

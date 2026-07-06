@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import tomllib
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -111,9 +112,9 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
         "fmt_comment": (
             "# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts."
         ),
-        "fmt_commands": ["{{ python }} ../scripts/format.py"],
+        "fmt_commands": ["@{{ python }} ../scripts/format.py"],
         "fmt_check_comment": "# Check formatting without modifying files.",
-        "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
+        "fmt_check_commands": ["@{{ python }} ../scripts/format.py --check"],
     }
 
     assert actual == expected, (
@@ -244,6 +245,75 @@ def test_root_format_driver_covers_all_formatter_groups(
     ]
 
 
+def test_root_format_driver_discards_successful_command_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _load_root_format_script_module()
+    processes = iter(
+        (
+            script.subprocess.CompletedProcess(("first",), 0, "routine output\n"),
+            script.subprocess.CompletedProcess(("second",), 2, "failure output\n"),
+        )
+    )
+    monkeypatch.setattr(script.subprocess, "run", lambda *args, **kwargs: next(processes))
+    group = script.FormatterGroup(
+        "Test",
+        (script.Command(("first",)), script.Command(("second",))),
+    )
+
+    assert script.run_formatter_group(group) == script.FormatterResult(
+        "Test",
+        "$ second\nfailure output\n",
+        2,
+    )
+
+
+def test_root_format_driver_is_silent_when_all_formatters_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (script.FormatterGroup("Quiet", ()),)
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+    monkeypatch.setattr(
+        script,
+        "run_formatter_group",
+        lambda group: script.FormatterResult(group.name, "hidden output\n", 0),
+    )
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 0
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_root_format_driver_reports_only_failed_formatters(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (
+        script.FormatterGroup("Quiet", ()),
+        script.FormatterGroup("Broken", ()),
+    )
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+
+    def fake_run(group):
+        if group.name == "Broken":
+            return script.FormatterResult(group.name, "$ broken\nfailure output\n", 2)
+        return script.FormatterResult(group.name, "hidden output\n", 0)
+
+    monkeypatch.setattr(script, "run_formatter_group", fake_run)
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "==> Broken formatter failed\n$ broken\nfailure output\nFormatting failed: Broken\n"
+    )
+
+
 def test_generate_types_wires_all_generation_steps() -> None:
     """The type generation command should refresh every schema-derived artifact."""
     source = (ROOT / "scripts" / "update_sdk_artifacts.py").read_text()
@@ -306,6 +376,32 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     ]
 
 
+def test_schema_normalization_makes_chatgpt_account_email_nullable() -> None:
+    script = _load_update_script_module()
+    schema = {
+        "definitions": {
+            "Account": {
+                "oneOf": [
+                    {
+                        "properties": {
+                            "email": {"type": "string"},
+                            "type": {"enum": ["chatgpt"], "type": "string"},
+                        },
+                        "required": ["email", "type"],
+                        "type": "object",
+                    }
+                ]
+            }
+        }
+    }
+
+    script._make_chatgpt_account_email_nullable(schema)
+
+    chatgpt_account = schema["definitions"]["Account"]["oneOf"][0]
+    assert chatgpt_account["properties"]["email"]["type"] == ["string", "null"]
+    assert "email" in chatgpt_account["required"]
+
+
 def test_python_codegen_schema_annotation_adds_stable_variant_titles(
     tmp_path: Path,
 ) -> None:
@@ -348,6 +444,17 @@ def test_generate_v2_all_uses_titles_for_generated_names() -> None:
     assert "--use-annotated" in source
     assert "--formatters" in source
     assert "ruff-format" in source
+
+
+def test_generated_chatgpt_account_email_is_required_nullable() -> None:
+    from openai_codex.generated.v2_all import ChatgptAccount
+
+    account = ChatgptAccount.model_validate({"email": None, "planType": "pro", "type": "chatgpt"})
+    assert account.email is None
+    assert ChatgptAccount.model_fields["email"].is_required()
+
+    with pytest.raises(ValidationError):
+        ChatgptAccount.model_validate({"planType": "pro", "type": "chatgpt"})
 
 
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:

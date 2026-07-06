@@ -6,12 +6,12 @@ expression: popup
   Browse plugins from available marketplaces.
   Installed 1 of 4 available plugins.
 
-  [All Plugins]  Installed (1)  OpenAI Curated  Repo Marketplace  Add Marketplace
+  [All Plugins]  Installed (1)  OpenAI Curated  Workspace  Repo Marketplace  Add Marketplace
 
   Type to search plugins
-› [ ] Alpha Sync          Disabled    Space to enable; Enter view details.
-  [-] Bravo Search        Available · ChatGPT Marketplace · Search docs and tickets.
-  [-] Hidden Repo Plugin  Available · Repo Marketplace · Should not be shown in /plugins.
-  [-] Starter             Available · ChatGPT Marketplace · Included by default.
+› [ ] Alpha Sync          Disabled         Space to enable; Enter view details.
+  [-] Bravo Search        Available      · OpenAI Curated · Search docs and tickets.
+  [-] Hidden Repo Plugin  Available      · Repo Marketplace · Should not be shown in /plugins.
+  [-] Starter             Admin assigned · OpenAI Curated · Included by default.
 
   space enable/disable · ←/→ select marketplace · enter view details · esc close

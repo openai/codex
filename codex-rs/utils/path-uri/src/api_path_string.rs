@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
+use std::path::Path;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -18,10 +19,10 @@ use ts_rs::TS;
 ///
 /// When converting from [`PathUri`], "native" refers to the supplied
 /// [`PathConvention`], which may be foreign to the operating system running
-/// this process. The inner string is private so path-producing code must convert
-/// from [`AbsolutePathBuf`] or use [`Self::from_path_uri`] instead of bypassing
-/// the intended conversion boundary. Non-UTF-8 paths are converted to UTF-8
-/// lossily because this API value is serialized as a JSON string.
+/// this process. The inner string is private so path-producing code must use a
+/// path conversion method instead of bypassing the intended conversion
+/// boundary. Non-UTF-8 paths are converted to UTF-8 lossily because this API
+/// value is serialized as a JSON string.
 ///
 /// Deserialization accepts any UTF-8 string without interpreting or validating
 /// it. That unrestricted construction path is intentionally available only to
@@ -35,9 +36,14 @@ use ts_rs::TS;
 pub struct LegacyAppPathString(String);
 
 impl LegacyAppPathString {
+    /// Preserves path text without interpreting it using the current host.
+    pub fn from_path(path: &Path) -> Self {
+        Self(path.to_string_lossy().into_owned())
+    }
+
     /// Renders an absolute path using the current host's path convention.
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
-        Self(path.to_string_lossy().into_owned())
+        Self::from_path(path.as_path())
     }
 
     /// Renders a path URI using the requested native path convention.
@@ -78,6 +84,17 @@ impl LegacyAppPathString {
     /// Parses this API string as an absolute path using the convention inferred from its spelling.
     pub fn to_inferred_path_uri(&self) -> Option<PathUri> {
         PathUri::try_from(self.clone()).ok()
+    }
+
+    /// Renders this API path for display in a user interface.
+    ///
+    /// Absolute paths are normalized using their inferred native convention.
+    /// Strings that cannot be interpreted as absolute paths retain their raw
+    /// API spelling.
+    pub fn render_for_ui(&self) -> String {
+        self.to_inferred_path_uri()
+            .map(|path| path.inferred_native_path_string())
+            .unwrap_or_else(|| self.0.clone())
     }
 
     /// Parses this API string as a host-native absolute path.

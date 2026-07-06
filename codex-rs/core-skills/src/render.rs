@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Component;
@@ -16,6 +17,8 @@ use codex_utils_output_truncation::approx_token_count;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
+const MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS: usize = 1_024;
+const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
@@ -23,7 +26,7 @@ pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT: &str = "Skill descri
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator resource` locators are opaque non-filesystem resources, and `custom resource` locators use their provider's access mechanism.";
-pub const SKILLS_INTRO_WITH_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
+const SKILLS_INTRO_WITH_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
 pub const SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS: &str = r###"- Discovery: The list above is the skills available in this session (name + description + source locator). `file` entries live on the host filesystem, `environment resource` entries are owned by their execution environment, `orchestrator resource` entries must be accessed through `skills.list` and `skills.read`, and `custom resource` entries use their provider's access mechanism.
 - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
 - Missing/blocked: If a named skill isn't in the list or its source can't be read, say so briefly and continue with the best fallback.
@@ -71,14 +74,6 @@ pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[
     }
     lines.push("### Available skills".to_string());
     lines.extend(skill_lines.iter().cloned());
-
-    lines.push("### How to use skills".to_string());
-    let how_to_use = if skill_root_lines.is_empty() {
-        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-    } else {
-        SKILLS_HOW_TO_USE_WITH_ALIASES
-    };
-    lines.push(how_to_use.to_string());
 
     format!("\n{}\n", lines.join("\n"))
 }
@@ -446,7 +441,7 @@ impl SkillRenderReport {
 
 struct SkillLine<'a> {
     name: &'a str,
-    description: &'a str,
+    description: Cow<'a, str>,
     path: String,
 }
 
@@ -485,9 +480,10 @@ impl<'a> SkillLine<'a> {
     }
 
     fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
+        let description = truncate_default_context_skill_description(skill.description.as_str());
         Self {
             name: skill.name.as_str(),
-            description: skill.description.as_str(),
+            description,
             path,
         }
     }
@@ -505,7 +501,7 @@ impl<'a> SkillLine<'a> {
     }
 
     fn render_full(&self) -> String {
-        self.render_with_description(self.description)
+        self.render_with_description(self.description.as_ref())
     }
 
     fn render_minimum(&self) -> String {
@@ -524,7 +520,7 @@ impl<'a> SkillLine<'a> {
             format!("- {}: (file: {})", self.name, self.path)
         } else {
             let end = self.rendered_description_prefix_len(description_chars);
-            let description = &self.description[..end];
+            let description = &self.description.as_ref()[..end];
             format!("- {}: {} (file: {})", self.name, description, self.path)
         }
     }
@@ -536,6 +532,26 @@ impl<'a> SkillLine<'a> {
             format!("- {}: {} (file: {})", self.name, description, self.path)
         }
     }
+}
+
+fn truncate_default_context_skill_description(description: &str) -> Cow<'_, str> {
+    if description
+        .char_indices()
+        .nth(MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS)
+        .is_none()
+    {
+        return Cow::Borrowed(description);
+    }
+
+    let prefix_chars = MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS
+        .saturating_sub(TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count());
+    let prefix_end = description
+        .char_indices()
+        .nth(prefix_chars)
+        .map_or(description.len(), |(index, _)| index);
+    let mut truncated = description[..prefix_end].to_string();
+    truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
+    Cow::Owned(truncated)
 }
 
 impl<'a> DescriptionBudgetLine<'a> {
@@ -1027,6 +1043,28 @@ mod tests {
         assert_eq!(
             default_skill_metadata_budget(Some(-1)),
             SkillMetadataBudget::Characters(DEFAULT_SKILL_METADATA_CHAR_BUDGET)
+        );
+    }
+
+    #[test]
+    fn default_context_caps_descriptions_without_mutating_metadata() {
+        let description = "\u{1F4A1}".repeat(MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS + 1);
+        let skill = make_skill_with_description("long-skill", SkillScope::Repo, &description);
+        let expected_description = "\u{1F4A1}".repeat(
+            MAX_DEFAULT_CONTEXT_SKILL_DESCRIPTION_CHARS
+                - TRUNCATED_SKILL_DESCRIPTION_SUFFIX.chars().count(),
+        ) + TRUNCATED_SKILL_DESCRIPTION_SUFFIX;
+
+        let rendered = build_available_skills_from_metadata(
+            std::slice::from_ref(&skill),
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("skill should render");
+
+        assert_eq!(skill.description, description);
+        assert_eq!(
+            rendered.skill_lines,
+            vec![expected_skill_line(&skill, &expected_description)]
         );
     }
 

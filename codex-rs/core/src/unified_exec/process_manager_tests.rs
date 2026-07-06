@@ -1,5 +1,6 @@
 use super::*;
 use crate::unified_exec::clamp_yield_time;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -41,12 +42,20 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
         ("HOME".to_string(), "/client-home".to_string()),
         ("PATH".to_string(), "/client-path".to_string()),
         ("SHELL_SET".to_string(), "policy".to_string()),
+        (
+            CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+            "current-profile".to_string(),
+        ),
     ]);
     let request_env = HashMap::from([
         ("HOME".to_string(), "/client-home".to_string()),
         ("PATH".to_string(), "/sandbox-path".to_string()),
         ("SHELL_SET".to_string(), "policy".to_string()),
         ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        (
+            CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+            "current-profile".to_string(),
+        ),
         (
             "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
             "1".to_string(),
@@ -59,10 +68,39 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
             ("PATH".to_string(), "/sandbox-path".to_string()),
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
             (
+                CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+                "current-profile".to_string(),
+            ),
+            (
                 "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
                 "1".to_string()
             ),
         ])
+    );
+}
+
+#[test]
+fn exec_env_policy_excludes_runtime_permission_profile() {
+    let policy = ShellEnvironmentPolicy {
+        r#set: HashMap::from([
+            (
+                "codex_permission_profile".to_string(),
+                "stale-profile".to_string(),
+            ),
+            ("KEEP".to_string(), "value".to_string()),
+        ]),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        exec_env_policy_from_shell_policy(&policy),
+        codex_exec_server::ExecEnvPolicy {
+            inherit: policy.inherit,
+            ignore_default_excludes: policy.ignore_default_excludes,
+            exclude: vec![CODEX_PERMISSION_PROFILE_ENV_VAR.to_string()],
+            r#set: HashMap::from([("KEEP".to_string(), "value".to_string())]),
+            include_only: Vec::new(),
+        }
     );
 }
 
@@ -76,13 +114,26 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
     let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-    let request = ExecRequest {
+    let managed_network = ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123],
+        allow_local_binding: false,
+    };
+    let mut request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
         cwd: cwd.clone().into(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:43123".to_string(),
+            ),
+            ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+            (
+                "SSL_CERT_FILE".to_string(),
+                "/client/custom-ca.pem".to_string(),
+            ),
         ]),
         exec_server_env_config: Some(ExecServerEnvConfig {
             policy: codex_exec_server::ExecEnvPolicy {
@@ -95,6 +146,15 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
             local_policy_env: HashMap::from([
                 ("HOME".to_string(), "/client-home".to_string()),
                 ("PATH".to_string(), "/client-path".to_string()),
+                (
+                    "HTTP_PROXY".to_string(),
+                    "http://127.0.0.1:43123".to_string(),
+                ),
+                ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+                (
+                    "SSL_CERT_FILE".to_string(),
+                    "/client/custom-ca.pem".to_string(),
+                ),
             ]),
         }),
         network: None,
@@ -106,11 +166,14 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         windows_sandbox_workspace_roots: vec![cwd],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
-        permission_profile,
+        permission_profile: permission_profile.clone(),
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
+        exec_server_sandbox: None,
+        exec_server_enforce_managed_network: true,
+        exec_server_managed_network: Some(managed_network.clone()),
     };
 
     let params =
@@ -118,19 +181,31 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
 
     assert_eq!(params.process_id.as_str(), "123");
     assert_eq!(params.cwd, request.cwd);
+    assert!(params.enforce_managed_network);
+    assert_eq!(params.managed_network, Some(managed_network));
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
         HashMap::from([
             ("PATH".to_string(), "/sandbox-path".to_string()),
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:43123".to_string(),
+            ),
+            ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string(),),
         ])
     );
-}
-
-#[test]
-fn exec_server_process_id_matches_unified_exec_process_id() {
-    assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
+    request.exec_server_sandbox = Some(
+        codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
+    );
+    let first =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    let second =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    assert!(first.process_id.as_str().starts_with("123-"));
+    assert!(second.process_id.as_str().starts_with("123-"));
+    assert_ne!(first.process_id, second.process_id);
 }
 
 #[cfg(windows)]

@@ -7,6 +7,9 @@ use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::runtime::network_proxy_state_for_policy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use rama_core::extensions::Extensions;
+use rama_core::extensions::ExtensionsMut;
+use rama_core::extensions::ExtensionsRef;
 use rama_http::Body;
 use rama_http::HeaderMap;
 use rama_http::HeaderValue;
@@ -14,7 +17,90 @@ use rama_http::Method;
 use rama_http::Request;
 use rama_http::StatusCode;
 use rama_http::header::HeaderName;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
 use tempfile::NamedTempFile;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWrite;
+use tokio::io::AsyncWriteExt;
+use tokio::io::DuplexStream;
+use tokio::io::ReadBuf;
+use tokio::time::Duration;
+
+struct TestStream {
+    inner: DuplexStream,
+    extensions: Extensions,
+}
+
+impl TestStream {
+    fn new(inner: DuplexStream) -> Self {
+        Self {
+            inner,
+            extensions: Extensions::new(),
+        }
+    }
+}
+
+impl AsyncRead for TestStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TestStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+impl ExtensionsRef for TestStream {
+    fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+}
+
+impl ExtensionsMut for TestStream {
+    fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.extensions
+    }
+}
+
+#[tokio::test]
+async fn tls_prefix_detection_accumulates_fragmented_reads() {
+    let tls_prefix = [0x16, 0x03, 0x03, 0x00, 0x80];
+    let (mut writer, reader) = tokio::io::duplex(16);
+    let writer_task = tokio::spawn(async move {
+        writer.write_all(&tls_prefix[..1]).await.unwrap();
+        tokio::time::sleep(TLS_PREFIX_FIRST_BYTE_TIMEOUT + Duration::from_millis(50)).await;
+        writer.write_all(&tls_prefix[1..]).await.unwrap();
+    });
+
+    let (is_tls, mut stream) = peek_tls_prefix(TestStream::new(reader)).await.unwrap();
+    let mut replayed = [0_u8; 5];
+    stream.read_exact(&mut replayed).await.unwrap();
+
+    assert!(is_tls);
+    assert_eq!(replayed, tls_prefix);
+    writer_task.await.unwrap();
+}
 
 fn github_write_hook() -> crate::mitm_hook::MitmHookConfig {
     crate::mitm_hook::MitmHookConfig {

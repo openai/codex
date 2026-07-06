@@ -14,6 +14,9 @@ use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnAbortReason;
@@ -34,8 +37,8 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
-    let (tx_events, rx_events) = bounded(1);
+async fn forward_events_filters_private_events_before_blocked_send_is_cancelled() {
+    let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
     let (session, ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
@@ -71,32 +74,53 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         cancel.clone(),
     ));
 
-    tx_events
-        .send(Event {
-            id: "evt".to_string(),
-            msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-                item: ResponseItem::CustomToolCall {
-                    id: None,
-                    status: None,
-                    call_id: "call-1".to_string(),
-                    name: "tool".to_string(),
-                    input: "{}".to_string(),
-                    metadata: None,
-                },
-            }),
-        })
-        .await
-        .unwrap();
+    for msg in [
+        EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "pending".to_string(),
+            status: McpStartupStatus::Starting,
+        }),
+        EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),
+    ] {
+        tx_events
+            .send(Event {
+                id: "delegate-startup".to_string(),
+                msg,
+            })
+            .await
+            .unwrap();
+    }
+    let visible_msg = EventMsg::RawResponseItem(RawResponseItemEvent {
+        item: ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "tool".to_string(),
+            namespace: None,
+            input: "{}".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    });
+    for id in ["visible-1", "visible-2", "blocked"] {
+        tx_events
+            .send(Event {
+                id: id.to_string(),
+                msg: visible_msg.clone(),
+            })
+            .await
+            .unwrap();
+    }
 
     drop(tx_events);
+    let received = rx_out.recv().await.expect("prefilled event missing");
+    assert_eq!(received.id, "full");
+    let received = rx_out.recv().await.expect("visible event missing");
+    assert_eq!(received.id, "visible-1");
     cancel.cancel();
     timeout(std::time::Duration::from_millis(1000), forward)
         .await
         .expect("forward_events hung")
         .expect("forward_events join error");
 
-    let received = rx_out.recv().await.expect("prefilled event missing");
-    assert_eq!("full", received.id);
     let mut ops = Vec::new();
     while let Ok(sub) = rx_sub.try_recv() {
         ops.push(sub.op);
@@ -411,10 +435,13 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
-        McpInvocation {
-            server: "custom_server".to_string(),
-            tool: "dangerous_tool".to_string(),
-            arguments: None,
+        PendingMcpInvocation {
+            invocation: McpInvocation {
+                server: "custom_server".to_string(),
+                tool: "dangerous_tool".to_string(),
+                arguments: None,
+            },
+            metadata: None,
         },
     )])));
     let cancel_token = CancellationToken::new();
@@ -460,10 +487,13 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
         crate::session::tests::make_session_and_context_with_rx().await;
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
-        McpInvocation {
-            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool: "dangerous_tool".to_string(),
-            arguments: None,
+        PendingMcpInvocation {
+            invocation: McpInvocation {
+                server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool: "dangerous_tool".to_string(),
+                arguments: None,
+            },
+            metadata: None,
         },
     )])));
     let cancel_token = CancellationToken::new();

@@ -130,6 +130,41 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
 }
 
 #[tokio::test]
+async fn read_thread_item_from_rollout_rejects_unknown_canonical_history_mode() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(303);
+    let ts = "2025-01-03T12-00-00";
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    let contents = fs::read_to_string(&path).unwrap();
+    let mut lines = contents.lines();
+    let mut canonical_meta: serde_json::Value =
+        serde_json::from_str(lines.next().expect("canonical session meta")).unwrap();
+    canonical_meta["payload"]["history_mode"] = serde_json::json!("future");
+    let user_event = lines.next().expect("user event");
+    let mut source_meta = canonical_meta.clone();
+    let source_uuid = Uuid::from_u128(304);
+    source_meta["payload"]["session_id"] = serde_json::json!(source_uuid);
+    source_meta["payload"]["id"] = serde_json::json!(source_uuid);
+    source_meta["payload"]["history_mode"] = serde_json::json!("legacy");
+    fs::write(
+        &path,
+        format!("{canonical_meta}\n{user_event}\n{source_meta}\n"),
+    )
+    .unwrap();
+
+    assert_eq!(crate::list::read_thread_item_from_rollout(path).await, None);
+}
+
+#[tokio::test]
 async fn find_thread_path_falls_back_when_db_path_points_to_another_thread() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -297,6 +332,7 @@ fn write_session_file_with_provider(
     let mut file = File::create(file_path)?;
 
     let mut payload = serde_json::json!({
+        "session_id": uuid,
         "id": uuid,
         "timestamp": ts_str,
         "cwd": ".",
@@ -370,6 +406,7 @@ fn write_goal_started_session_file(
         "timestamp": ts_str,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts_str,
             "cwd": ".",
@@ -451,6 +488,7 @@ fn write_session_file_with_delayed_user_event(
             Uuid::from_u128(100 + i as u128)
         };
         let payload = serde_json::json!({
+            "session_id": uuid,
             "id": id,
             "timestamp": ts_str,
             "cwd": ".",
@@ -483,8 +521,9 @@ fn write_session_file_with_meta_payload(
     root: &Path,
     ts_str: &str,
     uuid: Uuid,
-    payload: serde_json::Value,
+    mut payload: serde_json::Value,
 ) -> std::io::Result<()> {
+    payload["session_id"] = serde_json::json!(uuid);
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let dt = PrimitiveDateTime::parse(ts_str, format)
@@ -606,6 +645,7 @@ async fn test_list_conversations_latest_first() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -625,6 +665,7 @@ async fn test_list_conversations_latest_first() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -644,6 +685,7 @@ async fn test_list_conversations_latest_first() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -756,6 +798,7 @@ async fn test_pagination_cursor() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -775,6 +818,7 @@ async fn test_pagination_cursor() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -830,6 +874,7 @@ async fn test_pagination_cursor() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -849,6 +894,7 @@ async fn test_pagination_cursor() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -896,6 +942,7 @@ async fn test_pagination_cursor() {
             git_sha: None,
             git_origin_url: None,
             source: Some(SessionSource::VSCode),
+            history_mode: Default::default(),
             parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
@@ -1068,6 +1115,7 @@ async fn test_get_thread_contents() {
             git_sha: None,
             git_origin_url: None,
             source: Some(SessionSource::VSCode),
+            history_mode: Default::default(),
             parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
@@ -1088,6 +1136,7 @@ async fn test_get_thread_contents() {
         "timestamp": ts,
         "type": "session_meta",
         "payload": {
+            "session_id": uuid,
             "id": uuid,
             "timestamp": ts,
             "cwd": ".",
@@ -1267,6 +1316,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: conversation_id.into(),
                 id: conversation_id,
                 forked_from_id: None,
                 parent_thread_id: None,
@@ -1282,8 +1332,11 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
                 dynamic_tools: None,
+                selected_capability_roots: Vec::new(),
                 memory_mode: None,
+                history_mode: Default::default(),
                 multi_agent_version: None,
+                context_window: None,
             },
             git: None,
         }),
@@ -1314,7 +1367,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                     text: format!("reply-{idx}"),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
@@ -1424,6 +1477,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1443,6 +1497,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
                 git_sha: None,
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
+                history_mode: Default::default(),
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,

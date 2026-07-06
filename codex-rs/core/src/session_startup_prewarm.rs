@@ -10,6 +10,7 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
+use crate::guardian::routes_approval_to_guardian;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::session::Session;
@@ -182,6 +183,14 @@ impl SessionStartupPrewarmHandle {
 impl Session {
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
         if !self.services.model_client.responses_websocket_enabled() {
+            // Without websocket prewarm, resolve auth once so Agent Identity bootstrap can
+            // register or engage this session's bearer fallback before the first user request.
+            let model_client = self.services.model_client.clone();
+            tokio::spawn(async move {
+                if let Err(err) = model_client.prewarm_auth().await {
+                    warn!("startup auth prewarm failed: {err:#}");
+                }
+            });
             return;
         }
 
@@ -242,11 +251,28 @@ async fn schedule_startup_prewarm_inner(
         prewarm_started_at.elapsed(),
         /*status*/ None,
     );
+    if routes_approval_to_guardian(&startup_turn_context) {
+        let guardian_session = Arc::clone(&session);
+        let guardian_parent_turn = Arc::clone(&startup_turn_context);
+        drop(tokio::spawn(async move {
+            if let Err(err) = guardian_session
+                .guardian_review_session
+                .initialize(Arc::clone(&guardian_session), guardian_parent_turn)
+                .await
+            {
+                warn!("failed to initialize guardian review session: {err:#}");
+            }
+        }));
+    }
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
+    // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
+    let step_context = session
+        .capture_step_context(Arc::clone(&startup_turn_context))
+        .await;
     let startup_router = built_tools(
         session.as_ref(),
-        startup_turn_context.as_ref(),
+        step_context.as_ref(),
         &startup_cancellation_token,
     )
     .await?;
@@ -295,6 +321,5 @@ async fn schedule_startup_prewarm_inner(
         websocket_warmup_started_at.elapsed(),
         /*status*/ None,
     );
-
     Ok(client_session)
 }

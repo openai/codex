@@ -3,14 +3,16 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use codex_app_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::ExecServerRuntimePaths;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::rpc::session_already_attached;
 use crate::server::process_handler::ProcessHandler;
+use crate::telemetry::ExecServerTelemetry;
 
 #[cfg(test)]
 const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
@@ -19,6 +21,7 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    telemetry: ExecServerTelemetry,
 }
 
 struct SessionEntry {
@@ -50,9 +53,10 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionRegistry {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(telemetry: ExecServerTelemetry) -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            telemetry,
         })
     }
 
@@ -60,6 +64,7 @@ impl SessionRegistry {
         self: &Arc<Self>,
         resume_session_id: Option<String>,
         notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
     ) -> Result<SessionHandle, JSONRPCErrorError> {
         enum AttachOutcome {
             Attached(Arc<SessionEntry>),
@@ -95,7 +100,7 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications),
+                    ProcessHandler::new(notifications, self.telemetry.clone(), runtime_paths),
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -115,6 +120,13 @@ impl SessionRegistry {
             entry,
             connection_id,
         })
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let sessions = std::mem::take(&mut *self.sessions.lock().await);
+        for entry in sessions.into_values() {
+            entry.process.shutdown().await;
+        }
     }
 
     async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
@@ -141,6 +153,7 @@ impl Default for SessionRegistry {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            telemetry: ExecServerTelemetry::default(),
         }
     }
 }

@@ -130,14 +130,16 @@ pub fn run_setup_refresh(
             proxy_enforced,
         },
         SetupRootOverrides::default(),
+        /*offline_proxy_settings_override*/ None,
     )
 }
 
-pub fn run_setup_refresh_with_overrides(
+pub(crate) fn run_setup_refresh_with_overrides_and_proxy_settings(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
+    offline_proxy_settings: &OfflineProxySettings,
 ) -> Result<()> {
-    run_setup_refresh_inner(request, overrides)
+    run_setup_refresh_inner(request, overrides, Some(offline_proxy_settings))
 }
 
 pub fn run_setup_refresh_with_extra_read_roots(
@@ -174,12 +176,14 @@ pub fn run_setup_refresh_with_extra_read_roots(
             deny_read_paths: None,
             deny_write_paths: None,
         },
+        /*offline_proxy_settings_override*/ None,
     )
 }
 
 fn run_setup_refresh_inner(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
+    offline_proxy_settings_override: Option<&OfflineProxySettings>,
 ) -> Result<()> {
     if !request.permissions.is_enforceable_by_windows_sandbox() {
         anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
@@ -187,9 +191,8 @@ fn run_setup_refresh_inner(
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    let network_identity =
-        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let offline_proxy_settings =
+        offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -281,6 +284,13 @@ pub struct SetupMarker {
 impl SetupMarker {
     pub fn version_matches(&self) -> bool {
         self.version == SETUP_VERSION
+    }
+
+    pub(crate) fn offline_proxy_settings(&self) -> OfflineProxySettings {
+        OfflineProxySettings {
+            proxy_ports: self.proxy_ports.clone(),
+            allow_local_binding: self.allow_local_binding,
+        }
     }
 
     pub(crate) fn request_mismatch_reason(
@@ -593,6 +603,17 @@ pub(crate) fn offline_proxy_settings_from_env(
     }
 }
 
+fn offline_proxy_settings_for_request(
+    request: &SandboxSetupRequest<'_>,
+    offline_proxy_settings_override: Option<&OfflineProxySettings>,
+) -> OfflineProxySettings {
+    offline_proxy_settings_override.cloned().unwrap_or_else(|| {
+        let network_identity =
+            SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
+        offline_proxy_settings_from_env(request.env_map, network_identity)
+    })
+}
+
 pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
     let mut ports = BTreeSet::new();
     for key in PROXY_ENV_KEYS {
@@ -822,6 +843,24 @@ pub fn run_elevated_setup(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
 ) -> Result<()> {
+    run_elevated_setup_inner(
+        request, overrides, /*offline_proxy_settings_override*/ None,
+    )
+}
+
+pub(crate) fn run_elevated_setup_with_proxy_settings(
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
+    offline_proxy_settings: &OfflineProxySettings,
+) -> Result<()> {
+    run_elevated_setup_inner(request, overrides, Some(offline_proxy_settings))
+}
+
+fn run_elevated_setup_inner(
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
+    offline_proxy_settings_override: Option<&OfflineProxySettings>,
+) -> Result<()> {
     if !request.permissions.is_enforceable_by_windows_sandbox() {
         anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
     }
@@ -836,9 +875,8 @@ pub fn run_elevated_setup(
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    let network_identity =
-        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let offline_proxy_settings =
+        offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -1168,6 +1206,37 @@ mod tests {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         )
+    }
+
+    #[test]
+    fn setup_request_prefers_explicit_proxy_settings() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let permissions = permissions_for(
+            &PermissionProfile::read_only(),
+            workspace_roots_for(&command_cwd).as_slice(),
+        );
+        let env_map = HashMap::from([(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        )]);
+        let explicit = super::OfflineProxySettings {
+            proxy_ports: vec![7890],
+            allow_local_binding: true,
+        };
+        let request = super::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: &command_cwd,
+            env_map: &env_map,
+            codex_home: tmp.path(),
+            proxy_enforced: false,
+        };
+
+        assert_eq!(
+            super::offline_proxy_settings_for_request(&request, Some(&explicit)),
+            explicit
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use codex_config::types::AppToolApproval;
+use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
@@ -69,7 +70,7 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
                 entry["env_vars"] = array_from_env_vars(env_vars);
             }
             if let Some(cwd) = cwd {
-                entry["cwd"] = value(cwd.to_string_lossy().to_string());
+                entry["cwd"] = value(cwd.as_str());
             }
         }
         McpServerTransportConfig::StreamableHttp {
@@ -95,6 +96,9 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
         }
     }
 
+    if matches!(&config.auth, McpServerAuth::ChatGpt) {
+        entry["auth"] = value("chatgpt");
+    }
     if !config.enabled {
         entry["enabled"] = value(false);
     }

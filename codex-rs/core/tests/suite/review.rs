@@ -29,6 +29,7 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -195,6 +196,95 @@ async fn review_op_emits_lifecycle_and_review_output() {
         !saw_assistant_xml,
         "assistant review output contains user_action markup"
     );
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_review_does_not_forward_delegate_mcp_startup() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = responses::mount_response_once(
+        &server,
+        responses::sse_response(responses::sse(vec![responses::ev_response_created(
+            "resp-1",
+        )]))
+        .set_delay(Duration::from_secs(30)),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+
+    // Consume the parent session's own empty startup round before starting the review.
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Cancel this review".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match codex.next_event().await.expect("review event").msg {
+                event @ (EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_)) => {
+                    panic!("review forwarded delegate MCP startup: {event:?}")
+                }
+                EventMsg::EnteredReviewMode(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for review entry");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while request_log.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("review request did not reach the server");
+
+    codex.submit(Op::Interrupt).await.unwrap();
+
+    let mut exited_review = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match codex
+                .next_event()
+                .await
+                .expect("review cancellation event")
+                .msg
+            {
+                event @ (EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_)) => {
+                    panic!("cancelled review forwarded delegate MCP startup: {event:?}")
+                }
+                EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }) => {
+                    assert_eq!(review_output, None);
+                    exited_review = true;
+                }
+                EventMsg::TurnAborted(_) if exited_review => break,
+                EventMsg::TurnAborted(_) => panic!("review turn aborted before review mode exited"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for review cancellation");
+
+    assert_eq!(request_log.requests().len(), 1);
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -511,6 +601,7 @@ async fn review_input_isolated_from_parent_history() {
             "timestamp": "2024-01-01T00:00:00.000Z",
             "type": "session_meta",
             "payload": {
+                "session_id": convo_id,
                 "id": convo_id,
                 "timestamp": "2024-01-01T00:00:00Z",
                 "cwd": ".",
@@ -531,7 +622,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: earlier user message".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
@@ -551,7 +642,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: assistant reply".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({

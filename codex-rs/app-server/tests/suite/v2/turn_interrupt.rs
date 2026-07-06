@@ -141,11 +141,11 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
     .await;
     create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
-    let mut mcp = TestAppServer::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

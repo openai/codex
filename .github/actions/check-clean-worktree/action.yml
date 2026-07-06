@@ -1,0 +1,19 @@
+name: check-clean-worktree
+description: Fail when a CI job leaves tracked changes or untracked files in the repository worktree.
+
+runs:
+  using: composite
+  steps:
+    - name: Check for a clean worktree
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        status="$(git -C "${GITHUB_WORKSPACE}" status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+        if [[ -z "${status}" ]]; then
+          exit 0
+        fi
+
+        echo "::error::CI job left tracked changes or untracked files in the repository worktree"
+        printf '%s\n' "${status}"
+        exit 1

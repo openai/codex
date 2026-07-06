@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
+mod denial;
 pub mod landlock;
 mod manager;
 pub mod policy_transforms;
@@ -11,6 +12,8 @@ mod windows;
 pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
+pub use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
+pub use denial::is_likely_sandbox_denied;
 pub use manager::SandboxCommand;
 pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
@@ -47,6 +50,9 @@ impl From<SandboxTransformError> for CodexErr {
             }
             SandboxTransformError::MissingLinuxSandboxExecutable => {
                 CodexErr::LandlockSandboxExecutableNotProvided
+            }
+            SandboxTransformError::EnvironmentNetworkProxy(message) => {
+                CodexErr::UnsupportedOperation(message)
             }
             #[cfg(target_os = "linux")]
             SandboxTransformError::Wsl1UnsupportedForBubblewrap => {

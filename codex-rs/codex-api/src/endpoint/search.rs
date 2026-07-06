@@ -55,6 +55,7 @@ mod tests {
     use crate::provider::RetryConfig;
     use crate::search::AllowedCaller;
     use crate::search::ApproximateLocation;
+    use crate::search::ExternalWebAccess;
     use crate::search::LocationType;
     use crate::search::OpenOperation;
     use crate::search::SearchCommands;
@@ -149,7 +150,7 @@ mod tests {
                     model: "gpt-test".to_string(),
                     reasoning: None,
                     input: Some(SearchInput::Items(vec![ResponseItem::Message {
-                        id: None,
+                        id: Some("msg_search".to_string()),
                         role: "user".to_string(),
                         content: vec![
                             ContentItem::InputText {
@@ -161,7 +162,7 @@ mod tests {
                             },
                         ],
                         phase: None,
-                        metadata: None,
+                        internal_chat_message_metadata_passthrough: None,
                     }])),
                     commands: Some(SearchCommands {
                         search_query: Some(vec![SearchQuery {
@@ -193,7 +194,7 @@ mod tests {
                             caption: Some(true),
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
-                        external_web_access: Some(true),
+                        external_web_access: Some(ExternalWebAccess::Boolean(true)),
                     }),
                     max_output_tokens: Some(2500),
                 },
@@ -228,6 +229,7 @@ mod tests {
                 "model": "gpt-test",
                 "input": [{
                     "type": "message",
+                    "id": "msg_search",
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "find this"},

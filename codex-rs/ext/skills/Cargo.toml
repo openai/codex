@@ -20,7 +20,6 @@ codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
 schemars = { workspace = true }
@@ -31,5 +30,6 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

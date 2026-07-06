@@ -20,6 +20,7 @@ use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
+use core_test_support::responses::ev_custom_tool_call_with_namespace;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -173,6 +174,80 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
         .unwrap_or_default();
     let expected = format!("unsupported custom tool call: {tool_name}");
     assert_eq!(output, expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_replay() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    let call_id = "custom-namespaced";
+    let namespace = "test_namespace::";
+    let tool_name = "unsupported_tool";
+    let input = "\"payload\"";
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call_with_namespace(call_id, namespace, tool_name, input),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "invoke namespaced custom tool",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let request = mock.single_request();
+    let custom_tool_calls = request.inputs_of_type("custom_tool_call");
+    let turn_id = custom_tool_calls
+        .first()
+        .and_then(|item| item.pointer("/internal_chat_message_metadata_passthrough/turn_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .expect("custom tool call should include turn metadata");
+    assert_eq!(
+        (custom_tool_calls, request.custom_tool_call_output(call_id),),
+        (
+            vec![json!({
+                "type": "custom_tool_call",
+                "call_id": call_id,
+                "namespace": namespace,
+                "name": tool_name,
+                "input": input,
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": turn_id,
+                },
+            })],
+            json!({
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": format!("unsupported custom tool call: {namespace}{tool_name}"),
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": turn_id,
+                },
+            }),
+        )
+    );
 
     Ok(())
 }

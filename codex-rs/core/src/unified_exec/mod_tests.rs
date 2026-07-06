@@ -23,7 +23,7 @@ use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
-use core_test_support::get_remote_test_env;
+use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
 use pretty_assertions::assert_eq;
@@ -108,7 +108,7 @@ async fn exec_command_with_tty(
 
     let process = Arc::new(
         manager
-            .open_session_with_exec_env(
+            .open_session_with_prepared_exec_env(
                 process_id,
                 &request,
                 tty,
@@ -228,6 +228,7 @@ impl BlockingTerminateExecProcess {
             exit_code: None,
             closed: false,
             failure: None,
+            sandbox_denied: false,
         })
     }
 
@@ -286,17 +287,14 @@ async fn blocking_terminate_unified_process(
 ) -> anyhow::Result<Arc<UnifiedExecProcess>> {
     let (wake_tx, _wake_rx) = watch::channel(0);
     Ok(Arc::new(
-        UnifiedExecProcess::from_exec_server_started(
-            StartedExecProcess {
-                process: Arc::new(BlockingTerminateExecProcess {
-                    process_id: process_id.to_string().into(),
-                    terminate_started,
-                    allow_terminate,
-                    wake_tx,
-                }),
-            },
-            SandboxType::None,
-        )
+        UnifiedExecProcess::from_exec_server_started(StartedExecProcess {
+            process: Arc::new(BlockingTerminateExecProcess {
+                process_id: process_id.to_string().into(),
+                terminate_started,
+                allow_terminate,
+                wake_tx,
+            }),
+        })
         .await?,
     ))
 }
@@ -811,7 +809,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
 
     let environment = codex_exec_server::Environment::default_for_tests();
     let process = UnifiedExecProcessManager::default()
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ false,
@@ -838,9 +836,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let remote_test_env = remote_test_env().await?;
     let (_, turn) = make_session_and_context().await;
@@ -853,7 +849,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
 
     let manager = UnifiedExecProcessManager::default();
     let process = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,
@@ -890,9 +886,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
-        return Ok(());
-    };
+    skip_if_no_remote_env!(Ok(()));
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
@@ -910,7 +904,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let manager = UnifiedExecProcessManager::default();
     let err = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,

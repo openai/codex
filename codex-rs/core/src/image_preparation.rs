@@ -13,6 +13,8 @@ pub(crate) const IMAGE_PROCESSING_ERROR_PLACEHOLDER: &str =
 const IMAGE_TOO_LARGE_PLACEHOLDER: &str =
     "image content omitted because it exceeded the supported size limit; use a smaller image";
 const UNSUPPORTED_LOW_DETAIL_PLACEHOLDER: &str = "image content omitted because detail 'low' is not supported; use 'high', 'original', or 'auto'";
+const REMOTE_IMAGE_URL_PLACEHOLDER: &str =
+    "image content omitted because remote image URLs are not supported";
 
 const HIGH_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
     max_dimension: 2048,
@@ -24,6 +26,8 @@ const ORIGINAL_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits 
 };
 #[derive(Debug, thiserror::Error)]
 enum ImagePreparationError {
+    #[error("remote image URLs are not supported")]
+    RemoteUrlUnsupported,
     #[error("image detail `low` is not supported")]
     UnsupportedLowDetail,
     #[error(transparent)]
@@ -33,6 +37,7 @@ enum ImagePreparationError {
 impl ImagePreparationError {
     fn placeholder(&self) -> &'static str {
         match self {
+            ImagePreparationError::RemoteUrlUnsupported => REMOTE_IMAGE_URL_PLACEHOLDER,
             ImagePreparationError::UnsupportedLowDetail => UNSUPPORTED_LOW_DETAIL_PLACEHOLDER,
             ImagePreparationError::Processing(ImageProcessingError::ImageTooLarge { .. }) => {
                 IMAGE_TOO_LARGE_PLACEHOLDER
@@ -52,7 +57,8 @@ pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
                     prepare_tool_output_content(content);
                 }
             }
-            ResponseItem::Reasoning { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
@@ -72,7 +78,6 @@ pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
 fn prepare_message_content(items: &mut [ContentItem]) {
     for item in items {
         if let ContentItem::InputImage { image_url, detail } = item
-            && is_data_url(image_url)
             && let Err(error) = prepare_image(image_url, *detail)
         {
             warn!(%error, "failed to prepare message image");
@@ -86,7 +91,6 @@ fn prepare_message_content(items: &mut [ContentItem]) {
 fn prepare_tool_output_content(items: &mut [FunctionCallOutputContentItem]) {
     for item in items {
         if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item
-            && is_data_url(image_url)
             && let Err(error) = prepare_image(image_url, *detail)
         {
             warn!(%error, "failed to prepare tool output image");
@@ -95,6 +99,12 @@ fn prepare_tool_output_content(items: &mut [FunctionCallOutputContentItem]) {
             };
         }
     }
+}
+
+fn is_remote_image_url(image_url: &str) -> bool {
+    image_url.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
 }
 
 fn is_data_url(image_url: &str) -> bool {
@@ -107,6 +117,13 @@ fn prepare_image(
     image_url: &mut String,
     detail: Option<ImageDetail>,
 ) -> Result<(), ImagePreparationError> {
+    if is_remote_image_url(image_url) {
+        return Err(ImagePreparationError::RemoteUrlUnsupported);
+    }
+    if !is_data_url(image_url) {
+        return Ok(());
+    }
+
     let limits = match detail {
         None | Some(ImageDetail::Auto | ImageDetail::High) => HIGH_DETAIL_LIMITS,
         Some(ImageDetail::Original) => ORIGINAL_DETAIL_LIMITS,

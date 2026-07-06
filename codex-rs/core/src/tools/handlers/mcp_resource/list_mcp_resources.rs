@@ -19,6 +19,8 @@ use super::ListResourcesPayload;
 use super::call_tool_result_from_content;
 use super::emit_tool_call_begin;
 use super::emit_tool_call_end;
+use super::ensure_model_can_access_mcp_server;
+use super::model_can_access_mcp_server;
 use super::normalize_optional_string;
 use super::parse_args_with_default;
 use super::parse_arguments;
@@ -51,11 +53,13 @@ impl ListMcpResourcesHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             call_id,
             payload,
             ..
         } = invocation;
+        let turn = std::sync::Arc::clone(&step_context.turn);
+        let manager = step_context.mcp.manager();
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -83,10 +87,11 @@ impl ListMcpResourcesHandler {
 
         let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
+                ensure_model_can_access_mcp_server(turn.as_ref(), &server_name)?;
                 let params = cursor
                     .clone()
                     .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
-                let result = session
+                let result = manager
                     .list_resources(&server_name, params)
                     .await
                     .map_err(|err| {
@@ -103,11 +108,10 @@ impl ListMcpResourcesHandler {
                     ));
                 }
 
-                let resources = session
-                    .services
-                    .mcp_connection_manager
-                    .load_full()
-                    .list_all_resources()
+                let resources = manager
+                    .list_all_resources(|server_name| {
+                        model_can_access_mcp_server(turn.as_ref(), server_name)
+                    })
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))
             }

@@ -1,9 +1,7 @@
 name: sdk
 
 on:
-  push:
-    branches: [main]
-  pull_request: {}
+  workflow_call:
 
 jobs:
   python-sdk:
@@ -40,6 +38,10 @@ jobs:
               /tmp/uv/bin/uv run --frozen --no-sync ruff format --check .
               /tmp/uv/bin/uv run --frozen --no-sync pytest
             '
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
 
   sdks:
     runs-on:
@@ -161,3 +163,7 @@ jobs:
           path: |
             ~/.cache/bazel-repo-cache
           key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

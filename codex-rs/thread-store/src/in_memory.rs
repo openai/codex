@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -10,8 +11,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::persisted_rollout_items;
 
@@ -28,11 +31,14 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadPage;
+use crate::ThreadRelationFilter;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
+use crate::error::reject_paginated_history_mode;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 static IN_MEMORY_THREAD_STORES: OnceLock<Mutex<HashMap<String, Arc<InMemoryThreadStore>>>> =
     OnceLock::new();
@@ -96,29 +102,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_filters_by_parent_thread_id() {
+    async fn list_threads_filters_by_spawn_relationship() {
         let store = InMemoryThreadStore::default();
         let parent_thread_id = ThreadId::default();
         let child_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
         let unrelated_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+        let grandchild_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000003").expect("valid thread id");
 
         for (thread_id, parent_thread_id) in [
             (child_thread_id, Some(parent_thread_id)),
             (unrelated_thread_id, None),
+            (grandchild_thread_id, Some(child_thread_id)),
         ] {
             store
                 .create_thread(CreateThreadParams {
+                    session_id: thread_id.into(),
                     thread_id,
                     extra_config: None,
                     forked_from_id: None,
                     parent_thread_id,
                     source: SessionSource::Exec,
                     thread_source: None,
+                    originator: "test_originator".to_string(),
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
+                    selected_capability_roots: Vec::new(),
                     multi_agent_version: None,
+                    history_mode: ThreadHistoryMode::Legacy,
+                    initial_window_id: uuid::Uuid::now_v7().to_string(),
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
                         model_provider: "test-provider".to_string(),
@@ -141,7 +155,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                parent_thread_id: Some(parent_thread_id),
+                relation_filter: Some(ThreadRelationFilter::DirectChildrenOf(parent_thread_id)),
                 use_state_db_only: false,
             },
         )
@@ -155,6 +169,184 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![child_thread_id]
         );
+
+        let page = ThreadStore::list_threads(
+            &store,
+            ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
+                use_state_db_only: false,
+            },
+        )
+        .await
+        .expect("list descendant threads");
+
+        assert_eq!(
+            page.items
+                .into_iter()
+                .map(|item| item.thread_id)
+                .collect::<HashSet<_>>(),
+            HashSet::from([child_thread_id, grandchild_thread_id])
+        );
+    }
+
+    #[tokio::test]
+    async fn paginated_threads_allow_metadata_reads_and_reject_legacy_history_paths() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::default();
+        let rollout_path = PathBuf::from("/tmp/paginated-thread.jsonl");
+
+        store
+            .create_thread(create_thread_params(thread_id, ThreadHistoryMode::Legacy))
+            .await
+            .expect("create legacy thread");
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path.clone()),
+                history: None,
+                include_archived: false,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("register rollout path");
+        {
+            let mut state = store.state.lock().await;
+            state
+                .created_threads
+                .get_mut(&thread_id)
+                .expect("created thread")
+                .history_mode = ThreadHistoryMode::Paginated;
+            let Some(RolloutItem::SessionMeta(meta_line)) = state
+                .histories
+                .get_mut(&thread_id)
+                .and_then(|history| history.first_mut())
+            else {
+                panic!("canonical session meta");
+            };
+            meta_line.meta.history_mode = ThreadHistoryMode::Paginated;
+        }
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("metadata read");
+        assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
+        assert!(thread.history.is_none());
+
+        let thread = store
+            .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                rollout_path,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("metadata path read");
+        assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
+        assert!(thread.history.is_none());
+
+        assert_paginated_threads_unsupported(
+            store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history: true,
+                })
+                .await
+                .expect_err("full history read should fail"),
+        );
+        assert_paginated_threads_unsupported(
+            store
+                .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                    rollout_path: PathBuf::from("/tmp/paginated-thread.jsonl"),
+                    include_archived: false,
+                    include_history: true,
+                })
+                .await
+                .expect_err("full history path read should fail"),
+        );
+        assert_paginated_threads_unsupported(
+            store
+                .load_history(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: false,
+                })
+                .await
+                .expect_err("history load should fail"),
+        );
+        assert_paginated_threads_unsupported(
+            store
+                .resume_thread(ResumeThreadParams {
+                    thread_id,
+                    rollout_path: None,
+                    history: None,
+                    include_archived: false,
+                    metadata: thread_metadata(),
+                })
+                .await
+                .expect_err("resume should fail"),
+        );
+        assert_paginated_threads_unsupported(
+            store
+                .create_thread(create_thread_params(
+                    ThreadId::default(),
+                    ThreadHistoryMode::Paginated,
+                ))
+                .await
+                .expect_err("paginated create should fail"),
+        );
+    }
+
+    fn create_thread_params(
+        thread_id: ThreadId,
+        history_mode: ThreadHistoryMode,
+    ) -> CreateThreadParams {
+        CreateThreadParams {
+            session_id: thread_id.into(),
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            history_mode,
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
+            metadata: thread_metadata(),
+        }
+    }
+
+    fn thread_metadata() -> ThreadPersistenceMetadata {
+        ThreadPersistenceMetadata {
+            cwd: None,
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
+        }
+    }
+
+    fn assert_paginated_threads_unsupported(err: ThreadStoreError) {
+        assert!(matches!(
+            err,
+            ThreadStoreError::Unsupported {
+                operation: "paginated_threads"
+            }
+        ));
     }
 }
 
@@ -228,9 +420,11 @@ impl InMemoryThreadStore {
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
+        reject_paginated_history_mode(params.history_mode)?;
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
         let session_meta = SessionMeta {
+            session_id: params.session_id,
             id: params.thread_id,
             forked_from_id: params.forked_from_id,
             parent_thread_id: params.parent_thread_id,
@@ -238,14 +432,18 @@ impl InMemoryThreadStore {
             agent_nickname: params.source.get_nickname(),
             agent_role: params.source.get_agent_role(),
             agent_path: params.source.get_agent_path().map(Into::into),
+            originator: params.originator.clone(),
             source: params.source.clone(),
             thread_source: params.thread_source.clone(),
             model_provider: Some(params.metadata.model_provider.clone()),
             base_instructions: Some(params.base_instructions.clone()),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
+            selected_capability_roots: params.selected_capability_roots.clone(),
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
+            history_mode: params.history_mode,
             multi_agent_version: params.multi_agent_version,
+            context_window: Some(SessionContextWindow::new(params.initial_window_id.clone())),
             ..SessionMeta::default()
         };
         state
@@ -263,8 +461,17 @@ impl InMemoryThreadStore {
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
+        let history_mode = params
+            .history
+            .as_deref()
+            .map(Vec::as_slice)
+            .map(canonical_history_mode_from_rollout_items)
+            .unwrap_or_else(|| history_mode_from_state(&state, params.thread_id));
+        reject_paginated_history_mode(history_mode)?;
         if let Some(history) = params.history {
-            state.histories.insert(params.thread_id, history);
+            state
+                .histories
+                .insert(params.thread_id, Arc::unwrap_or_clone(history));
         } else {
             state.histories.entry(params.thread_id).or_default();
         }
@@ -295,14 +502,18 @@ impl InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThreadHistory> {
         let mut state = self.state.lock().await;
         state.calls.load_history += 1;
-        let items = state.histories.get(&params.thread_id).cloned().ok_or(
-            ThreadStoreError::ThreadNotFound {
-                thread_id: params.thread_id,
-            },
-        )?;
+        let items =
+            state
+                .histories
+                .get(&params.thread_id)
+                .ok_or(ThreadStoreError::ThreadNotFound {
+                    thread_id: params.thread_id,
+                })?;
+        let history_mode = history_mode_from_state(&state, params.thread_id);
+        reject_paginated_history_mode(history_mode)?;
         Ok(StoredThreadHistory {
             thread_id: params.thread_id,
-            items,
+            items: items.clone(),
         })
     }
 
@@ -311,8 +522,10 @@ impl InMemoryThreadStore {
         state.calls.read_thread += 1;
         if params.include_history {
             state.calls.read_thread_with_history += 1;
+            reject_paginated_history_mode(history_mode_from_state(&state, params.thread_id))?;
         }
-        stored_thread_from_state(&state, params.thread_id, params.include_history)
+        let thread = stored_thread_from_state(&state, params.thread_id, params.include_history)?;
+        Ok(thread)
     }
 
     async fn read_thread_by_rollout_path(
@@ -329,7 +542,11 @@ impl InMemoryThreadStore {
                 ),
             });
         };
-        stored_thread_from_state(&state, thread_id, params.include_history)
+        if params.include_history {
+            reject_paginated_history_mode(history_mode_from_state(&state, thread_id))?;
+        }
+        let thread = stored_thread_from_state(&state, thread_id, params.include_history)?;
+        Ok(thread)
     }
 
     async fn list_threads(&self) -> ThreadStoreResult<ThreadPage> {
@@ -454,9 +671,33 @@ impl ThreadStore for InMemoryThreadStore {
     fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage> {
         Box::pin(async move {
             let mut page = InMemoryThreadStore::list_threads(self).await?;
-            if let Some(parent_thread_id) = params.parent_thread_id {
-                page.items
-                    .retain(|thread| thread.parent_thread_id == Some(parent_thread_id));
+            match params.relation_filter {
+                Some(ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) => {
+                    page.items
+                        .retain(|thread| thread.parent_thread_id == Some(parent_thread_id));
+                }
+                Some(ThreadRelationFilter::DescendantsOf(ancestor_thread_id)) => {
+                    let mut subtree = HashSet::from([ancestor_thread_id]);
+                    loop {
+                        let mut discovered = false;
+                        for thread in &page.items {
+                            if thread
+                                .parent_thread_id
+                                .is_some_and(|parent_thread_id| subtree.contains(&parent_thread_id))
+                            {
+                                discovered |= subtree.insert(thread.thread_id);
+                            }
+                        }
+                        if !discovered {
+                            break;
+                        }
+                    }
+                    page.items.retain(|thread| {
+                        thread.thread_id != ancestor_thread_id
+                            && subtree.contains(&thread.thread_id)
+                    });
+                }
+                None => {}
             }
             Ok(page)
         })
@@ -548,6 +789,7 @@ fn stored_thread_from_state(
         source: metadata
             .and_then(|metadata| metadata.source.clone())
             .unwrap_or_else(|| created.source.clone()),
+        history_mode: created.history_mode,
         thread_source: metadata
             .and_then(|metadata| metadata.thread_source.clone())
             .unwrap_or_else(|| created.thread_source.clone()),
@@ -565,6 +807,17 @@ fn stored_thread_from_state(
         first_user_message: metadata.and_then(|metadata| metadata.first_user_message.clone()),
         history,
     })
+}
+
+fn history_mode_from_state(
+    state: &InMemoryThreadStoreState,
+    thread_id: ThreadId,
+) -> ThreadHistoryMode {
+    state
+        .created_threads
+        .get(&thread_id)
+        .map(|thread| thread.history_mode)
+        .unwrap_or_default()
 }
 
 fn git_info_from_patch(patch: &ThreadMetadataPatch) -> Option<codex_protocol::protocol::GitInfo> {

@@ -43,6 +43,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
 
     let session_meta = SessionMetaLine {
         meta: SessionMeta {
+            session_id: thread_id.into(),
             id: thread_id,
             forked_from_id: None,
             parent_thread_id: None,
@@ -58,8 +59,11 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            selected_capability_roots: Vec::new(),
             memory_mode: None,
+            history_mode: Default::default(),
             multi_agent_version: None,
+            context_window: None,
         },
         git: None,
     };
