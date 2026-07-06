@@ -13,8 +13,10 @@ use codex_backend_client::DeliveredTomlFragment;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::auth::AgentIdentityAuth;
@@ -197,11 +199,11 @@ fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: vec![test_config_fragment()],
-            ..Default::default()
+            managed_layers: CloudConfigTomlManagedLayers::default(),
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![test_requirements_fragment()],
-            ..Default::default()
+            managed_layers: CloudRequirementsTomlManagedLayers::default(),
         },
     }
 }

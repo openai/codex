@@ -18,9 +18,12 @@ pub(crate) fn validate_bundle(
             )
         })?;
     let CloudConfigBundleLayers {
+        baseline_config: _,
+        system_overlay_config: _,
         enterprise_managed_config: _,
+        baseline_requirements: _,
+        system_overlay_requirements: _,
         enterprise_managed_requirements,
-        ..
     } = bundle_layers;
 
     compose_requirements(enterprise_managed_requirements).map_err(|err| {
