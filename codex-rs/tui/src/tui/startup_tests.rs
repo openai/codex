@@ -28,7 +28,10 @@ fn startup_input_keeps_text_without_replaying_actions() {
         input.handle_event(event);
     }
 
-    assert_eq!(input.into_text(), Some("hello\n\tworld".to_string()));
+    assert_eq!(input.take_text(), Some("hello\n\tworld".to_string()));
+    let handoff = input.into_handoff();
+    assert!(handoff.interrupt_requested);
+    assert!(handoff.suppress_repeats);
 }
 
 #[test]
@@ -45,7 +48,7 @@ fn startup_input_preserves_internal_plain_whitespace_but_drops_trailing_actions(
         input.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
 
-    assert_eq!(input.into_text(), Some("a\nb\tc".to_string()));
+    assert_eq!(input.take_text(), Some("a\nb\tc".to_string()));
 }
 
 #[test]
@@ -58,7 +61,7 @@ fn startup_probe_input_preserves_internal_plain_whitespace_across_phases() {
     )));
     input.handle_probe_input(b"\t");
 
-    assert_eq!(input.into_text(), Some("a\nb".to_string()));
+    assert_eq!(input.take_text(), Some("a\nb".to_string()));
 }
 
 #[cfg(unix)]
@@ -69,7 +72,7 @@ fn startup_probe_preserves_bracketed_paste_whitespace() {
         b"a\r\n\t".to_vec(),
     )]);
 
-    assert_eq!(input.into_text(), Some("a\n\t".to_string()));
+    assert_eq!(input.take_text(), Some("a\n\t".to_string()));
 }
 
 #[test]
@@ -77,7 +80,7 @@ fn startup_input_is_bounded() {
     let mut input = StartupInputBuffer::default();
     input.handle_event(Event::Paste("x".repeat(MAX_STARTUP_INPUT_CHARS + 1)));
 
-    assert_eq!(input.into_text(), Some("x".repeat(MAX_STARTUP_INPUT_CHARS)));
+    assert_eq!(input.take_text(), Some("x".repeat(MAX_STARTUP_INPUT_CHARS)));
 }
 
 #[test]
@@ -91,5 +94,30 @@ fn startup_input_applies_edits_across_capture_phases() {
         KeyModifiers::NONE,
     )));
 
-    assert_eq!(input.into_text(), Some("drap".to_string()));
+    assert_eq!(input.take_text(), Some("drap".to_string()));
+}
+
+#[test]
+fn startup_probe_controls_survive_text_extraction() {
+    let mut input = StartupInputBuffer::default();
+    input.handle_probe_input(b"draft\x03\x1a");
+
+    assert_eq!(input.take_text(), Some("draft".to_string()));
+    let handoff = input.into_handoff();
+    assert!(handoff.interrupt_requested);
+    assert!(handoff.suspend_requested);
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_paste_control_bytes_are_not_replayed_as_actions() {
+    let mut input = StartupInputBuffer::default();
+    input.handle_startup_probe_input(&[crate::terminal_probe::StartupInput::Paste(
+        b"a\x03\x1ab".to_vec(),
+    )]);
+
+    assert_eq!(input.take_text(), Some("ab".to_string()));
+    let handoff = input.into_handoff();
+    assert!(!handoff.interrupt_requested);
+    assert!(!handoff.suspend_requested);
 }

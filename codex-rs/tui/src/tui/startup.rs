@@ -41,6 +41,17 @@ pub(crate) struct StartupInputBuffer {
     text: String,
     char_count: usize,
     pending_plain_whitespace: String,
+    suppressed_action: bool,
+    interrupt_requested: bool,
+    suspend_requested: bool,
+}
+
+#[derive(Default)]
+pub(super) struct StartupInputHandoff {
+    pub(super) had_input: bool,
+    pub(super) suppress_repeats: bool,
+    pub(super) interrupt_requested: bool,
+    pub(super) suspend_requested: bool,
 }
 
 impl StartupInputBuffer {
@@ -52,15 +63,33 @@ impl StartupInputBuffer {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             }) => {
+                if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+                    self.interrupt_requested = true;
+                    return;
+                }
+                if code == KeyCode::Char('z') && modifiers.contains(KeyModifiers::CONTROL) {
+                    self.suspend_requested = true;
+                    return;
+                }
                 if modifiers.difference(KeyModifiers::SHIFT).is_empty() {
                     match code {
                         KeyCode::Char(ch) if !ch.is_control() => self.push_plain_char(ch),
                         KeyCode::Backspace => self.pop_char(),
-                        KeyCode::Enter => self.push_pending_plain_whitespace('\n'),
-                        KeyCode::Tab => self.push_pending_plain_whitespace('\t'),
-                        _ => self.pending_plain_whitespace.clear(),
+                        KeyCode::Enter => {
+                            self.suppressed_action = true;
+                            self.push_pending_plain_whitespace('\n');
+                        }
+                        KeyCode::Tab => {
+                            self.suppressed_action = true;
+                            self.push_pending_plain_whitespace('\t');
+                        }
+                        _ => {
+                            self.suppressed_action = true;
+                            self.pending_plain_whitespace.clear();
+                        }
                     }
                 } else {
+                    self.suppressed_action = true;
                     self.pending_plain_whitespace.clear();
                 }
             }
@@ -129,14 +158,23 @@ impl StartupInputBuffer {
         while let Some(ch) = chars.next() {
             match ch {
                 '\u{8}' | '\u{7f}' => self.pop_char(),
+                '\u{3}' => self.interrupt_requested = true,
+                '\u{1a}' => self.suspend_requested = true,
                 '\r' => {
+                    self.suppressed_action = true;
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
                     self.push_pending_plain_whitespace('\n');
                 }
-                '\n' => self.push_pending_plain_whitespace('\n'),
-                '\t' => self.push_pending_plain_whitespace('\t'),
+                '\n' => {
+                    self.suppressed_action = true;
+                    self.push_pending_plain_whitespace('\n');
+                }
+                '\t' => {
+                    self.suppressed_action = true;
+                    self.push_pending_plain_whitespace('\t');
+                }
                 ch if !ch.is_control() => self.push_plain_char(ch),
                 _ => {}
             }
@@ -157,8 +195,25 @@ impl StartupInputBuffer {
         }
     }
 
-    pub(super) fn into_text(self) -> Option<String> {
-        (!self.text.is_empty()).then_some(self.text)
+    pub(super) fn take_text(&mut self) -> Option<String> {
+        self.char_count = 0;
+        (!self.text.is_empty()).then(|| std::mem::take(&mut self.text))
+    }
+
+    pub(super) fn into_handoff(self) -> StartupInputHandoff {
+        let had_input = self.char_count > 0
+            || !self.pending_plain_whitespace.is_empty()
+            || self.suppressed_action
+            || self.interrupt_requested
+            || self.suspend_requested;
+        StartupInputHandoff {
+            had_input,
+            suppress_repeats: self.suppressed_action
+                || self.interrupt_requested
+                || self.suspend_requested,
+            interrupt_requested: self.interrupt_requested,
+            suspend_requested: self.suspend_requested,
+        }
     }
 }
 

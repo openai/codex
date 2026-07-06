@@ -45,6 +45,7 @@ use crate::notifications::detect_backend;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::tui::event_stream::EventBroker;
+use crate::tui::event_stream::InitialInputPolicy;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
@@ -64,6 +65,7 @@ pub(crate) mod test_support;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
+pub(crate) const STARTUP_INPUT_QUIET_PERIOD: Duration = Duration::from_secs(/*secs*/ 1);
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -77,9 +79,9 @@ pub(crate) struct InitializedTerminal {
 
 pub(crate) use startup::PreparedTerminal;
 use startup::StartupInputBuffer;
+use startup::StartupInputHandoff;
 pub(crate) use startup::abandon_prepared_terminal;
 use startup::capture_startup_input;
-pub(crate) use startup::discard_terminal_input;
 
 pub(super) fn flush_terminal_input_buffer() {
     startup::flush_terminal_input_buffer();
@@ -107,6 +109,11 @@ impl Drop for Tui {
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
+
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use tokio_stream::StreamExt;
 
     use super::StartupInputBuffer;
     use super::clear_for_viewport_change;
@@ -151,6 +158,28 @@ mod tests {
         })?;
 
         assert_eq!(startup_text.as_deref(), Some("a\nb"));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_interrupt_survives_text_extraction() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+        let mut startup_input = StartupInputBuffer::default();
+        startup_input.handle_probe_input(b"draft\x03");
+        tui.startup_input = Some(startup_input);
+
+        assert_eq!(
+            tui.take_startup_text_with_capture(|_| Ok(()))?.as_deref(),
+            Some("draft")
+        );
+        let mut events = tui.startup_event_stream();
+        assert!(matches!(
+            events.next().await,
+            Some(super::TuiEvent::Key(key)) if key == KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            )
+        ));
         Ok(())
     }
 
@@ -643,31 +672,43 @@ impl Tui {
     /// A screen that requests events becomes the new input owner, so text captured before the TUI
     /// was ready must not survive through it and later appear in the composer.
     pub fn event_stream(&mut self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        let discard_initial_input = self.claim_startup_input();
-        self.build_event_stream(discard_initial_input)
+        let startup_input = self.claim_startup_input();
+        self.build_event_stream(InitialInputPolicy::DiscardAll, startup_input)
     }
 
     pub(crate) fn startup_event_stream(
         &mut self,
     ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        self.claim_startup_input();
-        self.build_event_stream(/*discard_initial_input*/ true)
+        let startup_input = self.claim_startup_input();
+        self.build_event_stream(InitialInputPolicy::PreserveText, startup_input)
     }
 
-    fn claim_startup_input(&mut self) -> bool {
-        if self.startup_input_active {
-            self.startup_input = None;
-            discard_terminal_input();
-            self.startup_input_active = false;
-            true
-        } else {
-            false
+    fn claim_startup_input(&mut self) -> StartupInputHandoff {
+        if !self.startup_input_active {
+            return StartupInputHandoff::default();
         }
+        self.startup_input_active = false;
+        let startup_input = self.startup_input.take().unwrap_or_default().into_handoff();
+        #[cfg(unix)]
+        if startup_input.suspend_requested {
+            self.event_broker.pause_events();
+            let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
+            self.event_broker.resume_events();
+            if let Err(err) = suspend_result {
+                tracing::warn!(
+                    event = "tui_startup_suspend_failed",
+                    error = %err,
+                    "failed to suspend TUI process during startup"
+                );
+            }
+        }
+        startup_input
     }
 
     fn build_event_stream(
         &self,
-        discard_initial_input: bool,
+        initial_input_policy: InitialInputPolicy,
+        startup_input: StartupInputHandoff,
     ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         #[cfg(unix)]
         let stream = TuiEventStream::new(
@@ -683,11 +724,16 @@ impl Tui {
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
         );
-        let stream = if discard_initial_input {
-            stream.discarding_initial_input()
-        } else {
-            stream
+        let start_quiet = match initial_input_policy {
+            InitialInputPolicy::DiscardAll => startup_input.had_input,
+            InitialInputPolicy::PreserveText => startup_input.suppress_repeats,
         };
+        let stream = stream.filtering_initial_input(
+            initial_input_policy,
+            start_quiet,
+            startup_input.interrupt_requested,
+            startup_input.suspend_requested,
+        );
         Box::pin(stream)
     }
 
@@ -705,9 +751,10 @@ impl Tui {
 
         let mut input = self.startup_input.take().unwrap_or_default();
         capture(&mut input)?;
-        // Keep ownership until `event_stream()` performs the final flush immediately before the
-        // crossterm stream takes over stdin.
-        Ok(input.into_text())
+        // Keep action/control state until `event_stream()` hands input to crossterm.
+        let text = input.take_text();
+        self.startup_input = Some(input);
+        Ok(text)
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current

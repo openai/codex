@@ -17,6 +17,7 @@
 //!
 //! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim for more details.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -26,17 +27,70 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
+use tokio::time::Instant;
+use tokio::time::Sleep;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
+use super::STARTUP_INPUT_QUIET_PERIOD;
 use super::TuiEvent;
 
 /// Result type produced by an event source.
 pub type EventResult = std::io::Result<Event>;
+
+#[derive(Clone, Copy)]
+pub(super) enum InitialInputPolicy {
+    DiscardAll,
+    PreserveText,
+}
+
+struct InitialInputFilter {
+    policy: InitialInputPolicy,
+    drain_ready: bool,
+    quiet_timer: Option<Pin<Box<Sleep>>>,
+    interrupt_forwarded: bool,
+    suspend_forwarded: bool,
+}
+
+impl InitialInputFilter {
+    fn new(
+        policy: InitialInputPolicy,
+        start_quiet: bool,
+        interrupt_forwarded: bool,
+        suspend_forwarded: bool,
+    ) -> Self {
+        let quiet_timer = start_quiet.then(|| {
+            Box::pin(tokio::time::sleep_until(
+                Instant::now() + STARTUP_INPUT_QUIET_PERIOD,
+            ))
+        });
+        Self {
+            policy,
+            drain_ready: !start_quiet,
+            quiet_timer,
+            interrupt_forwarded,
+            suspend_forwarded,
+        }
+    }
+
+    fn reset_quiet_timer(&mut self) {
+        let deadline = Instant::now() + STARTUP_INPUT_QUIET_PERIOD;
+        if let Some(timer) = &mut self.quiet_timer {
+            timer.as_mut().reset(deadline);
+        } else {
+            self.quiet_timer = Some(Box::pin(tokio::time::sleep_until(deadline)));
+        }
+        self.drain_ready = false;
+    }
+}
 
 /// Abstraction over a source of terminal events. Allows swapping in a fake for tests.
 /// Value in production is [`CrosstermEventSource`].
@@ -142,7 +196,8 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
-    discard_initial_input: bool,
+    initial_input_filter: Option<InitialInputFilter>,
+    pending_interrupt: bool,
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
@@ -164,7 +219,8 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             resume_stream,
             terminal_focused,
             poll_draw_first: false,
-            discard_initial_input: false,
+            initial_input_filter: None,
+            pending_interrupt: false,
             #[cfg(unix)]
             suspend_context,
             #[cfg(unix)]
@@ -172,9 +228,74 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    pub fn discarding_initial_input(mut self) -> Self {
-        self.discard_initial_input = true;
+    pub(super) fn filtering_initial_input(
+        mut self,
+        policy: InitialInputPolicy,
+        start_quiet: bool,
+        pending_interrupt: bool,
+        suspend_forwarded: bool,
+    ) -> Self {
+        self.initial_input_filter = Some(InitialInputFilter::new(
+            policy,
+            start_quiet,
+            pending_interrupt,
+            suspend_forwarded,
+        ));
+        self.pending_interrupt = pending_interrupt;
         self
+    }
+
+    fn should_forward_initial_event(&mut self, event: &Event) -> bool {
+        let Some(filter) = &mut self.initial_input_filter else {
+            return true;
+        };
+        match event {
+            Event::Key(key_event) => {
+                filter.reset_quiet_timer();
+                if is_interrupt(*key_event) {
+                    return if filter.interrupt_forwarded {
+                        false
+                    } else {
+                        filter.interrupt_forwarded = true;
+                        true
+                    };
+                }
+                #[cfg(unix)]
+                if crate::tui::job_control::SUSPEND_KEY.is_press(*key_event) {
+                    return if filter.suspend_forwarded {
+                        false
+                    } else {
+                        filter.suspend_forwarded = true;
+                        true
+                    };
+                }
+                matches!(filter.policy, InitialInputPolicy::PreserveText)
+                    && is_text_input(*key_event)
+            }
+            Event::Paste(_) => {
+                filter.reset_quiet_timer();
+                matches!(filter.policy, InitialInputPolicy::PreserveText)
+            }
+            Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => true,
+            _ => false,
+        }
+    }
+
+    fn poll_initial_input_filter(&mut self, cx: &mut Context<'_>) {
+        let Some(filter) = &mut self.initial_input_filter else {
+            return;
+        };
+        if filter.drain_ready {
+            self.initial_input_filter = None;
+            return;
+        }
+        let Some(timer) = &mut filter.quiet_timer else {
+            self.initial_input_filter = None;
+            return;
+        };
+        if timer.as_mut().poll(cx).is_ready() {
+            self.initial_input_filter = None;
+        }
     }
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
@@ -183,6 +304,12 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
     /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
+        if std::mem::take(&mut self.pending_interrupt) {
+            return Poll::Ready(Some(TuiEvent::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ))));
+        }
         // Some crossterm events map to None (e.g. FocusLost, mouse); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         loop {
@@ -217,7 +344,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                             Poll::Ready(Some(())) => continue,
                             Poll::Ready(None) => return Poll::Ready(None),
                             Poll::Pending => {
-                                self.discard_initial_input = false;
+                                self.poll_initial_input_filter(cx);
                                 return Poll::Pending;
                             }
                         }
@@ -225,10 +352,13 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 }
             };
 
-            if self.discard_initial_input {
+            let Some(event) = poll_result else {
+                continue;
+            };
+            if !self.should_forward_initial_event(&event) {
                 continue;
             }
-            if let Some(mapped) = poll_result.and_then(|event| self.map_crossterm_event(event)) {
+            if let Some(mapped) = self.map_crossterm_event(event) {
                 return Poll::Ready(Some(mapped));
             }
         }
@@ -280,6 +410,25 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             _ => None,
         }
     }
+}
+
+fn is_interrupt(key_event: KeyEvent) -> bool {
+    matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        && key_event.code == KeyCode::Char('c')
+        && key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn is_text_input(key_event: KeyEvent) -> bool {
+    matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        && key_event
+            .modifiers
+            .difference(KeyModifiers::SHIFT)
+            .is_empty()
+        && match key_event.code {
+            KeyCode::Char(ch) => !ch.is_control(),
+            KeyCode::Backspace => true,
+            _ => false,
+        }
 }
 
 impl<S: EventSource + Default + Unpin> Unpin for TuiEventStream<S> {}
@@ -391,10 +540,13 @@ mod tests {
         )
     }
 
-    fn make_stream_discarding_initial_input(
+    fn make_stream_filtering_initial_input(
         broker: Arc<EventBroker<FakeEventSource>>,
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
+        policy: InitialInputPolicy,
+        start_quiet: bool,
+        pending_interrupt: bool,
     ) -> TuiEventStream<FakeEventSource> {
         TuiEventStream::new(
             broker,
@@ -405,7 +557,12 @@ mod tests {
             #[cfg(unix)]
             Arc::new(AtomicBool::new(false)),
         )
-        .discarding_initial_input()
+        .filtering_initial_input(
+            policy,
+            start_quiet,
+            pending_interrupt,
+            /*suspend_forwarded*/ false,
+        )
     }
 
     type SetupState = (
@@ -447,27 +604,106 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn initial_input_handoff_discards_only_events_already_ready() {
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn initial_input_handoff_waits_for_legacy_repeats_to_settle() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
-        let mut stream = make_stream_discarding_initial_input(broker, draw_rx, terminal_focused);
+        let mut stream = make_stream_filtering_initial_input(
+            broker,
+            draw_rx,
+            terminal_focused,
+            InitialInputPolicy::DiscardAll,
+            /*start_quiet*/ false,
+            /*pending_interrupt*/ false,
+        );
         handle.send(Ok(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         ))));
 
         assert!(
-            timeout(Duration::from_millis(10), stream.next())
+            timeout(Duration::from_nanos(1), stream.next())
+                .await
+                .is_err()
+        );
+        tokio::time::advance(STARTUP_INPUT_QUIET_PERIOD / 2).await;
+        handle.send(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ))));
+        assert!(
+            timeout(Duration::from_nanos(1), stream.next())
+                .await
+                .is_err()
+        );
+        tokio::time::advance(STARTUP_INPUT_QUIET_PERIOD).await;
+        assert!(
+            timeout(Duration::from_nanos(1), stream.next())
                 .await
                 .is_err()
         );
 
         let expected = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         handle.send(Ok(Event::Key(expected)));
-        match timeout(Duration::from_secs(1), stream.next()).await {
+        match timeout(Duration::from_nanos(1), stream.next()).await {
             Ok(Some(TuiEvent::Key(actual))) => assert_eq!(actual, expected),
             other => panic!("expected post-handoff key event, saw {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn startup_handoff_preserves_text_while_suppressing_actions() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream_filtering_initial_input(
+            broker,
+            draw_rx,
+            terminal_focused,
+            InitialInputPolicy::PreserveText,
+            /*start_quiet*/ true,
+            /*pending_interrupt*/ false,
+        );
+
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(key)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Key(actual)) if actual == key));
+
+        handle.send(Ok(Event::Paste("b\nc".to_string())));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Paste(text)) if text == "b\nc"));
+
+        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(backspace)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Key(actual)) if actual == backspace));
+
+        handle.send(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ))));
+        assert!(
+            timeout(Duration::from_nanos(1), stream.next())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn startup_handoff_forwards_interrupt_only_once() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream_filtering_initial_input(
+            broker,
+            draw_rx,
+            terminal_focused,
+            InitialInputPolicy::DiscardAll,
+            /*start_quiet*/ true,
+            /*pending_interrupt*/ true,
+        );
+
+        let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(matches!(stream.next().await, Some(TuiEvent::Key(actual)) if actual == interrupt));
+        handle.send(Ok(Event::Key(interrupt)));
+        assert!(
+            timeout(Duration::from_nanos(1), stream.next())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
