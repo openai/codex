@@ -120,6 +120,7 @@ impl CodeModeWaitHandler {
                         .code_mode_service
                         .finish_cell_dispatch(runtime_cell_id);
                 }
+                exec.session.services.elicitations.wait_until_clear().await;
                 handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
                     .await
                     .map(boxed_tool_output)

@@ -85,6 +85,7 @@ impl CodeModeExecuteHandler {
                 .code_mode_service
                 .finish_cell_dispatch(&cell_id);
         }
+        exec.session.services.elicitations.wait_until_clear().await;
         handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await
             .map_err(FunctionCallError::RespondToModel)

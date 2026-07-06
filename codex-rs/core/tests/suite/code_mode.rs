@@ -521,6 +521,76 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
     Ok(())
 }
 
+#[tokio::test]
+async fn code_mode_exec_holds_captured_result_during_elicitation() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build(&server).await?;
+
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", "text('captured');"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    assert_eq!(
+        test.codex.increment_out_of_band_elicitation_count().await?,
+        1
+    );
+    assert_eq!(
+        test.codex.increment_out_of_band_elicitation_count().await?,
+        2
+    );
+    let release_elicitation = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while first_mock.requests().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("initial response request should arrive");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            second_mock.requests().is_empty(),
+            "captured exec result should not return during an elicitation"
+        );
+        assert_eq!(
+            test.codex.decrement_out_of_band_elicitation_count().await?,
+            1
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            second_mock.requests().is_empty(),
+            "captured exec result should wait for every elicitation"
+        );
+        assert_eq!(
+            test.codex.decrement_out_of_band_elicitation_count().await?,
+            0
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+
+    tokio::try_join!(test.submit_turn("run code mode"), release_elicitation)?;
+    second_mock.single_request();
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
