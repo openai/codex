@@ -7,6 +7,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -15,6 +16,8 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::TextPosition;
+use codex_app_server_protocol::TextRange;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -101,6 +104,76 @@ model = "gpt-5.4-mini"
     let response: ThreadStartResponse = to_response(response)?;
 
     assert_eq!(response.model, "openai.gpt-5.5");
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let rules_dir = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    let rules_path = rules_dir.join("broken.rules");
+    std::fs::write(&rules_path, "prefix_rule(")?;
+    let rules_path = std::fs::canonicalize(rules_path)?;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadStartResponse = to_response(response)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("configWarning"),
+    )
+    .await??;
+    let notification: ServerNotification = notification.try_into()?;
+    let ServerNotification::ConfigWarning(warning) = notification else {
+        anyhow::bail!("unexpected notification variant");
+    };
+    let ConfigWarningNotification {
+        summary,
+        details,
+        path,
+        range,
+    } = warning;
+    assert_eq!(
+        (summary, path, range),
+        (
+            "Error parsing rules; custom rules not applied.".to_string(),
+            Some(rules_path.to_string_lossy().to_string()),
+            Some(TextRange {
+                start: TextPosition {
+                    line: 1,
+                    column: 13,
+                },
+                end: TextPosition {
+                    line: 1,
+                    column: 13,
+                },
+            }),
+        )
+    );
+    let details = details.context("warning should include details")?;
+    assert!(
+        details.contains(&format!(
+            "failed to parse rules file {}",
+            rules_path.display()
+        )),
+        "unexpected warning details: {details}"
+    );
+    assert!(
+        details.contains("Parse error"),
+        "unexpected warning details: {details}"
+    );
+
     Ok(())
 }
 
