@@ -15,6 +15,8 @@
 //! popup-specific handler if a popup is visible and otherwise to
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
+//! Accepted completions leave the cursor after one separator while preserving another before any
+//! existing non-whitespace suffix, including another sigil-prefixed token.
 //!
 //! # History Navigation (↑/↓)
 //!
@@ -2059,9 +2061,9 @@ impl ChatComposer {
 
     /// Leaves the cursor after one horizontal separator following a completion.
     ///
-    /// Another separator is preserved before ordinary suffix text so subsequent typing does not
-    /// merge into it. Line breaks are never reused as separators; a space is inserted before them
-    /// so subsequent typing stays on the completed token's line.
+    /// Another separator is preserved before any non-whitespace suffix so subsequent typing does
+    /// not merge into it. Line breaks are never reused as separators; a space is inserted before
+    /// them so subsequent typing stays on the completed token's line.
     fn advance_past_completion_separator(&mut self) {
         let cursor = self.draft.textarea.cursor();
         let existing_separator_len = self.draft.textarea.text()[cursor..]
@@ -2071,11 +2073,11 @@ impl ChatComposer {
             .map(char::len_utf8);
         if let Some(separator_len) = existing_separator_len {
             let after_separator = cursor + separator_len;
-            let separator_precedes_plain_text = self.draft.textarea.text()[after_separator..]
+            let separator_precedes_suffix = self.draft.textarea.text()[after_separator..]
                 .chars()
                 .next()
-                .is_some_and(|c| !c.is_whitespace() && !matches!(c, '@' | '$'));
-            if separator_precedes_plain_text {
+                .is_some_and(|c| !c.is_whitespace());
+            if separator_precedes_suffix {
                 self.draft.textarea.insert_str(" ");
             } else {
                 self.draft.textarea.set_cursor(after_separator);
@@ -9118,6 +9120,18 @@ mod tests {
         composer.insert_str("foo");
 
         assert_eq!(composer.current_text(), "src/main.rs foo next");
+    }
+
+    #[test]
+    fn file_completion_preserves_separator_before_sigiled_suffix() {
+        for suffix in ["@next", "$next"] {
+            let (mut composer, _rx) = new_test_composer();
+            composer.set_text_content(format!("@ma {suffix}"), Vec::new(), Vec::new());
+            composer.insert_selected_path(0.."@ma".len(), "src/main.rs");
+            composer.insert_str("foo");
+
+            assert_eq!(composer.current_text(), format!("src/main.rs foo {suffix}"));
+        }
     }
 
     #[test]
