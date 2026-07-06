@@ -20,6 +20,7 @@ pub(crate) fn validate_bundle(
     let CloudConfigBundleLayers {
         enterprise_managed_config: _,
         enterprise_managed_requirements,
+        ..
     } = bundle_layers;
 
     compose_requirements(enterprise_managed_requirements).map_err(|err| {

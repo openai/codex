@@ -16,6 +16,7 @@ fn test_bundle() -> CloudConfigBundle {
                 name: "Base config".to_string(),
                 contents: "model = \"gpt-5\"".to_string(),
             }],
+            ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![CloudRequirementsFragment {
@@ -23,6 +24,7 @@ fn test_bundle() -> CloudConfigBundle {
                 name: "Base requirements".to_string(),
                 contents: "allowed_approval_policies = [\"never\"]".to_string(),
             }],
+            ..Default::default()
         },
     }
 }

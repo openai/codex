@@ -110,9 +110,11 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: config_toml,
+            ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: requirements_toml,
+            ..Default::default()
         },
     }
 }

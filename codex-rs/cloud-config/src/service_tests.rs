@@ -197,9 +197,11 @@ fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: vec![test_config_fragment()],
+            ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![test_requirements_fragment()],
+            ..Default::default()
         },
     }
 }
@@ -228,6 +230,7 @@ fn invalid_config_bundle() -> CloudConfigBundle {
                 name: "Invalid config".to_string(),
                 contents: "model = [".to_string(),
             }],
+            ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle::default(),
     }
@@ -340,6 +343,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
                 enterprise_managed: vec![test_config_fragment()],
+                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle::default(),
         })),
@@ -350,6 +354,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
             config_toml: CloudConfigTomlBundle::default(),
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![test_requirements_fragment()],
+                ..Default::default()
             },
         })),
         "enterprise_requirements"
@@ -358,9 +363,11 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
                 enterprise_managed: vec![test_config_fragment()],
+                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![test_requirements_fragment()],
+                ..Default::default()
             },
         })),
         "enterprise_config,enterprise_requirements"
@@ -602,6 +609,7 @@ async fn get_bundle_ignores_cache_for_different_auth_identity() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            ..Default::default()
         },
     };
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
@@ -931,6 +939,7 @@ async fn get_bundle_does_not_use_cache_when_auth_identity_is_incomplete() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            ..Default::default()
         },
     };
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
@@ -996,6 +1005,7 @@ async fn refresh_from_remote_updates_cached_bundle() {
                 name: "Replacement requirements".to_string(),
                 contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
             }],
+            ..Default::default()
         },
     };
     let codex_home = tempdir().expect("tempdir");
@@ -1067,6 +1077,7 @@ fn bundle_response_conversion_preserves_fragment_order() {
                         contents: "model = \"low\"".to_string(),
                     },
                 ],
+                ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
                 enterprise_managed: vec![CloudRequirementsFragment {
@@ -1074,6 +1085,7 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     name: "High requirements".to_string(),
                     contents: "allowed_approval_policies = [\"never\"]".to_string(),
                 }],
+                ..Default::default()
             },
         }
     );

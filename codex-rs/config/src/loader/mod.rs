@@ -82,9 +82,11 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 /// composed with config-style TOML merging plus field-specific handling for
 /// hooks, rules, deny-read permissions, and remote sandbox config:
 ///
-/// - system    `/etc/codex/requirements.toml` (Unix) or
+/// - baseline: cloud-managed baseline fragments
+/// - system:   `/etc/codex/requirements.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows)
 /// - cloud:    enterprise-managed cloud config bundle requirements
+/// - overlay:  cloud-managed system-overlay fragments
 /// - legacy:   managed_config.toml reinterpreted as requirements.toml
 /// - admin:    managed preferences (*)
 ///
@@ -93,10 +95,12 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 ///
 /// Configuration is built up from multiple layers in the following order:
 ///
+/// - baseline: cloud-managed baseline fragments
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
-/// - cloud     enterprise-managed cloud config bundle fragments
+/// - cloud:    enterprise-managed cloud config bundle fragments
+/// - overlay:  cloud-managed system-overlay fragments
 /// - user      `${CODEX_HOME}/config.toml`
 /// - profile   `${CODEX_HOME}/<name>.config.toml`, when selected
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
@@ -132,10 +136,14 @@ pub async fn load_config_layers_state(
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut requirements_layers = Vec::new();
-    let mut bundle_requirements_layers = Vec::new();
+    let mut cloud_baseline_requirements_layers = Vec::new();
+    let mut enterprise_managed_requirements_layers = Vec::new();
+    let mut cloud_system_overlay_requirements_layers = Vec::new();
     let mut system_requirements_layer = None;
     let managed_preferences_requirements_layer;
-    let mut cloud_config_layers = Vec::new();
+    let mut cloud_baseline_config_layers = Vec::new();
+    let mut enterprise_managed_config_layers = Vec::new();
+    let mut cloud_system_overlay_config_layers = Vec::new();
 
     if !ignore_managed_requirements {
         if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
@@ -146,11 +154,19 @@ pub async fn load_config_layers_state(
                 CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
             };
             let CloudConfigBundleLayers {
+                baseline_config,
+                system_overlay_config,
                 enterprise_managed_config,
+                baseline_requirements,
+                system_overlay_requirements,
                 enterprise_managed_requirements,
             } = bundle_layers;
-            bundle_requirements_layers = enterprise_managed_requirements;
-            cloud_config_layers = enterprise_managed_config;
+            cloud_baseline_requirements_layers = baseline_requirements;
+            enterprise_managed_requirements_layers = enterprise_managed_requirements;
+            cloud_system_overlay_requirements_layers = system_overlay_requirements;
+            cloud_baseline_config_layers = baseline_config;
+            enterprise_managed_config_layers = enterprise_managed_config;
+            cloud_system_overlay_config_layers = system_overlay_config;
         }
 
         #[cfg(target_os = "macos")]
@@ -178,8 +194,10 @@ pub async fn load_config_layers_state(
         layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
             .await?;
     if !ignore_managed_requirements {
+        requirements_layers.extend(cloud_baseline_requirements_layers);
         requirements_layers.extend(system_requirements_layer);
-        requirements_layers.extend(bundle_requirements_layers);
+        requirements_layers.extend(enterprise_managed_requirements_layers);
+        requirements_layers.extend(cloud_system_overlay_requirements_layers);
         // Continue to support the legacy `managed_config.toml` locations as
         // requirements layers for backwards compatibility.
         requirements_layers.extend(requirements_layers_from_legacy_scheme(
@@ -235,8 +253,10 @@ pub async fn load_config_layers_state(
         },
     )
     .await?;
+    layers.extend(cloud_baseline_config_layers);
     layers.push(system_layer);
-    layers.extend(cloud_config_layers);
+    layers.extend(enterprise_managed_config_layers);
+    layers.extend(cloud_system_overlay_config_layers);
 
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
