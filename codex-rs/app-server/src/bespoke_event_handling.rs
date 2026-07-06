@@ -823,30 +823,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 on_request_permissions_response(pending_response, conversation, thread_state).await;
             });
         }
-        EventMsg::DynamicToolCallRequest(_) | EventMsg::DynamicToolCallResponse(_) => {
-            // Deprecated dynamic-tool events are still fanned out for raw-event and rollout
-            // compatibility consumers. App-server v2 receives the canonical DynamicToolCall
-            // item lifecycle and dispatches client requests from canonical starts instead.
-        }
-        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
-            // Deprecated MCP tool-call events are still fanned out for legacy clients.
-            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
-        }
-        EventMsg::CollabAgentSpawnBegin(_)
+        EventMsg::DynamicToolCallRequest(_)
+        | EventMsg::DynamicToolCallResponse(_)
+        | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabAgentInteractionEnd(_)
+        | EventMsg::CollabWaitingBegin(_)
+        | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => {
-            // Deprecated non-wait collaboration events are still fanned out for raw-event and
-            // rollout compatibility consumers. App-server v2 receives the canonical
-            // CollabAgentToolCall item lifecycle instead.
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::SubAgentActivity(_)
+        | EventMsg::ExecCommandBegin(_)
+        | EventMsg::ExecCommandEnd(_) => {
+            // Deprecated item lifecycle events are still fanned out for raw-event and rollout
+            // compatibility consumers.
+            // App-server v2 receives canonical TurnItem lifecycle instead, and dispatches
+            // dynamic tool requests from canonical DynamicToolCall starts.
         }
-        msg @ (EventMsg::CollabWaitingBegin(_)
-        | EventMsg::CollabWaitingEnd(_)
-        | EventMsg::AgentMessageContentDelta(_)
+        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
+            // Deprecated MCP tool-call events are still fanned out for raw-event and rollout
+            // compatibility consumers.
+            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
+        }
+        msg @ (EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
@@ -858,13 +860,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             );
             outgoing.send_server_notification(notification).await;
         }
-        EventMsg::SubAgentActivity(_) => {
-            // Deprecated sub-agent activity events are still fanned out for raw-event and
-            // rollout compatibility consumers. App-server v2 receives the canonical
-            // SubAgentActivity item lifecycle instead.
-        }
         EventMsg::ContextCompacted(..) => {
-            // Core still fans out this deprecated event for legacy clients;
+            // Core still fans out this deprecated event for raw-event and rollout compatibility
+            // consumers;
             // v2 clients receive the canonical ContextCompaction item instead.
         }
         EventMsg::DeprecationNotice(event) => {
@@ -1096,13 +1094,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::PatchApplyBegin(_) | EventMsg::PatchApplyEnd(_) => {
-            // Core still fans out these deprecated events for legacy clients;
+            // Core still fans out these deprecated events for raw-event and rollout compatibility
+            // consumers;
             // v2 clients receive the canonical FileChange item instead.
-        }
-        EventMsg::ExecCommandBegin(_) | EventMsg::ExecCommandEnd(_) => {
-            // Deprecated command-execution events are still fanned out for raw-event and rollout
-            // compatibility consumers. App-server v2 receives the canonical CommandExecution
-            // item lifecycle instead.
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let notification = item_event_to_server_notification(
