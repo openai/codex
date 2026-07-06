@@ -1,22 +1,32 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::search_capable_apps_builder;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use serde_json::Value;
+use serde_json::json;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -81,6 +91,136 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
             !description.contains("mcp__codex_apps__calendar_create_event(args:")
         }),
         "direct-model-only MCP namespace should not be available through exec: {body}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (apps_server, startup_control) =
+        AppsTestServer::mount_with_startup_control(&server).await?;
+    // Initial context is rendered twice before the first request, so keep both reads unavailable.
+    startup_control.fail_next_initialize_attempts(/*attempts*/ 2);
+    let call_id = "pause-for-apps";
+    let response = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue",
+                            "header": "Continue",
+                            "question": "Continue after Apps recovers?",
+                            "options": [{
+                                "label": "Yes (Recommended)",
+                                "description": "Continue the test."
+                            }, {
+                                "label": "No",
+                                "description": "Stop the test."
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder =
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::DeferredExecutor)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    let mcp_runtime = test.codex.current_mcp_runtime().await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "use an app after it recovers".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    let initial_requests = response.requests();
+    assert_eq!(initial_requests.len(), 1);
+    let initial_request = &initial_requests[0];
+    assert_eq!(
+        initial_request
+            .message_input_texts("developer")
+            .iter()
+            .filter(|text| text.contains("<apps_instructions>"))
+            .count(),
+        0
+    );
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if !mcp_runtime.manager().list_all_tools().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Apps MCP should recover while the turn is paused");
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .filter(|text| text.contains("<apps_instructions>"))
+            .count(),
+        1
     );
 
     Ok(())

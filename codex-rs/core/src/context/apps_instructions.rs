@@ -1,4 +1,3 @@
-use crate::connectors::AppInfo;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
@@ -7,15 +6,6 @@ use super::ContextualUserFragment;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppsInstructions;
-
-impl AppsInstructions {
-    pub(crate) fn from_connectors(connectors: &[AppInfo]) -> Option<Self> {
-        connectors
-            .iter()
-            .any(|connector| connector.is_accessible && connector.is_enabled)
-            .then_some(Self)
-    }
-}
 
 impl ContextualUserFragment for AppsInstructions {
     fn role(&self) -> &'static str {

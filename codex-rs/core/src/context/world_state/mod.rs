@@ -1,4 +1,5 @@
 mod agents_md;
+mod apps_instructions;
 mod environment;
 mod plugins_instructions;
 
@@ -17,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub(crate) use agents_md::AgentsMdState;
+pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use environment::EnvironmentsState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 
