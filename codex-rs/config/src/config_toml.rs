@@ -554,6 +554,14 @@ pub struct DebugConfigLockToml {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThreadStoreToml {
     Local {},
+    /// Store all thread metadata and replay history in MongoDB.
+    Mongodb {
+        /// Mongo database name. Defaults to `codex`.
+        database: Option<String>,
+        /// Environment variable containing the Mongo URI. When unset, the
+        /// backend uses mongodb://127.0.0.1:27017.
+        uri_env: Option<String>,
+    },
     #[schemars(skip)]
     InMemory {
         id: String,

@@ -601,6 +601,8 @@ pub enum ThreadStoreConfig {
     /// Persist threads locally using rollout JSONL files and sqlite metadata.
     #[default]
     Local,
+    /// Persist all thread metadata and replay history in MongoDB.
+    Mongodb { database: String, uri_env: String },
     /// In-memory thread store for test and debug configurations.
     InMemory { id: String },
 }
@@ -2241,6 +2243,10 @@ fn resolve_tool_suggest_config_from_config(
 fn thread_store_config(thread_store: Option<ThreadStoreToml>) -> ThreadStoreConfig {
     match thread_store {
         Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
+        Some(ThreadStoreToml::Mongodb { database, uri_env }) => ThreadStoreConfig::Mongodb {
+            database: database.unwrap_or_else(|| "codex".to_string()),
+            uri_env: uri_env.unwrap_or_else(|| "CODEX_MONGODB_URI".to_string()),
+        },
         Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
         None => ThreadStoreConfig::Local,
     }

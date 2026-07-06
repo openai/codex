@@ -79,6 +79,18 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Reads a thread summary and optionally its persisted history.
     fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread>;
 
+    /// Reads a thread for session resume.
+    ///
+    /// Implementations may return a replay-equivalent checkpoint plus its surviving tail instead
+    /// of every historical rollout item. Stores without resume checkpoints should use the default
+    /// full-history behavior.
+    fn read_thread_for_resume(
+        &self,
+        params: ReadThreadParams,
+    ) -> ThreadStoreFuture<'_, StoredThread> {
+        self.read_thread(params)
+    }
+
     /// Reads a rollout-backed thread by path when the store supports path-addressed lookups.
     ///
     /// Deprecated: new callers should use [`ThreadStore::read_thread`] instead.

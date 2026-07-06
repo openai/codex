@@ -312,6 +312,7 @@ env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
+mongodb = { version = "2.8", default-features = false, features = ["tokio-runtime"] }
 gethostname = "1.1.0"
 gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
 glob = "0.3"
