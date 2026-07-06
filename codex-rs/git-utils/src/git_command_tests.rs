@@ -436,6 +436,39 @@ fn config_source_authority_preserves_and_rejects_a_worktree_crossing_spelling() 
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn config_source_authority_rejects_direct_and_aliased_procfs_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let alias = fixture.path().join("config-alias");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    symlink("/proc/self/cwd", &alias).expect("create procfs alias");
+    let authority = config_authority_for_root(&root);
+
+    for path in [
+        PathBuf::from("/proc/self/cwd/config"),
+        PathBuf::from("/proc/thread-self/cwd/config"),
+        PathBuf::from("/proc/self/fd/1048575/config"),
+        PathBuf::from("/proc/4294967295/cwd/config"),
+        alias.join("config"),
+    ] {
+        let error = authority
+            .ensure_config_source_is_not_worktree_controlled(&path, "test config")
+            .expect_err("process-relative config source");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert!(error.to_string().contains("process-relative"), "{error}");
+        assert!(error.to_string().contains("test config"), "{error}");
+        assert!(
+            error.to_string().contains(&path.display().to_string()),
+            "{error}"
+        );
+    }
+}
+
 #[test]
 fn config_source_authority_allows_protected_metadata_and_unrelated_external_paths() {
     let fixture = tempdir_for_native_git();

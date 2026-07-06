@@ -3137,6 +3137,7 @@ dependencies = [
  "once_cell",
  "pretty_assertions",
  "regex",
+ "rustix 1.1.4",
  "same-file",
  "schemars 0.8.22",
  "serde",

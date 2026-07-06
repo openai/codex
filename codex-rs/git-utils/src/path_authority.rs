@@ -16,6 +16,7 @@ use route_walker::RouteObservationSnapshot;
 #[cfg(windows)]
 use route_walker::invalid_data;
 use route_walker::observe_route;
+use route_walker::route_contains_process_relative_procfs_path;
 #[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_authority_path_is_ambiguous;
 #[cfg(windows)]
@@ -63,6 +64,13 @@ impl RepositoryRouteBoundaries {
             &self.worktree_identities,
             &self.metadata_identities,
         )? != CandidateBoundary::Outside)
+    }
+
+    pub(crate) fn route_contains_process_relative_procfs_path(
+        &self,
+        route: &Path,
+    ) -> io::Result<bool> {
+        route_contains_process_relative_procfs_path(route)
     }
 }
 

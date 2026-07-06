@@ -401,6 +401,50 @@ mod tests {
         assert_eq!(read_file_normalized(&root.join("hello.txt")), "hello\n");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn apply_refuses_process_relative_primary_config_before_mutating_the_repository() {
+        const TEST_NAME: &str = "apply::tests::apply_refuses_process_relative_primary_config_before_mutating_the_repository";
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            run_isolated_test(
+                TEST_NAME,
+                &[
+                    (
+                        "GIT_CONFIG_GLOBAL",
+                        OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                    ),
+                    ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ],
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(
+            root.join("codex-process-relative.gitconfig"),
+            "[filter \"unsafe\"]\nclean = false\n",
+        )
+        .expect("worktree config");
+        let before_index = run(root, &["git", "ls-files", "--stage", "-z"]).1;
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: false,
+        };
+
+        let error = apply_git_patch(&request).expect_err("process-relative primary config");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert!(error.to_string().contains("process-relative"), "{error}");
+        assert!(!root.join("hello.txt").exists());
+        assert_eq!(
+            run(root, &["git", "ls-files", "--stage", "-z"]).1,
+            before_index
+        );
+    }
+
     #[test]
     fn numstat_path_discovery_does_not_preempt_apply_whitespace_result() {
         let _g = env_lock().lock().unwrap();

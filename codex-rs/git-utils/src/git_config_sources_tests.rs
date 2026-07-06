@@ -73,6 +73,16 @@ fn assert_worktree_rejection(error: io::Error) {
 }
 
 fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[&str]) {
+    let cwd = std::env::current_dir().expect("current directory");
+    run_isolated_source_test_from(test_name, env, removed, &cwd);
+}
+
+fn run_isolated_source_test_from(
+    test_name: &str,
+    env: &[(&str, &OsStr)],
+    removed: &[&str],
+    cwd: &Path,
+) {
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     crate::safe_git::isolate_git_command_environment(&mut command);
     command
@@ -80,7 +90,8 @@ fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[
         .arg("--exact")
         .arg("--nocapture")
         .env("CODEX_GIT_CONFIG_SOURCE_CHILD", "1")
-        .env("RUST_TEST_THREADS", "1");
+        .env("RUST_TEST_THREADS", "1")
+        .current_dir(cwd);
     for (name, value) in env {
         command.env(name, value);
     }
@@ -94,6 +105,90 @@ fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rejects_process_relative_primary_config_sources_before_git_changes_cwd() {
+    use std::os::unix::fs::symlink;
+
+    const TEST_NAME: &str = "git_config_sources::tests::rejects_process_relative_primary_config_sources_before_git_changes_cwd";
+    if std::env::var_os("CODEX_GIT_CONFIG_SOURCE_CHILD").is_none() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("repo");
+        let external = fixture.path().join("external");
+        let alias = fixture.path().join("config-alias");
+        let chained_alias = fixture.path().join("chained-alias");
+        init_repo_at(&root);
+        std::fs::create_dir(&external).expect("external directory");
+        std::fs::write(
+            external.join("decoy.gitconfig"),
+            "[safe]\nvalue = external\n",
+        )
+        .expect("external decoy");
+        std::fs::write(
+            external.join(".gitconfig"),
+            "[safe]\nvalue = external-home\n",
+        )
+        .expect("external HOME config");
+        for leaf in ["decoy.gitconfig", "missing-parent.gitconfig"] {
+            std::fs::write(root.join(leaf), "[unsafe]\nhelper = worktree\n")
+                .expect("worktree config");
+        }
+        symlink("/proc/self/cwd", &alias).expect("procfs alias");
+        symlink("config-alias", &chained_alias).expect("chained procfs alias");
+
+        let candidates = [
+            PathBuf::from("/proc/self/cwd/decoy.gitconfig"),
+            PathBuf::from("/proc/thread-self/cwd/decoy.gitconfig"),
+            PathBuf::from("/proc/self/cwd/missing-parent.gitconfig"),
+            alias.join("decoy.gitconfig"),
+            chained_alias.join("decoy.gitconfig"),
+        ];
+        for candidate in &candidates {
+            run_isolated_source_test_from(
+                TEST_NAME,
+                &[
+                    ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                    ("GIT_CONFIG_GLOBAL", candidate.as_os_str()),
+                    ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ],
+                &["GIT_CONFIG_SYSTEM"],
+                &external,
+            );
+        }
+        run_isolated_source_test_from(
+            TEST_NAME,
+            &[
+                ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                ("GIT_CONFIG_GLOBAL", OsStr::new("")),
+                (
+                    "GIT_CONFIG_SYSTEM",
+                    OsStr::new("/proc/self/cwd/decoy.gitconfig"),
+                ),
+            ],
+            &["GIT_CONFIG_NOSYSTEM"],
+            &external,
+        );
+        run_isolated_source_test_from(
+            TEST_NAME,
+            &[
+                ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                ("HOME", OsStr::new("/proc/self/cwd")),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+            &["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "XDG_CONFIG_HOME"],
+            &external,
+        );
+        return;
+    }
+
+    let root = PathBuf::from(
+        std::env::var_os("CODEX_GIT_CONFIG_SOURCE_ROOT").expect("fixture repository root"),
+    );
+    let error = guard(&root).expect_err("process-relative primary config source");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("process-relative"), "{error}");
 }
 
 #[test]

@@ -148,6 +148,31 @@ fn effective_paths_cover_supported_patch_headers() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn best_effort_parser_returns_empty_for_process_relative_primary_config() {
+    const TEST_NAME: &str =
+        "patch_paths::tests::best_effort_parser_returns_empty_for_process_relative_primary_config";
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                (
+                    "GIT_CONFIG_GLOBAL",
+                    OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                ),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+        );
+        return;
+    }
+
+    assert_eq!(
+        extract_paths_from_patch(&new_file_diff("safe.txt")),
+        Vec::<String>::new()
+    );
+}
+
 #[test]
 fn effective_paths_follow_git_for_mismatched_headers() {
     let mismatch = "diff --git a/safe.txt b/safe.txt\n--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
