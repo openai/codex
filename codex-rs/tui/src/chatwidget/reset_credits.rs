@@ -2,29 +2,13 @@ use crate::status::RateLimitSnapshotDisplay;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
-use codex_app_server_protocol::AccountRateLimitResetCreditListResponse;
-use codex_app_server_protocol::RateLimitResetCredit;
 use codex_app_server_protocol::RateLimitResetCreditStatus;
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RateLimitResetType;
 use codex_protocol::account::PlanType;
 use std::collections::BTreeMap;
 
 use super::rate_limits::get_limits_duration;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RateLimitResetCreditsState {
-    pub(crate) available_count: i64,
-    pub(crate) credits: Option<Vec<RateLimitResetCredit>>,
-}
-
-impl From<AccountRateLimitResetCreditListResponse> for RateLimitResetCreditsState {
-    fn from(response: AccountRateLimitResetCreditListResponse) -> Self {
-        Self {
-            available_count: response.available_count,
-            credits: Some(response.data),
-        }
-    }
-}
 
 pub(super) enum RateLimitResetScope {
     Monthly,
@@ -84,7 +68,7 @@ pub(super) fn rate_limit_reset_scope(
 }
 
 pub(super) fn reset_credit_options(
-    summary: &RateLimitResetCreditsState,
+    summary: &RateLimitResetCreditsSummary,
     scope: RateLimitResetScope,
 ) -> Vec<ResetCreditOption> {
     let available_count = summary.available_count.max(0);

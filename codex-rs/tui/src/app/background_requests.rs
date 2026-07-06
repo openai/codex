@@ -7,11 +7,8 @@
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
-use crate::app_event::RateLimitResetCreditsLoad;
 use crate::app_info::app_info_from_api;
 use crate::config_update::format_config_error;
-use codex_app_server_protocol::AccountRateLimitResetCreditListParams;
-use codex_app_server_protocol::AccountRateLimitResetCreditListResponse;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
@@ -86,7 +83,8 @@ impl App {
         tokio::spawn(async move {
             let request = fetch_account_rate_limits(request_handle);
             let result = match origin {
-                RateLimitRefreshOrigin::ResetConsume { .. } => {
+                RateLimitRefreshOrigin::ResetConsume { .. }
+                | RateLimitRefreshOrigin::ResetPicker { .. } => {
                     tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, request)
                         .await
                         .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
@@ -118,49 +116,6 @@ impl App {
             .map_err(|_| "account/usage/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
-        });
-    }
-
-    pub(super) fn refresh_rate_limit_reset_credits(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let reset_credit_request_handle = request_handle.clone();
-            let (rate_limits, reset_credits) = tokio::join!(
-                async move {
-                    tokio::time::timeout(
-                        RATE_LIMIT_RESET_REQUEST_TIMEOUT,
-                        fetch_account_rate_limits(request_handle),
-                    )
-                    .await
-                    .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
-                    .and_then(|result| result.map_err(|err| err.to_string()))
-                },
-                async move {
-                    tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, async move {
-                        let request_id =
-                            RequestId::String(format!("account-reset-credits-{}", Uuid::new_v4()));
-                        reset_credit_request_handle
-                            .request_typed::<AccountRateLimitResetCreditListResponse>(
-                                ClientRequest::AccountRateLimitResetCreditList {
-                                    request_id,
-                                    params: AccountRateLimitResetCreditListParams {},
-                                },
-                            )
-                            .await
-                            .wrap_err("account/rateLimitResetCredit/list failed in TUI")
-                    })
-                    .await
-                    .map_err(|_| "account/rateLimitResetCredit/list timed out in TUI".to_string())
-                    .and_then(|result| result.map_err(|err| err.to_string()))
-                },
-            );
-            let result = combine_rate_limit_reset_credit_results(rate_limits, reset_credits);
-            app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { request_id, result });
         });
     }
 
@@ -810,46 +765,6 @@ pub(super) async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")
 }
 
-fn combine_rate_limit_reset_credit_results(
-    rate_limits: Result<GetAccountRateLimitsResponse, String>,
-    reset_credits: Result<AccountRateLimitResetCreditListResponse, String>,
-) -> Result<RateLimitResetCreditsLoad, String> {
-    match (rate_limits, reset_credits) {
-        (rate_limits, Ok(reset_credits)) => {
-            let rate_limits = match rate_limits {
-                Ok(rate_limits) => Some(rate_limits),
-                Err(_) => {
-                    tracing::warn!(
-                        "account/rateLimits/read failed during reset-credit picker refresh"
-                    );
-                    None
-                }
-            };
-            Ok(RateLimitResetCreditsLoad {
-                rate_limits,
-                reset_credits: reset_credits.into(),
-            })
-        }
-        (Ok(rate_limits), Err(_)) => {
-            tracing::warn!(
-                "account/rateLimitResetCredit/list failed; falling back to the available reset count"
-            );
-            let reset_credits = rate_limits
-                .rate_limit_reset_credits
-                .clone()
-                .ok_or_else(|| "usage limit reset details are unavailable".to_string());
-            reset_credits.map(|reset_credits| RateLimitResetCreditsLoad {
-                rate_limits: Some(rate_limits),
-                reset_credits: crate::chatwidget::RateLimitResetCreditsState {
-                    available_count: reset_credits.available_count,
-                    credits: None,
-                },
-            })
-        }
-        (Err(_), Err(_)) => Err("couldn't load usage limit resets".to_string()),
-    }
-}
-
 pub(super) async fn fetch_account_token_activity(
     request_handle: AppServerRequestHandle,
 ) -> Result<codex_app_server_protocol::GetAccountTokenUsageResponse> {
@@ -1362,82 +1277,13 @@ pub(super) fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -
 mod tests {
     use super::*;
     use crate::app::test_support::make_test_app;
-    use crate::chatwidget::RateLimitResetCreditsState;
     use codex_app_server_protocol::PluginMarketplaceEntry;
-    use codex_app_server_protocol::RateLimitResetCreditsSummary;
     use codex_protocol::mcp::Tool;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
-    }
-
-    fn test_rate_limits(available_reset_count: i64) -> GetAccountRateLimitsResponse {
-        GetAccountRateLimitsResponse {
-            rate_limits: codex_app_server_protocol::RateLimitSnapshot {
-                limit_id: None,
-                limit_name: None,
-                primary: None,
-                secondary: None,
-                credits: None,
-                individual_limit: None,
-                plan_type: None,
-                rate_limit_reached_type: None,
-            },
-            rate_limits_by_limit_id: None,
-            rate_limit_reset_credits: Some(RateLimitResetCreditsSummary {
-                available_count: available_reset_count,
-            }),
-        }
-    }
-
-    #[test]
-    fn reset_credit_results_preserve_whichever_source_succeeds() {
-        let details = combine_rate_limit_reset_credit_results(
-            Err("rate limits unavailable".to_string()),
-            Ok(AccountRateLimitResetCreditListResponse {
-                available_count: 1,
-                data: Vec::new(),
-            }),
-        )
-        .expect("reset-credit details should remain usable");
-        assert_eq!(
-            (details.rate_limits, details.reset_credits),
-            (
-                None,
-                RateLimitResetCreditsState {
-                    available_count: 1,
-                    credits: Some(Vec::new()),
-                },
-            )
-        );
-
-        let rate_limits = test_rate_limits(/*available_reset_count*/ 2);
-        let count_only = combine_rate_limit_reset_credit_results(
-            Ok(rate_limits.clone()),
-            Err("reset-credit details unavailable".to_string()),
-        )
-        .expect("reset-credit count should remain usable");
-        assert_eq!(
-            (count_only.rate_limits, count_only.reset_credits),
-            (
-                Some(rate_limits),
-                RateLimitResetCreditsState {
-                    available_count: 2,
-                    credits: None,
-                },
-            )
-        );
-
-        assert_eq!(
-            combine_rate_limit_reset_credit_results(
-                Err("rate limits unavailable".to_string()),
-                Err("reset-credit details unavailable".to_string()),
-            )
-            .unwrap_err(),
-            "couldn't load usage limit resets"
-        );
     }
 
     #[test]

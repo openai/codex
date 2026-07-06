@@ -11,11 +11,7 @@ use uuid::Uuid;
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
 
 fn reset_credits(available_count: i64) -> RateLimitResetCreditsSummary {
-    RateLimitResetCreditsSummary { available_count }
-}
-
-fn reset_credit_state(available_count: i64) -> RateLimitResetCreditsState {
-    RateLimitResetCreditsState {
+    RateLimitResetCreditsSummary {
         available_count,
         credits: None,
     }
@@ -24,8 +20,8 @@ fn reset_credit_state(available_count: i64) -> RateLimitResetCreditsState {
 fn detailed_reset_credits(
     available_count: i64,
     credits: Vec<RateLimitResetCredit>,
-) -> RateLimitResetCreditsState {
-    RateLimitResetCreditsState {
+) -> RateLimitResetCreditsSummary {
+    RateLimitResetCreditsSummary {
         available_count,
         credits: Some(credits),
     }
@@ -295,7 +291,7 @@ async fn rate_limit_reset_popup_states_snapshot() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         empty_request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 0)),
+        Ok(reset_credits(/*available_count*/ 0)),
     ));
     record_popup(&chat, &mut states);
 
@@ -408,7 +404,7 @@ async fn usage_limit_reset_confirmation_uses_monthly_copy_for_monthly_limits_sna
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         go_request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 1)),
+        Ok(reset_credits(/*available_count*/ 1)),
     ));
     states.push(format!("Go:\n{}", render_bottom_popup(&chat, /*width*/ 80)));
 
@@ -447,7 +443,7 @@ async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 1)),
+        Ok(reset_credits(/*available_count*/ 1)),
     ));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -506,7 +502,7 @@ async fn rate_limit_reset_confirmation_can_use_reset() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 1)),
+        Ok(reset_credits(/*available_count*/ 1)),
     ));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -698,7 +694,7 @@ async fn account_change_invalidates_pending_reset_requests() {
     assert!(!chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 2)),
+        Ok(reset_credits(/*available_count*/ 2)),
     ));
     assert!(chat.bottom_pane.no_modal_or_popup_active());
 }
@@ -735,7 +731,7 @@ async fn rate_limit_reset_load_result_updates_popup_beneath_overlay() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(reset_credit_state(/*available_count*/ 2)),
+        Ok(reset_credits(/*available_count*/ 2)),
     ));
     assert_eq!(
         chat.bottom_pane.active_view_id(),

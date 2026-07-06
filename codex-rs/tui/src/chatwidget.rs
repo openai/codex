@@ -388,7 +388,6 @@ pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 mod reset_credits;
 pub(crate) use self::rate_limits::limit_label_for_window;
-pub(crate) use self::reset_credits::RateLimitResetCreditsState;
 mod reasoning_shortcuts;
 mod rendering;
 mod replay;

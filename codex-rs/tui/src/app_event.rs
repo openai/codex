@@ -40,7 +40,6 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
-use crate::chatwidget::RateLimitResetCreditsState;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
 use codex_app_server_protocol::AskForApproval;
@@ -90,12 +89,6 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RateLimitResetCreditsLoad {
-    pub(crate) rate_limits: Option<GetAccountRateLimitsResponse>,
-    pub(crate) reset_credits: RateLimitResetCreditsState,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PluginLocation {
     Local { marketplace_path: AbsolutePathBuf },
@@ -127,7 +120,8 @@ pub(crate) struct PluginRemoteSectionError {
 /// invocation and must call `finish_status_rate_limit_refresh` when done so the
 /// card stops showing a "refreshing" state. A `UsageMenu` refreshes a cached
 /// zero reset count so the disabled menu entry can become available without a
-/// restart.
+/// restart. A `ResetPicker` refreshes the rate limits and detailed reset-credit
+/// rows before showing redemption choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
     /// Eagerly fetched after bootstrap for `/status` data and reset availability.
@@ -137,6 +131,8 @@ pub(crate) enum RateLimitRefreshOrigin {
     StatusCommand { request_id: u64 },
     /// User reopened `/usage` while the cached reset-credit count was zero.
     UsageMenu { request_id: u64 },
+    /// User opened the reset-credit picker.
+    ResetPicker { request_id: u64 },
     /// Refresh requested after a reset credit was successfully consumed.
     ResetConsume { request_id: u64 },
 }
@@ -329,12 +325,6 @@ pub(crate) enum AppEvent {
 
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
-
-    /// Result of reading the current reset-credit balance.
-    RateLimitResetCreditsLoaded {
-        request_id: u64,
-        result: Result<RateLimitResetCreditsLoad, String>,
-    },
 
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {

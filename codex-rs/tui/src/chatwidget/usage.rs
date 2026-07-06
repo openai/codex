@@ -3,7 +3,6 @@ use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use uuid::Uuid;
 
-use super::reset_credits::RateLimitResetCreditsState;
 use super::reset_credits::rate_limit_reset_scope;
 use super::reset_credits::reset_credit_options;
 use super::*;
@@ -121,7 +120,7 @@ impl ChatWidget {
         &mut self,
         request_id: u64,
         snapshots: Vec<RateLimitSnapshot>,
-        result: Result<RateLimitResetCreditsState, String>,
+        result: Result<RateLimitResetCreditsSummary, String>,
     ) -> bool {
         if self.pending_rate_limit_reset_request_id != Some(request_id) {
             return false;
@@ -159,7 +158,7 @@ impl ChatWidget {
 
     fn rate_limit_reset_confirmation_params(
         &self,
-        reset_credits: &RateLimitResetCreditsState,
+        reset_credits: &RateLimitResetCreditsSummary,
     ) -> SelectionViewParams {
         let scope = rate_limit_reset_scope(&self.rate_limit_snapshots_by_limit_id, self.plan_type);
         let mut items = vec![SelectionItem {
