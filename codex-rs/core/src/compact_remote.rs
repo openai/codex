@@ -7,6 +7,8 @@ use crate::compact::InitialContextInjection;
 use crate::compact::build_compaction_initial_context;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact_model_fallback::is_model_unavailable_error;
+use crate::compact_model_fallback::record_model_fallback;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -45,6 +47,7 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
+    fallback_step_context: Option<Arc<StepContext>>,
     turn_state: Arc<OnceLock<String>>,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -53,6 +56,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
+        fallback_step_context.as_ref(),
         Some(turn_state),
         initial_context_injection,
         CompactionTrigger::Auto,
@@ -81,6 +85,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
+        /*fallback_step_context*/ None,
         /*turn_state*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
@@ -94,6 +99,7 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
+    fallback_step_context: Option<&Arc<StepContext>>,
     turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
@@ -139,9 +145,11 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         step_context,
+        fallback_step_context,
         turn_state,
         initial_context_injection,
         compaction_metadata,
+        reason,
         &mut analytics_details,
     )
     .await;
@@ -173,9 +181,11 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
+    fallback_step_context: Option<&Arc<StepContext>>,
     turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    reason: CompactionReason,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
@@ -185,21 +195,52 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let active_context_tokens_before = analytics_details.active_context_tokens_before;
-    let RemoteCompactAttempt {
-        turn_context,
-        new_history,
-        trace_input_history,
-        compaction_trace,
-    } = run_remote_compact_attempt(
+    let attempt = run_remote_compact_attempt(
         sess,
         step_context,
-        turn_state,
+        turn_state.clone(),
         compaction_item_id.as_str(),
         compaction_metadata,
         active_context_tokens_before,
         analytics_details,
     )
-    .await?;
+    .await;
+    let attempt = match attempt {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            let Some(fallback_step_context) = fallback_step_context else {
+                return Err(error);
+            };
+            if !is_model_unavailable_error(&error, turn_context.model_info.slug.as_str()) {
+                return Err(error);
+            }
+            let fallback_result = run_remote_compact_attempt(
+                sess,
+                fallback_step_context,
+                turn_state,
+                compaction_item_id.as_str(),
+                compaction_metadata,
+                active_context_tokens_before,
+                analytics_details,
+            )
+            .await;
+            record_model_fallback(
+                &sess.services.session_telemetry,
+                turn_context.model_info.slug.as_str(),
+                fallback_step_context.turn.model_info.slug.as_str(),
+                reason,
+                CompactionImplementation::ResponsesCompact,
+                fallback_result.is_ok(),
+            );
+            fallback_result?
+        }
+    };
+    let RemoteCompactAttempt {
+        turn_context,
+        new_history,
+        trace_input_history,
+        compaction_trace,
+    } = attempt;
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
