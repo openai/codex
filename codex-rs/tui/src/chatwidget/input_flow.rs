@@ -50,6 +50,13 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn clear_startup_draft_protection_if_discarded(&mut self) {
+        if self.startup_draft_pending_mcp_servers.is_some() && self.bottom_pane.composer_is_empty()
+        {
+            self.clear_startup_draft_protection();
+        }
+    }
+
     pub(crate) fn mark_startup_draft_rendered(&mut self) {
         if self.startup_draft_pending_mcp_servers.is_some() {
             self.startup_draft_rendered = true;

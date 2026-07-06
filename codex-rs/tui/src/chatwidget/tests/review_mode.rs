@@ -1070,6 +1070,27 @@ async fn ctrl_c_clears_startup_draft_protection_only_with_the_composer() {
     );
 }
 
+#[tokio::test]
+async fn editing_away_startup_draft_clears_submission_protection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.restore_startup_draft("captured during startup");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+
+    assert!(chat.bottom_pane.composer_is_empty());
+    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+    chat.bottom_pane.insert_str("replacement draft");
+    assert_matches!(
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        InputResult::Submitted { .. }
+    );
+
+    chat.restore_startup_draft("external editor draft");
+    chat.apply_external_edit(String::new());
+    assert!(chat.startup_draft_pending_mcp_servers.is_none());
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[tokio::test]
