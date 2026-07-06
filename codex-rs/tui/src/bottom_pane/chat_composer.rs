@@ -15,10 +15,21 @@
 //! popup-specific handler if a popup is visible and otherwise to
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
-//! Accepted completions leave the cursor after one separator while preserving another before any
-//! existing non-whitespace suffix, including another sigil-prefixed token.
-//! Popup dismissal follows the same token occurrence across offset-only edits without suppressing
-//! a later identical token.
+//!
+//! # Completion and Popup Dismissal
+//!
+//! Popup selection passes the detected token range directly to the insertion path. After replacing
+//! that range, completion leaves the cursor after one horizontal separator. It advances across an
+//! existing separator when no suffix would be joined; otherwise it inserts a space, preserving the
+//! existing separator before a non-whitespace suffix. It also inserts a space rather than crossing
+//! a line break.
+//!
+//! `Esc` records the active token as dismissed. A completed value that begins with `@` or `$` is
+//! also re-dismissed before popup synchronization, because separator affinity can still identify
+//! the completed token to the left of the cursor. Synchronization keeps the popup hidden only while
+//! the query, complete token text, and ordinal among matching whitespace-delimited tokens remain
+//! the same. This preserves dismissal across offset-only edits without suppressing a later
+//! identical token.
 //!
 //! # History Navigation (↑/↓)
 //!
@@ -2065,14 +2076,6 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
-    fn is_horizontal_whitespace(c: char) -> bool {
-        c.is_whitespace()
-            && !matches!(
-                c,
-                '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
-            )
-    }
-
     /// Leaves the cursor after one horizontal separator following a completion.
     ///
     /// Another separator is preserved before any non-whitespace suffix so subsequent typing does
@@ -2083,7 +2086,18 @@ impl ChatComposer {
         let existing_separator_len = self.draft.textarea.text()[cursor..]
             .chars()
             .next()
-            .filter(|c| Self::is_horizontal_whitespace(*c))
+            .filter(|c| {
+                c.is_whitespace()
+                    && !matches!(
+                        *c,
+                        '\n' | '\r'
+                            | '\u{000B}'
+                            | '\u{000C}'
+                            | '\u{0085}'
+                            | '\u{2028}'
+                            | '\u{2029}'
+                    )
+            })
             .map(char::len_utf8);
         if let Some(separator_len) = existing_separator_len {
             let after_separator = cursor + separator_len;
