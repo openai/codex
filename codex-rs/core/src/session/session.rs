@@ -32,6 +32,13 @@ pub(crate) struct Session {
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
     pub(super) state: Mutex<SessionState>,
+    /// Keeps idle history mutation and its rollout persistence atomic with reconciliation.
+    pub(super) history_persistence_lock: Arc<Mutex<()>>,
+    /// Keeps rollout append order identical to persisted-history cursor update order.
+    pub(super) rollout_persistence_lock: Arc<Mutex<()>>,
+    /// Keeps response-item persistence and its raw/canonical event batch on one side of a
+    /// running-thread resume snapshot cut.
+    pub(super) event_delivery_lock: Arc<Mutex<()>>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
@@ -1135,6 +1142,9 @@ impl Session {
                 agent_status,
                 out_of_band_elicitation_paused,
                 state: Mutex::new(state),
+                history_persistence_lock: Arc::new(Mutex::new(())),
+                rollout_persistence_lock: Arc::new(Mutex::new(())),
+                event_delivery_lock: Arc::new(Mutex::new(())),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 multi_agent_version,

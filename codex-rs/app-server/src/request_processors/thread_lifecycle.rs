@@ -1,5 +1,11 @@
 use super::*;
+use crate::bespoke_event_handling::hook_prompt_thread_item;
+use crate::bespoke_event_handling::maybe_emit_raw_response_item_completed;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::protocol::Event;
+use std::collections::VecDeque;
+use std::future::Future;
+use tokio::sync::mpsc;
 
 pub(super) const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
 
@@ -20,6 +26,7 @@ struct UnloadingState {
     delay: Duration,
     has_subscribers_rx: watch::Receiver<bool>,
     has_subscribers: (bool, Instant),
+    point_operation_count_rx: watch::Receiver<usize>,
     thread_status_rx: watch::Receiver<ThreadStatus>,
     is_active: (bool, Instant),
 }
@@ -34,6 +41,10 @@ impl UnloadingState {
             .thread_state_manager
             .subscribe_to_has_connections(thread_id)
             .await?;
+        let point_operation_count_rx = listener_task_context
+            .thread_state_manager
+            .subscribe_to_point_operation_count(thread_id)
+            .await?;
         let thread_status_rx = listener_task_context
             .thread_watch_manager
             .subscribe(thread_id)
@@ -47,12 +58,16 @@ impl UnloadingState {
             delay,
             has_subscribers_rx,
             has_subscribers,
+            point_operation_count_rx,
             thread_status_rx,
             is_active,
         })
     }
 
     fn unloading_target(&self) -> Option<Instant> {
+        if *self.point_operation_count_rx.borrow() != 0 {
+            return None;
+        }
         match (self.has_subscribers, self.is_active) {
             ((false, has_no_subscribers_since), (false, is_inactive_since)) => {
                 Some(std::cmp::max(has_no_subscribers_since, is_inactive_since) + self.delay)
@@ -109,6 +124,11 @@ impl UnloadingState {
                     }
                     self.sync_receiver_values();
                 },
+                changed = self.point_operation_count_rx.changed() => {
+                    if changed.is_err() {
+                        return false;
+                    }
+                },
                 changed = self.thread_status_rx.changed() => {
                     if changed.is_err() {
                         return false;
@@ -129,6 +149,31 @@ pub(super) enum ThreadShutdownResult {
 pub(super) enum EnsureConversationListenerResult {
     Attached,
     ConnectionClosed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ResumeEventCoverage {
+    pub(super) represented_in_resume_snapshot: bool,
+    pub(super) request_live_for_resumed_connection: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ResumePayloadMode {
+    Full,
+    Redacted,
+}
+
+impl ResumePayloadMode {
+    fn is_redacted(self) -> bool {
+        matches!(self, Self::Redacted)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct BufferedRawResponseRouting {
+    pub(super) event_coverage: ResumeEventCoverage,
+    pub(super) raw_events_enabled: bool,
+    pub(super) resume_payload_mode: ResumePayloadMode,
 }
 
 #[expect(
@@ -240,7 +285,7 @@ pub(super) async fn ensure_listener_task_running(
         .await;
     let thread_settings_baseline =
         thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
-    let (mut listener_command_rx, listener_generation) = {
+    let (mut listener_command_rx, listener_command_tx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
@@ -259,23 +304,41 @@ pub(super) async fn ensure_listener_task_running(
         };
         listener_task_context
             .thread_state_manager
-            .register_listener_command_tx(conversation_id, listener_command_tx);
-        (listener_command_rx, listener_generation)
+            .register_listener_command_tx(conversation_id, listener_command_tx.clone());
+        (
+            listener_command_rx,
+            listener_command_tx,
+            listener_generation,
+        )
     };
-    let ListenerTaskContext {
-        outgoing,
-        thread_manager,
-        thread_state_manager,
-        pending_thread_unloads,
-        thread_watch_manager,
-        thread_list_state_permit,
-        fallback_model_provider,
-        codex_home,
-        ..
-    } = listener_task_context;
-    let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        let resume_worker_cancel = CancellationToken::new();
+        let _resume_worker_cancel_guard = resume_worker_cancel.clone().drop_guard();
+        let mut resume_in_flight = false;
+        let mut buffered_resume_events = Vec::new();
+        let mut resume_exec_delta_replay = ResumeExecDeltaReplay::default();
+        let mut deferred_listener_commands = VecDeque::new();
         loop {
+            if !resume_in_flight {
+                while let Some(listener_command) = deferred_listener_commands.pop_front() {
+                    let transition = handle_thread_listener_command(
+                        conversation_id,
+                        &conversation,
+                        &listener_task_context,
+                        &thread_state,
+                        &listener_command_tx,
+                        &resume_worker_cancel,
+                        &mut buffered_resume_events,
+                        &mut resume_exec_delta_replay,
+                        listener_command,
+                    )
+                    .await;
+                    apply_listener_command_transition(&mut resume_in_flight, transition);
+                    if resume_in_flight {
+                        break;
+                    }
+                }
+            }
             tokio::select! {
                 biased;
                 _ = &mut cancel_rx => {
@@ -286,18 +349,23 @@ pub(super) async fn ensure_listener_task_running(
                     let Some(listener_command) = listener_command else {
                         break;
                     };
-                    handle_thread_listener_command(
+                    if should_defer_listener_command(resume_in_flight, &listener_command) {
+                        deferred_listener_commands.push_back(listener_command);
+                        continue;
+                    }
+                    let transition = handle_thread_listener_command(
                         conversation_id,
                         &conversation,
-                        codex_home.as_path(),
-                        &thread_state_manager,
+                        &listener_task_context,
                         &thread_state,
-                        &thread_watch_manager,
-                        &outgoing_for_task,
-                        &pending_thread_unloads,
+                        &listener_command_tx,
+                        &resume_worker_cancel,
+                        &mut buffered_resume_events,
+                        &mut resume_exec_delta_replay,
                         listener_command,
                     )
                     .await;
+                    apply_listener_command_transition(&mut resume_in_flight, transition);
                 }
                 event = conversation.next_event() => {
                     let event = match event {
@@ -308,46 +376,39 @@ pub(super) async fn ensure_listener_task_running(
                         }
                     };
 
-                    // Track the event before emitting any typed translations
-                    // so thread-local state such as raw event opt-in stays
-                    // synchronized with the conversation.
-                    let raw_events_enabled = {
-                        let mut thread_state = thread_state.lock().await;
-                        thread_state.track_current_turn_event(&event.id, &event.msg);
-                        thread_state.experimental_raw_events
+                    let event = if resume_in_flight {
+                        match route_resume_in_flight_event(
+                            event,
+                            /*has_buffered_prefix*/ !buffered_resume_events.is_empty(),
+                        ) {
+                            ResumeInFlightEvent::DispatchImmediately(event) => {
+                                resume_exec_delta_replay.retain(&event);
+                                event
+                            }
+                            ResumeInFlightEvent::Buffer(buffered) => {
+                                buffered_resume_events.push(buffered);
+                                continue;
+                            }
+                        }
+                    } else {
+                        event
                     };
-                    let subscribed_connection_ids = thread_state_manager
+
+                    let raw_events_enabled =
+                        track_thread_event(&thread_state, &event).await;
+                    let subscribed_connection_ids = listener_task_context
+                        .thread_state_manager
                         .subscribed_connection_ids(conversation_id)
                         .await;
-                    let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
-                        outgoing_for_task.clone(),
+                    dispatch_thread_event(
+                        event,
+                        conversation_id,
+                        &conversation,
+                        &listener_task_context,
+                        &thread_state,
                         subscribed_connection_ids,
-                        conversation_id,
-                    );
-
-                    if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
-                        && !raw_events_enabled
-                    {
-                        maybe_emit_hook_prompt_item_completed(
-                            conversation_id,
-                            &event.id,
-                            &raw_response_item_event.item,
-                            &thread_outgoing,
-                        )
-                        .await;
-                        continue;
-                    }
-
-                    apply_bespoke_event_handling(
-                        event.clone(),
-                        conversation_id,
-                        conversation.clone(),
-                        thread_manager.clone(),
-                        thread_outgoing,
-                        thread_state.clone(),
-                        thread_watch_manager.clone(),
-                        thread_list_state_permit.clone(),
-                        fallback_model_provider.clone(),
+                        /*item_lifecycle_connection_ids*/ None,
+                        raw_events_enabled,
                     )
                     .await;
                 }
@@ -363,7 +424,10 @@ pub(super) async fn ensure_listener_task_running(
                         continue;
                     }
                     {
-                        let mut pending_thread_unloads = pending_thread_unloads.lock().await;
+                        let mut pending_thread_unloads = listener_task_context
+                            .pending_thread_unloads
+                            .lock()
+                            .await;
                         if pending_thread_unloads.contains(&conversation_id) {
                             continue;
                         }
@@ -373,11 +437,11 @@ pub(super) async fn ensure_listener_task_running(
                         pending_thread_unloads.insert(conversation_id);
                     }
                     unload_thread_without_subscribers(
-                        thread_manager.clone(),
-                        outgoing_for_task.clone(),
-                        pending_thread_unloads.clone(),
-                        thread_state_manager.clone(),
-                        thread_watch_manager.clone(),
+                        Arc::clone(&listener_task_context.thread_manager),
+                        Arc::clone(&listener_task_context.outgoing),
+                        Arc::clone(&listener_task_context.pending_thread_unloads),
+                        listener_task_context.thread_state_manager.clone(),
+                        listener_task_context.thread_watch_manager.clone(),
                         conversation_id,
                         conversation.clone(),
                     )
@@ -387,14 +451,94 @@ pub(super) async fn ensure_listener_task_running(
             }
         }
 
+        resume_worker_cancel.cancel();
+
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
+            listener_task_context
+                .thread_state_manager
+                .unregister_listener_command_tx(conversation_id);
             thread_state.clear_listener();
         }
     });
     Ok(())
 }
+
+async fn track_thread_event(thread_state: &Arc<Mutex<ThreadState>>, event: &Event) -> bool {
+    // Track before emitting typed translations so thread-local state, including the active-turn
+    // overlay and raw event opt-in, stays synchronized with the core conversation.
+    let mut thread_state = thread_state.lock().await;
+    thread_state.track_current_turn_event(&event.id, &event.msg);
+    thread_state.experimental_raw_events
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_thread_event(
+    event: Event,
+    conversation_id: ThreadId,
+    conversation: &Arc<CodexThread>,
+    listener_task_context: &ListenerTaskContext,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    subscribed_connection_ids: Vec<ConnectionId>,
+    item_lifecycle_connection_ids: Option<Vec<ConnectionId>>,
+    raw_events_enabled: bool,
+) {
+    let ListenerTaskContext {
+        outgoing,
+        thread_manager,
+        thread_watch_manager,
+        thread_list_state_permit,
+        fallback_model_provider,
+        ..
+    } = listener_task_context;
+    let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+        Arc::clone(outgoing),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+
+    if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
+        && !raw_events_enabled
+    {
+        maybe_emit_hook_prompt_item_completed(
+            conversation_id,
+            &event.id,
+            &raw_response_item_event.item,
+            &thread_outgoing,
+        )
+        .await;
+        return;
+    }
+
+    let item_lifecycle_outgoing = item_lifecycle_connection_ids.map(|connection_ids| {
+        ThreadScopedOutgoingMessageSender::new(
+            Arc::clone(outgoing),
+            connection_ids,
+            conversation_id,
+        )
+    });
+    apply_bespoke_event_handling_with_item_lifecycle_outgoing(
+        event,
+        conversation_id,
+        Arc::clone(conversation),
+        Arc::clone(thread_manager),
+        thread_outgoing,
+        Arc::clone(thread_state),
+        thread_watch_manager.clone(),
+        Arc::clone(thread_list_state_permit),
+        fallback_model_provider.to_string(),
+        item_lifecycle_outgoing,
+    )
+    .await;
+}
+
+#[path = "thread_lifecycle/resume_event_coverage.rs"]
+mod resume_event_coverage;
+use resume_event_coverage::*;
+
+#[path = "thread_lifecycle/resume_event_dispatch.rs"]
+mod resume_event_dispatch;
+use resume_event_dispatch::*;
 
 pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
     match tokio::time::timeout(Duration::from_secs(10), thread.shutdown_and_wait()).await {
@@ -456,258 +600,13 @@ pub(super) async fn unload_thread_without_subscribers(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_thread_listener_command(
-    conversation_id: ThreadId,
-    conversation: &Arc<CodexThread>,
-    codex_home: &Path,
-    thread_state_manager: &ThreadStateManager,
-    thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
-    listener_command: ThreadListenerCommand,
-) {
-    match listener_command {
-        ThreadListenerCommand::SendThreadResumeResponse(resume_request) => {
-            handle_pending_thread_resume_request(
-                conversation_id,
-                conversation,
-                codex_home,
-                thread_state_manager,
-                thread_state,
-                thread_watch_manager,
-                outgoing,
-                pending_thread_unloads,
-                *resume_request,
-            )
-            .await;
-        }
-        ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, goal } => {
-            outgoing
-                .send_server_notification(ServerNotification::ThreadGoalUpdated(
-                    ThreadGoalUpdatedNotification {
-                        thread_id: conversation_id.to_string(),
-                        turn_id,
-                        goal,
-                    },
-                ))
-                .await;
-        }
-        ThreadListenerCommand::EmitThreadGoalCleared => {
-            outgoing
-                .send_server_notification(ServerNotification::ThreadGoalCleared(
-                    ThreadGoalClearedNotification {
-                        thread_id: conversation_id.to_string(),
-                    },
-                ))
-                .await;
-        }
-        ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
-            send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
-        }
-        ThreadListenerCommand::ResolveServerRequest {
-            request_id,
-            completion_tx,
-        } => {
-            resolve_pending_server_request(
-                conversation_id,
-                thread_state_manager,
-                outgoing,
-                request_id,
-            )
-            .await;
-            let _ = completion_tx.send(());
-        }
-    }
-}
+#[path = "thread_lifecycle/resume_response.rs"]
+mod resume_response;
+use resume_response::*;
 
-#[allow(clippy::too_many_arguments)]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "running-thread resume subscription must be serialized against pending unloads"
-)]
-pub(super) async fn handle_pending_thread_resume_request(
-    conversation_id: ThreadId,
-    conversation: &Arc<CodexThread>,
-    _codex_home: &Path,
-    thread_state_manager: &ThreadStateManager,
-    thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
-    pending: crate::thread_state::PendingThreadResumeRequest,
-) {
-    let active_turn = {
-        let state = thread_state.lock().await;
-        state.active_turn_snapshot()
-    };
-    tracing::debug!(
-        thread_id = %conversation_id,
-        request_id = ?pending.request_id,
-        active_turn_present = active_turn.is_some(),
-        active_turn_id = ?active_turn.as_ref().map(|turn| turn.id.as_str()),
-        active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
-        "composing running thread resume response"
-    );
-    let has_live_in_progress_turn =
-        matches!(conversation.agent_status().await, AgentStatus::Running)
-            || active_turn
-                .as_ref()
-                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
-
-    let request_id = pending.request_id;
-    let connection_id = request_id.connection_id;
-    let mut thread = pending.thread_summary;
-    if pending.include_turns {
-        populate_thread_turns_from_history(
-            &mut thread,
-            &pending.history_items,
-            active_turn.as_ref(),
-        );
-    }
-
-    let thread_status = thread_watch_manager
-        .loaded_status_for_thread(&thread.id)
-        .await;
-
-    set_thread_status_and_interrupt_stale_turns(
-        &mut thread,
-        thread_status,
-        has_live_in_progress_turn,
-    );
-    let token_usage_thread = pending.include_turns.then(|| thread.clone());
-    let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
-        match super::thread_processor::build_thread_resume_initial_turns_page(
-            &pending.history_items,
-            thread.status.clone(),
-            has_live_in_progress_turn,
-            active_turn,
-            params,
-        ) {
-            Ok(page) => Some(page),
-            Err(error) => {
-                outgoing.send_error(request_id, error).await;
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    if pending.redact_resume_payloads {
-        redact_thread_resume_payloads(&mut thread.turns);
-        if let Some(initial_turns_page) = initial_turns_page.as_mut() {
-            redact_thread_resume_payloads(&mut initial_turns_page.data);
-        }
-    }
-
-    {
-        let pending_thread_unloads = pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&conversation_id) {
-            drop(pending_thread_unloads);
-            outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(format!(
-                        "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
-                    )),
-                )
-                .await;
-            return;
-        }
-        if !thread_state_manager
-            .try_add_connection_to_thread(conversation_id, connection_id)
-            .await
-        {
-            tracing::debug!(
-                thread_id = %conversation_id,
-                connection_id = ?connection_id,
-                "skipping running thread resume for closed connection"
-            );
-            return;
-        }
-    }
-
-    let config_snapshot = pending.config_snapshot;
-    let cwd = config_snapshot.cwd().clone();
-    let ThreadConfigSnapshot {
-        model,
-        model_provider_id,
-        service_tier,
-        approval_policy,
-        approvals_reviewer,
-        permission_profile,
-        active_permission_profile,
-        workspace_roots,
-        reasoning_effort,
-        originator,
-        ..
-    } = config_snapshot;
-    let instruction_sources = pending.instruction_sources;
-    let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
-    let active_permission_profile =
-        thread_response_active_permission_profile(active_permission_profile);
-    let session_id = conversation.session_configured().session_id.to_string();
-    thread.session_id = session_id;
-
-    let response = ThreadResumeResponse {
-        thread,
-        model,
-        model_provider: model_provider_id,
-        service_tier,
-        cwd,
-        runtime_workspace_roots: workspace_roots,
-        instruction_sources,
-        approval_policy: approval_policy.into(),
-        approvals_reviewer: approvals_reviewer.into(),
-        sandbox,
-        active_permission_profile,
-        reasoning_effort,
-        multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
-        initial_turns_page,
-    };
-    outgoing
-        .send_response_with_thread_originator(request_id, response, originator)
-        .await;
-    // Match cold resume: metadata-only resume should attach the listener without
-    // paying the cost of turn reconstruction for historical usage replay.
-    if let Some(token_usage_thread) = token_usage_thread {
-        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
-            token_usage_thread.turns.as_slice(),
-        );
-        // Rejoining a loaded thread has the same UI contract as a cold resume, but
-        // uses the live conversation state instead of reconstructing a new session.
-        send_thread_token_usage_update_to_connection(
-            outgoing,
-            connection_id,
-            conversation_id,
-            &token_usage_thread,
-            conversation.as_ref(),
-            token_usage_turn_id,
-        )
-        .await;
-    }
-    if pending.emit_thread_goal_update {
-        if let Some(state_db) = pending.thread_goal_state_db {
-            send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
-        } else {
-            tracing::warn!(
-                thread_id = %conversation_id,
-                "state db unavailable when reading thread goal for running thread resume"
-            );
-        }
-    }
-    outgoing
-        .replay_requests_to_connection_for_thread(connection_id, conversation_id)
-        .await;
-    // App-server owns resume response and snapshot ordering, so wait until
-    // replay completes before letting extensions react to the idle thread.
-    if pending.emit_thread_goal_update {
-        conversation.emit_thread_idle_lifecycle_if_idle().await;
-    }
-}
-
+#[path = "thread_lifecycle/resume_worker.rs"]
+mod resume_worker;
+use resume_worker::*;
 pub(super) async fn send_thread_goal_snapshot_notification(
     outgoing: &Arc<OutgoingMessageSender>,
     thread_id: ThreadId,
@@ -800,3 +699,7 @@ pub(super) fn set_thread_status_and_interrupt_stale_turns(
     }
     thread.status = status;
 }
+
+#[cfg(test)]
+#[path = "thread_lifecycle_tests.rs"]
+mod tests;

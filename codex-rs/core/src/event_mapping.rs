@@ -21,6 +21,7 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -40,6 +41,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<personality_spec>",
     // Keep recognizing token-budget wrappers persisted by older versions.
     "<token_budget>",
+    TOKEN_BUDGET_REMINDER_OPEN_TAG,
     CONTEXT_WINDOW_OPEN_TAG,
     CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
     "<rollout_budget>",

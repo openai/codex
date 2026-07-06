@@ -145,6 +145,16 @@ impl Session {
         items: Vec<ResponseItem>,
         current_turn_context: Option<&TurnContext>,
     ) {
+        let _history_guard = self.acquire_history_persistence_lock().await;
+        self.inject_no_new_turn_locked(items, current_turn_context)
+            .await;
+    }
+
+    pub(crate) async fn inject_no_new_turn_locked(
+        &self,
+        items: Vec<ResponseItem>,
+        current_turn_context: Option<&TurnContext>,
+    ) {
         let Err(items) = self.inject_if_running(items).await else {
             return;
         };

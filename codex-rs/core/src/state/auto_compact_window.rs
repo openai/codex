@@ -72,6 +72,16 @@ impl AutoCompactWindow {
         self.ids = ids;
     }
 
+    pub(super) fn reconcile(&mut self, window_number: u64, ids: AutoCompactWindowIds) {
+        if self.window_number == window_number && self.ids == ids {
+            return;
+        }
+        self.restore(window_number, ids);
+        self.new_context_window_requested = false;
+        self.prefill_input_tokens = None;
+        self.token_budget_reminder_delivered = false;
+    }
+
     pub(super) fn advance(&mut self) -> (u64, AutoCompactWindowIds) {
         self.window_number = self.window_number.saturating_add(1);
         self.ids.previous_window_id = Some(self.ids.window_id);
@@ -83,6 +93,10 @@ impl AutoCompactWindow {
 
     pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
         !std::mem::replace(&mut self.token_budget_reminder_delivered, true)
+    }
+
+    pub(super) fn set_token_budget_reminder_delivered(&mut self, delivered: bool) {
+        self.token_budget_reminder_delivered = delivered;
     }
 
     pub(super) fn request_new_context_window(&mut self) {
