@@ -1,3 +1,6 @@
+mod execution_scope;
+
+use crate::attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use crate::config;
 use crate::credential_broker::BROKERED_CREDENTIALS_ENV_KEY;
 use crate::credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
@@ -22,6 +25,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
+
+use self::execution_scope::ExecutionScope;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
@@ -233,6 +238,7 @@ impl NetworkProxyBuilder {
             reserved_listeners,
             policy_decider: self.policy_decider,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
+            execution_scope: None,
         })
     }
 }
@@ -370,6 +376,7 @@ pub struct NetworkProxy {
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+    execution_scope: Option<Arc<ExecutionScope>>,
 }
 
 impl std::fmt::Debug for NetworkProxy {
@@ -424,6 +431,7 @@ pub const PROXY_ENV_KEYS: &[&str] = &[
     CREDENTIAL_BROKER_ACTIVE_ENV_KEY,
     BROKERED_CREDENTIALS_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
+    PROXY_ATTRIBUTION_TOKEN_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
     NODE_USE_ENV_PROXY_ENV_KEY,
     "HTTP_PROXY",
@@ -697,6 +705,12 @@ impl NetworkProxy {
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
         self.state.virtualize_child_credentials(&mut env);
+        if let Some(execution_scope) = self.execution_scope.as_ref() {
+            env.insert(
+                PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
+                execution_scope.attribution_token.clone(),
+            );
+        }
         let mut loopback_ports = [
             Some(addrs.http_addr),
             self.socks_enabled.then_some(addrs.socks_addr),
@@ -778,6 +792,14 @@ impl NetworkProxy {
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
+        if let Some(execution_scope) = self.execution_scope.as_ref() {
+            anyhow::ensure!(
+                execution_scope.environment_id == environment_id,
+                "execution-scoped network proxy belongs to environment `{}`, not `{environment_id}`",
+                execution_scope.environment_id
+            );
+        }
+
         let mut proxies = self
             .environment_proxies
             .lock()
@@ -895,6 +917,10 @@ impl NetworkProxy {
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
+        anyhow::ensure!(
+            self.execution_scope.is_none(),
+            "execution-scoped network proxy is already running"
+        );
         let current_cfg = self.state.current_cfg().await?;
         if !current_cfg.network.enabled {
             warn!("network.enabled is false; skipping proxy listeners");
