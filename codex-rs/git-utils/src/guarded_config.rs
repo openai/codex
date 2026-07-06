@@ -1,13 +1,21 @@
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Arc;
 
 use crate::FsmonitorOverride;
 use crate::git_command::GitCommand;
 use crate::git_command::GitRunner;
+use crate::git_config::GitConfigEntry;
+use crate::git_config::read_effective_config_with_fallback;
 use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::safe_git::DISABLED_HOOKS_PATH;
+use crate::safe_git::ExecutableFilterDrivers;
+use crate::safe_git::FilterPolicySnapshot;
+use crate::safe_git::build_filter_policy_snapshot;
 
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
@@ -39,6 +47,20 @@ impl<'git> ValidatedConfigSources<'git> {
             base_config_args: base_config_args.into_boxed_slice(),
         })
     }
+
+    fn read_effective(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        read_effective_config_with_fallback(
+            self.git,
+            &self.canonical_root,
+            &self.base_config_args,
+            pattern,
+            probe,
+        )
+    }
 }
 
 fn validate_base_config_args(args: &[String]) -> io::Result<()> {
@@ -67,15 +89,25 @@ fn invalid_base_config_args() -> io::Error {
 /// Operation-owned Git configuration capability.
 ///
 /// All operation children are rooted at the authorized repository, inherit
-/// the exact frozen base invocation, and receive fixed library safety scalars.
+/// the exact frozen base invocation, receive fixed library safety scalars, and
+/// retain any sealed filter override for the capability lifetime.
 pub(crate) struct GuardedGitConfig<'git> {
     sources: ValidatedConfigSources<'git>,
+    identity: Arc<CapabilityIdentity>,
+    // Ordered, typed snapshots keep each sealed filter overlay alive through
+    // every later child. Downstream staging may attach a fresh Git-add policy
+    // without rebuilding or weakening the source authorization.
+    filters: Vec<FilterPolicySnapshot>,
 }
+
+struct CapabilityIdentity;
 
 #[derive(Clone, Copy)]
 enum BoundSubcommand {
     AddLiteralPathspecs,
     Apply,
+    CheckAttr,
+    HashObject,
     RevParse,
 }
 
@@ -84,6 +116,8 @@ impl BoundSubcommand {
         match self {
             Self::AddLiteralPathspecs => "add",
             Self::Apply => "apply",
+            Self::CheckAttr => "check-attr",
+            Self::HashObject => "hash-object",
             Self::RevParse => "rev-parse",
         }
     }
@@ -96,8 +130,50 @@ impl BoundSubcommand {
     }
 }
 
-/// A command whose runner, root, config invocation, and fixed subcommand are
-/// inseparably bound to one operation capability.
+/// A sealed filter-only include owned for the complete capability lifetime.
+/// Its fields and include argument are intentionally inaccessible outside this
+/// module; callers can neither forge one nor append it to another command.
+pub(crate) struct SealedFilterConfigOverride {
+    owner: Arc<CapabilityIdentity>,
+    include_arg: String,
+    _config_dir: tempfile::TempDir,
+}
+
+impl SealedFilterConfigOverride {
+    fn append_to(
+        &self,
+        owner: &Arc<CapabilityIdentity>,
+        command: &mut GitCommand,
+    ) -> io::Result<()> {
+        self.ensure_owner(owner)?;
+        command.args(["-c", &self.include_arg]);
+        Ok(())
+    }
+
+    fn append_rendered_args(
+        &self,
+        owner: &Arc<CapabilityIdentity>,
+        args: &mut Vec<String>,
+    ) -> io::Result<()> {
+        self.ensure_owner(owner)?;
+        args.push("-c".to_string());
+        args.push(self.include_arg.clone());
+        Ok(())
+    }
+
+    fn ensure_owner(&self, owner: &Arc<CapabilityIdentity>) -> io::Result<()> {
+        if !Arc::ptr_eq(&self.owner, owner) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "sealed Git filter override belongs to another operation",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A command whose runner, root, config invocation, overlay lifetime, and
+/// fixed subcommand are inseparably bound to one operation capability.
 pub(crate) struct GuardedGitCommand<'operation, 'git> {
     operation: &'operation GuardedGitConfig<'git>,
     inner: GitCommand,
@@ -118,6 +194,16 @@ impl GuardedGitCommand<'_, '_> {
         self
     }
 
+    pub(crate) fn disable_optional_locks(&mut self) -> &mut Self {
+        self.inner.env("GIT_OPTIONAL_LOCKS", "0");
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
+        self
+    }
+
     pub(crate) fn output(self) -> io::Result<std::process::Output> {
         self.operation.sources.git.output(self.inner)
     }
@@ -131,6 +217,8 @@ impl<'git> GuardedGitConfig<'git> {
     ) -> io::Result<Self> {
         Ok(Self {
             sources: ValidatedConfigSources::authorize(git, canonical_root, base_config_args)?,
+            identity: Arc::new(CapabilityIdentity),
+            filters: Vec::new(),
         })
     }
 
@@ -150,6 +238,10 @@ impl<'git> GuardedGitConfig<'git> {
         self.guarded_command(BoundSubcommand::RevParse)
     }
 
+    pub(crate) fn filter_attribute_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        self.guarded_command(BoundSubcommand::CheckAttr)
+    }
+
     fn guarded_command(
         &self,
         subcommand: BoundSubcommand,
@@ -160,6 +252,11 @@ impl<'git> GuardedGitConfig<'git> {
             .command_for_cwd(&self.sources.canonical_root)?;
         command.args(&self.sources.base_config_args);
         append_safe_scalar_overrides(&mut command);
+        for filter in &self.filters {
+            if let Some(neutralizer) = filter.neutralizer() {
+                neutralizer.append_to(&self.identity, &mut command)?;
+            }
+        }
         subcommand.append_to(&mut command);
         Ok(GuardedGitCommand {
             operation: self,
@@ -167,10 +264,119 @@ impl<'git> GuardedGitConfig<'git> {
         })
     }
 
+    pub(crate) fn command_for_sentinel_filter_probe<'operation>(
+        &'operation self,
+        neutralizer: &'operation SealedFilterConfigOverride,
+        driver: &str,
+        required: bool,
+    ) -> io::Result<GuardedGitCommand<'operation, 'git>> {
+        if !matches!(driver, "set" | "unset" | "unspecified") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git filter sentinel probe requested for a non-sentinel driver",
+            ));
+        }
+        let mut command = self
+            .sources
+            .git
+            .command_for_cwd(&self.sources.canonical_root)?;
+        command.args(&self.sources.base_config_args);
+        append_safe_scalar_overrides(&mut command);
+        for filter in &self.filters {
+            if let Some(attached) = filter.neutralizer() {
+                attached.append_to(&self.identity, &mut command)?;
+            }
+        }
+        neutralizer.append_to(&self.identity, &mut command)?;
+        command.args(["-c", &format!("filter.{driver}.required={required}")]);
+        BoundSubcommand::HashObject.append_to(&mut command);
+        Ok(GuardedGitCommand {
+            operation: self,
+            inner: command,
+        })
+    }
+
+    pub(crate) fn read_effective(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        self.sources.read_effective(pattern, probe)
+    }
+
+    fn ensure_owned_config_path(&self, path: &Path, description: &str) -> io::Result<()> {
+        self.sources
+            .git
+            .ensure_config_source_is_not_worktree_controlled(path, description)
+    }
+
+    pub(crate) fn build_filter_override(
+        &self,
+        executable_drivers: &ExecutableFilterDrivers,
+    ) -> io::Result<SealedFilterConfigOverride> {
+        let config_dir = tempfile::tempdir()?;
+        let config_path = config_dir.path().join("filter-neutralization.gitconfig");
+        self.ensure_owned_config_path(&config_path, "owned Git filter neutralization")?;
+        std::fs::write(&config_path, [])?;
+        for driver in executable_drivers.iter() {
+            for name in ["clean", "smudge", "process"] {
+                self.write_filter_override_value(&config_path, driver, name, "")?;
+            }
+            self.write_filter_override_value(&config_path, driver, "required", "false")?;
+        }
+        let config_path = config_path.to_str().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 filter guard path")
+        })?;
+        Ok(SealedFilterConfigOverride {
+            owner: Arc::clone(&self.identity),
+            include_arg: format!("include.path={config_path}"),
+            _config_dir: config_dir,
+        })
+    }
+
+    fn write_filter_override_value(
+        &self,
+        config_path: &Path,
+        driver: &str,
+        name: &str,
+        value: &str,
+    ) -> io::Result<()> {
+        debug_assert!(matches!(name, "clean" | "smudge" | "process" | "required"));
+        let mut command = self
+            .sources
+            .git
+            .command_for_cwd(&self.sources.canonical_root)?;
+        command
+            .args(&self.sources.base_config_args)
+            .args(["config", "--file"])
+            .arg(config_path)
+            .args(["--add", &format!("filter.{driver}.{name}"), value]);
+        let output = self.sources.git.output(command)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to write Git filter neutralization for {driver:?} (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
+        let filter = build_filter_policy_snapshot(self, paths)?;
+        self.filters.push(filter);
+        Ok(())
+    }
+
     pub(crate) fn render_command_for_log(&self, args: &[String]) -> io::Result<String> {
         let mut parts = vec!["git".to_string()];
         parts.extend(self.sources.base_config_args.iter().cloned());
         parts.extend(safe_scalar_override_args());
+        for filter in &self.filters {
+            if let Some(neutralizer) = filter.neutralizer() {
+                neutralizer.append_rendered_args(&self.identity, &mut parts)?;
+            }
+        }
         parts.extend(args.iter().cloned());
         Ok(format!(
             "(cd {} && {})",

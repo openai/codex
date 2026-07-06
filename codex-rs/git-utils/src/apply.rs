@@ -52,7 +52,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let expected_root = crate::get_git_repo_root(&requested_cwd)
         .ok_or_else(|| io::Error::other("not a Git repository"))
         .and_then(std::fs::canonicalize)?;
-    let config = GuardedGitConfig::authorize(&git, &expected_root, cfg_parts)?;
+    let mut config = GuardedGitConfig::authorize(&git, &expected_root, cfg_parts)?;
     resolve_git_root(&config, &requested_cwd)?;
 
     // Write unified diff into a temporary file
@@ -60,6 +60,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
     let patch_paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, req.revert)?;
+    config.authorize_filter_paths(&patch_paths)?;
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
@@ -205,6 +206,10 @@ fn run_guarded_apply(
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "apply_filter_tests.rs"]
+mod filter_tests;
 
 #[cfg(test)]
 mod tests {

@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use crate::errors::GitReadError;
 use crate::git_config_environment::GitConfigEnvironmentSnapshot;
@@ -62,6 +63,11 @@ impl GitCommand {
 
     pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
         self.inner.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
         self
     }
 }

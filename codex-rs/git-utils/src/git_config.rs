@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Component;
 use std::path::Path;
@@ -106,6 +107,16 @@ pub(crate) enum GitConfigOrigin {
     File(std::path::PathBuf),
 }
 
+#[cfg(test)]
+pub(crate) fn parse_effective_config(
+    output: &[u8],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(parse_config_entries(output)?
+        .into_iter()
+        .map(|entry| (entry.key.clone(), entry))
+        .collect())
+}
+
 pub(crate) fn parse_config_entries(output: &[u8]) -> io::Result<Vec<GitConfigEntry>> {
     if output.is_empty() {
         return Ok(Vec::new());
@@ -188,6 +199,34 @@ pub(crate) fn parse_config_entries_with_origins(output: &[u8]) -> io::Result<Vec
     Ok(entries)
 }
 
+#[cfg(test)]
+pub(crate) fn parse_effective_config_with_origins(
+    output: &[u8],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(parse_config_entries_with_origins(output)?
+        .into_iter()
+        .map(|entry| (entry.key.clone(), entry))
+        .collect())
+}
+
+pub(crate) fn read_effective_config_entries_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_entries_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )
+}
+
 pub(crate) fn read_config_entries_without_includes(
     git: &GitRunner,
     cwd: &Path,
@@ -196,7 +235,15 @@ pub(crate) fn read_config_entries_without_includes(
     probe: &str,
     config_file: Option<&Path>,
 ) -> io::Result<Vec<GitConfigEntry>> {
-    read_config_entries_with_fallback(git, cwd, git_config_args, pattern, probe, config_file)
+    read_config_entries_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ false,
+        config_file,
+    )
 }
 
 fn read_config_entries_with_fallback(
@@ -205,6 +252,7 @@ fn read_config_entries_with_fallback(
     git_config_args: &[String],
     pattern: &str,
     probe: &str,
+    follow_includes: bool,
     config_file: Option<&Path>,
 ) -> io::Result<Vec<GitConfigEntry>> {
     let scoped = run_effective_config_query(
@@ -213,6 +261,7 @@ fn read_config_entries_with_fallback(
         git_config_args,
         pattern,
         /*show_scope*/ true,
+        follow_includes,
         config_file,
     )?;
     if scoped
@@ -229,6 +278,7 @@ fn read_config_entries_with_fallback(
         git_config_args,
         pattern,
         /*show_scope*/ false,
+        follow_includes,
         config_file,
     )?;
     if !legacy
@@ -245,12 +295,28 @@ fn read_config_entries_with_fallback(
     parse_config_entries_with_origins(&legacy.stdout)
 }
 
+pub(crate) fn read_effective_config_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(
+        read_effective_config_entries_with_fallback(git, cwd, git_config_args, pattern, probe)?
+            .into_iter()
+            .map(|entry| (entry.key.clone(), entry))
+            .collect(),
+    )
+}
+
 fn run_effective_config_query(
     git: &GitRunner,
     cwd: &Path,
     git_config_args: &[String],
     pattern: &str,
     show_scope: bool,
+    follow_includes: bool,
     config_file: Option<&Path>,
 ) -> io::Result<std::process::Output> {
     let mut command = git.command_for_cwd(cwd)?;
@@ -265,7 +331,16 @@ fn run_effective_config_query(
     if show_scope {
         command.arg("--show-scope");
     }
-    command.args(["--show-origin", "--no-includes", "--get-regexp", pattern]);
+    command.args([
+        "--show-origin",
+        if follow_includes {
+            "--includes"
+        } else {
+            "--no-includes"
+        },
+        "--get-regexp",
+        pattern,
+    ]);
     git.output(command)
 }
 
