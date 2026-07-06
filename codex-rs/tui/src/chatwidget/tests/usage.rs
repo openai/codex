@@ -522,33 +522,6 @@ async fn rate_limit_reset_confirmation_can_use_reset() {
 }
 
 #[tokio::test]
-async fn rate_limit_reset_picker_keeps_automatic_fallback_for_omitted_details() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let request_id = chat.show_rate_limit_reset_loading_popup();
-    assert!(chat.finish_rate_limit_reset_credits_refresh(
-        request_id,
-        Vec::new(),
-        Ok(detailed_reset_credits(
-            /*available_count*/ 2,
-            vec![reset_credit("credit-1", /*expires_at*/ None)],
-        )),
-    ));
-
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Use any reset"));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::ConsumeRateLimitResetCredit {
-            idempotency_key,
-            credit_id,
-        }) if Uuid::parse_str(&idempotency_key).is_ok() && credit_id.is_none()
-    );
-}
-
-#[tokio::test]
 async fn rate_limit_reset_retry_reuses_idempotency_key() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_consuming_popup();

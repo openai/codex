@@ -130,18 +130,11 @@ pub(super) fn reset_credit_options(
         })
         .collect::<Vec<_>>();
 
-    let detailed_count = i64::try_from(options.len()).unwrap_or(i64::MAX);
     if options.is_empty() {
         options.push(ResetCreditOption {
             credit_id: None,
             name: "Use a reset".to_string(),
             description: scope.usage_description().to_string(),
-        });
-    } else if detailed_count < available_count {
-        options.push(ResetCreditOption {
-            credit_id: None,
-            name: "Use any reset".to_string(),
-            description: "Some expiry details are unavailable.".to_string(),
         });
     }
 
