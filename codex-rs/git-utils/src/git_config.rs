@@ -2,6 +2,19 @@ use std::path::Component;
 use std::path::Path;
 
 pub(crate) fn parse_git_boolean(value: &[u8]) -> Option<bool> {
+    parse_git_boolean_with_minimum(value, i128::from(i32::MIN))
+}
+
+/// Parse the Git boolean grammar while excluding numeric `INT_MIN`.
+///
+/// Older supported Git releases reject that one signed endpoint after unit
+/// expansion, so environment gates that must succeed across versions use this
+/// conservative variant. The accepted spellings otherwise share one parser.
+pub(crate) fn parse_git_boolean_symmetric_i32(value: &[u8]) -> Option<bool> {
+    parse_git_boolean_with_minimum(value, -i128::from(i32::MAX))
+}
+
+fn parse_git_boolean_with_minimum(value: &[u8], minimum: i128) -> Option<bool> {
     if value.eq_ignore_ascii_case(b"true")
         || value.eq_ignore_ascii_case(b"yes")
         || value.eq_ignore_ascii_case(b"on")
@@ -61,7 +74,7 @@ pub(crate) fn parse_git_boolean(value: &[u8]) -> Option<bool> {
     let magnitude = i128::from_str_radix(digits, base).ok()?;
     let signed = if negative { -magnitude } else { magnitude };
     let value = signed.checked_mul(factor)?;
-    (i128::from(i32::MIN)..=i128::from(i32::MAX))
+    (minimum..=i128::from(i32::MAX))
         .contains(&value)
         .then_some(value != 0)
 }

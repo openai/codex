@@ -62,11 +62,21 @@ fn read_file_normalized(path: &Path) -> String {
 
 fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
-    let cwd = std::env::current_dir()?;
-    let git = GitRunner::for_cwd_io(&cwd)?;
-    let paths = extract_effective_paths_from_patch(&git, &patch_path, revert)?;
+    let repo = init_repo();
+    let cwd = repo.path();
+    let git = GitRunner::for_cwd_io(cwd)?;
+    let git_root =
+        crate::get_git_repo_root(cwd).ok_or_else(|| io::Error::other("not a Git repository"))?;
+    let git_root = std::fs::canonicalize(git_root)?;
+    ensure_no_worktree_primary_config_sources(&git, &git_root)?;
+    let paths = extract_effective_paths_from_patch(&git, &git_root, &patch_path, revert, &[])?;
     drop(tmpdir);
     Ok(paths)
+}
+
+fn best_effort_paths(diff: &str) -> Vec<String> {
+    let cwd = tempfile::tempdir().expect("non-repository cwd");
+    extract_paths_from_patch_from_cwd(diff, cwd.path())
 }
 
 #[test]
@@ -127,7 +137,7 @@ fn effective_paths_cover_supported_patch_headers() {
                 "{name}, revert={revert}"
             );
         }
-        assert_eq!(extract_paths_from_patch(diff), expected, "{name}");
+        assert_eq!(best_effort_paths(diff), expected, "{name}");
     }
 
     let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
@@ -135,6 +145,31 @@ fn effective_paths_cover_supported_patch_headers() {
     assert_eq!(
         nul_rename_paths,
         vec!["old name.txt".to_string(), "new name.txt".to_string()]
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn best_effort_parser_returns_empty_for_process_relative_primary_config() {
+    const TEST_NAME: &str =
+        "patch_paths::tests::best_effort_parser_returns_empty_for_process_relative_primary_config";
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                (
+                    "GIT_CONFIG_GLOBAL",
+                    OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                ),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+        );
+        return;
+    }
+
+    assert_eq!(
+        extract_paths_from_patch(&new_file_diff("safe.txt")),
+        Vec::<String>::new()
     );
 }
 
@@ -150,7 +185,7 @@ fn effective_paths_follow_git_for_mismatched_headers() {
         effective_paths(mismatch, /*revert*/ true).unwrap(),
         expected
     );
-    assert_eq!(extract_paths_from_patch(mismatch), expected);
+    assert_eq!(best_effort_paths(mismatch), expected);
 }
 
 #[test]

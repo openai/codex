@@ -59,6 +59,11 @@ impl GitCommand {
         self.inner.env(key, value);
         self
     }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
 }
 
 impl GitRunner {
@@ -100,6 +105,19 @@ impl GitRunner {
         let mut command = self.command();
         command.arg("-C").arg(cwd);
         Ok(command)
+    }
+
+    pub(crate) fn ensure_config_source_is_not_worktree_controlled(
+        &self,
+        path: &Path,
+        description: &str,
+    ) -> io::Result<()> {
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(path, description)
+    }
+
+    pub(crate) fn config_environment_value(&self, name: &str) -> Option<&OsStr> {
+        self.config_environment.value(name)
     }
 
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
