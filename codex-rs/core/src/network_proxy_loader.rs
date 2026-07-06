@@ -63,7 +63,15 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let (exec_policy, warning) = load_exec_policy_with_warning(&config_layer_stack).await?;
+    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
+    let state = build_config_state_from_layers(&config_layer_stack).await?;
+    Ok((state, layer_mtimes))
+}
+
+async fn build_config_state_from_layers(
+    config_layer_stack: &ConfigLayerStack,
+) -> Result<ConfigState> {
+    let (exec_policy, warning) = load_exec_policy_with_warning(config_layer_stack).await?;
     if let Some(err) = warning.as_ref() {
         tracing::warn!(
             "failed to parse execpolicy while building network proxy state: {}",
@@ -71,12 +79,10 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         );
     }
 
-    let config = config_from_layers(&config_layer_stack, &exec_policy)?;
+    let config = config_from_layers(config_layer_stack, &exec_policy)?;
 
-    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
-    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
-    let state = build_config_state(config, constraints)?;
-    Ok((state, layer_mtimes))
+    let constraints = enforce_trusted_constraints(config_layer_stack, &config)?;
+    build_config_state(config, constraints)
 }
 
 fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
