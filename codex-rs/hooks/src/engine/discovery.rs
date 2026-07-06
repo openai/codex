@@ -291,6 +291,13 @@ fn fallback_managed_hooks_source_path(
                 "<enterprise-managed:{name}:{id}>/requirements.toml"
             ))
         }
+        Some(RequirementSource::CloudManaged { layer, id, name }) => {
+            let name = escape_xml_text(name);
+            let id = escape_xml_text(id);
+            synthetic_layer_path(&format!(
+                "<cloud-managed:{layer}:{name}:{id}>/requirements.toml"
+            ))
+        }
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -377,6 +384,9 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         }
         ConfigLayerSource::EnterpriseManaged { id, name } => synthetic_layer_path(&format!(
             "<enterprise-managed:{name}:{id}>/{CONFIG_TOML_FILE}"
+        )),
+        ConfigLayerSource::CloudManaged { layer, id, name } => synthetic_layer_path(&format!(
+            "<cloud-managed:{layer}:{name}:{id}>/{CONFIG_TOML_FILE}"
         )),
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
@@ -619,6 +629,7 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
         ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
+        ConfigLayerSource::CloudManaged { .. } => (HookSource::CloudManagedConfig, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
             (HookSource::LegacyManagedConfigFile, true)
@@ -647,12 +658,14 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
             hook_source_for_requirement_source(sources.first())
         }
         Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
+        Some(RequirementSource::CloudManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_config::CloudManagedLayer;
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
@@ -746,6 +759,43 @@ mod tests {
         assert!(source_path.contains("Name &lt;Admin&gt; &amp; &quot;Ops&quot;"));
         assert!(source_path.contains("id&lt;&amp;&gt;"));
         assert!(!source_path.contains("Name <Admin>"));
+    }
+
+    #[test]
+    fn cloud_managed_synthetic_path_identifies_layer_and_escapes_display_fields() {
+        let source = RequirementSource::CloudManaged {
+            layer: CloudManagedLayer::SystemOverlay,
+            id: "id<&>".to_string(),
+            name: "Name <Admin> & \"Ops\"".to_string(),
+        };
+
+        let source_path = super::fallback_managed_hooks_source_path(Some(&source));
+        let source_path = source_path.display().to_string();
+
+        assert!(source_path.contains("cloud-managed:system-overlay"));
+        assert!(source_path.contains("Name &lt;Admin&gt; &amp; &quot;Ops&quot;"));
+        assert!(source_path.contains("id&lt;&amp;&gt;"));
+        assert!(!source_path.contains("Name <Admin>"));
+        assert_eq!(
+            super::hook_source_for_requirement_source(Some(&source)),
+            HookSource::CloudRequirements
+        );
+    }
+
+    #[test]
+    fn cloud_managed_config_source_path_identifies_layer() {
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::Baseline,
+                id: "layer-1".to_string(),
+                name: "Defaults".to_string(),
+            },
+            TomlValue::Table(Default::default()),
+        );
+
+        let source_path = super::config_toml_source_path(&layer).display().to_string();
+        assert!(source_path.contains("cloud-managed:baseline:Defaults:layer-1"));
+        assert!(source_path.ends_with("config.toml"));
     }
 
     fn command_group(matcher: Option<&str>) -> MatcherGroup {
@@ -1070,6 +1120,14 @@ mod tests {
             super::hook_metadata_for_config_layer_source(&ConfigLayerSource::EnterpriseManaged {
                 id: "cfg_123".to_string(),
                 name: "Base policy".to_string(),
+            }),
+            (HookSource::CloudManagedConfig, true),
+        );
+        assert_eq!(
+            super::hook_metadata_for_config_layer_source(&ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
+                id: "cfg_456".to_string(),
+                name: "Managed overlay".to_string(),
             }),
             (HookSource::CloudManagedConfig, true),
         );

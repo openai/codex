@@ -21,6 +21,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
+/// Position of a fragment within the cloud-managed configuration contract.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum CloudManagedLayer {
+    Baseline,
+    SystemOverlay,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -53,6 +62,20 @@ pub enum ConfigLayerSource {
         /// Admin-facing name for the delivered layer. This is surfaced in
         /// diagnostics so users know which cloud layer needs administrator
         /// attention.
+        name: String,
+    },
+
+    /// Config fragment delivered through the cloud-managed layer contract.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CloudManaged {
+        /// Precedence tier that contains the fragment.
+        layer: CloudManagedLayer,
+
+        /// Stable identifier for the delivered fragment.
+        id: String,
+
+        /// Human-readable name for diagnostics and source attribution.
         name: String,
     },
 
@@ -104,6 +127,10 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::EnterpriseManaged { .. } => 15,
+            ConfigLayerSource::CloudManaged { layer, .. } => match layer {
+                CloudManagedLayer::Baseline => -10,
+                CloudManagedLayer::SystemOverlay => 15,
+            },
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21

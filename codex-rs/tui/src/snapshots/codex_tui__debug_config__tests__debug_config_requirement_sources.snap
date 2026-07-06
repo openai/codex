@@ -5,7 +5,9 @@ expression: rendered.as_str()
 /debug-config
 
 Config layer stack (lowest precedence first):
-  1. user (/home/alice/.codex/config.toml) (enabled)
+  1. cloud-managed baseline (Baseline policy, policy-1) (enabled)
+     Cloud-managed config value: { model = "managed" }
+  2. user (/home/alice/.codex/config.toml) (enabled)
 
 Requirements:
   - allowed_approval_policies: on-request (source: MDM managed_config.toml (legacy))
