@@ -46,13 +46,29 @@ impl ExecutableFilterDrivers {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FilterPolicyRole {
+    Apply,
+    GitAdd,
+}
+
 pub(crate) struct FilterPolicySnapshot {
+    role: FilterPolicyRole,
+    checked_paths: BTreeSet<String>,
     neutralizer: Option<SealedFilterConfigOverride>,
 }
 
 impl FilterPolicySnapshot {
     pub(crate) fn neutralizer(&self) -> Option<&SealedFilterConfigOverride> {
         self.neutralizer.as_ref()
+    }
+
+    pub(crate) fn role(&self) -> FilterPolicyRole {
+        self.role
+    }
+
+    pub(crate) fn contains_checked_path(&self, path: &str) -> bool {
+        self.checked_paths.contains(path)
     }
 }
 
@@ -86,35 +102,116 @@ pub(crate) fn isolate_git_command_environment(command: &mut Command) {
 pub(crate) fn build_filter_policy_snapshot(
     config: &GuardedGitConfig<'_>,
     paths: &[String],
+    execution: FilterExecution,
 ) -> io::Result<FilterPolicySnapshot> {
-    let entries = read_filter_config(config)?;
+    let entries = read_filter_config(config).map_err(|error| {
+        if matches!(execution, FilterExecution::GitAdd)
+            && error.kind() == io::ErrorKind::InvalidData
+        {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("refusing malformed Git filter configuration: {error}"),
+            )
+        } else {
+            error
+        }
+    })?;
     let executable_drivers = executable_filter_drivers(&entries)?;
+    let role = match execution {
+        FilterExecution::AnyWorktreeOperation => FilterPolicyRole::Apply,
+        FilterExecution::GitAdd => FilterPolicyRole::GitAdd,
+    };
+    let checked_paths = paths.iter().cloned().collect();
     if executable_drivers.is_empty() {
-        return Ok(FilterPolicySnapshot { neutralizer: None });
+        return Ok(FilterPolicySnapshot {
+            role,
+            checked_paths,
+            neutralizer: None,
+        });
     }
     let neutralizer = config.build_filter_override(&executable_drivers)?;
+    #[cfg(test)]
+    FILTER_POLICY_OVERLAY_COUNT.with(|count| count.set(count.get() + 1));
     let paths = paths
         .iter()
         .map(|path| path.as_bytes().to_vec())
         .collect::<Vec<_>>();
     let attributes = read_filter_attributes(config, &paths, &executable_drivers, &neutralizer)?;
-    if let Some((driver, path)) = selected_executable_filter(&entries, &attributes)? {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!(
-                "refusing to run an internal Git worktree operation with executable filter {driver:?} selected for {}",
-                String::from_utf8_lossy(&path)
-            ),
-        ));
+    let mut required_cache = BTreeMap::new();
+    for (path, driver) in &attributes {
+        if !executable_drivers.contains(driver) {
+            continue;
+        }
+        let refused = match execution {
+            FilterExecution::AnyWorktreeOperation => true,
+            FilterExecution::GitAdd => {
+                git_add_filter_is_refused(config, &entries, driver, &mut required_cache)?
+            }
+        };
+        if refused {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "refusing to run an internal Git worktree operation with executable filter {driver:?} selected for {}",
+                    String::from_utf8_lossy(path)
+                ),
+            ));
+        }
     }
     Ok(FilterPolicySnapshot {
+        role,
+        checked_paths,
         neutralizer: Some(neutralizer),
     })
+}
+
+fn git_add_filter_is_refused(
+    config: &GuardedGitConfig<'_>,
+    entries: &BTreeMap<String, GitConfigEntry>,
+    driver: &str,
+    required_cache: &mut BTreeMap<String, bool>,
+) -> io::Result<bool> {
+    if ["clean", "process"].into_iter().any(|name| {
+        effective_filter_value(entries, driver, name).is_some_and(|value| !value.is_empty())
+    }) {
+        return Ok(true);
+    }
+    if let Some(required) = required_cache.get(driver) {
+        return Ok(*required);
+    }
+    let required = config
+        .read_bool(&format!("filter.{driver}.required"))
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "refusing selected Git filter {driver:?} with malformed required value: {error}"
+                ),
+            )
+        })?
+        .unwrap_or(false);
+    required_cache.insert(driver.to_string(), required);
+    Ok(required)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FilterExecution {
+    AnyWorktreeOperation,
+    GitAdd,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterCommand {
+    Clean,
+    Smudge,
+    Process,
 }
 
 fn read_filter_config(
     config: &GuardedGitConfig<'_>,
 ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    #[cfg(test)]
+    FILTER_POLICY_READ_COUNT.with(|count| count.set(count.get() + 1));
     config.read_effective(EXECUTABLE_FILTER_CONFIG_PATTERN, "filter")
 }
 
@@ -131,7 +228,7 @@ fn read_filter_attributes(
     write_nul_paths(&mut input, paths)?;
     input.rewind()?;
 
-    let mut command = config.filter_attribute_command()?;
+    let mut command = config.pending_filter_attribute_command(neutralization)?;
     command
         .disable_optional_locks()
         .args(["--stdin", "-z", "filter"])
@@ -268,17 +365,57 @@ fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
     Ok(path.into())
 }
 
+#[cfg(test)]
+fn selected_executable_filter_for(
+    entries: &BTreeMap<String, GitConfigEntry>,
+    attributes: &BTreeMap<Vec<u8>, String>,
+    execution: FilterExecution,
+) -> io::Result<Option<(String, Vec<u8>)>> {
+    let executable_drivers = executable_filter_drivers_for(entries, execution)?;
+    Ok(selected_filter(&executable_drivers, attributes))
+}
+
+#[cfg(test)]
+fn executable_filter_drivers_for(
+    entries: &BTreeMap<String, GitConfigEntry>,
+    execution: FilterExecution,
+) -> io::Result<BTreeSet<String>> {
+    let mut drivers = BTreeSet::new();
+    for entry in entries.values() {
+        if entry.key.ends_with(".required") {
+            continue;
+        }
+        let (driver, command) = filter_driver_and_command(&entry.key)?;
+        let relevant = match execution {
+            FilterExecution::AnyWorktreeOperation => true,
+            FilterExecution::GitAdd => command != FilterCommand::Smudge,
+        };
+        if relevant && !entry.value.is_empty() {
+            drivers.insert(driver);
+        }
+    }
+    Ok(drivers)
+}
+
+#[cfg(test)]
+fn selected_filter(
+    drivers: &BTreeSet<String>,
+    attributes: &BTreeMap<Vec<u8>, String>,
+) -> Option<(String, Vec<u8>)> {
+    for (path, driver) in attributes {
+        if drivers.contains(driver) {
+            return Some((driver.clone(), path.clone()));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
 fn selected_executable_filter(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<Vec<u8>, String>,
 ) -> io::Result<Option<(String, Vec<u8>)>> {
-    let executable_drivers = executable_filter_drivers(entries)?;
-    for (path, driver) in attributes {
-        if executable_drivers.contains(driver) {
-            return Ok(Some((driver.clone(), path.clone())));
-        }
-    }
-    Ok(None)
+    selected_executable_filter_for(entries, attributes, FilterExecution::AnyWorktreeOperation)
 }
 
 fn executable_filter_drivers(
@@ -289,7 +426,7 @@ fn executable_filter_drivers(
         if entry.key.ends_with(".required") {
             continue;
         }
-        let driver = filter_driver_name(&entry.key)?;
+        let (driver, _command) = filter_driver_and_command(&entry.key)?;
         if !entry.value.is_empty() {
             executable_drivers.insert(driver);
         }
@@ -297,15 +434,38 @@ fn executable_filter_drivers(
     Ok(ExecutableFilterDrivers(executable_drivers))
 }
 
+fn effective_filter_value<'a>(
+    entries: &'a BTreeMap<String, GitConfigEntry>,
+    driver: &str,
+    name: &str,
+) -> Option<&'a str> {
+    entries
+        .get(&format!("filter.{driver}.{name}"))
+        .map(|entry| entry.value.as_str())
+}
+
+#[cfg(test)]
 fn filter_driver_name(key: &str) -> io::Result<String> {
+    filter_driver_and_command(key).map(|(driver, _command)| driver)
+}
+
+fn filter_driver_and_command(key: &str) -> io::Result<(String, FilterCommand)> {
     let Some(remainder) = key.strip_prefix("filter.") else {
         return Err(invalid_filter_output("malformed filter config key"));
     };
-    let driver = [".clean", ".smudge", ".process"]
-        .into_iter()
-        .find_map(|suffix| remainder.strip_suffix(suffix))
-        .ok_or_else(|| invalid_filter_output("malformed filter config key"))?;
-    Ok(driver.to_string())
+    let (driver, command) = [
+        (".clean", FilterCommand::Clean),
+        (".smudge", FilterCommand::Smudge),
+        (".process", FilterCommand::Process),
+    ]
+    .into_iter()
+    .find_map(|(suffix, command)| {
+        remainder
+            .strip_suffix(suffix)
+            .map(|driver| (driver, command))
+    })
+    .ok_or_else(|| invalid_filter_output("malformed filter config key"))?;
+    Ok((driver.to_string(), command))
 }
 
 fn write_nul_paths(input: &mut std::fs::File, paths: &[Vec<u8>]) -> io::Result<()> {
@@ -373,6 +533,28 @@ pub(crate) fn parse_filter_attributes(
 
 fn invalid_filter_output(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FILTER_POLICY_READ_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FILTER_POLICY_OVERLAY_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_filter_policy_counts() {
+    FILTER_POLICY_READ_COUNT.with(|count| count.set(0));
+    FILTER_POLICY_OVERLAY_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn filter_policy_read_count() -> usize {
+    FILTER_POLICY_READ_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn filter_policy_overlay_count() -> usize {
+    FILTER_POLICY_OVERLAY_COUNT.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

@@ -1,13 +1,47 @@
 //! Effective patch-path discovery and safe staging guards.
 
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::apply::write_temp_patch;
+use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::exact_staging::update_index_exact_paths_standalone;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
 use crate::guarded_config::GuardedGitConfig;
+
+#[cfg(test)]
+enum StagePathsHookPoint {
+    BindRunner = 0,
+    ResolvePhysicalCwd = 1,
+    PreSpawn = 2,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    #[allow(clippy::type_complexity)]
+    static STAGE_PATHS_HOOKS: std::cell::RefCell<[Option<Box<dyn FnOnce()>>; 3]> =
+        std::cell::RefCell::new([None, None, None]);
+}
+
+#[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code))]
+fn set_stage_paths_hook(point: StagePathsHookPoint, hook: impl FnOnce() + 'static) {
+    STAGE_PATHS_HOOKS.with(|slots| {
+        let prior = slots.borrow_mut()[point as usize].replace(Box::new(hook));
+        assert!(prior.is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_stage_paths_hook(point: StagePathsHookPoint) {
+    let hook = STAGE_PATHS_HOOKS.with(|slots| slots.borrow_mut()[point as usize].take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
 
 // Path discovery must not turn a repository's whitespace policy into an
 // API-level parser failure before the real apply can report its status.
@@ -54,6 +88,8 @@ fn git_apply_numstat_paths_guarded(
     revert: bool,
 ) -> io::Result<Vec<String>> {
     let mut command = config.apply_command()?;
+    #[cfg(test)]
+    run_stage_paths_hook(StagePathsHookPoint::PreSpawn);
     command.args(APPLY_NUMSTAT_ARGS);
     if revert {
         command.arg("-R");
@@ -89,10 +125,11 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
     };
     let paths = (|| -> io::Result<Vec<String>> {
         let git = GitRunner::for_cwd_io(cwd)?;
-        let authorized_cwd = crate::get_git_repo_root(cwd)
+        let requested_cwd = std::fs::canonicalize(cwd)?;
+        let authorized_cwd = crate::get_git_repo_root(&requested_cwd)
             .map(std::fs::canonicalize)
             .transpose()?
-            .unwrap_or(std::fs::canonicalize(cwd)?);
+            .unwrap_or(requested_cwd);
         let config = GuardedGitConfig::authorize(&git, &authorized_cwd, Vec::new())?;
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ false)
     })()
@@ -172,7 +209,7 @@ fn insert_numstat_path(paths: &mut Vec<String>, path: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_patch_path(path: String) -> io::Result<String> {
+pub(crate) fn validate_patch_path(path: String) -> io::Result<String> {
     if path.starts_with('/')
         || path.ends_with('/')
         || invalid_platform_patch_path(&path)
@@ -242,53 +279,125 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
-    let git = GitRunner::for_cwd_io(git_root)?;
-    let requested_cwd = std::fs::canonicalize(git_root)?;
-    let canonical_root = crate::get_git_repo_root(&requested_cwd)
-        .ok_or_else(|| io::Error::other("not a Git repository"))
-        .and_then(std::fs::canonicalize)?;
-    let config = GuardedGitConfig::authorize(&git, &canonical_root, Vec::new())?;
+    let immutable_traversal = !git_root.is_absolute()
+        && git_root.components().next().is_some()
+        && git_root
+            .components()
+            .all(|component| matches!(component, Component::CurDir | Component::ParentDir));
+    let (guarded_root, bound_git) = if git_root.is_absolute() {
+        (git_root.to_path_buf(), None)
+    } else if immutable_traversal {
+        let git = GitRunner::for_cwd_io(Path::new("."))?;
+        #[cfg(test)]
+        run_stage_paths_hook(StagePathsHookPoint::BindRunner);
+        let resolve_immutable_traversal = || -> io::Result<PathBuf> {
+            let mut root = std::fs::canonicalize(Path::new("."))?;
+            for component in git_root.components() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        root.pop();
+                    }
+                    _ => unreachable!("non-traversal component"),
+                }
+            }
+            Ok(root)
+        };
+        let initial_root = resolve_immutable_traversal()?;
+        git.ensure_active_worktree_root(&initial_root)?;
+        #[cfg(test)]
+        run_stage_paths_hook(StagePathsHookPoint::ResolvePhysicalCwd);
+        let live_root = resolve_immutable_traversal()?;
+        git.ensure_active_worktree_root(&live_root)?;
+        (live_root, Some(git))
+    } else {
+        (std::env::current_dir()?.join(git_root), None)
+    };
+    if !guarded_root.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "repository root route could not be anchored to an absolute path",
+        ));
+    }
+    let git = match bound_git {
+        Some(git) => git,
+        None => GitRunner::for_cwd_io(&guarded_root)?,
+    };
+    git.ensure_repository_root_route(&guarded_root)?;
+    let canonical_root = std::fs::canonicalize(&guarded_root)?;
+    let mut config = GuardedGitConfig::authorize(&git, &canonical_root, Vec::new())?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths =
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ true)?;
     let _guard = tmpdir;
-    stage_effective_paths_guarded(&config, &paths)
+    stage_effective_paths_standalone(&mut config, &paths)
 }
 
-/// Preserve the existing reverse staging behavior while constructing every
-/// Git child from the operation-owned configuration capability.
-pub(crate) fn stage_effective_paths_guarded(
-    config: &GuardedGitConfig<'_>,
+pub(crate) fn stage_effective_paths_from_apply(
+    config: &mut GuardedGitConfig<'_>,
     paths: &[String],
 ) -> io::Result<()> {
+    let (existing, content_filter_paths) = classify_exact_staging_leaves(config, paths)?;
+    let _result = update_index_exact_paths_from_apply(config, &existing, &content_filter_paths)?;
+    // Preserve the public helper's historical best-effort treatment of a
+    // non-zero staging command. Security and probe failures still propagate.
+    Ok(())
+}
+
+fn stage_effective_paths_standalone(
+    config: &mut GuardedGitConfig<'_>,
+    paths: &[String],
+) -> io::Result<()> {
+    let (existing, content_filter_paths) = classify_exact_staging_leaves(config, paths)?;
+    let _result = update_index_exact_paths_standalone(config, &existing, &content_filter_paths)?;
+    // Preserve the public helper's historical best-effort treatment of a
+    // non-zero staging command. Security and probe failures still propagate.
+    Ok(())
+}
+
+fn classify_exact_staging_leaves(
+    config: &GuardedGitConfig<'_>,
+    paths: &[String],
+) -> io::Result<(Vec<String>, Vec<String>)> {
     let confined = confine_patch_paths_guarded(config, paths)?;
     let mut existing = Vec::new();
+    let mut content_filter_paths = Vec::new();
     for path in confined.into_exact_leaves()? {
         let joined = config.canonical_root().join(&path);
         if let Ok(metadata) = std::fs::symlink_metadata(&joined) {
-            if leaf_is_traversable_directory(metadata.file_type()) {
+            let file_type = metadata.file_type();
+            if leaf_is_traversable_directory(file_type) {
                 return Err(containment_error(
                     "refusing to recursively stage a directory patch path",
                 ));
             }
+            if leaf_may_run_git_content_filter(file_type) {
+                content_filter_paths.push(path.clone());
+            }
             existing.push(path);
         }
     }
-    if existing.is_empty() {
-        return Ok(());
-    }
-    let mut args = vec!["--".to_string()];
-    args.extend(existing);
-    let mut command = config.literal_add_command()?;
-    command.args(&args);
-    let _output = command.output()?;
-    // Preserve the existing best-effort staging contract on non-zero status.
-    Ok(())
+    Ok((existing, content_filter_paths))
 }
 
 #[cfg(not(windows))]
 fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     file_type.is_dir()
+}
+
+#[cfg(unix)]
+fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
+    // Git stages an exact Unix symlink as a mode-120000 blob containing the
+    // link target. The whole-command neutralizer covers unrelated racy index
+    // entries while this target is omitted from the selected-filter refusal.
+    !file_type.is_symlink()
+}
+
+#[cfg(not(unix))]
+fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
+    // Keep the conservative policy on platforms whose symlink staging
+    // behavior can depend on repository and host configuration.
+    true
 }
 
 #[cfg(windows)]
@@ -376,7 +485,8 @@ pub(crate) fn confine_patch_paths(
     git_root: &Path,
     paths: &[String],
 ) -> io::Result<ConfinedPatchPaths> {
-    let config = GuardedGitConfig::authorize(git, git_root, Vec::new())?;
+    let canonical_root = std::fs::canonicalize(git_root)?;
+    let config = GuardedGitConfig::authorize(git, &canonical_root, Vec::new())?;
     confine_patch_paths_guarded(&config, paths)
 }
 

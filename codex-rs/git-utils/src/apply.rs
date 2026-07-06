@@ -14,7 +14,7 @@ use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::guarded_config::GuardedGitConfig;
 use crate::patch_paths::extract_effective_paths_from_patch_guarded;
-use crate::patch_paths::stage_effective_paths_guarded;
+use crate::patch_paths::stage_effective_paths_from_apply;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
 
@@ -64,7 +64,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths_guarded(&config, &patch_paths)?;
+        stage_effective_paths_from_apply(&mut config, &patch_paths)?;
     }
 
     // Build git args
@@ -216,6 +216,9 @@ mod tests {
     use super::*;
     use crate::guarded_config::config_source_authorization_count;
     use crate::guarded_config::reset_config_source_authorization_count;
+    use crate::safe_git::filter_policy_overlay_count;
+    use crate::safe_git::filter_policy_read_count;
+    use crate::safe_git::reset_filter_policy_counts;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::sync::Mutex;
@@ -628,6 +631,22 @@ mod tests {
     #[test]
     fn apply_then_revert_success() {
         let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            let config_dir = tempfile::tempdir().expect("config tempdir");
+            let global_config = config_dir.path().join("global.gitconfig");
+            let system_config = config_dir.path().join("system.gitconfig");
+            std::fs::write(&global_config, "").expect("empty global config");
+            std::fs::write(&system_config, "").expect("empty system config");
+            run_isolated_test(
+                "apply::tests::apply_then_revert_success",
+                &[
+                    ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+                    ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+                ],
+            );
+            return;
+        }
+
         let repo = init_repo();
         let root = repo.path();
         // Seed file and commit original content
@@ -658,8 +677,11 @@ mod tests {
             preflight: false,
         };
         reset_config_source_authorization_count();
+        reset_filter_policy_counts();
         let res_revert = apply_git_patch(&revert_req).expect("revert ok");
         assert_eq!(config_source_authorization_count(), 1);
+        assert_eq!(filter_policy_read_count(), 2);
+        assert_eq!(filter_policy_overlay_count(), 0);
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_revert, "orig\n");
