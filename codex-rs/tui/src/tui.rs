@@ -111,6 +111,7 @@ mod tests {
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
+    use crate::tui::test_support::make_test_tui;
     use codex_config::types::NotificationCondition;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
@@ -121,6 +122,18 @@ mod tests {
             NotificationCondition::Unfocused,
             /*terminal_focused*/ true
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_input_remains_owned_until_event_stream_creation() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+
+        let _ = tui.take_startup_text_with_capture(|_| Ok(()))?;
+        assert!(tui.startup_input_active);
+
+        let _events = tui.event_stream();
+        assert!(!tui.startup_input_active);
+        Ok(())
     }
 
     #[test]
@@ -610,19 +623,32 @@ impl Tui {
     /// A screen that requests events becomes the new input owner, so text captured before the TUI
     /// was ready must not survive through it and later appear in the composer.
     pub fn event_stream(&mut self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        self.claim_startup_input();
-        self.build_event_stream()
+        let discard_initial_input = self.claim_startup_input();
+        self.build_event_stream(discard_initial_input)
     }
 
-    fn claim_startup_input(&mut self) {
+    pub(crate) fn startup_event_stream(
+        &mut self,
+    ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
+        self.claim_startup_input();
+        self.build_event_stream(/*discard_initial_input*/ true)
+    }
+
+    fn claim_startup_input(&mut self) -> bool {
         if self.startup_input_active {
             self.startup_text = None;
             discard_terminal_input();
             self.startup_input_active = false;
+            true
+        } else {
+            false
         }
     }
 
-    fn build_event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
+    fn build_event_stream(
+        &self,
+        discard_initial_input: bool,
+    ) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         #[cfg(unix)]
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
@@ -637,10 +663,22 @@ impl Tui {
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
         );
+        let stream = if discard_initial_input {
+            stream.discarding_initial_input()
+        } else {
+            stream
+        };
         Box::pin(stream)
     }
 
     pub(crate) fn take_startup_text(&mut self) -> Result<Option<String>> {
+        self.take_startup_text_with_capture(capture_startup_input)
+    }
+
+    fn take_startup_text_with_capture(
+        &mut self,
+        capture: impl FnOnce(&mut StartupInputBuffer) -> Result<()>,
+    ) -> Result<Option<String>> {
         if !self.startup_input_active {
             return Ok(None);
         }
@@ -649,8 +687,9 @@ impl Tui {
         if let Some(text) = self.startup_text.take() {
             input.push_text(&text);
         }
-        capture_startup_input(&mut input)?;
-        self.startup_input_active = false;
+        capture(&mut input)?;
+        // Keep ownership until `event_stream()` performs the final flush immediately before the
+        // crossterm stream takes over stdin.
         Ok(input.into_text())
     }
 

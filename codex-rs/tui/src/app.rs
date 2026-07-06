@@ -1120,7 +1120,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         let event_stream_started_at = Instant::now();
-        let tui_events = tui.event_stream();
+        let tui_events = tui.startup_event_stream();
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();

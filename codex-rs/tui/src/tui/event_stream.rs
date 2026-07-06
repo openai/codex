@@ -142,6 +142,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
+    discard_initial_input: bool,
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
@@ -163,11 +164,17 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             resume_stream,
             terminal_focused,
             poll_draw_first: false,
+            discard_initial_input: false,
             #[cfg(unix)]
             suspend_context,
             #[cfg(unix)]
             alt_screen_active,
         }
+    }
+
+    pub fn discarding_initial_input(mut self) -> Self {
+        self.discard_initial_input = true;
+        self
     }
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
@@ -209,12 +216,18 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         match Pin::new(&mut self.resume_stream).poll_next(cx) {
                             Poll::Ready(Some(())) => continue,
                             Poll::Ready(None) => return Poll::Ready(None),
-                            Poll::Pending => return Poll::Pending,
+                            Poll::Pending => {
+                                self.discard_initial_input = false;
+                                return Poll::Pending;
+                            }
                         }
                     }
                 }
             };
 
+            if self.discard_initial_input {
+                continue;
+            }
             if let Some(mapped) = poll_result.and_then(|event| self.map_crossterm_event(event)) {
                 return Poll::Ready(Some(mapped));
             }
@@ -378,6 +391,23 @@ mod tests {
         )
     }
 
+    fn make_stream_discarding_initial_input(
+        broker: Arc<EventBroker<FakeEventSource>>,
+        draw_rx: broadcast::Receiver<()>,
+        terminal_focused: Arc<AtomicBool>,
+    ) -> TuiEventStream<FakeEventSource> {
+        TuiEventStream::new(
+            broker,
+            draw_rx,
+            terminal_focused,
+            #[cfg(unix)]
+            crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
+            Arc::new(AtomicBool::new(false)),
+        )
+        .discarding_initial_input()
+    }
+
     type SetupState = (
         Arc<EventBroker<FakeEventSource>>,
         FakeEventSourceHandle,
@@ -414,6 +444,29 @@ mod tests {
                 assert_eq!(key, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
             }
             other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn initial_input_handoff_discards_only_events_already_ready() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream_discarding_initial_input(broker, draw_rx, terminal_focused);
+        handle.send(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ))));
+
+        assert!(
+            timeout(Duration::from_millis(10), stream.next())
+                .await
+                .is_err()
+        );
+
+        let expected = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected)));
+        match timeout(Duration::from_secs(1), stream.next()).await {
+            Ok(Some(TuiEvent::Key(actual))) => assert_eq!(actual, expected),
+            other => panic!("expected post-handoff key event, saw {other:?}"),
         }
     }
 
