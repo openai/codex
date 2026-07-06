@@ -169,14 +169,21 @@ pub(super) async fn persist_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
+    persist_history(store, thread_id).await?;
+    store.flush_pending_metadata_update(thread_id).await
+}
+
+pub(super) async fn persist_history(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<()> {
     store
         .live_recorder(thread_id)
         .await?
         .persist()
         .await
         .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await?;
-    store.flush_pending_metadata_update(thread_id).await
+    sync_materialized_rollout_path(store, thread_id).await
 }
 
 pub(super) async fn flush_thread(
