@@ -299,11 +299,11 @@ async fn forward_events(
                 match event {
                     Event {
                         id: _,
-                        msg: EventMsg::TokenCount(_),
-                    } => {}
-                    Event {
-                        id: _,
-                        msg: EventMsg::SessionConfigured(_),
+                        msg:
+                            EventMsg::TokenCount(_)
+                            | EventMsg::SessionConfigured(_)
+                            | EventMsg::McpStartupUpdate(_)
+                            | EventMsg::McpStartupComplete(_),
                     } => {}
                     Event {
                         id,
