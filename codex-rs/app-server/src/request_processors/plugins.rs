@@ -101,6 +101,15 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
             ref_name,
             sha,
         },
+        MarketplacePluginSource::Npm {
+            package,
+            version,
+            registry,
+        } => PluginSource::Npm {
+            package,
+            version,
+            registry,
+        },
     }
 }
 
@@ -134,7 +143,7 @@ fn share_context_for_source(
                 creator_name: None,
                 share_principals: None,
             }),
-        MarketplacePluginSource::Git { .. } => None,
+        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
     }
 }
 
@@ -146,6 +155,7 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     PluginSummary {
         id: plugin.id,
         remote_plugin_id: None,
+        version: None,
         local_version: plugin.local_version,
         installed: plugin.installed,
         enabled: plugin.enabled,
@@ -1086,6 +1096,7 @@ impl PluginRequestProcessor {
                     summary: PluginSummary {
                         id: outcome.plugin.id,
                         remote_plugin_id: None,
+                        version: None,
                         local_version: outcome.plugin.local_version,
                         name: outcome.plugin.name,
                         share_context,
@@ -1883,6 +1894,7 @@ impl PluginRequestProcessor {
                 let notification = ServerNotification::McpServerOauthLoginCompleted(
                     McpServerOauthLoginCompletedNotification {
                         name: notification_name,
+                        thread_id: None,
                         success,
                         error,
                     },
@@ -2158,7 +2170,8 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
     PluginSummary {
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
-        local_version: None,
+        version: summary.version,
+        local_version: summary.local_version,
         name: summary.name,
         share_context: summary
             .share_context

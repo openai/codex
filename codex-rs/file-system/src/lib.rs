@@ -1,3 +1,9 @@
+mod find_up;
+
+pub use find_up::FindUpErrorPolicy;
+pub use find_up::find_nearest_ancestor_with_markers;
+pub use find_up::find_nearest_native_ancestor_with_markers;
+
 use bytes::Bytes;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ManagedFileSystemPermissions;
@@ -12,6 +18,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::Stream;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
@@ -72,6 +79,8 @@ pub struct WalkOptions {
     pub max_directories: usize,
     /// Maximum number of directory entries that may be examined.
     pub max_entries: usize,
+    /// Whether directory symlinks should be followed.
+    pub follow_directory_symlinks: bool,
 }
 
 /// Type of a filesystem entry returned by a walk.
@@ -82,7 +91,7 @@ pub enum WalkEntryKind {
     File,
 }
 
-/// One non-symlink entry returned by a walk.
+/// One entry returned by a walk.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalkEntry {
@@ -300,14 +309,26 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>>;
 
-    /// Recursively lists descendants, skipping symlinks.
+    /// Recursively lists descendants, optionally following directory symlinks.
     fn walk<'a>(
         &'a self,
         path: &'a PathUri,
         options: WalkOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
-        Box::pin(walk(self, path, options, sandbox))
+        self.walk_via_directory_reads(path, options, sandbox)
+    }
+
+    /// Performs a bounded walk using the primitive filesystem operations.
+    ///
+    /// Implementations with an optimized walk transport can use this as a compatibility fallback.
+    fn walk_via_directory_reads<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        Box::pin(walk_via_directory_reads(self, path, options, sandbox))
     }
 
     fn remove<'a>(
@@ -326,7 +347,7 @@ pub trait ExecutorFileSystem: Send + Sync {
     ) -> ExecutorFileSystemFuture<'a, ()>;
 }
 
-async fn walk<F: ExecutorFileSystem + ?Sized>(
+async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
     file_system: &F,
     root: &PathUri,
     options: WalkOptions,
@@ -351,12 +372,20 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
     }
 
     let root_metadata = file_system.get_metadata(root, sandbox).await?;
-    if root_metadata.is_symlink || !root_metadata.is_directory {
+    if !root_metadata.is_directory
+        || (root_metadata.is_symlink && !options.follow_directory_symlinks)
+    {
         return Ok(WalkOutcome::default());
     }
 
+    let root_identity = if options.follow_directory_symlinks {
+        file_system.canonicalize(root, sandbox).await?
+    } else {
+        root.clone()
+    };
     let mut outcome = WalkOutcome::default();
     let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+    let mut visited_directories = HashSet::from([root_identity]);
     let mut directory_count = 1usize;
     let mut entry_count = 0usize;
     let mut response_bytes = 0usize;
@@ -409,7 +438,8 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
                     continue;
                 }
             };
-            if metadata.is_symlink {
+            if metadata.is_symlink && (!options.follow_directory_symlinks || !metadata.is_directory)
+            {
                 continue;
             }
 
@@ -433,6 +463,27 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
             });
 
             if kind == WalkEntryKind::Directory && depth < options.max_depth {
+                let directory_identity = if options.follow_directory_symlinks {
+                    match file_system.canonicalize(&path, sandbox).await {
+                        Ok(path) => path,
+                        Err(error) => {
+                            if !push_walk_error(
+                                &mut outcome,
+                                &mut response_bytes,
+                                path,
+                                error.to_string(),
+                            ) {
+                                return Ok(outcome);
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    path.clone()
+                };
+                if !visited_directories.insert(directory_identity) {
+                    continue;
+                }
                 if directory_count == options.max_directories {
                     outcome.truncated = true;
                 } else {

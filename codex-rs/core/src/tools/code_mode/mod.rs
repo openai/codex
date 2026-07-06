@@ -6,16 +6,19 @@ mod wait_handler;
 pub(crate) mod wait_spec;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
+use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
-use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -61,46 +64,62 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Option<Arc<dyn CodeModeSession>>,
+    session: OnceCell<Arc<dyn CodeModeSession>>,
+    session_provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    shutting_down: AtomicBool,
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(session_provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(InProcessCodeModeSession::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: OnceCell::new(),
+            session_provider,
             dispatch_broker,
+            shutting_down: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn session_provider(&self) -> Arc<dyn CodeModeSessionProvider> {
+        Arc::clone(&self.session_provider)
     }
 
     pub(crate) async fn execute(
         &self,
         request: codex_code_mode::ExecuteRequest,
     ) -> Result<codex_code_mode::StartedCell, String> {
-        self.session()?.execute(request).await
+        self.session().await?.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
         request: codex_code_mode::WaitRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.wait(request).await
+        self.session().await?.wait(request).await
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.terminate(cell_id).await
+        self.session().await?.terminate(cell_id).await
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
-            Some(session) => session.shutdown().await,
-            None => Ok(()),
+        self.shutting_down.store(true, Ordering::Release);
+        // Join any initialization already in progress without initializing an unused service.
+        match self
+            .session
+            .get_or_try_init(|| async {
+                Err::<Arc<dyn CodeModeSession>, String>(
+                    "code mode session is shutting down".to_string(),
+                )
+            })
+            .await
+        {
+            Ok(session) => session.shutdown().await,
+            Err(_) => Ok(()),
         }
     }
 
@@ -121,9 +140,7 @@ impl CodeModeService {
     ) -> Option<CodeModeDispatchWorker> {
         let turn = &step_context.turn;
         let tool_mode = effective_tool_mode(turn);
-        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            || self.session.is_none()
-        {
+        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -137,10 +154,27 @@ impl CodeModeService {
         )
     }
 
-    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+    async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("code mode session is shutting down".to_string());
+        }
         self.session
-            .as_ref()
-            .ok_or_else(|| "code mode is unavailable".to_string())
+            .get_or_try_init(|| async {
+                if self.shutting_down.load(Ordering::Acquire) {
+                    return Err("code mode session is shutting down".to_string());
+                }
+                let session = self
+                    .session_provider
+                    .create_session(self.dispatch_broker.clone())
+                    .await?;
+                if self.shutting_down.load(Ordering::Acquire) {
+                    let _ = session.shutdown().await;
+                    return Err("code mode session is shutting down".to_string());
+                }
+                Ok(session)
+            })
+            .await
+            .map(Arc::clone)
     }
 }
 
@@ -325,10 +359,15 @@ fn build_freeform_tool_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use super::CodeModeService;
     use super::build_nested_tool_payload;
     use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CodeModeToolKind;
+    use codex_code_mode::ExecuteRequest;
+    use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
@@ -384,5 +423,29 @@ mod tests {
                 .to_string(),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn missing_process_host_is_reported_without_failing_service_creation() {
+        let service = CodeModeService::new(Arc::new(
+            ProcessOwnedCodeModeSessionProvider::with_host_program(
+                "codex-code-mode-host-does-not-exist".into(),
+            ),
+        ));
+
+        let error = service
+            .execute(ExecuteRequest {
+                tool_call_id: "call-1".to_string(),
+                enabled_tools: Vec::new(),
+                source: "text('unreachable')".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            })
+            .await
+            .err()
+            .expect("missing host should reject execution");
+
+        assert!(error.contains("failed to spawn code-mode host"));
+        service.shutdown().await.expect("shutdown unused service");
     }
 }

@@ -464,6 +464,7 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         request_id: RequestId,
         response: Box<ClientResponsePayload>,
+        thread_originator: Option<String>,
     },
     ErrorResponse {
         connection_id: u64,
@@ -508,6 +509,7 @@ pub(crate) enum CustomAnalyticsFact {
     AppUsed(AppUsedInput),
     HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
+    PluginInstallRequested(PluginInstallRequestedInput),
     PluginStateChanged(PluginStateChangedInput),
     PluginInstallFailed(PluginInstallFailedInput),
     ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
@@ -543,6 +545,33 @@ pub struct HookRunFact {
 pub(crate) struct PluginUsedInput {
     pub tracking: TrackEventsContext,
     pub plugin: PluginTelemetryMetadata,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstallRequestSource {
+    EndpointRecommendation,
+    LegacyDiscovery,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstallRequested {
+    pub suggestion_id: String,
+    pub plugins: Vec<PluginInstallRequestedPlugin>,
+    pub source: PluginInstallRequestSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstallRequestedPlugin {
+    pub plugin_id: String,
+    pub remote_plugin_id: Option<String>,
+    pub plugin_name: String,
+    pub connector_ids: Vec<String>,
+}
+
+pub(crate) struct PluginInstallRequestedInput {
+    pub tracking: TrackEventsContext,
+    pub request: PluginInstallRequested,
 }
 
 pub(crate) struct PluginStateChangedInput {

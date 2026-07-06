@@ -21,6 +21,13 @@ pub struct NetworkProxyConfig {
     pub network: NetworkProxySettings,
 }
 
+impl NetworkProxyConfig {
+    pub fn set_credential_broker_enabled(&mut self, enabled: bool) {
+        self.network.credential_broker = enabled;
+        self.network.mitm |= enabled;
+    }
+}
+
 /// Variant order encodes effective precedence for duplicate patterns:
 /// `None < Allow < Deny`, so deny wins over allow when entries conflict.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,6 +149,10 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub mitm: bool,
     #[serde(default)]
+    pub credential_broker: bool,
+    #[serde(default)]
+    pub dangerously_allow_plaintext_credential_injection: bool,
+    #[serde(default)]
     pub mitm_hooks: Vec<MitmHookConfig>,
 }
 
@@ -161,6 +172,8 @@ impl Default for NetworkProxySettings {
             unix_sockets: None,
             allow_local_binding: false,
             mitm: false,
+            credential_broker: false,
+            dangerously_allow_plaintext_credential_injection: false,
             mitm_hooks: Vec::new(),
         }
     }
@@ -593,6 +606,8 @@ mod tests {
                 unix_sockets: None,
                 allow_local_binding: false,
                 mitm: false,
+                credential_broker: false,
+                dangerously_allow_plaintext_credential_injection: false,
                 mitm_hooks: Vec::new(),
             }
         );
@@ -658,6 +673,8 @@ mod tests {
                     "unix_sockets": null,
                     "allow_local_binding": false,
                     "mitm": false,
+                    "credential_broker": false,
+                    "dangerously_allow_plaintext_credential_injection": false,
                     "mitm_hooks": [],
                 }
             })

@@ -163,32 +163,61 @@ async fn reads_declared_config_only_through_executor_file_system() {
 
     assert_eq!(
         servers,
-        vec![(
-            "demo".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: "demo-mcp".to_string(),
-                    args: Vec::new(),
-                    env: None,
-                    env_vars: Vec::new(),
-                    cwd: Some(LegacyAppPathString::from_path(plugin_root.as_path())),
+        vec![
+            (
+                "demo".to_string(),
+                McpServerConfig {
+                    auth: Default::default(),
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "demo-mcp".to_string(),
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: Some(LegacyAppPathString::from_path(plugin_root.as_path())),
+                    },
+                    environment_id: "executor-test".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
-                environment_id: "executor-test".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )]
+            ),
+            (
+                "hosted".to_string(),
+                McpServerConfig {
+                    auth: Default::default(),
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://example.com/mcp".to_string(),
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    },
+                    environment_id: "executor-test".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            ),
+        ]
     );
     assert_eq!(reads(&file_system), vec![config_path]);
 }
@@ -221,6 +250,7 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
         vec![(
             "counter".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::Stdio {
                     command: "counter-mcp".to_string(),
                     args: Vec::new(),

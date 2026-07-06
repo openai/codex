@@ -48,6 +48,7 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "ext/connectors",
     "ext/extension-api",
     "ext/goal",
     "ext/guardian",
@@ -165,6 +166,7 @@ codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
+codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
@@ -316,6 +318,7 @@ glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
 http = "1.3.1"
+httpdate = "1.0.3"
 iana-time-zone = "0.1.64"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -359,7 +362,7 @@ portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
-quick-xml = "0.38.4"
+quick-xml = "0.41.0"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
@@ -504,7 +507,6 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
-    "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

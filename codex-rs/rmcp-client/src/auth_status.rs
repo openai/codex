@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_exec_server::HttpClient;
 use codex_protocol::protocol::McpAuthStatus;
 use futures::FutureExt;
 use reqwest::Client;
@@ -13,6 +15,7 @@ use tracing::debug;
 
 use crate::oauth::StoredOAuthTokenStatus;
 use crate::oauth::oauth_token_status;
+use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
@@ -25,6 +28,36 @@ pub struct StreamableHttpOAuthDiscovery {
     pub scopes_supported: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpLoginRequirement {
+    Login,
+    Reauthentication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpAuthState {
+    Unsupported,
+    LoggedOut(McpLoginRequirement),
+    BearerToken,
+    OAuth,
+}
+
+impl From<McpAuthState> for McpAuthStatus {
+    fn from(value: McpAuthState) -> Self {
+        match value {
+            McpAuthState::Unsupported => Self::Unsupported,
+            McpAuthState::LoggedOut(_) => Self::NotLoggedIn,
+            McpAuthState::BearerToken => Self::BearerToken,
+            McpAuthState::OAuth => Self::OAuth,
+        }
+    }
+}
+
+enum AuthStatusCheck {
+    Complete(McpAuthState),
+    Discover(HeaderMap),
+}
+
 /// Determine the authentication status for a streamable HTTP MCP server.
 pub async fn determine_streamable_http_auth_status(
     server_name: &str,
@@ -34,32 +67,110 @@ pub async fn determine_streamable_http_auth_status(
     env_http_headers: Option<HashMap<String, String>>,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-) -> Result<McpAuthStatus> {
+) -> Result<McpAuthState> {
+    let default_headers = match auth_status_before_discovery(
+        server_name,
+        url,
+        bearer_token_env_var,
+        http_headers,
+        env_http_headers,
+        store_mode,
+        keyring_backend_kind,
+    )? {
+        AuthStatusCheck::Complete(status) => return Ok(status),
+        AuthStatusCheck::Discover(default_headers) => default_headers,
+    };
+
+    determine_auth_status_from_discovery(
+        server_name,
+        url,
+        discover_streamable_http_oauth_with_headers(url, &default_headers).await,
+    )
+}
+
+/// Determine authentication status while routing OAuth discovery through the
+/// provided HTTP client.
+#[allow(clippy::too_many_arguments)]
+pub async fn determine_streamable_http_auth_status_with_http_client(
+    server_name: &str,
+    url: &str,
+    bearer_token_env_var: Option<&str>,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<McpAuthState> {
+    let default_headers = match auth_status_before_discovery(
+        server_name,
+        url,
+        bearer_token_env_var,
+        http_headers,
+        env_http_headers,
+        store_mode,
+        keyring_backend_kind,
+    )? {
+        AuthStatusCheck::Complete(status) => return Ok(status),
+        AuthStatusCheck::Discover(default_headers) => default_headers,
+    };
+    determine_auth_status_from_discovery(
+        server_name,
+        url,
+        discover_streamable_http_oauth_with_headers_and_http_client(
+            url,
+            default_headers,
+            http_client,
+        )
+        .await,
+    )
+}
+
+fn auth_status_before_discovery(
+    server_name: &str,
+    url: &str,
+    bearer_token_env_var: Option<&str>,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<AuthStatusCheck> {
     if bearer_token_env_var.is_some() {
-        return Ok(McpAuthStatus::BearerToken);
+        return Ok(AuthStatusCheck::Complete(McpAuthState::BearerToken));
     }
 
     let default_headers = build_default_headers(http_headers, env_http_headers)?;
     if default_headers.contains_key(AUTHORIZATION) {
-        return Ok(McpAuthStatus::BearerToken);
+        return Ok(AuthStatusCheck::Complete(McpAuthState::BearerToken));
     }
 
     match oauth_token_status(server_name, url, store_mode, keyring_backend_kind)? {
-        StoredOAuthTokenStatus::Usable => return Ok(McpAuthStatus::OAuth),
+        StoredOAuthTokenStatus::Usable => {
+            return Ok(AuthStatusCheck::Complete(McpAuthState::OAuth));
+        }
         StoredOAuthTokenStatus::AuthorizationRequired => {
-            return Ok(McpAuthStatus::NotLoggedIn);
+            return Ok(AuthStatusCheck::Complete(McpAuthState::LoggedOut(
+                McpLoginRequirement::Reauthentication,
+            )));
         }
         StoredOAuthTokenStatus::Missing => {}
     }
 
-    match discover_streamable_http_oauth_with_headers(url, &default_headers).await {
-        Ok(Some(_)) => Ok(McpAuthStatus::NotLoggedIn),
-        Ok(None) => Ok(McpAuthStatus::Unsupported),
+    Ok(AuthStatusCheck::Discover(default_headers))
+}
+
+fn determine_auth_status_from_discovery(
+    server_name: &str,
+    url: &str,
+    discovery: Result<Option<StreamableHttpOAuthDiscovery>>,
+) -> Result<McpAuthState> {
+    match discovery {
+        Ok(Some(_)) => Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login)),
+        Ok(None) => Ok(McpAuthState::Unsupported),
         Err(error) => {
             debug!(
                 "failed to detect OAuth support for MCP server `{server_name}` at {url}: {error:?}"
             );
-            Ok(McpAuthStatus::Unsupported)
+            Ok(McpAuthState::Unsupported)
         }
     }
 }
@@ -82,6 +193,17 @@ pub async fn discover_streamable_http_oauth(
     discover_streamable_http_oauth_with_headers(url, &default_headers).await
 }
 
+pub async fn discover_streamable_http_oauth_with_http_client(
+    url: &str,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<Option<StreamableHttpOAuthDiscovery>> {
+    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    discover_streamable_http_oauth_with_headers_and_http_client(url, default_headers, http_client)
+        .await
+}
+
 async fn discover_streamable_http_oauth_with_headers(
     url: &str,
     default_headers: &HeaderMap,
@@ -92,6 +214,25 @@ async fn discover_streamable_http_oauth_with_headers(
     let client = apply_default_headers(builder, default_headers).build()?;
     let mut authorization_manager = AuthorizationManager::new(url).await?;
     authorization_manager.with_client(client)?;
+    discover_streamable_http_oauth_with_manager(&authorization_manager).await
+}
+
+async fn discover_streamable_http_oauth_with_headers_and_http_client(
+    url: &str,
+    default_headers: HeaderMap,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<Option<StreamableHttpOAuthDiscovery>> {
+    let authorization_manager = AuthorizationManager::new_with_oauth_http_client(
+        url,
+        Arc::new(OAuthHttpClientAdapter::new(http_client, default_headers)),
+    )
+    .await?;
+    discover_streamable_http_oauth_with_manager(&authorization_manager).await
+}
+
+async fn discover_streamable_http_oauth_with_manager(
+    authorization_manager: &AuthorizationManager,
+) -> Result<Option<StreamableHttpOAuthDiscovery>> {
     match authorization_manager.discover_metadata().boxed().await {
         Ok(metadata) => Ok(Some(StreamableHttpOAuthDiscovery {
             scopes_supported: normalize_scopes(metadata.scopes_supported),
@@ -222,7 +363,7 @@ mod tests {
         .await
         .expect("status should compute");
 
-        assert_eq!(status, McpAuthStatus::BearerToken);
+        assert_eq!(status, McpAuthState::BearerToken);
     }
 
     #[tokio::test]
@@ -244,7 +385,7 @@ mod tests {
         .await
         .expect("status should compute");
 
-        assert_eq!(status, McpAuthStatus::BearerToken);
+        assert_eq!(status, McpAuthState::BearerToken);
     }
 
     #[tokio::test]

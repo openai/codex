@@ -43,7 +43,7 @@ fn configured_plugins_from_stack_merges_user_layers() {
     )
     .expect("valid config layer stack");
 
-    let plugins = configured_plugins_from_stack(&stack);
+    let plugins = configured_plugins_from_stack(&stack, temp_dir.path());
 
     assert_eq!(
         plugins,

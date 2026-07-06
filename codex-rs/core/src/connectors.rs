@@ -80,19 +80,6 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     )
 }
 
-pub(crate) async fn list_accessible_and_enabled_connectors_from_manager(
-    mcp_connection_manager: &McpConnectionManager,
-    config: &Config,
-) -> Vec<AppInfo> {
-    with_app_enabled_state(
-        accessible_connectors_from_mcp_tools(&mcp_connection_manager.list_all_tools().await),
-        config,
-    )
-    .into_iter()
-    .filter(|connector| connector.is_accessible && connector.is_enabled)
-    .collect()
-}
-
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
@@ -246,11 +233,14 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
+    let runtime_context =
+        McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        &runtime_context,
     )
     .await;
 
@@ -270,8 +260,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.
-        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
+        runtime_context,
         config.codex_home.to_path_buf(),
+        mcp_manager.codex_apps_tools_cache(),
         codex_apps_tools_cache_key(auth.as_ref()),
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
@@ -279,6 +270,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
+        codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;
 

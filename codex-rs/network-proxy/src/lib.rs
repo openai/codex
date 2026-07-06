@@ -1,8 +1,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod attribution;
 mod certs;
 mod config;
 mod connect_policy;
+mod credential_broker;
 mod http_proxy;
 mod mitm;
 mod mitm_hook;
@@ -17,6 +19,8 @@ mod socks5;
 mod state;
 mod upstream;
 
+pub use attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
+pub use attribution::write_attribution_frame;
 pub use certs::CUSTOM_CA_ENV_KEYS;
 pub use certs::is_managed_mitm_ca_trust_bundle_path;
 pub use config::NetworkDomainPermission;
@@ -27,6 +31,9 @@ pub use config::NetworkProxyConfig;
 pub use config::NetworkUnixSocketPermission;
 pub use config::NetworkUnixSocketPermissions;
 pub use config::host_and_port_from_network_addr;
+pub use credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
+pub use credential_broker::brokered_credential_dummy_env_keys;
+pub use credential_broker::brokered_credential_env_keys;
 pub use mitm_hook::InjectedHeaderConfig;
 pub use mitm_hook::MitmHookActionsConfig;
 pub use mitm_hook::MitmHookBodyConfig;

@@ -32,6 +32,7 @@ use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 use crate::metrics::timer::Timer;
 use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
+use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_protocol::ThreadId;
@@ -516,6 +517,7 @@ impl SessionTelemetry {
             /*cf_ray*/ None,
             /*auth_error*/ None,
             /*auth_error_code*/ None,
+            /*agent_identity_telemetry*/ None,
         );
 
         response
@@ -538,6 +540,7 @@ impl SessionTelemetry {
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
         auth_error_code: Option<&str>,
+        agent_identity_telemetry: Option<&AgentIdentityTelemetry>,
     ) {
         let success = status.is_some_and(|code| (200..=299).contains(&code)) && error.is_none();
         let success_str = if success { "true" } else { "false" };
@@ -578,6 +581,8 @@ impl SessionTelemetry {
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
                 auth.error_code = auth_error_code,
+                auth.agent_id = agent_identity_telemetry.map(|metadata| metadata.agent_id.as_str()),
+                auth.task_id = agent_identity_telemetry.map(|metadata| metadata.task_id.as_str()),
             },
             log: {},
             trace: {},
@@ -601,6 +606,7 @@ impl SessionTelemetry {
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
         auth_error_code: Option<&str>,
+        agent_identity_telemetry: Option<&AgentIdentityTelemetry>,
     ) {
         let success = error.is_none()
             && status
@@ -632,6 +638,8 @@ impl SessionTelemetry {
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
                 auth.error_code = auth_error_code,
+                auth.agent_id = agent_identity_telemetry.map(|metadata| metadata.agent_id.as_str()),
+                auth.task_id = agent_identity_telemetry.map(|metadata| metadata.task_id.as_str()),
             },
             log: {},
             trace: {},
@@ -643,6 +651,7 @@ impl SessionTelemetry {
         duration: Duration,
         error: Option<&str>,
         connection_reused: bool,
+        agent_identity_telemetry: Option<&AgentIdentityTelemetry>,
     ) {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
@@ -669,6 +678,8 @@ impl SessionTelemetry {
                 auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.connection_reused = connection_reused,
+                auth.agent_id = agent_identity_telemetry.map(|metadata| metadata.agent_id.as_str()),
+                auth.task_id = agent_identity_telemetry.map(|metadata| metadata.task_id.as_str()),
             },
             log: {},
             trace: {},
@@ -899,6 +910,7 @@ impl SessionTelemetry {
         cached_token_count: Option<i64>,
         reasoning_token_count: Option<i64>,
         tool_token_count: i64,
+        ttft_ms: Option<i64>,
     ) {
         log_and_trace_event!(
             self,
@@ -910,6 +922,7 @@ impl SessionTelemetry {
                 cached_token_count = cached_token_count,
                 reasoning_token_count = reasoning_token_count,
                 tool_token_count = %tool_token_count,
+                ttft_ms = ttft_ms,
                 service_tier = self.metadata.service_tier.as_deref(),
                 model_reasoning_effort = self.metadata.model_reasoning_effort.as_deref(),
             },

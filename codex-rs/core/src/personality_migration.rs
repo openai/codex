@@ -88,7 +88,7 @@ async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<boo
             allowed_sources: Vec::new(),
             model_providers: None,
             cwd_filters: None,
-            parent_thread_id: None,
+            relation_filter: None,
             archived,
             search_term: None,
             use_state_db_only: false,

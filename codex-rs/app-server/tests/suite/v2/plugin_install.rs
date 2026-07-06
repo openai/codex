@@ -1095,6 +1095,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: Some("featured".to_string()),
             branding: None,
             app_metadata: None,
@@ -1110,6 +1112,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             description: Some("Beta connector".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1194,6 +1198,8 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
         description: Some("Sample MCP connector".to_string()),
         logo_url: Some("https://example.com/alpha.png".to_string()),
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: Some("featured".to_string()),
         branding: None,
         app_metadata: None,
@@ -1586,6 +1592,8 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
         description: Some("Alpha connector".to_string()),
         logo_url: Some("https://example.com/alpha.png".to_string()),
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: Some("featured".to_string()),
         branding: None,
         app_metadata: None,
@@ -2019,7 +2027,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )
@@ -2049,7 +2056,6 @@ chatgpt_base_url = "{}/backend-api/"
 
 [features]
 plugins = true
-remote_plugin = true
 connectors = true
 "#,
             server.uri()

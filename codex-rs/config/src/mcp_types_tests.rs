@@ -426,6 +426,7 @@ fn deserialize_ignores_unknown_server_fields() {
     assert_eq!(
         cfg,
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec![],

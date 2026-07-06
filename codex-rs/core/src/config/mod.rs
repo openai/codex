@@ -14,7 +14,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -40,7 +39,6 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
-use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -54,11 +52,13 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
+use codex_features::CurrentTimeReminderDeliveryMode;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
@@ -1037,7 +1037,7 @@ pub struct Config {
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
-    /// Current-time reminder configuration, when enabled.
+    /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
@@ -1088,12 +1088,14 @@ pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
     "Your context window is nearly exhausted (only {n_remaining} tokens remaining) and will be automatically reset for you soon. ",
     "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
 );
-const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 1000;
+const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 2000;
+const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
+    pub guidance_message: Option<String>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -1101,6 +1103,7 @@ impl Default for TokenBudgetConfig {
         Self {
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
+            guidance_message: None,
         }
     }
 }
@@ -1117,6 +1120,9 @@ pub struct RolloutBudgetConfig {
 pub struct CurrentTimeReminderConfig {
     pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
+    pub delivery_mode: CurrentTimeReminderDeliveryMode,
+    /// Whether to expose the input-interruptible `clock.sleep` tool.
+    pub sleep_tool: bool,
 }
 
 impl Default for CurrentTimeReminderConfig {
@@ -1124,6 +1130,8 @@ impl Default for CurrentTimeReminderConfig {
         Self {
             reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
+            delivery_mode: CurrentTimeReminderDeliveryMode::AnyInference,
+            sleep_tool: false,
         }
     }
 }
@@ -1137,6 +1145,7 @@ pub struct MultiAgentV2Config {
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
+    pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub non_code_mode_only: bool,
@@ -1158,6 +1167,7 @@ impl MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
             )),
+            multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
@@ -1519,6 +1529,14 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+        self.to_mcp_config_with_loaded_plugins(&loaded_plugins, additional_plugin_registrations)
+    }
+
+    pub(crate) fn to_mcp_config_with_loaded_plugins(
+        &self,
+        loaded_plugins: &PluginLoadOutcome,
+        additional_plugin_registrations: impl IntoIterator<Item = McpServerRegistration>,
+    ) -> McpConfig {
         let mut catalog = ResolvedMcpCatalog::builder();
         for (plugin_order, plugin) in loaded_plugins
             .plugins()
@@ -1578,7 +1596,10 @@ impl Config {
                 ElicitationCapability::default()
             },
             mcp_server_catalog: catalog.build(),
-            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+            connector_snapshot:
+                codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+                    loaded_plugins.capability_summaries(),
+                ),
         }
     }
 
@@ -1878,7 +1899,7 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1907,7 +1928,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = plugin_mcp_requirements
             .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1968,26 +1989,6 @@ where
     }
 
     Ok(false)
-}
-
-fn mcp_server_matches_requirement(
-    requirement: &McpServerRequirement,
-    server: &McpServerConfig,
-) -> bool {
-    match &requirement.identity {
-        McpServerIdentity::Command {
-            command: want_command,
-        } => matches!(
-            &server.transport,
-            McpServerTransportConfig::Stdio { command: got_command, .. }
-                if got_command == want_command
-        ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
-    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -2511,6 +2512,10 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         base.map(|config| &config.subagent_usage_hint_text),
         default.subagent_usage_hint_text,
     );
+    let multi_agent_mode_hint_text = base
+        .and_then(|config| config.multi_agent_mode_hint_text.as_ref())
+        .cloned()
+        .or(default.multi_agent_mode_hint_text);
     let tool_namespace = base
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
@@ -2530,6 +2535,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         usage_hint_text,
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
+        multi_agent_mode_hint_text,
         tool_namespace,
         hide_spawn_agent_metadata,
         non_code_mode_only,
@@ -2572,9 +2578,25 @@ fn resolve_token_budget_config(
         ));
     }
 
+    let guidance_message = token_budget_config
+        .and_then(|config| config.guidance_message.clone())
+        .filter(|message| !message.trim().is_empty());
+    if guidance_message
+        .as_ref()
+        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+
     Ok(Some(TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
+        guidance_message,
     }))
 }
 
@@ -2660,18 +2682,18 @@ fn resolve_current_time_reminder_config(
     let reminder_interval_seconds = base
         .and_then(|config| config.reminder_interval_seconds)
         .unwrap_or(default.reminder_interval_seconds);
-    if reminder_interval_seconds == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.current_time_reminder.reminder_interval_seconds must be positive",
-        ));
-    }
 
     Ok(Some(CurrentTimeReminderConfig {
         reminder_interval_seconds,
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
+        delivery_mode: base
+            .and_then(|config| config.delivery_mode)
+            .unwrap_or(default.delivery_mode),
+        sleep_tool: base
+            .and_then(|config| config.sleep_tool)
+            .unwrap_or(default.sleep_tool),
     }))
 }
 

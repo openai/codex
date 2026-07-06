@@ -10,6 +10,8 @@ use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,6 +33,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -78,6 +81,32 @@ fn write_global_file(
     Ok(path.abs())
 }
 
+fn remove_agents_md_world_state_section(rollout_path: &Path) -> Result<()> {
+    let rollout = std::fs::read_to_string(rollout_path)?;
+    let mut removed_section = false;
+    let retained = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|mut line| {
+            if let RolloutItem::WorldState(world_state) = &mut line.item
+                && let Some(state) = world_state.state.as_object_mut()
+            {
+                removed_section |= state.remove("agents_md").is_some();
+            }
+            serde_json::to_string(&line)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    anyhow::ensure!(
+        removed_section,
+        "rollout did not contain a persisted AGENTS.md WorldState section"
+    );
+    std::fs::write(rollout_path, format!("{retained}\n"))?;
+    Ok(())
+}
+
 fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("user")
@@ -93,6 +122,26 @@ fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> Strin
 
 fn expected_provider_only_instruction_fragment(contents: &str) -> String {
     format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn assert_instruction_replacement_once(
+    requests: &[responses::ResponsesRequest],
+    initial_contents: &str,
+    replacement_contents: &str,
+) {
+    let initial = expected_provider_only_instruction_fragment(initial_contents);
+    let replacement = expected_provider_only_instruction_fragment(&format!(
+        "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{replacement_contents}"
+    ));
+    assert_eq!(instruction_fragments(&requests[0]), vec![initial.clone()]);
+    assert_eq!(
+        instruction_fragments(&requests[1]),
+        vec![initial.clone(), replacement.clone()]
+    );
+    assert_eq!(
+        instruction_fragments(&requests[2]),
+        vec![initial, replacement]
+    );
 }
 
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
@@ -437,12 +486,13 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
         .thread_manager
         .start_thread_with_options(StartThreadOptions {
             config: test.config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
@@ -643,12 +693,13 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         .thread_manager
         .start_thread_with_options(StartThreadOptions {
             config: test.config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
-            multi_agent_mode: None,
             parent_trace: None,
             environments: vec![
                 TurnEnvironmentSelection {
@@ -752,11 +803,8 @@ async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     Ok(())
 }
 
-// TODO(anp): Align cold-resume instruction sources with the historical instructions replayed to
-// the model so the API source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resume_replays_rendered_instructions_but_reports_current_config_sources() -> Result<()>
-{
+async fn cold_resume_invalidates_deleted_legacy_agents_md_once() -> Result<()> {
     // Set up an initial turn and a later cold-resumed turn against the same rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -769,6 +817,10 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
             responses::sse(vec![
                 responses::ev_response_created("resumed-response"),
                 responses::ev_completed("resumed-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("second-resumed-response"),
+                responses::ev_completed("second-resumed-response"),
             ]),
         ],
     )
@@ -802,29 +854,27 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     })
     .await;
 
-    // Add a preferred override source, then cold-resume with freshly loaded configuration.
-    let new_source = write_global_file(
-        home.as_ref(),
-        GLOBAL_AGENTS_OVERRIDE_FILENAME,
-        NEW_GLOBAL_INSTRUCTIONS,
-    )?;
-    assert_ne!(old_source, new_source);
+    // Simulate a rollout written before AGENTS.md had a persisted WorldState section.
+    remove_agents_md_world_state_section(&rollout_path)?;
+
+    std::fs::remove_file(old_source.as_path())?;
     let mut resume_builder = test_codex().with_home(Arc::clone(&home));
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
 
-    // Assert the API reports the new source while model history replays the old structured prefix.
+    // Model history still contains the old fragment, but the source no longer exists.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![PathUri::from_abs_path(&new_source)],
-        "resume reports sources from the newly loaded config"
+        Vec::<PathUri>::new(),
+        "resume reports no deleted instruction source"
     );
 
     resumed.submit_turn("continue resumed thread").await?;
+    resumed.submit_turn("continue again").await?;
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let initial_input = requests[0].input();
     let resumed_input = requests[1].input();
     assert_eq!(
@@ -832,15 +882,22 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         Some(initial_input.as_slice()),
         "cold resume should replay the original structured input prefix"
     );
-    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &expected_fragment);
-    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    let initial = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
+    let removal = expected_provider_only_instruction_fragment(
+        "The previously provided AGENTS.md instructions no longer apply.",
+    );
+    assert_eq!(instruction_fragments(&requests[0]), vec![initial.clone()]);
+    assert_eq!(
+        instruction_fragments(&requests[1]),
+        vec![initial.clone(), removal.clone()]
+    );
+    assert_eq!(instruction_fragments(&requests[2]), vec![initial, removal]);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
+async fn fork_injects_changed_agents_md_once() -> Result<()> {
     // Set up a parent turn and a later fork turn against the parent's rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -853,6 +910,10 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
             responses::sse(vec![
                 responses::ev_response_created("fork-response"),
                 responses::ev_completed("fork-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("second-fork-response"),
+                responses::ev_completed("second-fork-response"),
             ]),
         ],
     )
@@ -910,27 +971,12 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         "fork config should reflect the newly loaded global source"
     );
 
-    forked
-        .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "continue fork".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-    wait_for_event(&forked.thread, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    submit_thread_turn(&forked.thread, "continue fork").await?;
+    submit_thread_turn(&forked.thread, "continue fork again").await?;
 
     // Assert the forked model request replays the parent's exact structured history.
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let parent_input = requests[0].input();
     let fork_input = requests[1].input();
     assert_eq!(
@@ -938,9 +984,11 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         Some(parent_input.as_slice()),
         "fork should replay the parent's original structured input prefix"
     );
-    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &expected_fragment);
-    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    assert_instruction_replacement_once(
+        &requests,
+        OLD_GLOBAL_INSTRUCTIONS,
+        NEW_GLOBAL_INSTRUCTIONS,
+    );
 
     Ok(())
 }

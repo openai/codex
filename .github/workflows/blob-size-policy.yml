@@ -1,7 +1,7 @@
 name: blob-size-policy
 
 on:
-  pull_request: {}
+  workflow_call:
 
 jobs:
   check:
@@ -14,13 +14,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Determine PR comparison range
+      - name: Determine comparison range
         id: range
         shell: bash
         run: |
           set -euo pipefail
-          echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
-          echo "head=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+          # PRs inspect the proposed diff; main pushes inspect only the commit
+          # range that just landed. Both paths feed the same blob-size checker.
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base='${{ github.event.pull_request.base.sha }}'
+            head='${{ github.event.pull_request.head.sha }}'
+          else
+            base='${{ github.event.before }}'
+            head='${{ github.sha }}'
+          fi
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
 
       - name: Check changed blob sizes
         env:

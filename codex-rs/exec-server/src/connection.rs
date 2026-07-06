@@ -667,6 +667,7 @@ mod tests {
             id: RequestId::Integer(1),
             method: "test".to_string(),
             params: None,
+            trace: None,
         });
 
         server_websocket
@@ -731,6 +732,7 @@ mod tests {
             id: RequestId::Integer(1),
             method: "test".to_string(),
             params: None,
+            trace: None,
         })
     }
 

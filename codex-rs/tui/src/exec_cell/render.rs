@@ -12,6 +12,7 @@ use crate::motion::activity_indicator;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::ui_consts::TRANSCRIPT_HINT;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
@@ -32,7 +33,6 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
-const TRANSCRIPT_HINT: &str = "ctrl + t to view transcript";
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,

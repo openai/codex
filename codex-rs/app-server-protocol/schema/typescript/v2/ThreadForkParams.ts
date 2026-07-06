@@ -18,6 +18,12 @@ import type { ThreadSource } from "./ThreadSource";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadForkParams = {threadId: string, /**
+ * Optional last turn id to fork through, inclusive.
+ *
+ * When specified, turns after `last_turn_id` are omitted from the fork.
+ * The referenced turn cannot be in progress.
+ */
+lastTurnId?: string | null, /**
  * Configuration overrides for the forked thread, if any.
  */
 model?: string | null, modelProvider?: string | null, serviceTier?: string | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**

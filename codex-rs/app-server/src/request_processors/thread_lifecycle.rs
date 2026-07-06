@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::config_types::MultiAgentMode;
 
 pub(super) const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
 
@@ -639,7 +640,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         active_permission_profile,
         workspace_roots,
         reasoning_effort,
-        multi_agent_mode,
+        originator,
         ..
     } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
@@ -662,10 +663,12 @@ pub(super) async fn handle_pending_thread_resume_request(
         sandbox,
         active_permission_profile,
         reasoning_effort,
-        multi_agent_mode,
+        multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         initial_turns_page,
     };
-    outgoing.send_response(request_id, response).await;
+    outgoing
+        .send_response_with_thread_originator(request_id, response, originator)
+        .await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {

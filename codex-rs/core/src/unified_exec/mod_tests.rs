@@ -160,7 +160,7 @@ async fn exec_command_with_tty(
         &output_closed,
         &output_closed_notify,
         &cancellation_token,
-        Some(session.subscribe_out_of_band_elicitation_pause_state()),
+        Some(session.subscribe_elicitation_pause_state()),
         deadline,
     )
     .await;
@@ -515,12 +515,11 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
 
     let (session, turn) = test_session_and_turn().await;
-    session.set_out_of_band_elicitation_pause_state(/*paused*/ true);
+    let elicitation = session.services.elicitations.register();
 
-    let paused_session = Arc::clone(&session);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
-        paused_session.set_out_of_band_elicitation_pause_state(/*paused*/ false);
+        drop(elicitation);
     });
 
     let started = tokio::time::Instant::now();

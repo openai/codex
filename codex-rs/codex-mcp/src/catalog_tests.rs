@@ -17,6 +17,7 @@ use super::ResolvedMcpCatalog;
 
 fn server(url: &str) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,
@@ -301,6 +302,17 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
                 register(selected_plugin_source("selected-alpha")),
             ],
         }]
+    );
+
+    let refreshed = server("https://refreshed.example/mcp");
+    let catalog =
+        catalog.with_materialized_servers(HashMap::from([("docs".to_string(), refreshed.clone())]));
+    assert_eq!(
+        catalog.server("docs"),
+        Some(&super::ResolvedMcpServer {
+            source: selected_plugin_source("selected-alpha"),
+            config: refreshed,
+        })
     );
 
     let mut builder = catalog.to_builder();
