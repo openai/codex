@@ -630,7 +630,7 @@ fn spawn_startup_thread_start(
     app_server: &AppServerSession,
     config: Config,
     app_event_tx: AppEventSender,
-    load_legacy_mcp_server_names: bool,
+    load_legacy_mcp_server_names: Option<tokio::sync::oneshot::Receiver<bool>>,
 ) {
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
@@ -645,7 +645,10 @@ fn spawn_startup_thread_start(
         .await;
         let result = match result {
             Ok(mut started) => {
-                if load_legacy_mcp_server_names && started.mcp_server_names.is_none() {
+                if started.mcp_server_names.is_none()
+                    && let Some(load_legacy_mcp_server_names) = load_legacy_mcp_server_names
+                    && load_legacy_mcp_server_names.await.unwrap_or(false)
+                {
                     load_legacy_startup_mcp_server_names(request_handle, &mut started).await;
                 }
                 Ok(started)
@@ -660,18 +663,23 @@ async fn load_legacy_startup_mcp_server_names(
     request_handle: AppServerRequestHandle,
     started: &mut AppServerStartedThread,
 ) {
-    let server_names = match background_requests::fetch_all_mcp_server_statuses(
+    const LEGACY_MCP_INVENTORY_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+
+    let request = background_requests::fetch_all_mcp_server_statuses(
         request_handle,
         McpServerStatusDetail::ToolsAndAuthOnly,
         Some(started.session.thread_id),
-    )
-    .await
-    {
-        Ok(statuses) => statuses.into_iter().map(|status| status.name).collect(),
-        Err(err) => {
+    );
+    let server_names = match tokio::time::timeout(LEGACY_MCP_INVENTORY_TIMEOUT, request).await {
+        Ok(Ok(statuses)) => statuses.into_iter().map(|status| status.name).collect(),
+        Ok(Err(err)) => {
             tracing::warn!(
                 "failed to load startup MCP server names from an older app server: {err}"
             );
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!("timed out loading startup MCP server names from an older app server");
             Vec::new()
         }
     };
@@ -922,13 +930,19 @@ impl App {
             &session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         );
+        let mut startup_draft_decision_tx = None;
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                let load_legacy_mcp_server_names = allow_startup_text.then(|| {
+                    let (decision_tx, decision_rx) = tokio::sync::oneshot::channel();
+                    startup_draft_decision_tx = Some(decision_tx);
+                    decision_rx
+                });
                 spawn_startup_thread_start(
                     &app_server,
                     config.clone(),
                     app_event_tx.clone(),
-                    /*load_legacy_mcp_server_names*/ allow_startup_text,
+                    load_legacy_mcp_server_names,
                 );
                 // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
@@ -1151,7 +1165,15 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
-        if allow_startup_text && let Some(startup_text) = tui.take_startup_text()? {
+        let startup_text = if allow_startup_text {
+            tui.take_startup_text()?
+        } else {
+            None
+        };
+        if let Some(startup_draft_decision_tx) = startup_draft_decision_tx {
+            let _ = startup_draft_decision_tx.send(startup_text.is_some());
+        }
+        if let Some(startup_text) = startup_text {
             app.chat_widget.restore_startup_draft(&startup_text);
         }
 
