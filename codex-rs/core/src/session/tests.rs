@@ -3038,6 +3038,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: Some(turn_context.config.approvals_reviewer),
         sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
         network: None,
