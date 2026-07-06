@@ -2608,6 +2608,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd,
+                mcp_server_names: vec!["example".to_string()],
                 runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![
                     codex_utils_path_uri::LegacyAppPathString::from_abs_path(&absolute_path(
@@ -2661,6 +2662,7 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": absolute_path_string("tmp"),
+                    "mcpServerNames": ["example"],
                     "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-request",

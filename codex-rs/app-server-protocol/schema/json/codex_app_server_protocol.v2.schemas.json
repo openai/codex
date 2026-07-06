@@ -17310,6 +17310,14 @@
           },
           "type": "array"
         },
+        "mcpServerNames": {
+          "default": [],
+          "description": "Names of the effective MCP servers in the thread's initial runtime.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "model": {
           "type": "string"
         },

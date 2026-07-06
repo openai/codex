@@ -138,13 +138,13 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
 }
 
 #[tokio::test]
-async fn restored_startup_draft_waits_for_initial_mcp_settlement() {
+async fn restored_startup_draft_waits_for_effective_mcp_settlement() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
     app.chat_widget
         .set_queue_submissions_until_session_configured(/*queue*/ true);
     app.chat_widget
-        .restore_startup_draft("captured during startup", ["test".to_string()]);
+        .restore_startup_draft("captured during startup");
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     app.chat_widget.handle_key_event(enter);
 
@@ -165,6 +165,7 @@ async fn restored_startup_draft_waits_for_initial_mcp_settlement() {
         Ok(AppServerStartedThread {
             session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
             turns: Vec::new(),
+            mcp_server_names: vec!["test".to_string()],
         }),
     )
     .await
@@ -246,54 +247,6 @@ async fn startup_without_restored_draft_uses_normal_queued_submission() {
 }
 
 #[tokio::test]
-async fn remote_startup_draft_does_not_wait_for_local_mcp_servers() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let local_only_config = toml::from_str::<toml::Value>("command = 'true'")
-        .expect("test MCP config should parse")
-        .try_into()
-        .expect("test MCP config should deserialize");
-    app.config
-        .mcp_servers
-        .set(std::collections::HashMap::from([(
-            "local-only".to_string(),
-            local_only_config,
-        )]))
-        .expect("test MCP servers should accept any configuration");
-    assert_eq!(
-        app.expected_mcp_startup_servers(),
-        vec!["local-only".to_string()]
-    );
-    app.app_server_target = crate::AppServerTarget::Remote {
-        endpoint: codex_app_server_client::RemoteAppServerEndpoint::WebSocket {
-            websocket_url: "wss://remote.example.test".to_string(),
-            auth_token: None,
-        },
-    };
-    let expected_mcp_servers = app.expected_mcp_startup_servers();
-    assert_eq!(expected_mcp_servers, Vec::<String>::new());
-    app.chat_widget
-        .restore_startup_draft("captured during startup", expected_mcp_servers);
-
-    app.chat_widget.handle_thread_session(test_thread_session(
-        ThreadId::new(),
-        test_path_buf("/tmp/remote-project"),
-    ));
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match next_user_turn_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "captured during startup".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected remote startup draft submission, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn startup_thread_start_failure_returns_error() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
@@ -353,6 +306,7 @@ fn stale_startup_thread_started_removes_local_routing_state() -> Result<()> {
                 Ok(AppServerStartedThread {
                     session: test_thread_session(stale_thread_id, test_path_buf("/tmp/project")),
                     turns: Vec::new(),
+                    mcp_server_names: Vec::new(),
                 }),
             )
             .await?;

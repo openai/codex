@@ -512,9 +512,14 @@ impl App {
         self.chat_widget
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
-            Ok(started) => {
-                self.enqueue_primary_thread_session(started.session, started.turns)
-                    .await?;
+            Ok(AppServerStartedThread {
+                session,
+                turns,
+                mcp_server_names,
+            }) => {
+                self.chat_widget
+                    .set_startup_draft_expected_mcp_servers(mcp_server_names);
+                self.enqueue_primary_thread_session(session, turns).await?;
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {

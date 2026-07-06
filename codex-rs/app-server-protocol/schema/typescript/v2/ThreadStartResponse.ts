@@ -10,6 +10,9 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
 export type ThreadStartResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
+ * Names of the effective MCP servers in the thread's initial runtime.
+ */
+mcpServerNames: Array<string>, /**
  * Environment-native paths to instruction source files currently loaded for this thread.
  */
 instructionSources: Array<LegacyAppPathString>, approvalPolicy: AskForApproval, /**

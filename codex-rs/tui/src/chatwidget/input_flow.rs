@@ -7,14 +7,21 @@
 use super::*;
 
 impl ChatWidget {
-    pub(crate) fn restore_startup_draft<I>(&mut self, text: &str, expected_mcp_servers: I)
+    pub(crate) fn restore_startup_draft(&mut self, text: &str) {
+        self.insert_str(text);
+        self.startup_draft_pending_mcp_servers = Some(HashSet::new());
+        self.bottom_pane
+            .set_startup_draft_submission_blocked(/*blocked*/ true);
+    }
+
+    pub(crate) fn set_startup_draft_expected_mcp_servers<I>(&mut self, server_names: I)
     where
         I: IntoIterator<Item = String>,
     {
-        self.insert_str(text);
-        self.startup_draft_pending_mcp_servers = Some(expected_mcp_servers.into_iter().collect());
-        self.bottom_pane
-            .set_startup_draft_submission_blocked(/*blocked*/ true);
+        let Some(pending) = &mut self.startup_draft_pending_mcp_servers else {
+            return;
+        };
+        *pending = server_names.into_iter().collect();
         self.finish_startup_draft_protection_if_ready();
     }
 

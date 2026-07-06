@@ -1116,9 +1116,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         if allow_startup_text && let Some(startup_text) = tui.take_startup_text()? {
-            let expected_mcp_servers = app.expected_mcp_startup_servers();
-            app.chat_widget
-                .restore_startup_draft(&startup_text, expected_mcp_servers);
+            app.chat_widget.restore_startup_draft(&startup_text);
         }
 
         let event_stream_started_at = Instant::now();

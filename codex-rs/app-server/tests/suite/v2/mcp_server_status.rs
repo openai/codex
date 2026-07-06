@@ -70,6 +70,20 @@ url = "{mcp_server_url}/mcp"
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let thread_start_response: ThreadStartResponse = to_response(thread_start_response)?;
+    assert_eq!(
+        thread_start_response.mcp_server_names,
+        vec!["some-server".to_string()]
+    );
+
     let request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
             cursor: None,
