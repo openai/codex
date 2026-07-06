@@ -12,6 +12,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 use super::super::conversation_panes::ConversationPaneInit;
 use super::*;
+use crate::app_event::OwnedScreenPanelPreference;
 use crate::app_event::PaneSlot;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
@@ -84,8 +85,19 @@ async fn app_with_owned_parent() -> App {
     app
 }
 
-async fn app_with_owned_side() -> App {
-    let mut app = app_with_owned_parent().await;
+async fn app_with_owned_parent_and_events() -> (App, tokio::sync::mpsc::UnboundedReceiver<AppEvent>)
+{
+    let (mut app, app_event_rx, _op_rx) =
+        super::super::test_support::make_test_app_with_channels().await;
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
+        AltScreenBehavior::Owned,
+        &app.chat_widget,
+        app.keymap.pager.clone(),
+    );
+    (app, app_event_rx)
+}
+
+async fn install_owned_side(app: &mut App) {
     let (side_widget, _side_rx) = make_chatwidget_for_pane(PaneSlot::Side).await;
     let file_search = FileSearchManager::new(
         side_widget.config_ref().cwd.to_path_buf(),
@@ -102,7 +114,18 @@ async fn app_with_owned_side() -> App {
         owned_screen,
     });
     assert!(result.is_ok(), "side pane should install");
+}
+
+async fn app_with_owned_side() -> App {
+    let mut app = app_with_owned_parent().await;
+    install_owned_side(&mut app).await;
     app
+}
+
+async fn app_with_owned_side_and_events() -> (App, tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+    let (mut app, app_event_rx) = app_with_owned_parent_and_events().await;
+    install_owned_side(&mut app).await;
+    (app, app_event_rx)
 }
 
 fn seed_pane(app: &mut App, slot: PaneSlot, draft: &str, cells: &[&'static str]) {
@@ -131,6 +154,27 @@ fn render_app(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
             }
         })
         .expect("render owned panes");
+    terminal
+}
+
+fn render_frame_app(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
+    let frame_overlays_enabled = app.chat_widget.no_modal_or_popup_active();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| {
+            if let Some(rendered) = render_owned_screen_contents(
+                &mut app.chat_widget,
+                &mut app.owned_screen_frame,
+                frame.area(),
+                frame.buffer_mut(),
+                frame_overlays_enabled,
+            ) && app.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
+                && let Some((x, y)) = rendered.cursor
+            {
+                frame.set_cursor_position((x, y));
+            }
+        })
+        .expect("render owned frame");
     terminal
 }
 
@@ -175,6 +219,384 @@ async fn single_pane_app_layout_preserves_existing_owned_render() {
 "                                                  "
 "  gpt-5.5 default · /tmp/project                  "
 "###);
+}
+
+#[tokio::test]
+async fn owned_screen_auto_frame_wide_renders_both_rails() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+
+    let terminal = render_frame_app(&mut app, /*width*/ 144, /*height*/ 12);
+
+    assert_snapshot!(
+        "owned_screen_auto_frame_wide_renders_both_rails",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
+async fn owned_screen_explicit_summary_renders_as_narrow_overlay() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+    app.owned_screen_frame
+        .set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+
+    let terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 12);
+
+    assert_snapshot!(
+        "owned_screen_explicit_summary_renders_as_narrow_overlay",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
+async fn escape_closes_focused_frame_overlay_before_backtrack() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    app.owned_screen_frame
+        .set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+    let _terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 30);
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Summary
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+
+    assert_eq!(
+        app.owned_screen_frame.preference(OwnedScreenPanel::Summary),
+        OwnedScreenPanelPreference::Hidden
+    );
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Conversation
+    );
+    assert!(!app.backtrack.primed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn remapped_panel_shortcuts_toggle_frame_preferences() -> Result<()> {
+    let (mut app, mut app_event_rx) = app_with_owned_parent_and_events().await;
+    app.keymap.app.toggle_sidebar = vec![crate::key_hint::plain(KeyCode::F(11))];
+    app.keymap.app.toggle_summary = vec![crate::key_hint::plain(KeyCode::F(12))];
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    for (key, panel) in [
+        (KeyCode::F(11), OwnedScreenPanel::Sidebar),
+        (KeyCode::F(12), OwnedScreenPanel::Summary),
+    ] {
+        app.handle_key_event(
+            &mut tui,
+            &mut app_server,
+            KeyEvent::new(key, KeyModifiers::NONE),
+        )
+        .await;
+        let event = app_event_rx
+            .try_recv()
+            .expect("panel shortcut should emit an app event");
+        assert!(matches!(
+            &event,
+            AppEvent::SetOwnedScreenPanel {
+                panel: emitted_panel,
+                preference: None,
+            } if *emitted_panel == panel
+        ));
+        app.handle_event(&mut tui, &mut app_server, event).await?;
+        assert_eq!(
+            app.owned_screen_frame.preference(panel),
+            OwnedScreenPanelPreference::Shown
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remapped_panel_shortcut_precedes_fixed_pane_focus() -> Result<()> {
+    let (mut app, mut app_event_rx) = app_with_owned_side_and_events().await;
+    app.keymap.app.toggle_summary = vec![crate::key_hint::alt(KeyCode::Char('2'))];
+    let _terminal = render_frame_app(&mut app, /*width*/ 144, /*height*/ 12);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT),
+    )
+    .await;
+
+    assert!(matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::SetOwnedScreenPanel {
+            panel: OwnedScreenPanel::Summary,
+            preference: None,
+        })
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    Ok(())
+}
+
+#[tokio::test]
+async fn frame_overlay_traps_fixed_pane_focus_shortcut() -> Result<()> {
+    let mut app = app_with_owned_side().await;
+    app.owned_screen_frame
+        .set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+    let _terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 12);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT),
+    )
+    .await;
+
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Summary
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn remapped_copy_page_up_beats_focused_frame_navigation() -> Result<()> {
+    let (mut app, mut app_event_rx) = app_with_owned_parent_and_events().await;
+    let mut keymap_config = app.config.tui_keymap.clone();
+    keymap_config.global.copy = Some(codex_config::types::KeybindingsSpec::One(
+        codex_config::types::KeybindingSpec("page-up".to_string()),
+    ));
+    let runtime_keymap =
+        crate::keymap::RuntimeKeymap::from_config(&keymap_config).expect("valid copy remap");
+    app.chat_widget
+        .apply_keymap_update(keymap_config, &runtime_keymap);
+    app.keymap = runtime_keymap;
+    let _terminal = render_frame_app(&mut app, /*width*/ 144, /*height*/ 12);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )
+    .await;
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Sidebar
+    );
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    )
+    .await;
+
+    let event = app_event_rx
+        .try_recv()
+        .expect("copy shortcut should emit an info cell");
+    let AppEvent::InsertHistoryCell(cell) = event else {
+        panic!("expected copy info cell");
+    };
+    assert!(
+        cell.display_lines(/*width*/ 120)
+            .iter()
+            .any(|line| line.to_string().contains("No agent response to copy"))
+    );
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Sidebar
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_transcript_selection_owns_drag_across_rail() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "",
+        &["selectable transcript text"],
+    );
+    let _terminal = render_frame_app(&mut app, /*width*/ 144, /*height*/ 12);
+    let conversation = app
+        .chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("owned screen")
+        .last_conversation_area;
+    let frame_layout = app.owned_screen_frame.layout(
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 144, /*height*/ 12,
+        ),
+        /*has_side*/ false,
+    );
+    let sidebar = frame_layout.sidebar.expect("sidebar").area;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create input test TUI");
+
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_press(conversation.x, conversation.y),
+    ));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(MousePrimaryEventKind::Drag, sidebar.x, sidebar.y),
+    ));
+
+    assert!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .selection_is_active()
+    );
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Conversation
+    );
+}
+
+#[tokio::test]
+async fn typing_with_a_draft_returns_frame_focus_to_the_composer() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(&mut app, PaneSlot::Parent, "draft", &[]);
+    let _terminal = render_frame_app(&mut app, /*width*/ 144, /*height*/ 12);
+    let sidebar = app
+        .owned_screen_frame
+        .layout(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 144, /*height*/ 12,
+            ),
+            /*has_side*/ false,
+        )
+        .sidebar
+        .expect("sidebar")
+        .area;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.backtrack.primed = true;
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, primary_press(sidebar.x, sidebar.y),));
+    assert!(!app.backtrack.primed);
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Sidebar
+    );
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    )
+    .await;
+
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Conversation
+    );
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+    )
+    .await;
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "draftx".to_string()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn modal_scroll_bypasses_background_frame_panel() {
+    let mut app = app_with_owned_parent().await;
+    app.owned_screen_frame
+        .set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+    let _terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 12);
+    let summary = app
+        .owned_screen_frame
+        .layout(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 75, /*height*/ 30,
+            ),
+            /*has_side*/ false,
+        )
+        .summary
+        .expect("summary overlay")
+        .area;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create input test TUI");
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, primary_press(summary.x, summary.y),));
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Summary
+    );
+    app.chat_widget.open_approvals_popup();
+    let terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 30);
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Update Model Permissions"),
+        "expected approval popup, got:\n{rendered}"
+    );
+    assert!(!rendered.contains("┌ Summary"));
+
+    assert!(!app.handle_owned_screen_mouse_scroll(
+        &mut tui,
+        MouseScrollEvent {
+            direction: MouseScrollDirection::Down,
+            column: summary.x,
+            row: summary.y,
+        },
+    ));
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Conversation
+    );
+}
+
+#[tokio::test]
+async fn frame_overlay_traps_paste_before_hidden_composer() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    app.chat_widget
+        .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+    app.owned_screen_frame
+        .set_preference(OwnedScreenPanel::Summary, OwnedScreenPanelPreference::Shown);
+    let _terminal = render_frame_app(&mut app, /*width*/ 75, /*height*/ 12);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Paste("hidden paste".to_string()),
+    )
+    .await?;
+
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        OwnedScreenFrameFocus::Summary
+    );
+    Ok(())
 }
 
 #[tokio::test]

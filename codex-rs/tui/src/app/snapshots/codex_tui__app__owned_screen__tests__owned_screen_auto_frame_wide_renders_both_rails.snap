@@ -1,0 +1,16 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+expression: terminal.backend()
+---
+" Tasks                      │committed response                                                              │ Summary                          "
+"  New task  /new            │                                                                                │  Focused thread                  "
+"  Search    /resume         │                                                                                │                                  "
+"                            │                                                                                │  Environment, plan, agents,      "
+"  Current                   │                                                                                │  and background tasks            "
+"  • Parent                  │                                                                                │  appear here.                    "
+"                            │                                                                                │                                  "
+"                            │                                                                                │                                  "
+"                            │                                                                                │                                  "
+"                            │› draft sentinel                                                                │                                  "
+"                            │                                                                                │                                  "
+"                            │  gpt-5.5 default · /tmp/project                                                │                                  "

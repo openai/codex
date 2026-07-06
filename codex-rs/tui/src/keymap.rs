@@ -70,6 +70,10 @@ pub(crate) struct AppKeymap {
     pub(crate) toggle_fast_mode: Vec<KeyBinding>,
     /// Toggle raw scrollback mode for copy-friendly transcript selection.
     pub(crate) toggle_raw_output: Vec<KeyBinding>,
+    /// Toggle the owned-screen sidebar.
+    pub(crate) toggle_sidebar: Vec<KeyBinding>,
+    /// Toggle the owned-screen summary rail.
+    pub(crate) toggle_summary: Vec<KeyBinding>,
 }
 
 /// Chat-level keybindings evaluated at the app event layer.
@@ -421,6 +425,16 @@ impl RuntimeKeymap {
                 keymap.global.toggle_raw_output.as_ref(),
                 &defaults.app.toggle_raw_output,
                 "tui.keymap.global.toggle_raw_output",
+            )?,
+            toggle_sidebar: resolve_bindings(
+                keymap.global.toggle_sidebar.as_ref(),
+                &defaults.app.toggle_sidebar,
+                "tui.keymap.global.toggle_sidebar",
+            )?,
+            toggle_summary: resolve_bindings(
+                keymap.global.toggle_summary.as_ref(),
+                &defaults.app.toggle_summary,
+                "tui.keymap.global.toggle_summary",
             )?,
         };
 
@@ -809,6 +823,14 @@ impl RuntimeKeymap {
                 keymap.global.toggle_raw_output.as_ref(),
                 app.toggle_raw_output.as_slice(),
             ),
+            (
+                keymap.global.toggle_sidebar.as_ref(),
+                app.toggle_sidebar.as_slice(),
+            ),
+            (
+                keymap.global.toggle_summary.as_ref(),
+                app.toggle_summary.as_slice(),
+            ),
             (keymap.list.move_up.as_ref(), list_move_up.as_slice()),
             (keymap.list.move_down.as_ref(), list_move_down.as_slice()),
             (keymap.list.accept.as_ref(), list_accept.as_slice()),
@@ -916,6 +938,8 @@ impl RuntimeKeymap {
                 toggle_vim_mode: default_bindings![],
                 toggle_fast_mode: default_bindings![],
                 toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+                toggle_sidebar: default_bindings![],
+                toggle_summary: default_bindings![],
             },
             chat: ChatKeymap {
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
@@ -1175,6 +1199,8 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("toggle_sidebar", self.app.toggle_sidebar.as_slice()),
+                ("toggle_summary", self.app.toggle_summary.as_slice()),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
@@ -1218,6 +1244,8 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("toggle_sidebar", self.app.toggle_sidebar.as_slice()),
+                ("toggle_summary", self.app.toggle_summary.as_slice()),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
@@ -1267,6 +1295,8 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("toggle_sidebar", self.app.toggle_sidebar.as_slice()),
+                ("toggle_summary", self.app.toggle_summary.as_slice()),
             ],
             [
                 ("list.move_up", self.list.move_up.as_slice()),
@@ -1341,6 +1371,8 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("toggle_sidebar", self.app.toggle_sidebar.as_slice()),
+                ("toggle_summary", self.app.toggle_summary.as_slice()),
                 (
                     "composer.history_search_previous",
                     self.composer.history_search_previous.as_slice(),
@@ -2829,6 +2861,37 @@ mod tests {
             runtime.app.toggle_raw_output,
             vec![key_hint::plain(KeyCode::F(12))]
         );
+    }
+
+    #[test]
+    fn owned_screen_panel_toggles_are_unbound_by_default_and_can_be_remapped() {
+        let defaults = RuntimeKeymap::defaults();
+        assert_eq!(
+            (defaults.app.toggle_sidebar, defaults.app.toggle_summary,),
+            (Vec::new(), Vec::new())
+        );
+
+        let mut keymap = TuiKeymap::default();
+        keymap.global.toggle_sidebar = Some(one("f11"));
+        keymap.global.toggle_summary = Some(one("f12"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            (runtime.app.toggle_sidebar, runtime.app.toggle_summary),
+            (
+                vec![key_hint::plain(KeyCode::F(11))],
+                vec![key_hint::plain(KeyCode::F(12))],
+            )
+        );
+    }
+
+    #[test]
+    fn owned_screen_panel_toggles_participate_in_app_conflict_validation() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.toggle_sidebar = Some(one("f12"));
+        keymap.global.toggle_summary = Some(one("f12"));
+
+        expect_conflict(&keymap, "toggle_sidebar", "toggle_summary");
     }
 
     #[test]

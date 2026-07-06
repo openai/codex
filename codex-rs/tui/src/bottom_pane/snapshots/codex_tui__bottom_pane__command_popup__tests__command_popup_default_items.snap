@@ -25,6 +25,8 @@ expression: commands
 /compact - summarize conversation to prevent hitting the context limit
 /agent - switch the active agent thread
 /side - start a side conversation in an ephemeral fork
+/sidebar - toggle the owned-screen task sidebar
+/summary - toggle the owned-screen thread summary
 /copy - copy last response as markdown
 /raw - toggle raw scrollback mode for copy-friendly terminal selection
 /diff - show git diff (including untracked files)

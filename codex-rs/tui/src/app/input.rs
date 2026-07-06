@@ -101,7 +101,99 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        if self.handle_conversation_pane_focus_key(key_event) {
+        let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+            self.chat_widget.toggle_vim_mode_and_notify();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.toggle_fast_mode.is_pressed(key_event)
+            && self.chat_widget.can_toggle_fast_mode_from_keybinding()
+        {
+            self.chat_widget.toggle_fast_mode_from_ui();
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_sidebar.is_pressed(key_event) {
+            self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
+                panel: crate::app_event::OwnedScreenPanel::Sidebar,
+                preference: None,
+            });
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_summary.is_pressed(key_event) {
+            self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
+                panel: crate::app_event::OwnedScreenPanel::Summary,
+                preference: None,
+            });
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
+            // Enter alternate screen and set viewport to full size.
+            let _ = tui.enter_alt_screen();
+            self.overlay = Some(Overlay::new_transcript(
+                self.chat_widget.transcript_cells.clone(),
+                self.keymap.pager.clone(),
+            ));
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.open_external_editor.is_pressed(key_event)
+        {
+            // Only launch the external editor if there is no overlay and the bottom pane is not in use.
+            // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
+            if self.overlay.is_none()
+                && self.chat_widget.can_launch_external_editor()
+                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+            {
+                self.request_external_editor_launch(tui);
+            }
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.copy.is_pressed(key_event) {
+            self.chat_widget.handle_key_event(key_event);
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.clear_terminal.is_pressed(key_event) {
+            if !self.chat_widget.can_run_ctrl_l_clear_now() {
+                return;
+            }
+            if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
+                tracing::warn!(error = %err, "failed to clear terminal UI");
+                self.chat_widget
+                    .add_error_message(format!("Failed to clear terminal UI: {err}"));
+            } else {
+                self.reset_app_ui_state_after_clear(tui);
+                self.queue_clear_ui_header(tui);
+                tui.frame_requester().schedule_frame();
+            }
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.handle_owned_screen_navigation_key(tui, key_event)
+        {
+            if self.backtrack.primed {
+                self.reset_backtrack_state();
+            }
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.handle_conversation_pane_focus_key(key_event) {
             tui.frame_requester().schedule_frame();
             return;
         }
@@ -147,56 +239,10 @@ impl App {
             }
             return;
         }
-        if side_return_shortcut_matches(key_event)
+        if app_keymap_shortcuts_available
+            && side_return_shortcut_matches(key_event)
             && self.maybe_return_from_side(tui, app_server).await
         {
-            return;
-        }
-
-        let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
-
-        if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
-            self.chat_widget.toggle_vim_mode_and_notify();
-            return;
-        }
-
-        if app_keymap_shortcuts_available
-            && self.keymap.app.toggle_fast_mode.is_pressed(key_event)
-            && self.chat_widget.can_toggle_fast_mode_from_keybinding()
-        {
-            self.chat_widget.toggle_fast_mode_from_ui();
-            return;
-        }
-
-        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
-        {
-            let enabled = !self.chat_widget.raw_output_mode();
-            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
-            return;
-        }
-
-        if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
-            // Enter alternate screen and set viewport to full size.
-            let _ = tui.enter_alt_screen();
-            self.overlay = Some(Overlay::new_transcript(
-                self.chat_widget.transcript_cells.clone(),
-                self.keymap.pager.clone(),
-            ));
-            tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if app_keymap_shortcuts_available
-            && self.keymap.app.open_external_editor.is_pressed(key_event)
-        {
-            // Only launch the external editor if there is no overlay and the bottom pane is not in use.
-            // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-            if self.overlay.is_none()
-                && self.chat_widget.can_launch_external_editor()
-                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
-            {
-                self.request_external_editor_launch(tui);
-            }
             return;
         }
 
@@ -217,31 +263,7 @@ impl App {
             return;
         }
 
-        if app_keymap_shortcuts_available && self.handle_owned_screen_navigation_key(tui, key_event)
-        {
-            if self.backtrack.primed {
-                self.reset_backtrack_state();
-            }
-            return;
-        }
-
         match key_event {
-            _ if app_keymap_shortcuts_available
-                && self.keymap.app.clear_terminal.is_pressed(key_event) =>
-            {
-                if !self.chat_widget.can_run_ctrl_l_clear_now() {
-                    return;
-                }
-                if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
-                    tracing::warn!(error = %err, "failed to clear terminal UI");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to clear terminal UI: {err}"));
-                } else {
-                    self.reset_app_ui_state_after_clear(tui);
-                    self.queue_clear_ui_header(tui);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
@@ -283,6 +305,7 @@ impl App {
         if self.backtrack.primed {
             self.reset_backtrack_state();
         }
+        self.owned_screen_frame.focus_conversation();
         if self.chat_widget.focused_slot() == target {
             return true;
         }

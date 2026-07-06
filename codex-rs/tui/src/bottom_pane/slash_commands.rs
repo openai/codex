@@ -303,6 +303,8 @@ mod tests {
             commands,
             vec![
                 SlashCommand::Ide,
+                SlashCommand::Sidebar,
+                SlashCommand::Summary,
                 SlashCommand::Copy,
                 SlashCommand::Raw,
                 SlashCommand::Diff,

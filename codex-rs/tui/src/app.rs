@@ -215,6 +215,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod owned_screen;
+mod owned_screen_frame;
 mod owned_screen_resize;
 mod pending_interactive_replay;
 mod pets;
@@ -516,6 +517,7 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ConversationPanes,
+    owned_screen_frame: owned_screen_frame::OwnedScreenFrameState,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -1033,6 +1035,7 @@ See the Codex keymap documentation for supported actions and examples."
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
+            owned_screen_frame: owned_screen_frame::OwnedScreenFrameState::default(),
             workspace_command_runner: Some(workspace_command_runner),
             config,
             state_db,
@@ -1272,12 +1275,14 @@ See the Codex keymap documentation for supported actions and examples."
     ) -> Result<AppRunControl> {
         match &event {
             TuiEvent::Resize => {
+                self.owned_screen_frame.cancel_interaction();
                 self.chat_widget.cancel_owned_screen_split_drag();
             }
             TuiEvent::FocusLost => {
+                let frame_canceled = self.owned_screen_frame.cancel_interaction();
                 let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
                 let selection_canceled = self.cancel_owned_screen_selection();
-                if split_canceled || selection_canceled {
+                if frame_canceled || split_canceled || selection_canceled {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -1292,9 +1297,10 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         if self.overlay.is_some() {
+            let frame_canceled = self.owned_screen_frame.cancel_interaction();
             let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
             let selection_canceled = self.cancel_owned_screen_selection();
-            if split_canceled || selection_canceled {
+            if frame_canceled || split_canceled || selection_canceled {
                 tui.frame_requester().schedule_frame();
             }
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
@@ -1304,11 +1310,15 @@ See the Codex keymap documentation for supported actions and examples."
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
+                    if self.owned_screen_frame.traps_background_input() {
+                        return Ok(AppRunControl::Continue);
+                    }
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r", "\n");
+                    self.owned_screen_frame.focus_conversation();
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::MouseScroll(event) => {

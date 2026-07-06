@@ -88,6 +88,19 @@ impl App {
             AppEvent::RawOutputModeChanged { enabled } => {
                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             }
+            AppEvent::SetOwnedScreenPanel { panel, preference } => {
+                if !self.has_owned_screen() {
+                    self.chat_widget.add_info_message(
+                        "Panels require `tui.alternate_screen = \"always\"`.".to_string(),
+                        /*details*/ None,
+                    );
+                } else if let Some(preference) = preference {
+                    self.owned_screen_frame.set_preference(panel, preference);
+                } else {
+                    self.owned_screen_frame.toggle(panel);
+                }
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear(tui);

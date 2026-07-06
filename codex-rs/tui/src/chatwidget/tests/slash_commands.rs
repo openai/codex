@@ -1,4 +1,6 @@
 use super::*;
+use crate::app_event::OwnedScreenPanel;
+use crate::app_event::OwnedScreenPanelPreference;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
@@ -2948,6 +2950,66 @@ async fn raw_slash_command_reports_usage_for_invalid_arg() {
         rendered.contains("Usage: /raw [on|off]"),
         "expected raw usage error, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn panel_slash_commands_emit_toggle_and_preference_events() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for (command, panel) in [
+        (SlashCommand::Sidebar, OwnedScreenPanel::Sidebar),
+        (SlashCommand::Summary, OwnedScreenPanel::Summary),
+    ] {
+        chat.dispatch_command(command);
+        let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
+            _ => None,
+        });
+        assert_eq!(event, Some((panel, None)));
+
+        for (arg, preference) in [
+            ("on", OwnedScreenPanelPreference::Shown),
+            ("off", OwnedScreenPanelPreference::Hidden),
+            ("auto", OwnedScreenPanelPreference::Auto),
+        ] {
+            chat.dispatch_command_with_args(command, arg.to_string(), Vec::new());
+            let event = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+                AppEvent::SetOwnedScreenPanel { panel, preference } => Some((panel, preference)),
+                _ => None,
+            });
+            assert_eq!(event, Some((panel, Some(preference))));
+        }
+    }
+}
+
+#[tokio::test]
+async fn panel_slash_commands_report_usage_for_invalid_arg() {
+    for command in [SlashCommand::Sidebar, SlashCommand::Summary] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+        chat.dispatch_command_with_args(command, "sometimes".to_string(), Vec::new());
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AppEvent::SetOwnedScreenPanel { .. }))
+        );
+        let rendered = events
+            .into_iter()
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&format!("Usage: /{} [on|off|auto]", command.command())),
+            "expected panel usage error, got {rendered:?}"
+        );
+    }
 }
 
 #[tokio::test]

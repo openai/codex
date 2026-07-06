@@ -65,6 +65,21 @@ pub(crate) enum ThreadGoalSetMode {
     },
 }
 
+/// Identifies one frame-level rail in the application-owned alternate screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnedScreenPanel {
+    Sidebar,
+    Summary,
+}
+
+/// User preference for a frame-level owned-screen rail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnedScreenPanelPreference {
+    Auto,
+    Shown,
+    Hidden,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct HistoryLookupResponse {
     pub(crate) offset: usize,
@@ -199,6 +214,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+
+    /// Toggle a rail, or set its explicit responsive preference.
+    SetOwnedScreenPanel {
+        panel: OwnedScreenPanel,
+        preference: Option<OwnedScreenPanelPreference>,
+    },
 
     /// Fork the current thread into a transient side conversation.
     StartSide {

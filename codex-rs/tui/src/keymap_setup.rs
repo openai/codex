@@ -1125,13 +1125,23 @@ mod tests {
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
 
-        assert_eq!(unbound_tab.items.len(), 2);
-        assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
-        assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
-        assert!(!unbound_tab.items[0].is_disabled);
-        assert_eq!(unbound_tab.items[1].name, "Kill Whole Line");
-        assert_eq!(unbound_tab.items[1].description.as_deref(), Some("unbound"));
-        assert!(!unbound_tab.items[1].is_disabled);
+        assert_eq!(
+            unbound_tab
+                .items
+                .iter()
+                .map(|item| (
+                    item.name.as_str(),
+                    item.description.as_deref(),
+                    item.is_disabled,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Toggle Vim Mode", Some("unbound"), false),
+                ("Toggle Sidebar", Some("unbound"), false),
+                ("Toggle Summary", Some("unbound"), false),
+                ("Kill Whole Line", Some("unbound"), false),
+            ]
+        );
     }
 
     #[test]

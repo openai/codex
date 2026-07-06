@@ -18,9 +18,12 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::owned_screen_frame::OwnedScreenFrameFocus;
+use super::owned_screen_frame::OwnedScreenFrameState;
 use super::owned_screen_resize::OwnedScreenLayout;
 use super::*;
 use crate::AltScreenBehavior;
+use crate::app_event::OwnedScreenPanel;
 use crate::key_hint::is_plain_text_key_event;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
@@ -386,7 +389,20 @@ impl App {
         tui: &mut tui::Tui,
         key_event: KeyEvent,
     ) -> bool {
-        if !self.chat_widget.composer_is_empty() || !self.chat_widget.no_modal_or_popup_active() {
+        if !self.chat_widget.no_modal_or_popup_active() {
+            return false;
+        }
+        let composer_is_empty = self.chat_widget.composer_is_empty();
+        let frame_has_focus =
+            self.owned_screen_frame.focus() != OwnedScreenFrameFocus::Conversation;
+        if (composer_is_empty || frame_has_focus)
+            && self.owned_screen_frame.handle_navigation_key(key_event)
+        {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+            return true;
+        }
+        if !composer_is_empty {
             return false;
         }
         let handled = self
@@ -406,7 +422,19 @@ impl App {
         tui: &mut tui::Tui,
         event: MouseScrollEvent,
     ) -> bool {
-        if self.chat_widget.owned_screen_split_is_dragging() {
+        if !self.chat_widget.no_modal_or_popup_active() {
+            self.owned_screen_frame.focus_conversation();
+            let frame_canceled = self.owned_screen_frame.cancel_interaction();
+            let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
+            let selection_canceled = self.cancel_owned_screen_selection();
+            if frame_canceled || split_canceled || selection_canceled {
+                tui.frame_requester().schedule_frame();
+            }
+            return false;
+        }
+        if self.owned_screen_frame.is_resizing()
+            || self.chat_widget.owned_screen_split_is_dragging()
+        {
             return true;
         }
         let active_selection_slot = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
@@ -426,6 +454,11 @@ impl App {
                     .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
             }
             return handled;
+        }
+        if self.owned_screen_frame.handle_mouse_scroll(event) {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+            return true;
         }
         for slot in [PaneSlot::Parent, PaneSlot::Side] {
             let handled = self.chat_widget.by_slot_mut(slot).is_some_and(|pane| {
@@ -450,12 +483,33 @@ impl App {
         event: MousePrimaryEvent,
     ) -> bool {
         if self.overlay.is_some() || !self.chat_widget.no_modal_or_popup_active() {
+            self.owned_screen_frame.focus_conversation();
+            let frame_canceled = self.owned_screen_frame.cancel_interaction();
             let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
             let selection_canceled = self.cancel_owned_screen_selection();
-            if split_canceled || selection_canceled {
+            if frame_canceled || split_canceled || selection_canceled {
                 tui.frame_requester().schedule_frame();
             }
             return false;
+        }
+
+        let route_to_frame =
+            event.kind == MousePrimaryEventKind::Press || self.owned_screen_frame.is_interacting();
+        if route_to_frame && self.owned_screen_frame.handle_mouse_primary(event) {
+            if self.backtrack.primed {
+                self.reset_backtrack_state();
+            }
+            self.chat_widget.cancel_owned_screen_split_drag();
+            self.cancel_owned_screen_selection();
+            match event.kind {
+                MousePrimaryEventKind::Drag => tui
+                    .frame_requester()
+                    .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL),
+                MousePrimaryEventKind::Press | MousePrimaryEventKind::Release => {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            return true;
         }
 
         if self.chat_widget.handle_owned_screen_split_mouse(event) {
@@ -591,6 +645,7 @@ impl App {
 
     pub(super) fn handle_owned_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<bool> {
         if !self.has_owned_screen() {
+            self.owned_screen_frame.clear_layout();
             return Ok(false);
         }
         let size = tui.terminal.size()?;
@@ -611,23 +666,28 @@ impl App {
         if !self.has_owned_screen() {
             return Ok(None);
         }
-        if !self.chat_widget.no_modal_or_popup_active() {
+        let frame_overlays_enabled = self.chat_widget.no_modal_or_popup_active();
+        if !frame_overlays_enabled {
+            self.owned_screen_frame.focus_conversation();
+            self.owned_screen_frame.cancel_interaction();
             self.chat_widget.cancel_owned_screen_split_drag();
             self.cancel_owned_screen_selection();
         }
-        let focused = self.chat_widget.focused_slot();
-        let has_side = self.chat_widget.has_side();
-        let split_preference = self.chat_widget.owned_screen_split_preference();
         let mut rendered_area = Rect::default();
         let mut selection_autoscroll_active = false;
         tui.draw(/*height*/ u16::MAX, |frame| {
             rendered_area = frame.area();
-            let layout = OwnedScreenLayout::new(rendered_area, has_side, focused, split_preference);
-            if let Some(rendered) =
-                render_layout(&mut self.chat_widget, layout, focused, frame.buffer)
-            {
+            if let Some(rendered) = render_owned_screen_contents(
+                &mut self.chat_widget,
+                &mut self.owned_screen_frame,
+                rendered_area,
+                frame.buffer,
+                frame_overlays_enabled,
+            ) {
                 selection_autoscroll_active = rendered.selection_autoscroll_active;
-                if let Some((x, y)) = rendered.cursor {
+                if self.owned_screen_frame.focus() == OwnedScreenFrameFocus::Conversation
+                    && let Some((x, y)) = rendered.cursor
+                {
                     frame.set_cursor_style(rendered.cursor_style);
                     frame.set_cursor_position((x, y));
                 }
@@ -639,6 +699,62 @@ impl App {
         }
         Ok(Some(rendered_area))
     }
+}
+
+fn render_owned_screen_contents(
+    chat_widget: &mut ConversationPanes,
+    owned_screen_frame: &mut OwnedScreenFrameState,
+    area: Rect,
+    buffer: &mut Buffer,
+    frame_overlays_enabled: bool,
+) -> Option<RenderedOwnedScreen> {
+    if !frame_overlays_enabled {
+        owned_screen_frame.focus_conversation();
+    }
+    let focused = chat_widget.focused_slot();
+    let has_side = chat_widget.has_side();
+    let split_preference = chat_widget.owned_screen_split_preference();
+    let frame_layout = if frame_overlays_enabled {
+        owned_screen_frame.layout(area, has_side)
+    } else {
+        owned_screen_frame.layout_without_overlay(area, has_side)
+    };
+    let layout = OwnedScreenLayout::new(frame_layout.center, has_side, focused, split_preference);
+    let rendered = render_layout(chat_widget, layout, focused, buffer);
+    owned_screen_frame.render_panel(
+        OwnedScreenPanel::Sidebar,
+        "Tasks",
+        &sidebar_placeholder_lines(),
+        buffer,
+    );
+    owned_screen_frame.render_panel(
+        OwnedScreenPanel::Summary,
+        "Summary",
+        &summary_placeholder_lines(),
+        buffer,
+    );
+    owned_screen_frame.render_dividers(buffer);
+    rendered
+}
+
+fn sidebar_placeholder_lines() -> Vec<Line<'static>> {
+    vec![
+        vec!["  ".into(), "New task".into(), "  /new".dim()].into(),
+        vec!["  ".into(), "Search".into(), "    /resume".dim()].into(),
+        "".into(),
+        "  Current".bold().into(),
+        vec!["  • ".dim(), "Parent".into()].into(),
+    ]
+}
+
+fn summary_placeholder_lines() -> Vec<Line<'static>> {
+    vec![
+        "  Focused thread".bold().into(),
+        "".into(),
+        "  Environment, plan, agents,".dim().into(),
+        "  and background tasks".dim().into(),
+        "  appear here.".dim().into(),
+    ]
 }
 
 #[cfg(test)]

@@ -111,6 +111,10 @@ pub struct TuiGlobalKeymap {
     pub toggle_fast_mode: Option<KeybindingsSpec>,
     /// Toggle raw scrollback mode for copy-friendly transcript selection.
     pub toggle_raw_output: Option<KeybindingsSpec>,
+    /// Toggle the owned-screen sidebar.
+    pub toggle_sidebar: Option<KeybindingsSpec>,
+    /// Toggle the owned-screen summary rail.
+    pub toggle_summary: Option<KeybindingsSpec>,
 }
 
 /// Chat context keybindings.
@@ -650,6 +654,23 @@ mod tests {
         "#;
         let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
         assert!(keymap.global.open_transcript.is_some());
+    }
+
+    #[test]
+    fn owned_screen_panel_actions_under_global_context_are_accepted() {
+        let toml_input = r#"
+            [global]
+            toggle_sidebar = "f11"
+            toggle_summary = "f12"
+        "#;
+        let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
+        let mut expected = TuiKeymap::default();
+        expected.global.toggle_sidebar =
+            Some(KeybindingsSpec::One(KeybindingSpec("f11".to_string())));
+        expected.global.toggle_summary =
+            Some(KeybindingsSpec::One(KeybindingSpec("f12".to_string())));
+
+        assert_eq!(keymap, expected);
     }
 
     #[test]

@@ -1,0 +1,16 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+expression: terminal.backend()
+---
+"committed response                      ┌ Summary ───────────────────────┐ "
+"                                        │  Focused thread                │ "
+"                                        │                                │ "
+"                                        │  Environment, plan, agents,    │ "
+"                                        │  and background tasks          │ "
+"                                        │  appear here.                  │ "
+"                                        │                                │ "
+"                                        │                                │ "
+"                                        │                                │ "
+"› draft sentinel                        │                                │ "
+"                                        │                                │ "
+"  gpt-5.5 default · /tmp/project        └────────────────────────────────┘ "

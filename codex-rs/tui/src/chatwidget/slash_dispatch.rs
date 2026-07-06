@@ -6,6 +6,8 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::app_event::OwnedScreenPanel;
+use crate::app_event::OwnedScreenPanelPreference;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
@@ -36,6 +38,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const PANEL_USAGE: &str = "Usage: /{command} [on|off|auto]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 impl ChatWidget {
@@ -299,6 +302,15 @@ impl ChatWidget {
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
+            }
+            SlashCommand::Sidebar | SlashCommand::Summary => {
+                let Some(panel) = owned_screen_panel_for_command(cmd) else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
+                    panel,
+                    preference: None,
+                });
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -709,6 +721,26 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
+            SlashCommand::Sidebar | SlashCommand::Summary => {
+                let Some(panel) = owned_screen_panel_for_command(cmd) else {
+                    return;
+                };
+                let preference = match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => Some(OwnedScreenPanelPreference::Shown),
+                    "off" => Some(OwnedScreenPanelPreference::Hidden),
+                    "auto" => Some(OwnedScreenPanelPreference::Auto),
+                    _ => {
+                        self.add_error_message(PANEL_USAGE.replace("{command}", cmd.command()));
+                        None
+                    }
+                };
+                if let Some(preference) = preference {
+                    self.app_event_tx.send(AppEvent::SetOwnedScreenPanel {
+                        panel,
+                        preference: Some(preference),
+                    });
+                }
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -1054,6 +1086,8 @@ impl ChatWidget {
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw
+            | SlashCommand::Sidebar
+            | SlashCommand::Summary
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::App
@@ -1146,5 +1180,13 @@ impl ChatWidget {
         ));
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+}
+
+fn owned_screen_panel_for_command(command: SlashCommand) -> Option<OwnedScreenPanel> {
+    match command {
+        SlashCommand::Sidebar => Some(OwnedScreenPanel::Sidebar),
+        SlashCommand::Summary => Some(OwnedScreenPanel::Summary),
+        _ => None,
     }
 }

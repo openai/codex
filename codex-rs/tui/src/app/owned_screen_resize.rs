@@ -50,6 +50,14 @@ pub(super) enum OwnedScreenLayout {
 }
 
 impl OwnedScreenLayout {
+    pub(super) fn minimum_width(has_side: bool) -> u16 {
+        if has_side {
+            MIN_SPLIT_WIDTH
+        } else {
+            MIN_SPLIT_PANE_WIDTH
+        }
+    }
+
     pub(super) fn new(
         area: Rect,
         has_side: bool,

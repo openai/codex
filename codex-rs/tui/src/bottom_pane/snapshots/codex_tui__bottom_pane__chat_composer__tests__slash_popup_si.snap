@@ -5,5 +5,5 @@ expression: terminal.backend()
 "                                                            "
 "› /si                                                       "
 "                                                            "
-"                                                            "
-"  /side  start a side conversation in an ephemeral fork     "
+"  /side     start a side conversation in an ephemeral fork  "
+"  /sidebar  toggle the owned-screen task sidebar            "
