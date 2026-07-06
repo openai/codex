@@ -24,8 +24,7 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
 use codex_extension_items::ExtensionItem;
-use codex_extension_items::ExtensionItemPayload;
-use codex_extension_items::image_generation::ImageGenerationPayload;
+use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -91,26 +90,19 @@ struct ImagegenArgs {
     num_last_images_to_include: Option<usize>,
 }
 
-fn legacy_end_event(payload: &ImageGenerationPayload, call_id: String) -> EventMsg {
+fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
     EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
-        call_id,
-        status: payload.status.clone(),
-        revised_prompt: payload.revised_prompt.clone(),
-        result: payload.result.clone(),
-        saved_path: payload.saved_path.clone(),
+        call_id: item.id.clone(),
+        status: item.status.clone(),
+        revised_prompt: item.revised_prompt.clone(),
+        result: item.result.clone(),
+        saved_path: item.saved_path.clone(),
     })
 }
 
-fn extension_turn_item(
-    id: String,
-    payload: ImageGenerationPayload,
-    legacy_event: EventMsg,
-) -> ExtensionTurnItem {
+fn extension_turn_item(item: ImageGenerationItem, legacy_event: EventMsg) -> ExtensionTurnItem {
     ExtensionTurnItem::Extension {
-        item: ExtensionItem {
-            id,
-            payload: ExtensionItemPayload::ImageGeneration(payload),
-        },
+        item: ExtensionItem::ImageGeneration(item),
         legacy_events: vec![legacy_event],
     }
 }
@@ -145,8 +137,8 @@ impl ImageGenerationTool {
                 .await?;
         call.turn_item_emitter
             .emit_started(extension_turn_item(
-                call.call_id.clone(),
-                ImageGenerationPayload {
+                ImageGenerationItem {
+                    id: call.call_id.clone(),
                     status: "in_progress".to_string(),
                     revised_prompt: None,
                     result: String::new(),
@@ -173,19 +165,16 @@ impl ImageGenerationTool {
         let result = match result {
             Ok(result) => result,
             Err(message) => {
-                let payload = ImageGenerationPayload {
+                let item = ImageGenerationItem {
+                    id: call.call_id.clone(),
                     status: "failed".to_string(),
                     revised_prompt: Some(args.prompt),
                     result: String::new(),
                     saved_path: None,
                 };
-                let legacy_event = legacy_end_event(&payload, call.call_id.clone());
+                let legacy_event = legacy_end_event(&item);
                 call.turn_item_emitter
-                    .emit_completed(extension_turn_item(
-                        call.call_id.clone(),
-                        payload,
-                        legacy_event,
-                    ))
+                    .emit_completed(extension_turn_item(item, legacy_event))
                     .await;
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -215,19 +204,16 @@ impl ImageGenerationTool {
             },
             None => None,
         };
-        let payload = ImageGenerationPayload {
+        let item = ImageGenerationItem {
+            id: call.call_id.clone(),
             status: "completed".to_string(),
             revised_prompt: Some(args.prompt),
             result: result.clone(),
             saved_path: saved_path.clone(),
         };
-        let legacy_event = legacy_end_event(&payload, call.call_id.clone());
+        let legacy_event = legacy_end_event(&item);
         call.turn_item_emitter
-            .emit_completed(extension_turn_item(
-                call.call_id.clone(),
-                payload,
-                legacy_event,
-            ))
+            .emit_completed(extension_turn_item(item, legacy_event))
             .await;
         let output_hint = saved_path.as_ref().and_then(|output_path| {
             let output_dir = output_path.parent()?;

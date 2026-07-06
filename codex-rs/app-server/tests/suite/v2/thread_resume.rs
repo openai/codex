@@ -889,7 +889,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 !remote_turn
                     .items
                     .iter()
-                    .any(|item| matches!(item, ThreadItem::ImageGeneration { .. })),
+                    .any(|item| matches!(item, ThreadItem::ImageGeneration(_))),
                 "remote resume should drop image generation items for {client_name}"
             );
         }
@@ -943,12 +943,9 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     assert!(
         normal_turn.items.iter().any(|item| matches!(
             item,
-            ThreadItem::ImageGeneration {
-                result,
-                revised_prompt,
-                ..
-            } if result == "base64-image-result"
-                && revised_prompt.as_deref() == Some("secret revised prompt")
+            ThreadItem::ImageGeneration(item)
+                if item.result == "base64-image-result"
+                    && item.revised_prompt.as_deref() == Some("secret revised prompt")
         )),
         "normal resume should keep image generation items"
     );

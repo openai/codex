@@ -2,19 +2,16 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::ExtensionItem;
-use super::ExtensionItemPayload;
-use super::image_generation::ImageGenerationPayload;
+use super::image_generation::ImageGenerationItem;
 
 fn completed_image_generation_item() -> ExtensionItem {
-    ExtensionItem {
+    ExtensionItem::ImageGeneration(ImageGenerationItem {
         id: "image-1".to_string(),
-        payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
-            status: "completed".to_string(),
-            revised_prompt: Some("A blue square".to_string()),
-            result: "cG5n".to_string(),
-            saved_path: None,
-        }),
-    }
+        status: "completed".to_string(),
+        revised_prompt: Some("A blue square".to_string()),
+        result: "cG5n".to_string(),
+        saved_path: None,
+    })
 }
 
 #[test]
@@ -25,14 +22,11 @@ fn image_generation_item_preserves_stable_wire_shape() {
     assert_eq!(
         value,
         json!({
-            "id": "image-1",
             "kind": "image_gen.generation",
-            "payload": {
-                "status": "completed",
-                "revised_prompt": "A blue square",
-                "result": "cG5n",
-                "saved_path": null,
-            },
+            "id": "image-1",
+            "status": "completed",
+            "revisedPrompt": "A blue square",
+            "result": "cG5n",
         })
     );
     assert_eq!(
@@ -44,9 +38,8 @@ fn image_generation_item_preserves_stable_wire_shape() {
 #[test]
 fn unknown_extension_kind_is_rejected() {
     let value = json!({
-        "id": "image-1",
         "kind": "image_gen.unknown",
-        "payload": {},
+        "id": "image-1",
     });
 
     assert!(serde_json::from_value::<ExtensionItem>(value).is_err());
@@ -55,11 +48,9 @@ fn unknown_extension_kind_is_rejected() {
 #[test]
 fn malformed_known_extension_payload_is_rejected() {
     let value = json!({
-        "id": "image-1",
         "kind": "image_gen.generation",
-        "payload": {
-            "status": "completed",
-        },
+        "id": "image-1",
+        "status": "completed",
     });
 
     assert!(serde_json::from_value::<ExtensionItem>(value).is_err());

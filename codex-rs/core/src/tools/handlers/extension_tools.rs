@@ -192,8 +192,7 @@ mod tests {
     use codex_extension_api::ExtensionData;
     use codex_extension_api::TurnItemContributor;
     use codex_extension_items::ExtensionItem;
-    use codex_extension_items::ExtensionItemPayload;
-    use codex_extension_items::image_generation::ImageGenerationPayload;
+    use codex_extension_items::image_generation::ImageGenerationItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::ContentItem;
@@ -503,15 +502,13 @@ mod tests {
         codex_tools::TurnItemEmitter::emit_completed(
             &emitter,
             ExtensionTurnItem::Extension {
-                item: ExtensionItem {
+                item: ExtensionItem::ImageGeneration(ImageGenerationItem {
                     id: "image-1".to_string(),
-                    payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
-                        status: "completed".to_string(),
-                        revised_prompt: None,
-                        result: "cG5n".to_string(),
-                        saved_path: None,
-                    }),
-                },
+                    status: "completed".to_string(),
+                    revised_prompt: None,
+                    result: "cG5n".to_string(),
+                    saved_path: None,
+                }),
                 legacy_events: Vec::new(),
             },
         )
@@ -537,24 +534,20 @@ mod tests {
             session: Arc::downgrade(&session),
             turn: Arc::downgrade(&turn),
         };
-        let expected_started_item = ExtensionItem {
+        let expected_started_item = ExtensionItem::ImageGeneration(ImageGenerationItem {
             id: "call-image".to_string(),
-            payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
-                status: "in_progress".to_string(),
-                revised_prompt: None,
-                result: String::new(),
-                saved_path: None,
-            }),
-        };
-        let expected_completed_item = ExtensionItem {
+            status: "in_progress".to_string(),
+            revised_prompt: None,
+            result: String::new(),
+            saved_path: None,
+        });
+        let expected_completed_item = ExtensionItem::ImageGeneration(ImageGenerationItem {
             id: "call-image".to_string(),
-            payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
-                status: "completed".to_string(),
-                revised_prompt: Some("A tiny blue square".to_string()),
-                result: "cG5n".to_string(),
-                saved_path: Some(expected_path.clone()),
-            }),
-        };
+            status: "completed".to_string(),
+            revised_prompt: Some("A tiny blue square".to_string()),
+            result: "cG5n".to_string(),
+            saved_path: Some(expected_path.clone()),
+        });
         codex_tools::TurnItemEmitter::emit_started(
             &emitter,
             ExtensionTurnItem::Extension {

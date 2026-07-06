@@ -22,6 +22,7 @@ use crate::protocol::v2::TurnItemsView;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
+use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
@@ -828,24 +829,24 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_image_generation_begin(&mut self, payload: &ImageGenerationBeginEvent) {
-        let item = ThreadItem::ImageGeneration {
+        let item = ThreadItem::ImageGeneration(ImageGenerationItem {
             id: payload.call_id.clone(),
             status: String::new(),
             revised_prompt: None,
             result: String::new(),
             saved_path: None,
-        };
+        });
         self.upsert_item_in_current_turn(item);
     }
 
     fn handle_image_generation_end(&mut self, payload: &ImageGenerationEndEvent) {
-        let item = ThreadItem::ImageGeneration {
+        let item = ThreadItem::ImageGeneration(ImageGenerationItem {
             id: payload.call_id.clone(),
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
-        };
+        });
         self.upsert_item_in_current_turn(item);
     }
 
@@ -1550,8 +1551,6 @@ mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
     use codex_extension_items::ExtensionItem as CoreExtensionItem;
-    use codex_extension_items::ExtensionItemPayload;
-    use codex_extension_items::image_generation::ImageGenerationPayload;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::CommandExecutionItem as CoreCommandExecutionItem;
@@ -1866,15 +1865,15 @@ mod tests {
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id,
                 turn_id: turn_id.to_string(),
-                item: CoreTurnItem::Extension(CoreExtensionItem {
-                    id: "image-1".to_string(),
-                    payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
+                item: CoreTurnItem::Extension(CoreExtensionItem::ImageGeneration(
+                    ImageGenerationItem {
+                        id: "image-1".to_string(),
                         status: "completed".to_string(),
                         revised_prompt: Some("A blue square".to_string()),
                         result: "cG5n".to_string(),
                         saved_path: Some(saved_path.clone()),
-                    }),
-                }),
+                    },
+                )),
                 completed_at_ms: 1_000,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -1894,13 +1893,13 @@ mod tests {
 
         assert_eq!(
             turns[0].items,
-            vec![ThreadItem::ImageGeneration {
+            vec![ThreadItem::ImageGeneration(ImageGenerationItem {
                 id: "image-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("A blue square".to_string()),
                 result: "cG5n".to_string(),
                 saved_path: Some(saved_path),
-            }]
+            })]
         );
     }
 
@@ -2116,13 +2115,13 @@ mod tests {
                             text_elements: Vec::new(),
                         }],
                     },
-                    ThreadItem::ImageGeneration {
+                    ThreadItem::ImageGeneration(ImageGenerationItem {
                         id: "ig_123".into(),
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
-                    },
+                    }),
                 ],
             }
         );

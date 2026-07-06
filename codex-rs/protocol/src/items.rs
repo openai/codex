@@ -52,8 +52,8 @@ pub enum TurnItem {
     Sleep(SleepItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
-    /// Standalone image generation uses this path. App-server projects its
-    /// typed extension payload back into the public image-generation item.
+    /// Standalone image generation uses this path. App-server wraps the same
+    /// typed item in its public image-generation variant.
     Extension(ExtensionItem),
     /// Hosted Responses API image-generation item handled directly by core.
     ///
@@ -615,7 +615,7 @@ impl TurnItem {
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Sleep(item) => item.id.clone(),
-            TurnItem::Extension(item) => item.id.clone(),
+            TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),

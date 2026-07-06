@@ -1,4 +1,4 @@
-//! Typed display-item payloads owned by Codex extensions.
+//! Typed display items owned by Codex extensions.
 //!
 //! This crate intentionally sits below `codex-protocol` so core can carry
 //! extension items without owning each extension's display schema.
@@ -16,36 +16,34 @@ pub mod image_generation;
 ///
 /// ```json
 /// {
-///   "id": "call-id",
 ///   "kind": "image_gen.generation",
-///   "payload": {
-///     "status": "completed",
-///     "revised_prompt": "A blue square",
-///     "result": "cG5n",
-///     "saved_path": null
-///   }
+///   "id": "call-id",
+///   "status": "completed",
+///   "revisedPrompt": "A blue square",
+///   "result": "cG5n",
+///   "savedPath": "/tmp/image.png"
 /// }
 /// ```
 ///
-/// `kind` values follow `<extension_namespace>.<item_kind>`. Adding a payload
-/// variant also requires app-server to add its typed public projection.
+/// `kind` values follow `<extension_namespace>.<item_kind>`. Adding a variant
+/// also requires app-server to add its typed public wrapper.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
-pub struct ExtensionItem {
-    pub id: String,
-    #[serde(flatten)]
-    #[ts(flatten)]
-    pub payload: ExtensionItemPayload,
-}
-
-/// Closed set of extension-owned turn-item payloads that app-server projects
-/// into its typed public API.
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
-#[serde(tag = "kind", content = "payload")]
-#[ts(tag = "kind", content = "payload")]
-pub enum ExtensionItemPayload {
+#[serde(tag = "kind")]
+#[ts(tag = "kind")]
+pub enum ExtensionItem {
     #[serde(rename = "image_gen.generation")]
     #[ts(rename = "image_gen.generation")]
-    ImageGeneration(image_generation::ImageGenerationPayload),
+    ImageGeneration(image_generation::ImageGenerationItem),
+}
+
+impl ExtensionItem {
+    /// Returns the stable item identifier without exposing variant fields to
+    /// core or rollout persistence.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::ImageGeneration(item) => &item.id,
+        }
+    }
 }
 
 #[cfg(test)]
