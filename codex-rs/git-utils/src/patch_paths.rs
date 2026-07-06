@@ -9,7 +9,7 @@ use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
-use crate::git_config_sources::ensure_no_worktree_primary_config_sources;
+use crate::git_config_sources::ensure_no_worktree_config_sources;
 
 // Path discovery must not turn a repository's whitespace policy into an
 // API-level parser failure before the real apply can report its status.
@@ -71,7 +71,7 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
             .map(std::fs::canonicalize)
             .transpose()?
             .unwrap_or(std::fs::canonicalize(cwd)?);
-        ensure_no_worktree_primary_config_sources(&git, &authorized_cwd)?;
+        ensure_no_worktree_config_sources(&git, &authorized_cwd, &[])?;
         extract_effective_paths_from_patch(
             &git,
             &authorized_cwd,
@@ -256,7 +256,7 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let git = GitRunner::for_cwd_io(git_root)?;
     let git_config_args = safe_git_config_parts();
-    ensure_no_worktree_primary_config_sources(&git, git_root)?;
+    ensure_no_worktree_config_sources(&git, git_root, &git_config_args)?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths = extract_effective_paths_from_patch(
         &git,

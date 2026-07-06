@@ -19,7 +19,7 @@ use route_walker::observe_route;
 use route_walker::route_contains_process_relative_procfs_path;
 #[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_authority_path_is_ambiguous;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_path_is_ambiguous;
 
 #[derive(Clone, Copy, Eq, PartialEq)]

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
-use crate::git_config_sources::ensure_no_worktree_primary_config_sources;
+use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::patch_paths::extract_effective_paths_from_patch;
 use crate::patch_paths::stage_effective_paths;
 use crate::safe_git::DISABLED_HOOKS_PATH;
@@ -52,7 +52,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let expected_root = crate::get_git_repo_root(&requested_cwd)
         .ok_or_else(|| io::Error::other("not a Git repository"))
         .and_then(std::fs::canonicalize)?;
-    ensure_no_worktree_primary_config_sources(&git, &expected_root)?;
+    ensure_no_worktree_config_sources(&git, &expected_root, &cfg_parts)?;
     let git_root = resolve_git_root(&git, &expected_root, &cfg_parts)?;
 
     // Write unified diff into a temporary file

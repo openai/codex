@@ -2,6 +2,8 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use same_file::Handle;
+
 use crate::errors::GitReadError;
 use crate::git_config::path_is_within;
 use crate::path_authority::RepositoryRouteBoundaries;
@@ -24,11 +26,37 @@ use super::resolve_repository_metadata;
 
 mod policy;
 
+fn open_active_worktree_identity(path: &Path) -> io::Result<Handle> {
+    #[cfg(windows)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+
+        // Deliberately omit FILE_SHARE_DELETE so the repository root cannot
+        // be renamed or replaced between validation and the guarded child.
+        let directory = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?;
+        Handle::from_file(directory)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Handle::from_path(path)
+    }
+}
+
 /// Repository and filesystem authority retained for the lifetime of one
 /// trusted Git runner.
 #[derive(Debug)]
 pub(crate) struct RepositoryAuthority {
     active_worktree_root: PathBuf,
+    active_worktree_identity: Option<Handle>,
     roots: Vec<PathBuf>,
     worktree_roots: Vec<PathBuf>,
     common_dirs: Vec<PathBuf>,
@@ -57,8 +85,11 @@ impl RepositoryAuthority {
         let worktree_root = crate::get_git_repo_root(&canonical_cwd)
             .and_then(|root| std::fs::canonicalize(root).ok())
             .unwrap_or_else(|| canonical_cwd.clone());
+        let active_worktree_identity = open_active_worktree_identity(&worktree_root)
+            .map_err(|error| invalid_metadata(&worktree_root, error))?;
         let mut authority = Self {
             active_worktree_root: worktree_root.clone(),
+            active_worktree_identity: Some(active_worktree_identity),
             roots: Vec::new(),
             worktree_roots: Vec::new(),
             common_dirs: Vec::new(),
@@ -116,6 +147,7 @@ impl RepositoryAuthority {
     }
 
     pub(crate) fn revalidate_active_repository_metadata(&self) -> io::Result<()> {
+        self.revalidate_active_worktree_identity()?;
         let Some(expected) = &self.active_metadata else {
             return Ok(());
         };
@@ -148,6 +180,25 @@ impl RepositoryAuthority {
         })
     }
 
+    fn revalidate_active_worktree_identity(&self) -> io::Result<()> {
+        let Some(expected) = &self.active_worktree_identity else {
+            return Ok(());
+        };
+        let actual = Handle::from_path(&self.active_worktree_root).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("guarded Git repository identity could not be revalidated: {error}"),
+            )
+        })?;
+        if &actual != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "guarded Git repository identity changed before Git launch",
+            ));
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_locations(
         roots: Vec<PathBuf>,
@@ -156,12 +207,15 @@ impl RepositoryAuthority {
     ) -> Result<Self, GitReadError> {
         let route_boundaries = repository_route_boundaries(&worktree_roots, &common_dirs)
             .map_err(|error| invalid_metadata(Path::new("<test>"), error))?;
+        let active_worktree_root = worktree_roots
+            .first()
+            .or_else(|| roots.first())
+            .cloned()
+            .unwrap_or_default();
+        let active_worktree_identity = open_active_worktree_identity(&active_worktree_root).ok();
         Ok(Self {
-            active_worktree_root: worktree_roots
-                .first()
-                .or_else(|| roots.first())
-                .cloned()
-                .unwrap_or_default(),
+            active_worktree_root,
+            active_worktree_identity,
             roots,
             worktree_roots,
             common_dirs,
