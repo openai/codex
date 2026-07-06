@@ -1929,9 +1929,8 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
-- `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the earned rate-limit reset count. Rate-limit updates arrive via `account/rateLimits/updated` (notify); reset-credit data is snapshot-only.
-- `account/rateLimitResetCredit/list` — fetch a non-pageable snapshot with details for up to 10 available earned resets, including expiry timestamps, plus the full available count.
-- `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key, optionally selecting a reset-credit ID returned by `account/rateLimitResetCredit/list`.
+- `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the earned rate-limit resets currently available, including expiry details when provided by the backend. Rate-limit updates arrive via `account/rateLimits/updated` (notify); reset-credit data is snapshot-only.
+- `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key, optionally selecting a reset-credit ID returned by `account/rateLimits/read`.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets.
 - `account/workspaceMessages/read` — fetch active workspace messages, including workspace notification headlines when available.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
@@ -2042,7 +2041,18 @@ Field notes:
       "rateLimitReachedType": null
     },
     "rateLimitResetCredits": {
-      "availableCount": 2
+      "availableCount": 2,
+      "credits": [
+        {
+          "id": "RateLimitResetCredit_1",
+          "resetType": "codexRateLimits",
+          "status": "available",
+          "grantedAt": 1781654400,
+          "expiresAt": 1784246400,
+          "title": "Full reset (Weekly + 5 hr)",
+          "description": "Ready to redeem"
+        }
+      ]
     }
   }
 }
@@ -2057,55 +2067,29 @@ Field notes:
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
 - `individualLimit` describes the effective monthly credit limit when available. In an `account/rateLimits/read` response, `null` means no monthly limit is available. In a sparse `account/rateLimits/updated` notification, nullable account metadata may be unavailable and does not clear a previously observed value.
 - `rateLimitResetCredits` contains the available earned-reset count when the backend provides it; otherwise it is `null`.
+- `rateLimitResetCredits.credits` is `null` when only the count is available. An empty array means details were fetched and no available credits were returned.
+- The backend may cap `rateLimitResetCredits.credits`, so `availableCount` is the authoritative total and can be greater than the number of detail rows.
+- Reset-credit `id` values are opaque strings. `grantedAt` and `expiresAt` are Unix timestamps in seconds; `expiresAt` is `null` for a credit that does not expire.
+- `title` and `description` are backend-provided display text. Either field can be `null` when the backend does not provide it.
+- `resetType` is currently `codexRateLimits`. `status` reports the credit lifecycle state: `available`, `redeeming`, or `redeemed`.
 - Refetch `account/rateLimits/read` after consuming a reset.
 
 ### 8) Earned rate-limit resets (ChatGPT)
 
 ```json
-{ "method": "account/rateLimitResetCredit/list", "id": 8, "params": {} }
-{
-  "id": 8,
-  "result": {
-    "availableCount": 2,
-    "data": [
-      {
-        "id": "RateLimitResetCredit_1",
-        "resetType": "codexRateLimits",
-        "status": "available",
-        "grantedAt": 1781654400,
-        "expiresAt": 1784246400,
-        "title": "Full reset (Weekly + 5 hr)",
-        "description": "Ready to redeem"
-      },
-      {
-        "id": "RateLimitResetCredit_2",
-        "resetType": "codexRateLimits",
-        "status": "available",
-        "grantedAt": 1781740800,
-        "expiresAt": null,
-        "title": null,
-        "description": null
-      }
-    ]
-  }
-}
-{ "method": "account/rateLimitResetCredit/consume", "id": 9, "params": { "idempotencyKey": "8ae96ff3-3425-4f4c-8772-b6fd61502868", "creditId": "RateLimitResetCredit_1" } }
-{ "id": 9, "result": { "outcome": "reset" } }
+{ "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "idempotencyKey": "8ae96ff3-3425-4f4c-8772-b6fd61502868", "creditId": "RateLimitResetCredit_1" } }
+{ "id": 8, "result": { "outcome": "reset" } }
 ```
 
 Field notes:
 
-- `availableCount` is the authoritative total. `data` contains details for at most the first 10 available credits. The backend does not expose a cursor, so the count can be greater than the number of rows and this method cannot paginate the remainder.
-- Reset-credit `id` values are opaque strings. `grantedAt` and `expiresAt` are Unix timestamps in seconds; `expiresAt` is `null` for a credit that does not expire.
-- `title` and `description` are backend-provided display text. Either field can be `null` when the backend does not provide it.
-- `resetType` is currently `codexRateLimits`. `status` reports the credit lifecycle state: `available`, `redeeming`, or `redeemed`.
 - `idempotencyKey` must be non-empty. A UUID is recommended for each logical redemption attempt; reuse the same value when retrying that attempt.
-- `creditId` is optional. When provided, it must be a non-empty opaque ID returned by `account/rateLimitResetCredit/list`; when omitted, the backend selects the next available credit.
+- `creditId` is optional. When provided, it must be a non-empty opaque ID returned by `account/rateLimits/read`; when omitted, the backend selects the next available credit.
 - `reset` means a credit was consumed.
 - `alreadyRedeemed` means the same redemption completed previously. Treat it as an idempotent success and refresh account limits.
 - `nothingToReset` means there is no eligible rate-limit window to reset.
 - `noCredit` means the account has no earned reset credits available.
-- Refetch `account/rateLimits/read` and `account/rateLimitResetCredit/list` after consuming a reset instead of inferring updated state from this response.
+- Refetch `account/rateLimits/read` after consuming a reset instead of inferring updated state from this response.
 
 ### 9) Workspace messages (ChatGPT)
 

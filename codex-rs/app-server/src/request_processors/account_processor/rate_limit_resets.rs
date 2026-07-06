@@ -7,19 +7,39 @@ const RATE_LIMIT_RESET_REQUEST_TIMEOUT_ENV_VAR: &str =
     "CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS";
 
 impl AccountRequestProcessor {
-    pub(super) async fn account_rate_limit_reset_credit_list_response(
-        &self,
-    ) -> Result<AccountRateLimitResetCreditListResponse, JSONRPCErrorError> {
-        let client = self.rate_limit_reset_backend_client().await?;
-        let details = tokio::time::timeout(
+    pub(super) async fn detailed_rate_limit_reset_credits(
+        client: &BackendClient,
+    ) -> Option<RateLimitResetCreditsSummary> {
+        let details = match tokio::time::timeout(
             RATE_LIMIT_RESET_DETAILS_REQUEST_TIMEOUT,
             client.list_rate_limit_reset_credits(),
         )
         .await
-        .map_err(|_| internal_error("rate limit reset credit detail request timed out"))?
-        .map_err(|_| internal_error("failed to fetch rate limit reset credit details"))?;
-        rate_limit_reset_credits_from_backend(details)
-            .map_err(|_| internal_error("failed to parse rate limit reset credit details"))
+        {
+            Ok(Ok(details)) => details,
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "failed to fetch rate limit reset credit details; falling back to the usage response: {err}"
+                );
+                return None;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "rate limit reset credit detail request timed out; falling back to the usage response"
+                );
+                return None;
+            }
+        };
+
+        match rate_limit_reset_credits_from_backend(details) {
+            Ok(summary) => Some(summary),
+            Err(err) => {
+                tracing::warn!(
+                    "failed to parse rate limit reset credit details; falling back to the usage response: {err}"
+                );
+                None
+            }
+        }
     }
 
     pub(crate) async fn consume_account_rate_limit_reset_credit(
@@ -96,15 +116,15 @@ impl AccountRequestProcessor {
 
 fn rate_limit_reset_credits_from_backend(
     details: BackendRateLimitResetCreditsDetails,
-) -> Result<AccountRateLimitResetCreditListResponse, String> {
-    let data = details
+) -> Result<RateLimitResetCreditsSummary, String> {
+    let credits = details
         .credits
         .into_iter()
         .map(rate_limit_reset_credit_from_backend)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(AccountRateLimitResetCreditListResponse {
+    Ok(RateLimitResetCreditsSummary {
         available_count: details.available_count,
-        data,
+        credits: Some(credits),
     })
 }
 

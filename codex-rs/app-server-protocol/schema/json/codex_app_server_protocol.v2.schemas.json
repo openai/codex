@@ -101,34 +101,6 @@
       "title": "AccountLoginCompletedNotification",
       "type": "object"
     },
-    "AccountRateLimitResetCreditListParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Parameters for listing available reset credits.\n\nThe upstream API counts every available credit but returns details for at most the first 10 and does not expose a pagination cursor, so this method cannot truthfully expose `cursor` or `limit`.",
-      "title": "AccountRateLimitResetCreditListParams",
-      "type": "object"
-    },
-    "AccountRateLimitResetCreditListResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Available reset credits returned by the backend.\n\nThis is a non-pageable snapshot because the upstream API does not expose a cursor. `data` contains details for at most 10 credits, so it can contain fewer rows than `availableCount`.",
-      "properties": {
-        "availableCount": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "data": {
-          "items": {
-            "$ref": "#/definitions/RateLimitResetCredit"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "availableCount",
-        "data"
-      ],
-      "title": "AccountRateLimitResetCreditListResponse",
-      "type": "object"
-    },
     "AccountRateLimitsUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Sparse rolling rate-limit update.\n\nClients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.",
@@ -2913,30 +2885,6 @@
             "method"
           ],
           "title": "Account/rateLimits/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/rateLimitResetCredit/list"
-              ],
-              "title": "Account/rateLimitResetCredit/listRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/AccountRateLimitResetCreditListParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Account/rateLimitResetCredit/listRequest",
           "type": "object"
         },
         {
@@ -11057,6 +11005,16 @@
         "availableCount": {
           "format": "int64",
           "type": "integer"
+        },
+        "credits": {
+          "description": "Detail rows for available reset credits, when the backend provides them.\n\n`null` means only `availableCount` is known, while an empty array means details were fetched and no available credits were returned. The backend may cap this list, so its length can be less than `availableCount`.",
+          "items": {
+            "$ref": "#/definitions/RateLimitResetCredit"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [

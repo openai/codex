@@ -1,6 +1,0 @@
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Parameters for listing available reset credits.\n\nThe upstream API counts every available credit but returns details for at most the first 10 and does not expose a pagination cursor, so this method cannot truthfully expose `cursor` or `limit`.",
-  "title": "AccountRateLimitResetCreditListParams",
-  "type": "object"
-}

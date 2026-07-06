@@ -2,8 +2,6 @@
 
 export type { Account } from "./Account";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
-export type { AccountRateLimitResetCreditListParams } from "./AccountRateLimitResetCreditListParams";
-export type { AccountRateLimitResetCreditListResponse } from "./AccountRateLimitResetCreditListResponse";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountTokenUsageDailyBucket } from "./AccountTokenUsageDailyBucket";
 export type { AccountTokenUsageSummary } from "./AccountTokenUsageSummary";

@@ -1017,12 +1017,6 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
-    AccountRateLimitResetCreditList => "account/rateLimitResetCredit/list" {
-        params: v2::AccountRateLimitResetCreditListParams,
-        serialization: None,
-        response: v2::AccountRateLimitResetCreditListResponse,
-    },
-
     ConsumeAccountRateLimitResetCredit => "account/rateLimitResetCredit/consume" {
         params: v2::ConsumeAccountRateLimitResetCreditParams,
         serialization: global("account-auth"),

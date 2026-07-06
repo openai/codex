@@ -284,28 +284,12 @@ pub struct GetAccountRateLimitsResponse {
 #[ts(export_to = "v2/")]
 pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,
-}
-
-/// Parameters for listing available reset credits.
-///
-/// The upstream API counts every available credit but returns details for at most the first 10 and
-/// does not expose a pagination cursor, so this method cannot truthfully expose `cursor` or `limit`.
-#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountRateLimitResetCreditListParams {}
-
-/// Available reset credits returned by the backend.
-///
-/// This is a non-pageable snapshot because the upstream API does not expose a cursor. `data`
-/// contains details for at most 10 credits, so it can contain fewer rows than `availableCount`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountRateLimitResetCreditListResponse {
-    #[ts(type = "number")]
-    pub available_count: i64,
-    pub data: Vec<RateLimitResetCredit>,
+    /// Detail rows for available reset credits, when the backend provides them.
+    ///
+    /// `null` means only `availableCount` is known, while an empty array means details were fetched
+    /// and no available credits were returned. The backend may cap this list, so its length can be
+    /// less than `availableCount`.
+    pub credits: Option<Vec<RateLimitResetCredit>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
