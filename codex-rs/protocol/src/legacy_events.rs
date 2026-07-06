@@ -487,6 +487,7 @@ impl TurnItem {
                 })]
             }
             TurnItem::Sleep(_) => Vec::new(),
+            TurnItem::Extension(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(String::new())

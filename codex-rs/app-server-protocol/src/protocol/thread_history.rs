@@ -592,7 +592,8 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::CommandExecution(_)
             | codex_protocol::items::TurnItem::DynamicToolCall(_)
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
-            | codex_protocol::items::TurnItem::SubAgentActivity(_) => true,
+            | codex_protocol::items::TurnItem::SubAgentActivity(_)
+            | codex_protocol::items::TurnItem::Extension(_) => true,
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
@@ -1548,6 +1549,9 @@ impl From<&PendingTurn> for Turn {
 mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
+    use codex_extension_items::ExtensionItem as CoreExtensionItem;
+    use codex_extension_items::ExtensionItemPayload;
+    use codex_extension_items::image_generation::ImageGenerationPayload;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::CommandExecutionItem as CoreCommandExecutionItem;
@@ -1842,6 +1846,59 @@ mod tests {
             vec![ThreadItem::Sleep {
                 id: "sleep-1".to_string(),
                 duration_ms: 1_000,
+            }]
+        );
+    }
+
+    #[test]
+    fn rebuilds_extension_image_generation_item_from_persisted_completion() {
+        let turn_id = "turn-1";
+        let thread_id = ThreadId::new();
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::Extension(CoreExtensionItem {
+                    id: "image-1".to_string(),
+                    payload: ExtensionItemPayload::ImageGeneration(ImageGenerationPayload {
+                        status: "completed".to_string(),
+                        revised_prompt: Some("A blue square".to_string()),
+                        result: "cG5n".to_string(),
+                        saved_path: None,
+                    }),
+                }),
+                completed_at_ms: 1_000,
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::ImageGeneration {
+                id: "image-1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("A blue square".to_string()),
+                result: "cG5n".to_string(),
+                saved_path: None,
             }]
         );
     }

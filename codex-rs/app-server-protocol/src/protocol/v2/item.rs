@@ -11,6 +11,7 @@ use super::shared::v2_enum_from_core;
 use crate::protocol::item_builders::command_actions_for_path_uri;
 use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_extension_items::ExtensionItemPayload;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
@@ -930,6 +931,15 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::Sleep(sleep) => ThreadItem::Sleep {
                 id: sleep.id,
                 duration_ms: sleep.duration_ms,
+            },
+            CoreTurnItem::Extension(extension) => match extension.payload {
+                ExtensionItemPayload::ImageGeneration(payload) => ThreadItem::ImageGeneration {
+                    id: extension.id,
+                    status: payload.status,
+                    revised_prompt: payload.revised_prompt,
+                    result: payload.result,
+                    saved_path: payload.saved_path,
+                },
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
