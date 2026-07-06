@@ -83,7 +83,7 @@ async fn emits_safety_buffering_with_the_responses_api_model_without_header_gati
     created["safety_buffering"] = json!({
         "use_cases": ["cyber"],
         "reasons": ["policy-check"],
-        "faster_model": FASTER_MODEL,
+        "retry_model": FASTER_MODEL,
     });
     mount_response_once(
         &server,
