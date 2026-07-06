@@ -15,7 +15,6 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use tracing::debug;
 
 use super::LocalThreadStore;
-use super::helpers::rollout_path_is_archived;
 use super::read_thread;
 use crate::LoadThreadHistoryParams;
 use crate::StoredModelContext;
@@ -37,13 +36,6 @@ pub(super) async fn load_latest_model_context(
         .ok_or_else(|| ThreadStoreError::InvalidRequest {
             message: format!("no rollout found for thread id {}", params.thread_id),
         })?;
-    if !params.include_archived
-        && rollout_path_is_archived(store.config.codex_home.as_path(), path.as_path())
-    {
-        return Err(ThreadStoreError::InvalidRequest {
-            message: format!("thread {} is archived", params.thread_id),
-        });
-    }
 
     let session_meta = codex_rollout::read_session_meta_line(path.as_path())
         .await
@@ -142,7 +134,6 @@ struct ModelContextSelector {
     saw_checkpoint: bool,
     saw_resume_metadata: bool,
     active_segment: ActiveSegment,
-    fallback: bool,
 }
 
 impl ModelContextSelector {
@@ -150,13 +141,11 @@ impl ModelContextSelector {
         match item {
             RolloutItem::Compacted(compacted) => {
                 if compacted.replacement_history.is_none() || compacted.window_number.is_none() {
-                    self.fallback = true;
                     return ScanControl::Fallback;
                 }
                 if self.saw_checkpoint {
                     // A second checkpoint before a usable turn boundary means the selector cannot
                     // prove that the first checkpoint belongs to a surviving replay segment.
-                    self.fallback = true;
                     return ScanControl::Fallback;
                 }
                 self.saw_checkpoint = true;
@@ -164,7 +153,6 @@ impl ModelContextSelector {
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
                 // Paginated threads reject rollback. Keep old rollouts correct rather than
                 // duplicating rollback survival semantics in this storage-only selector.
-                self.fallback = true;
                 return ScanControl::Fallback;
             }
             RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
@@ -229,7 +217,7 @@ impl ModelContextSelector {
     }
 
     fn is_complete(&self) -> bool {
-        !self.fallback && self.saw_checkpoint && self.saw_resume_metadata
+        self.saw_checkpoint && self.saw_resume_metadata
     }
 }
 
