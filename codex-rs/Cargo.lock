@@ -2227,11 +2227,8 @@ dependencies = [
  "codex-windows-sandbox",
  "dotenvy",
  "pretty_assertions",
- "serde",
- "serde_json",
  "tempfile",
  "tokio",
- "url",
 ]
 
 [[package]]
