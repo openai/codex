@@ -41,6 +41,8 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
+use crate::thread_metadata_sync::PendingThreadMetadataPatch;
+use crate::thread_metadata_sync::ThreadMetadataSync;
 
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
 ///
@@ -50,10 +52,9 @@ use crate::UpdateThreadMetadataParams;
 /// The SQLite state DB, when available, is the queryable metadata index used by
 /// list/read paths for fast lookup.
 ///
-/// Live appends still write canonical JSONL history, but append-derived
-/// metadata is observed above the store and applied through
-/// [`ThreadStore::update_thread_metadata`]. This implementation applies that
-/// patch literally to SQLite while keeping the JSONL/name-index compatibility
+/// Live appends write canonical JSONL history and derive the local metadata
+/// needed by the SQLite thread index. Explicit metadata patches remain literal
+/// updates. The implementation also keeps the JSONL/name-index compatibility
 /// behavior needed for SQLite-less reads, repair, and old local rollout files.
 #[derive(Clone)]
 pub struct LocalThreadStore {
@@ -64,6 +65,7 @@ pub struct LocalThreadStore {
 
 struct LiveRecorderEntry {
     recorder: RolloutRecorder,
+    metadata_sync: ThreadMetadataSync,
     // Local rollout files are materialized lazily, but metadata updates can arrive before the
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
@@ -165,6 +167,7 @@ impl LocalThreadStore {
         thread_id: ThreadId,
         recorder: RolloutRecorder,
         history_mode: ThreadHistoryMode,
+        metadata_sync: ThreadMetadataSync,
     ) -> ThreadStoreResult<()> {
         match self.live_recorders.lock().await.entry(thread_id) {
             Entry::Occupied(entry) => Err(ThreadStoreError::InvalidRequest {
@@ -173,11 +176,90 @@ impl LocalThreadStore {
             Entry::Vacant(entry) => {
                 entry.insert(LiveRecorderEntry {
                     recorder,
+                    metadata_sync,
                     history_mode,
                 });
                 Ok(())
             }
         }
+    }
+
+    pub(super) async fn record_resume_history(
+        &self,
+        thread_id: ThreadId,
+        history: &[codex_protocol::protocol::RolloutItem],
+    ) -> ThreadStoreResult<()> {
+        let mut recorders = self.live_recorders.lock().await;
+        let entry = recorders
+            .get_mut(&thread_id)
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
+        entry.metadata_sync.record_resume_history(history);
+        Ok(())
+    }
+
+    pub(super) async fn observe_appended_metadata(
+        &self,
+        thread_id: ThreadId,
+        items: &[codex_protocol::protocol::RolloutItem],
+    ) -> ThreadStoreResult<Option<PendingThreadMetadataPatch>> {
+        let mut recorders = self.live_recorders.lock().await;
+        let entry = recorders
+            .get_mut(&thread_id)
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
+        Ok(entry.metadata_sync.observe_appended_items(items))
+    }
+
+    async fn apply_pending_metadata_update(
+        &self,
+        thread_id: ThreadId,
+        update: Option<PendingThreadMetadataPatch>,
+    ) -> ThreadStoreResult<()> {
+        let Some(update) = update else {
+            return Ok(());
+        };
+        update_thread_metadata::update_thread_metadata(
+            self,
+            UpdateThreadMetadataParams {
+                thread_id,
+                patch: update.patch.clone(),
+                include_archived: true,
+            },
+        )
+        .await?;
+        if let Some(entry) = self.live_recorders.lock().await.get_mut(&thread_id) {
+            entry.metadata_sync.mark_pending_update_applied(&update);
+        }
+        Ok(())
+    }
+
+    pub(super) async fn flush_pending_metadata_update(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<()> {
+        let update = self
+            .live_recorders
+            .lock()
+            .await
+            .get(&thread_id)
+            .and_then(|entry| entry.metadata_sync.take_pending_update());
+        self.apply_pending_metadata_update(thread_id, update).await
+    }
+
+    pub(super) async fn flush_pending_metadata_update_for_existing_history(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<()> {
+        let update = self
+            .live_recorders
+            .lock()
+            .await
+            .get(&thread_id)
+            .and_then(|entry| {
+                entry
+                    .metadata_sync
+                    .take_pending_update_for_existing_history()
+            });
+        self.apply_pending_metadata_update(thread_id, update).await
     }
 
     async fn load_history(
@@ -305,7 +387,10 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(async move { update_thread_metadata::update_thread_metadata(self, params).await })
+        Box::pin(async move {
+            self.flush_pending_metadata_update(params.thread_id).await?;
+            update_thread_metadata::update_thread_metadata(self, params).await
+        })
     }
 
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
@@ -399,9 +484,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_append_items_does_not_update_sqlite_metadata() {
-        // This pins the ThreadStore contract: raw appends are history-only. Callers that need
-        // metadata updates must use LiveThread or call update_thread_metadata explicitly.
+    async fn local_store_derives_sqlite_metadata_from_appended_items() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -420,42 +503,11 @@ mod tests {
         store
             .append_items(AppendThreadItemsParams {
                 thread_id,
-                items: vec![user_message_item("raw append")],
+                items: vec![user_message_item("observed append")],
             })
             .await
-            .expect("append raw item");
+            .expect("append item");
         store.flush_thread(thread_id).await.expect("flush thread");
-
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .expect("sqlite metadata read"),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn live_thread_observes_appended_items_into_sqlite_metadata() {
-        let home = TempDir::new().expect("temp dir");
-        let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
-        let thread_id = ThreadId::default();
-        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
-            .await
-            .expect("create live thread");
-
-        live_thread
-            .append_items(&[user_message_item("observed append")])
-            .await
-            .expect("append observed item");
-        live_thread.flush().await.expect("flush thread");
 
         let metadata = runtime
             .get_thread(thread_id)

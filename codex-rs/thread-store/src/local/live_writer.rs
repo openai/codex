@@ -12,11 +12,13 @@ use super::LocalThreadStore;
 use super::create_thread;
 use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
+use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::error::reject_paginated_history_mode;
+use crate::thread_metadata_sync::ThreadMetadataSync;
 use crate::types::canonical_history_mode_from_rollout_items;
 
 const ROLLOUT_SIZE_BYTES_METRIC: &str = "codex.rollout.size_bytes";
@@ -27,10 +29,11 @@ pub(super) async fn create_thread(
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
     let history_mode = params.history_mode;
+    let metadata_sync = ThreadMetadataSync::for_create(&params).await;
     store.ensure_live_recorder_absent(thread_id).await?;
     let recorder = create_thread::create_thread(store, params).await?;
     store
-        .insert_live_recorder(thread_id, recorder, history_mode)
+        .insert_live_recorder(thread_id, recorder, history_mode, metadata_sync)
         .await
 }
 
@@ -38,6 +41,10 @@ pub(super) async fn resume_thread(
     store: &LocalThreadStore,
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
+    let thread_id = params.thread_id;
+    let should_load_history = params.history.is_none();
+    let include_archived = params.include_archived;
+    let metadata_sync = ThreadMetadataSync::for_resume(&params);
     store.ensure_live_recorder_absent(params.thread_id).await?;
     let history_mode = if let Some(history) = params.history.as_deref() {
         canonical_history_mode_from_rollout_items(history)
@@ -102,8 +109,32 @@ pub(super) async fn resume_thread(
             message: format!("failed to resume local thread recorder: {err}"),
         })?;
     store
-        .insert_live_recorder(params.thread_id, recorder, history_mode)
-        .await
+        .insert_live_recorder(thread_id, recorder, history_mode, metadata_sync)
+        .await?;
+    if should_load_history {
+        match store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived,
+            })
+            .await
+        {
+            Ok(history) => {
+                store
+                    .record_resume_history(thread_id, &history.items)
+                    .await?
+            }
+            Err(err) => {
+                if let Err(discard_err) = discard_thread(store, thread_id).await {
+                    warn!(
+                        "failed to discard local thread persistence after resume history load failed: {discard_err}"
+                    );
+                }
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tracing::instrument(
@@ -124,9 +155,14 @@ pub(super) async fn append_items(
         .record_canonical_items(canonical_items.as_slice())
         .await
         .map_err(thread_store_io_error)?;
-    // LiveThread applies metadata immediately after append_items returns. Wait for the local
-    // writer so SQLite never gets ahead of JSONL for accepted live appends.
-    recorder.flush().await.map_err(thread_store_io_error)
+    // Wait for the local writer so SQLite never gets ahead of JSONL for accepted live appends.
+    recorder.flush().await.map_err(thread_store_io_error)?;
+    let update = store
+        .observe_appended_metadata(params.thread_id, canonical_items.as_slice())
+        .await?;
+    store
+        .apply_pending_metadata_update(params.thread_id, update)
+        .await
 }
 
 pub(super) async fn persist_thread(
@@ -139,7 +175,8 @@ pub(super) async fn persist_thread(
         .persist()
         .await
         .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    sync_materialized_rollout_path(store, thread_id).await?;
+    store.flush_pending_metadata_update(thread_id).await
 }
 
 pub(super) async fn flush_thread(
@@ -152,13 +189,19 @@ pub(super) async fn flush_thread(
         .flush()
         .await
         .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    sync_materialized_rollout_path(store, thread_id).await?;
+    store
+        .flush_pending_metadata_update_for_existing_history(thread_id)
+        .await
 }
 
 pub(super) async fn shutdown_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
+    store
+        .flush_pending_metadata_update_for_existing_history(thread_id)
+        .await?;
     let recorder = store.live_recorder(thread_id).await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
     recorder.shutdown().await.map_err(thread_store_io_error)?;
