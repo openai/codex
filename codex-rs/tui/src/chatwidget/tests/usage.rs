@@ -14,7 +14,10 @@ async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
@@ -35,7 +38,10 @@ async fn usage_command_disables_reset_after_cached_zero_snapshot() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
@@ -63,7 +69,10 @@ async fn usage_menu_refresh_enables_newly_available_reset() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
@@ -76,7 +85,10 @@ async fn usage_menu_refresh_enables_newly_available_reset() {
     chat.finish_usage_menu_rate_limit_refresh(
         /*request_id*/ 1,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None,
+        }),
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -92,7 +104,10 @@ async fn usage_menu_refresh_failure_preserves_disabled_known_zero() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
 
     chat.dispatch_command(SlashCommand::Usage);
@@ -122,7 +137,10 @@ async fn account_update_invalidates_usage_menu_refresh_when_visible_state_is_unc
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         startup_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
     chat.dispatch_command(SlashCommand::Usage);
     assert_matches!(
@@ -139,7 +157,10 @@ async fn account_update_invalidates_usage_menu_refresh_when_visible_state_is_unc
     chat.finish_usage_menu_rate_limit_refresh(
         /*request_id*/ 1,
         vec![snapshot(/*percent*/ 92.0)],
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None,
+        }),
     );
 
     assert_eq!(chat.available_rate_limit_reset_credits, None);
@@ -185,7 +206,10 @@ async fn usage_menu_rate_limit_reset_entry_opens_reset_flow() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     chat.dispatch_command(SlashCommand::Usage);
 
@@ -206,7 +230,10 @@ async fn rate_limit_reset_popup_states_snapshot() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         loading_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     record_popup(&chat, &mut states);
 
@@ -215,7 +242,10 @@ async fn rate_limit_reset_popup_states_snapshot() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         empty_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
     record_popup(&chat, &mut states);
 
@@ -270,7 +300,10 @@ async fn rate_limit_reset_popup_states_snapshot() {
     assert!(chat.finish_post_consume_reset_credits_refresh(
         success_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     record_popup(&chat, &mut states);
 
@@ -288,7 +321,10 @@ async fn usage_limit_reset_confirmation_uses_monthly_copy_for_monthly_limits_sna
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         free_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     states.push(format!(
         "Free:\n{}",
@@ -301,7 +337,10 @@ async fn usage_limit_reset_confirmation_uses_monthly_copy_for_monthly_limits_sna
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         go_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     states.push(format!("Go:\n{}", render_bottom_popup(&chat, /*width*/ 80)));
 
@@ -317,7 +356,10 @@ async fn usage_limit_reset_confirmation_uses_monthly_copy_for_monthly_limits_sna
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         business_request_id,
         vec![monthly_business_snapshot],
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     states.push(format!(
         "Business with monthly window:\n{}",
@@ -337,7 +379,10 @@ async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -353,7 +398,10 @@ async fn rate_limit_reset_confirmation_can_use_reset() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -393,7 +441,10 @@ async fn no_credit_outcome_disables_reset_entry_in_usage_menu() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         startup_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     let consume_request_id = chat.show_rate_limit_reset_consuming_popup();
     assert!(!finish_reset_consume_outcome(
@@ -438,7 +489,10 @@ async fn rate_limit_reset_redemption_cannot_be_dismissed_while_in_flight() {
     assert!(chat.finish_post_consume_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     dismiss_popup(&mut chat);
     assert!(chat.bottom_pane.no_modal_or_popup_active());
@@ -469,7 +523,10 @@ async fn already_redeemed_is_an_idempotent_success() {
     assert!(chat.finish_post_consume_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
     assert!(
         render_bottom_popup(&chat, /*width*/ 80)
@@ -485,7 +542,10 @@ async fn failed_post_consume_refresh_does_not_keep_stale_reset_count() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         startup_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     let consume_request_id = chat.show_rate_limit_reset_consuming_popup();
     assert!(finish_reset_consume_outcome(
@@ -522,7 +582,10 @@ async fn account_change_invalidates_pending_reset_requests() {
     assert!(!chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     assert!(chat.bottom_pane.no_modal_or_popup_active());
 }
@@ -536,7 +599,10 @@ async fn clearing_pending_reset_hint_preserves_in_flight_redemption() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
 
     chat.clear_pending_rate_limit_reset_hint();
@@ -559,7 +625,10 @@ async fn rate_limit_reset_load_result_updates_popup_beneath_overlay() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     assert_eq!(
         chat.bottom_pane.active_view_id(),
@@ -588,7 +657,10 @@ async fn rate_limit_reset_success_updates_popup_beneath_overlay() {
     assert!(chat.finish_post_consume_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 1,
+            credits: None
+        }),
     ));
     assert_eq!(
         chat.bottom_pane.active_view_id(),
@@ -631,7 +703,10 @@ async fn startup_check_shows_available_reset_hint_snapshot() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     let rendered = lines_to_single_string(
         &chat
@@ -654,7 +729,10 @@ async fn startup_reset_hint_waits_for_active_output_snapshot() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
 
     assert!(chat.usage_history_insertion_blocked());
@@ -685,7 +763,10 @@ async fn opening_rate_limit_reset_flow_invalidates_in_flight_startup_hint() {
     assert!(!chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     assert!(chat.pending_rate_limit_reset_hint().is_none());
 }
@@ -698,7 +779,10 @@ async fn starting_rate_limit_reset_redemption_clears_deferred_startup_hint() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     assert!(chat.pending_rate_limit_reset_hint().is_some());
 
@@ -716,7 +800,10 @@ async fn startup_check_omits_reset_hint_when_none_are_available() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 0,
+            credits: None
+        }),
     ));
     assert!(chat.pending_rate_limit_reset_hint().is_none());
 }
@@ -731,7 +818,10 @@ async fn startup_check_shows_reset_hint_for_workspace_account_with_credit() {
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Vec::new(),
-        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+        Ok(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: None
+        }),
     ));
     assert!(chat.pending_rate_limit_reset_hint().is_some());
     assert_eq!(chat.available_rate_limit_reset_credits, Some(2));

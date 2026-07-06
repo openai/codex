@@ -18,6 +18,8 @@ pub use types::DeliveredConfigToml;
 pub use types::DeliveredRequirementsToml;
 pub use types::DeliveredTomlFragment;
 pub use types::PaginatedListTaskListItem;
+pub use types::RateLimitResetCreditDetails;
+pub use types::RateLimitResetCreditsDetails;
 pub use types::RateLimitResetCreditsSummary;
 pub use types::RateLimitsWithResetCredits;
 pub use types::TaskListItem;
