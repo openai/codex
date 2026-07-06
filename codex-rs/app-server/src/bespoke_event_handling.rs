@@ -22,7 +22,6 @@ use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
-use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
@@ -823,52 +822,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 on_request_permissions_response(pending_response, conversation, thread_state).await;
             });
         }
-        EventMsg::DynamicToolCallRequest(request) => {
-            let call_id = request.call_id;
-            let turn_id = request.turn_id;
-            let namespace = request.namespace;
-            let tool = request.tool;
-            let arguments = request.arguments;
-            let item = ThreadItem::DynamicToolCall {
-                id: call_id.clone(),
-                namespace: namespace.clone(),
-                tool: tool.clone(),
-                arguments: arguments.clone(),
-                status: DynamicToolCallStatus::InProgress,
-                content_items: None,
-                success: None,
-                duration_ms: None,
-            };
-            let notification = ItemStartedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: turn_id.clone(),
-                started_at_ms: request.started_at_ms,
-                item,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ItemStarted(notification))
-                .await;
-            let params = DynamicToolCallParams {
-                thread_id: conversation_id.to_string(),
-                turn_id: turn_id.clone(),
-                call_id: call_id.clone(),
-                namespace,
-                tool: tool.clone(),
-                arguments: arguments.clone(),
-            };
-            let (_pending_request_id, rx) = outgoing
-                .send_request(ServerRequestPayload::DynamicToolCall(params))
-                .await;
-            tokio::spawn(async move {
-                crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
-            });
+        EventMsg::DynamicToolCallRequest(_) | EventMsg::DynamicToolCallResponse(_) => {
+            // Deprecated dynamic-tool events are still fanned out for raw-event and rollout
+            // compatibility consumers. App-server v2 receives the canonical DynamicToolCall
+            // item lifecycle and dispatches client requests from canonical starts instead.
         }
         EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
             // Deprecated MCP tool-call events are still fanned out for legacy clients.
             // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
         }
-        msg @ (EventMsg::DynamicToolCallResponse(_)
-        | EventMsg::CollabAgentSpawnBegin(_)
+        msg @ (EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabAgentInteractionEnd(_)
@@ -1040,6 +1003,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .insert(item.id.clone()),
                 _ => true,
             };
+            let dynamic_tool_call_params = match &event.item {
+                CoreTurnItem::DynamicToolCall(item) => Some(DynamicToolCallParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id.clone(),
+                    call_id: item.id.clone(),
+                    namespace: item.namespace.clone(),
+                    tool: item.tool.clone(),
+                    arguments: item.arguments.clone(),
+                }),
+                _ => None,
+            };
             if should_emit {
                 let notification = item_event_to_server_notification(
                     EventMsg::ItemStarted(event),
@@ -1047,6 +1021,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &event_turn_id,
                 );
                 outgoing.send_server_notification(notification).await;
+            }
+            if let Some(params) = dynamic_tool_call_params {
+                let call_id = params.call_id.clone();
+                let (_pending_request_id, rx) = outgoing
+                    .send_request(ServerRequestPayload::DynamicToolCall(params))
+                    .await;
+                tokio::spawn(async move {
+                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                });
             }
         }
         EventMsg::ItemCompleted(event) => {
@@ -2185,10 +2168,14 @@ mod tests {
     use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::AgentPath;
+    use codex_protocol::items::DynamicToolCallItem;
+    use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
     use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
@@ -2205,6 +2192,7 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GuardianAssessmentEvent;
     use codex_protocol::protocol::GuardianAssessmentStatus;
+    use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::RolloutItem;
@@ -3477,6 +3465,92 @@ mod tests {
                 thread_id: conversation_id.to_string(),
                 turn_id: "turn-1".to_string(),
                 completed_at_ms: 42,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_dynamic_tool_start_emits_item_and_requests_client() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "turn-1".to_string(),
+                msg: EventMsg::ItemStarted(ItemStartedEvent {
+                    thread_id: conversation_id,
+                    turn_id: "turn-1".to_string(),
+                    item: CoreTurnItem::DynamicToolCall(DynamicToolCallItem {
+                        id: "dynamic-1".to_string(),
+                        namespace: Some("apps".to_string()),
+                        tool: "lookup".to_string(),
+                        arguments: json!({"id": "123"}),
+                        status: CoreDynamicToolCallStatus::InProgress,
+                        content_items: None,
+                        success: None,
+                        error: None,
+                        duration: None,
+                    }),
+                    started_at_ms: 42,
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            new_thread_state(),
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        let item_started = recv_broadcast_message(&mut rx).await?;
+        let OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(payload)) =
+            item_started
+        else {
+            bail!("unexpected message: {item_started:?}");
+        };
+        assert_eq!(payload.item.id(), "dynamic-1");
+
+        let request = recv_broadcast_message(&mut rx).await?;
+        let OutgoingMessage::Request(ServerRequest::DynamicToolCall { params, .. }) = request
+        else {
+            bail!("unexpected message: {request:?}");
+        };
+        assert_eq!(
+            params,
+            DynamicToolCallParams {
+                thread_id: conversation_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                call_id: "dynamic-1".to_string(),
+                namespace: Some("apps".to_string()),
+                tool: "lookup".to_string(),
+                arguments: json!({"id": "123"}),
             }
         );
         Ok(())
