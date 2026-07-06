@@ -7,7 +7,8 @@ fn expired_metadata_is_not_reused() {
     let artifact = PluginArtifactIdentity {
         plugin_id: "sample@test".to_string(),
         source: MarketplacePluginSource::Local {
-            path: AbsolutePathBuf::try_from("/tmp/sample").expect("absolute path"),
+            path: AbsolutePathBuf::try_from(std::env::temp_dir().join("sample"))
+                .expect("absolute path"),
         },
     };
     let entry = Ok(Arc::new(ToolSuggestMetadataFragment {
