@@ -577,21 +577,25 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     // item in history, so the trace should preserve it when the stream is
     // abandoned.
     let item = output_message("msg-1", "partial answer");
-    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
-        .chain(futures::stream::pending());
+    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone {
+        item,
+        output_index: Some(0),
+    })])
+    .chain(futures::stream::pending());
     let (mut stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     let observed = stream
         .next()
         .await
         .expect("mapped stream should yield output item")?;
-    assert!(matches!(observed, ResponseEvent::OutputItemDone(_)));
+    assert!(matches!(observed, ResponseEvent::OutputItemDone { .. }));
 
     // Dropping the consumer is how turn interruption/preemption stops polling
     // the provider stream. The mapper task observes that drop asynchronously
@@ -635,6 +639,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     while stream.next().await.is_some() {}
@@ -648,6 +653,122 @@ async fn response_stream_records_last_model_feedback_ids() {
         tags.get("last_model_response_id").map(String::as_str),
         Some("\"resp-123\"")
     );
+}
+
+#[tokio::test]
+async fn response_stream_reorders_completed_items_for_concurrent_cutoff() {
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::OutputItemDone {
+            item: output_message("msg-1", "second"),
+            output_index: Some(1),
+        }),
+        Ok(ResponseEvent::OutputItemDone {
+            item: output_message("msg-0", "first"),
+            output_index: Some(0),
+        }),
+        Ok(ResponseEvent::Completed {
+            response_id: "resp-123".to_string(),
+            token_usage: None,
+            end_turn: Some(true),
+        }),
+    ]);
+    let (mut stream, last_response_rx) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        /*reorder_output_items*/ true,
+    );
+
+    let mut completed_item_ids = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let ResponseEvent::OutputItemDone { item, .. } =
+            event.expect("mapped stream should succeed")
+        {
+            completed_item_ids.push(item.id().expect("output item id").to_string());
+        }
+    }
+
+    assert_eq!(completed_item_ids, ["msg-0", "msg-1"]);
+    let last_response = last_response_rx.await.expect("last response");
+    assert_eq!(
+        last_response
+            .items_added
+            .iter()
+            .map(|item| item.id().expect("output item id"))
+            .collect::<Vec<_>>(),
+        ["msg-0", "msg-1"]
+    );
+}
+
+#[tokio::test]
+async fn response_stream_flushes_buffered_items_before_error() {
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::OutputItemDone {
+            item: output_message("msg-1", "second"),
+            output_index: Some(1),
+        }),
+        Err(ApiError::Stream("boom".to_string())),
+    ]);
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        /*reorder_output_items*/ true,
+    );
+
+    let first = stream
+        .next()
+        .await
+        .expect("buffered item should be flushed")
+        .expect("buffered item should succeed");
+    assert!(matches!(
+        first,
+        ResponseEvent::OutputItemDone {
+            output_index: Some(1),
+            ..
+        }
+    ));
+    assert!(
+        stream
+            .next()
+            .await
+            .expect("mapped error should be emitted")
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn response_stream_flushes_buffered_items_at_eof() {
+    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone {
+        item: output_message("msg-1", "second"),
+        output_index: Some(1),
+    })]);
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        /*reorder_output_items*/ true,
+    );
+
+    let first = stream
+        .next()
+        .await
+        .expect("buffered item should be flushed")
+        .expect("buffered item should succeed");
+    assert!(matches!(
+        first,
+        ResponseEvent::OutputItemDone {
+            output_index: Some(1),
+            ..
+        }
+    ));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]
@@ -693,10 +814,10 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     for _ in 0..super::RESPONSE_STREAM_CHANNEL_CAPACITY {
         events.push_back(ResponseEvent::Created);
     }
-    events.push_back(ResponseEvent::OutputItemDone(output_message(
-        "msg-1",
-        "partial answer",
-    )));
+    events.push_back(ResponseEvent::OutputItemDone {
+        item: output_message("msg-1", "partial answer"),
+        output_index: Some(0),
+    });
     let api_stream = NotifyAfterEventStream {
         events,
         yielded: 0,
@@ -710,6 +831,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output

@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
+use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -1909,6 +1910,15 @@ async fn try_run_sampling_request(
         turn_context.provider.info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
+    let uses_concurrent_reasoning_summaries = matches!(
+        responses_metadata.request_kind,
+        Some(CodexResponsesRequestKind::Turn)
+    )
+        && ModelClient::should_request_concurrent_reasoning_summaries(
+            turn_context.provider.info(),
+            &turn_context.model_info,
+            turn_context.reasoning_summary,
+        );
     let mut stream = client_session
         .stream(
             prompt,
@@ -1928,6 +1938,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut current_response_item_id: Option<String> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1985,7 +1996,7 @@ async fn try_run_sampling_request(
 
         match event {
             ResponseEvent::Created => {}
-            ResponseEvent::OutputItemDone(item) => {
+            ResponseEvent::OutputItemDone { item, .. } => {
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
@@ -2080,6 +2091,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
+                current_response_item_id = item.id().map(str::to_owned);
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,
@@ -2291,6 +2303,9 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
+                if uses_concurrent_reasoning_summaries {
+                    continue;
+                }
                 if let Some(active) = active_item.as_ref() {
                     if !active_item_is_streaming_to_client {
                         continue;
@@ -2309,6 +2324,9 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if uses_concurrent_reasoning_summaries {
+                    continue;
+                }
                 if let Some(active) = active_item.as_ref() {
                     if !active_item_is_streaming_to_client {
                         continue;
@@ -2322,6 +2340,45 @@ async fn try_run_sampling_request(
                 } else {
                     error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
+            }
+            ResponseEvent::ReasoningSummaryDone {
+                item_id,
+                text,
+                summary_index,
+            } => {
+                // Concurrent cutoff can cancel a partial summary at the next output-item
+                // boundary. Present only atomic parts that finish while their item is current.
+                if !uses_concurrent_reasoning_summaries
+                    || defer_streamed_turn_items_for_contributors
+                    || current_response_item_id.as_deref() != Some(item_id.as_str())
+                {
+                    continue;
+                }
+                let Some(active) = active_item.as_ref() else {
+                    continue;
+                };
+                if !active_item_is_streaming_to_client || active.id() != item_id {
+                    continue;
+                }
+                if summary_index > 0 {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: item_id.clone(),
+                            summary_index,
+                        }),
+                    )
+                    .await;
+                }
+                let event = ReasoningContentDeltaEvent {
+                    thread_id: sess.thread_id.to_string(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item_id,
+                    delta: text,
+                    summary_index,
+                };
+                sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                    .await;
             }
             ResponseEvent::ReasoningContentDelta {
                 delta,

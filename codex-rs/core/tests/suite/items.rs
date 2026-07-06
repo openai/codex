@@ -3,6 +3,7 @@
 use anyhow::Ok;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
@@ -1085,21 +1086,56 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
+async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
-
-    let stream = sse(vec![
-        ev_response_created("resp-1"),
-        ev_reasoning_item_added("reasoning-1", &[""]),
-        ev_reasoning_summary_text_delta("step one"),
-        ev_reasoning_item("reasoning-1", &["step one"], &[]),
-        ev_completed("resp-1"),
-    ]);
-    mount_sse_once(&server, stream).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.supports_reasoning_summaries = true;
+        })
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+        })
+        .build(&server)
+        .await?;
+    let summary_done = |item_id: &str, summary_index: i64, text: &str| {
+        serde_json::json!({
+            "type": "response.reasoning_summary_text.done",
+            "item_id": item_id,
+            "summary_index": summary_index,
+            "text": text,
+        })
+    };
+    let with_output_index = |mut event: serde_json::Value, output_index: usize| {
+        event["output_index"] = serde_json::json!(output_index);
+        event
+    };
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_reasoning_item_added("reasoning-1", &[""]),
+            // Concurrent cutoff renders atomic done events, not partial legacy events.
+            ev_reasoning_summary_text_delta("partial"),
+            summary_done("reasoning-1", 0, "step one"),
+            ev_message_item_added("message-1", ""),
+            // Once a later output item starts, summaries for the earlier item are stale.
+            summary_done("reasoning-1", 1, "late step"),
+            ev_output_text_delta("Done"),
+            with_output_index(
+                ev_reasoning_item("reasoning-1", &["step one", "late step"], &[]),
+                /*output_index*/ 0,
+            ),
+            with_output_index(
+                ev_assistant_message("message-1", "Done"),
+                /*output_index*/ 1,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
 
     codex
         .submit(Op::UserInput {
@@ -1123,13 +1159,31 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     })
     .await;
 
-    let delta_event = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ReasoningContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    assert_eq!(delta_event.item_id, reasoning_item.id);
-    assert_eq!(delta_event.delta, "step one");
+    let mut summary_deltas = Vec::new();
+    let mut summary_sections = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::ReasoningContentDelta(event) => {
+                summary_deltas.push((event.item_id, event.delta, event.summary_index));
+            }
+            EventMsg::AgentReasoningSectionBreak(event) => {
+                summary_sections.push((event.item_id, event.summary_index));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        summary_deltas,
+        vec![(reasoning_item.id, "step one".to_string(), 0)]
+    );
+    assert_eq!(summary_sections, Vec::new());
+    assert_eq!(
+        response_mock.single_request().body_json()["stream_options"]["reasoning_summary_delivery"]
+            .as_str(),
+        Some("concurrent_cutoff")
+    );
 
     Ok(())
 }

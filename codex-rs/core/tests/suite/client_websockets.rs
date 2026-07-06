@@ -386,7 +386,12 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
+    let mut provider = websocket_provider(&server);
+    provider.name = "OpenAI".to_string();
+    let mut harness =
+        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ true).await;
+    harness.model_info.supports_reasoning_summaries = true;
+    harness.summary = ReasoningSummary::Concise;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
@@ -422,6 +427,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
+    assert_eq!(warmup.get("stream_options"), None);
     assert_eq!(warmup["tools"], serde_json::json!([]));
     let warmup_turn_metadata: serde_json::Value = serde_json::from_str(
         warmup["client_metadata"]["x-codex-turn-metadata"]
@@ -436,6 +442,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(follow_up["type"].as_str(), Some("response.create"));
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
+    assert_eq!(
+        follow_up["stream_options"]["reasoning_summary_delivery"].as_str(),
+        Some("concurrent_cutoff")
+    );
 
     server.shutdown().await;
 }

@@ -294,7 +294,7 @@ impl MemoryStartupContext {
         while let Some(message) = stream.next().await.transpose()? {
             match message {
                 ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
-                ResponseEvent::OutputItemDone(item) => {
+                ResponseEvent::OutputItemDone { item, .. } => {
                     if result.is_empty()
                         && let codex_protocol::models::ResponseItem::Message { content, .. } = item
                         && let Some(text) = content_items_to_text(&content)

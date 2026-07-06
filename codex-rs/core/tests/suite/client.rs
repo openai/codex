@@ -2412,6 +2412,13 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("context")),
         None
     );
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("stream_options")
+            .and_then(|stream_options| stream_options.get("reasoning_summary_delivery"))
+            .and_then(|value| value.as_str()),
+        Some("concurrent_cutoff")
+    );
 
     Ok(())
 }
@@ -2583,6 +2590,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary")),
         None
     );
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
 }
