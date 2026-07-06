@@ -50,9 +50,9 @@ fn stores() -> &'static Mutex<HashMap<String, Arc<InMemoryThreadStore>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ListItemsFilters;
     use crate::ListItemsParams;
     use crate::ListTurnsParams;
-    use crate::ListUpdatedItemsParams;
     use crate::SortDirection;
     use crate::StoredTurnItemsView;
     use crate::ThreadPersistenceMetadata;
@@ -86,8 +86,8 @@ mod tests {
         let items_err = store
             .list_items(ListItemsParams {
                 thread_id,
-                turn_id: None,
                 include_archived: true,
+                filters: ListItemsFilters::default(),
                 cursor: None,
                 page_size: 10,
                 sort_direction: SortDirection::Asc,
@@ -98,25 +98,6 @@ mod tests {
             items_err,
             ThreadStoreError::Unsupported {
                 operation: "list_items"
-            }
-        ));
-
-        let updated_items_err = store
-            .list_updated_items(ListUpdatedItemsParams {
-                thread_id,
-                turn_id: None,
-                after_updated_at: None,
-                through_updated_at: None,
-                cursor: None,
-                page_size: 10,
-                sort_direction: SortDirection::Asc,
-            })
-            .await
-            .expect_err("default list_updated_items should be unsupported");
-        assert!(matches!(
-            updated_items_err,
-            ThreadStoreError::Unsupported {
-                operation: "list_updated_items"
             }
         ));
     }

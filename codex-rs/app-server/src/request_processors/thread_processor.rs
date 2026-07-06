@@ -2461,8 +2461,11 @@ impl ThreadRequestProcessor {
             .thread_store
             .list_items(StoreListItemsParams {
                 thread_id,
-                turn_id,
                 include_archived: true,
+                filters: StoreListItemsFilters {
+                    turn_id,
+                    updated_at: None,
+                },
                 cursor,
                 page_size,
                 sort_direction: match sort_direction.unwrap_or(SortDirection::Asc) {
