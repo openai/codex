@@ -697,6 +697,7 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
                 decision: Decision::Prompt,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         }
     );
@@ -739,6 +740,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
                 decision: Decision::Prompt,
                 resolved_program: Some(program),
                 justification: None,
+                reviewer: None,
             }],
         }
     );

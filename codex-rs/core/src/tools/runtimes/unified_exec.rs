@@ -221,6 +221,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         command,
                         native_cwd,
                         reason,
+                        ctx.approvals_reviewer,
                         ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
@@ -598,6 +599,7 @@ mod tests {
             SandboxPermissions::RequireEscalated,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
+                reviewer: None,
                 proposed_execpolicy_amendment: None,
             },
         );
@@ -623,6 +625,7 @@ mod tests {
             SandboxPermissions::WithAdditionalPermissions,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
+                reviewer: None,
                 proposed_execpolicy_amendment: None,
             },
         );

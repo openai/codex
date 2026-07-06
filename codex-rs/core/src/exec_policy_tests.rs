@@ -333,6 +333,7 @@ async fn loads_policies_from_policy_subdirectory() {
                 decision: Decision::Forbidden,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         policy.check_multiple(command.iter(), &|_| Decision::Allow)
@@ -611,6 +612,7 @@ async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
                 decision: Decision::Forbidden,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
@@ -623,6 +625,7 @@ async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
                 decision: Decision::Prompt,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
@@ -765,6 +768,7 @@ async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
     )
@@ -792,6 +796,7 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_mat
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
     )
@@ -815,6 +820,7 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_matches(
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
     )
@@ -902,6 +908,7 @@ EOF"#
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "zsh".to_string(),
                 "-lc".to_string(),
@@ -959,6 +966,53 @@ async fn exec_approval_requirement_prefers_execpolicy_match() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: Some("`rm` requires approval by policy".to_string()),
+            reviewer: None,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_carries_user_reviewer_from_prompt_rule() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(
+                r#"prefix_rule(pattern=["rm"], decision="prompt", reviewer="user", justification="human checkpoint")"#
+                    .to_string(),
+            ),
+            command: vec!["rm".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some("`rm` requires human approval: human checkpoint".to_string()),
+            reviewer: Some(ApprovalsReviewer::User),
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_carries_auto_review_reviewer_from_prompt_rule() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(
+                r#"prefix_rule(pattern=["rm"], decision="prompt", reviewer="auto_review")"#
+                    .to_string(),
+            ),
+            command: vec!["rm".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some("`rm` requires automatic approval review by policy".to_string()),
+            reviewer: Some(ApprovalsReviewer::AutoReview),
             proposed_execpolicy_amendment: None,
         },
     )
@@ -1045,6 +1099,7 @@ async fn requested_prefix_rule_can_approve_absolute_path_commands() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
                 "install".to_string(),
@@ -1229,6 +1284,7 @@ async fn exec_approval_requirement_prompts_for_inline_additional_permissions_und
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "touch".to_string(),
                 "requested-dir/requested-but-unused.txt".to_string(),
@@ -1251,6 +1307,7 @@ async fn exec_approval_requirement_prompts_for_known_safe_escalation_under_on_re
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "echo".to_string(),
                 "hello".to_string(),
@@ -1406,6 +1463,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
         }
     );
@@ -1431,6 +1489,7 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
     );
@@ -1460,6 +1519,7 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
     );
@@ -1489,6 +1549,7 @@ async fn request_rule_uses_prefix_rule() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
                 "install".to_string(),
@@ -1521,6 +1582,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "rm".to_string(),
                 "-rf".to_string(),
@@ -1557,6 +1619,7 @@ async fn heuristics_apply_when_other_commands_match_policy() {
             .await,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "orange".to_string()
             ]))
@@ -1630,6 +1693,7 @@ async fn proposed_execpolicy_amendment_is_present_for_single_command_without_pol
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         },
     )
@@ -1649,6 +1713,7 @@ async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: Some("`rm` requires approval by policy".to_string()),
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
     )
@@ -1672,6 +1737,7 @@ async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
                 "build".to_string(),
@@ -1701,6 +1767,7 @@ async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scri
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "apple".to_string(),
             ])),
@@ -1925,6 +1992,7 @@ fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
         decision: Decision::Prompt,
         resolved_program: None,
         justification: None,
+        reviewer: None,
     }];
     assert_eq!(
         None,
@@ -1936,6 +2004,7 @@ fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
         decision: Decision::Allow,
         resolved_program: None,
         justification: None,
+        reviewer: None,
     }];
     assert_eq!(
         None,
@@ -1947,6 +2016,7 @@ fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
         decision: Decision::Forbidden,
         resolved_program: None,
         justification: None,
+        reviewer: None,
     }];
     assert_eq!(
         None,
@@ -1973,6 +2043,7 @@ async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         },
     )
@@ -2012,6 +2083,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 safe" should require approval."#,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
+                reviewer: None,
                 proposed_execpolicy_amendment: expected_amendment.clone(),
             },
         )
@@ -2044,6 +2116,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
     assert_eq!(
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
                 "rm",
                 "-rf",

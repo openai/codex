@@ -3804,6 +3804,7 @@ command = "python3 /enterprise/hooks/pre.py"
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );

@@ -4,11 +4,13 @@ use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::allowed_approval_reviewer_override;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
@@ -29,8 +31,10 @@ use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_execpolicy::RuleReviewer;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -445,6 +449,7 @@ impl CoreShellActionProvider {
         argv: &[String],
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
+        reviewer: Option<ApprovalsReviewer>,
         additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
@@ -455,7 +460,20 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
+        let reviewer = allowed_approval_reviewer_override(&turn, reviewer);
+        let use_guardian = reviewer.map_or_else(
+            || routes_approval_to_guardian(&turn),
+            |reviewer| routes_approval_to_guardian_with_reviewer(&turn, reviewer),
+        );
+        let guardian_review_id = use_guardian.then(new_guardian_review_id);
+        let approval_reason = reviewer.map(|reviewer| {
+            let approval_description = match reviewer {
+                ApprovalsReviewer::User => "requires human approval",
+                ApprovalsReviewer::AutoReview => "requires automatic approval review",
+            };
+            let command = codex_shell_command::parse_command::shlex_join(&command);
+            format!("`{command}` {approval_description} by policy")
+        });
         Ok(stopwatch
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
@@ -503,7 +521,7 @@ impl CoreShellActionProvider {
                             cwd: workdir.clone(),
                             additional_permissions,
                         },
-                        /*retry_reason*/ None,
+                        approval_reason.clone(),
                     )
                     .await;
                     return PromptDecision {
@@ -522,7 +540,8 @@ impl CoreShellActionProvider {
                         environment_id,
                         command,
                         workdir.clone(),
-                        /*reason*/ None,
+                        approval_reason,
+                        reviewer,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
@@ -546,6 +565,7 @@ impl CoreShellActionProvider {
         program: &AbsolutePathBuf,
         argv: &[String],
         workdir: &AbsolutePathBuf,
+        reviewer: Option<ApprovalsReviewer>,
         prompt_permissions: Option<AdditionalPermissionProfile>,
         escalation_execution: EscalationExecution,
         decision_source: DecisionSource,
@@ -561,7 +581,14 @@ impl CoreShellActionProvider {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     let prompt_decision = self
-                        .prompt(program, argv, workdir, &self.stopwatch, prompt_permissions)
+                        .prompt(
+                            program,
+                            argv,
+                            workdir,
+                            &self.stopwatch,
+                            reviewer,
+                            prompt_permissions,
+                        )
                         .await?;
                     match prompt_decision.decision {
                         ReviewDecision::Approved
@@ -674,6 +701,10 @@ impl CoreShellActionProvider {
         } else {
             DecisionSource::UnmatchedCommandFallback
         };
+        let reviewer = evaluation.prompt_reviewer().map(|reviewer| match reviewer {
+            RuleReviewer::User => ApprovalsReviewer::User,
+            RuleReviewer::AutoReview => ApprovalsReviewer::AutoReview,
+        });
         let escalation_execution = match decision_source {
             DecisionSource::PrefixRule if unsandboxed_allowed => EscalationExecution::Unsandboxed,
             DecisionSource::PrefixRule => EscalationExecution::TurnDefault,
@@ -690,6 +721,7 @@ impl CoreShellActionProvider {
             program,
             argv,
             workdir,
+            reviewer,
             self.prompt_permissions.clone(),
             escalation_execution,
             decision_source,

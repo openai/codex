@@ -69,6 +69,7 @@ async fn guardian_review_request_includes_patch_context() {
         )]),
         exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
         additional_permissions: None,
@@ -105,6 +106,7 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         changes: HashMap::new(),
         exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         },
         additional_permissions: None,

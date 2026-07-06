@@ -28,3 +28,4 @@ pub use rule::PrefixRule;
 pub use rule::Rule;
 pub use rule::RuleMatch;
 pub use rule::RuleRef;
+pub use rule::RuleReviewer;

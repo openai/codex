@@ -9,6 +9,7 @@ use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::RuleMatch;
 use crate::rule::RuleRef;
+use crate::rule::RuleReviewer;
 use crate::rule::normalize_network_rule_host;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
@@ -104,6 +105,7 @@ impl Policy {
             },
             decision,
             justification: None,
+            reviewer: None,
         });
 
         self.rules_by_program.insert(first_token.clone(), rule);
@@ -355,6 +357,38 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
+    /// Returns the explicit reviewer requested by matching prompt rules.
+    ///
+    /// When multiple prompt rules match, a user reviewer wins over auto-review.
+    /// None means that no matching prompt rule overrides the caller's
+    /// configured reviewer.
+    pub fn prompt_reviewer(&self) -> Option<RuleReviewer> {
+        let mut reviewer = None;
+
+        for rule_match in &self.matched_rules {
+            let RuleMatch::PrefixRuleMatch {
+                decision,
+                reviewer: Some(rule_reviewer),
+                ..
+            } = rule_match
+            else {
+                continue;
+            };
+
+            if *decision != Decision::Prompt {
+                continue;
+            }
+
+            if *rule_reviewer == RuleReviewer::User {
+                return Some(RuleReviewer::User);
+            }
+
+            reviewer = Some(RuleReviewer::AutoReview);
+        }
+
+        reviewer
+    }
+
     pub fn is_match(&self) -> bool {
         self.matched_rules
             .iter()

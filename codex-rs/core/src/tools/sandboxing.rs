@@ -15,6 +15,7 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -130,6 +131,8 @@ pub(crate) struct ApprovalCtx<'a> {
     /// review without overloading the tool call ID as a review ID.
     pub guardian_review_id: Option<String>,
     pub retry_reason: Option<String>,
+    /// Optional per-request reviewer selected by a matching exec-policy rule.
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
@@ -172,6 +175,10 @@ pub(crate) enum ExecApprovalRequirement {
     /// Approval required for this tool call.
     NeedsApproval {
         reason: Option<String>,
+        /// Optional per-request reviewer selected by a matching exec-policy rule.
+        ///
+        /// When omitted, approval routing falls back to the turn-level reviewer.
+        reviewer: Option<ApprovalsReviewer>,
         /// Proposed execpolicy amendment to skip future approvals for similar commands
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
@@ -192,6 +199,13 @@ impl ExecApprovalRequirement {
                 ..
             } => Some(prefix),
             _ => None,
+        }
+    }
+
+    pub fn reviewer(&self) -> Option<ApprovalsReviewer> {
+        match self {
+            Self::NeedsApproval { reviewer, .. } => *reviewer,
+            Self::Skip { .. } | Self::Forbidden { .. } => None,
         }
     }
 }
@@ -229,6 +243,7 @@ pub(crate) fn default_exec_approval_requirement(
     } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: None,
         }
     } else {

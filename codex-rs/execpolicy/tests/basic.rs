@@ -18,6 +18,7 @@ use codex_execpolicy::PrefixPattern;
 use codex_execpolicy::PrefixRule;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
+use codex_execpolicy::RuleReviewer;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -159,6 +160,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         evaluation
@@ -191,6 +193,7 @@ prefix_rule(
                 decision: Decision::Forbidden,
                 resolved_program: None,
                 justification: Some("destructive command".to_string()),
+                reviewer: None,
             }],
         },
         evaluation
@@ -220,6 +223,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: Some("safe and commonly used".to_string()),
+                reviewer: None,
             }],
         },
         evaluation
@@ -247,6 +251,122 @@ prefix_rule(
 }
 
 #[test]
+fn prompt_rule_reviewer_is_attached_to_matches() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    reviewer = "auto_review",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check(&tokens(&["git", "push", "origin", "main"]), &allow_all);
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git", "push"]),
+                decision: Decision::Prompt,
+                resolved_program: None,
+                justification: None,
+                reviewer: Some(RuleReviewer::AutoReview),
+            }],
+        },
+        evaluation
+    );
+    assert_eq!(evaluation.prompt_reviewer(), Some(RuleReviewer::AutoReview));
+    let serialized = serde_json::to_value(&evaluation)?;
+    assert_eq!(
+        serialized["matchedRules"][0]["prefixRuleMatch"]["reviewer"],
+        "auto_review"
+    );
+    Ok(())
+}
+
+#[test]
+fn prompt_rule_user_reviewer_wins_over_auto_review() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+    reviewer = "auto_review",
+)
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    reviewer = "user",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check(&tokens(&["git", "push", "origin", "main"]), &allow_all);
+    assert_eq!(evaluation.prompt_reviewer(), Some(RuleReviewer::User));
+    Ok(())
+}
+
+#[test]
+fn prompt_rule_without_reviewer_inherits_configured_reviewer() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check(&tokens(&["git", "push", "origin", "main"]), &allow_all);
+    assert_eq!(evaluation.prompt_reviewer(), None);
+    Ok(())
+}
+
+#[test]
+fn reviewer_is_rejected_for_non_prompt_decisions() {
+    for decision in ["allow", "forbidden"] {
+        let policy_src = format!(
+            r#"prefix_rule(
+    pattern = ["git"],
+    decision = "{decision}",
+    reviewer = "user",
+)"#
+        );
+        let mut parser = PolicyParser::new();
+        let err = parser
+            .parse("test.rules", &policy_src)
+            .expect_err("reviewer should require a prompt decision");
+        assert!(
+            err.to_string()
+                .contains("reviewer can only be used with decision = \"prompt\"")
+        );
+    }
+}
+
+#[test]
+fn reviewer_rejects_unknown_values() {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+    reviewer = "guardian",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("unknown reviewer should fail");
+    assert!(
+        err.to_string()
+            .contains("reviewer must be one of user, auto_review")
+    );
+}
+
+#[test]
 fn add_prefix_rule_extends_policy() -> Result<()> {
     let mut policy = Policy::empty();
     policy.add_prefix_rule(&tokens(&["ls", "-l"]), Decision::Prompt)?;
@@ -260,6 +380,7 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
             },
             decision: Decision::Prompt,
             justification: None,
+            reviewer: None,
         })],
         rules
     );
@@ -273,6 +394,7 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
                 decision: Decision::Prompt,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         evaluation
@@ -321,6 +443,7 @@ prefix_rule(
                 },
                 decision: Decision::Prompt,
                 justification: None,
+                reviewer: None,
             }),
             RuleSnapshot::Prefix(PrefixRule {
                 pattern: PrefixPattern {
@@ -329,6 +452,7 @@ prefix_rule(
                 },
                 decision: Decision::Forbidden,
                 justification: None,
+                reviewer: None,
             }),
         ],
         git_rules
@@ -343,6 +467,7 @@ prefix_rule(
                 decision: Decision::Prompt,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         status_eval
@@ -358,12 +483,14 @@ prefix_rule(
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
             ],
         },
@@ -398,6 +525,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            reviewer: None,
         })],
         bash_rules
     );
@@ -409,6 +537,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            reviewer: None,
         })],
         sh_rules
     );
@@ -422,6 +551,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         bash_eval
@@ -436,6 +566,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         sh_eval
@@ -470,6 +601,7 @@ prefix_rule(
             },
             decision: Decision::Allow,
             justification: None,
+            reviewer: None,
         })],
         rules
     );
@@ -483,6 +615,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         npm_i
@@ -500,6 +633,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         npm_install
@@ -531,6 +665,7 @@ prefix_rule(
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         },
         match_eval
@@ -559,6 +694,7 @@ fn strictest_decision_wins_across_matches() -> Result<()> {
 prefix_rule(
     pattern = ["git"],
     decision = "prompt",
+    reviewer = "user",
 )
 prefix_rule(
     pattern = ["git", "commit"],
@@ -579,12 +715,14 @@ prefix_rule(
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: Some(RuleReviewer::User),
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
             ],
         },
@@ -624,18 +762,21 @@ prefix_rule(
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 },
             ],
         },
@@ -773,7 +914,7 @@ fn host_executable_resolution_uses_basename_rule_when_allowed() -> Result<()> {
     let git_path_literal = starlark_string(&git_path);
     let policy_src = format!(
         r#"
-prefix_rule(pattern = ["git", "status"], decision = "prompt")
+prefix_rule(pattern = ["git", "status"], decision = "prompt", reviewer = "user")
 host_executable(name = "git", paths = ["{git_path_literal}"])
 "#
     );
@@ -797,9 +938,11 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
                 decision: Decision::Prompt,
                 resolved_program: Some(absolute_path(&git_path)),
                 justification: None,
+                reviewer: Some(RuleReviewer::User),
             }],
         }
     );
+    assert_eq!(evaluation.prompt_reviewer(), Some(RuleReviewer::User));
     Ok(())
 }
 
@@ -919,6 +1062,7 @@ prefix_rule(pattern = ["git"], decision = "prompt")
                 decision: Decision::Prompt,
                 resolved_program: Some(absolute_path(&git_path)),
                 justification: None,
+                reviewer: None,
             }],
         }
     );
@@ -956,6 +1100,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
                 decision: Decision::Allow,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         }
     );

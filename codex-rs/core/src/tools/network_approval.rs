@@ -612,6 +612,7 @@ impl NetworkApprovalService {
                     prompt_command,
                     cwd,
                     Some(prompt_reason),
+                    /*approvals_reviewer*/ None,
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,

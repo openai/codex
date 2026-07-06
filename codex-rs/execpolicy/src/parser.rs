@@ -32,6 +32,7 @@ use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::RuleRef;
+use crate::rule::RuleReviewer;
 use crate::rule::validate_match_examples;
 use crate::rule::validate_not_match_examples;
 
@@ -257,6 +258,16 @@ fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
     }
 }
 
+fn parse_rule_reviewer(raw: &str) -> Result<RuleReviewer> {
+    match raw {
+        "user" => Ok(RuleReviewer::User),
+        "auto_review" => Ok(RuleReviewer::AutoReview),
+        other => Err(Error::InvalidRule(format!(
+            "reviewer must be one of user, auto_review (got {other})"
+        ))),
+    }
+}
+
 fn error_location_from_file_span(span: FileSpan) -> ErrorLocation {
     let resolved = span.resolve_span();
     ErrorLocation {
@@ -352,12 +363,20 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
         justification: Option<&'v str>,
+        reviewer: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
             Some(raw) => Decision::parse(raw)?,
             None => Decision::Allow,
         };
+        let reviewer = reviewer.map(parse_rule_reviewer).transpose()?;
+        if reviewer.is_some() && decision != Decision::Prompt {
+            return Err(Error::InvalidRule(
+                "reviewer can only be used with decision = \"prompt\"".to_string(),
+            )
+            .into());
+        }
 
         let justification = match justification {
             Some(raw) if raw.trim().is_empty() => {
@@ -398,6 +417,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                     },
                     decision,
                     justification: justification.clone(),
+                    reviewer,
                 }) as RuleRef
             })
             .collect();

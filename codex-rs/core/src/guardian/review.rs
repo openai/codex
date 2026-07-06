@@ -169,6 +169,54 @@ pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer)
 }
 
+/// Returns a per-request reviewer override when managed requirements permit it.
+///
+/// A disallowed override must not bypass allowed_approvals_reviewers; in that
+/// case the request inherits the already-constrained turn-level reviewer.
+pub(crate) fn allowed_approval_reviewer_override(
+    turn: &TurnContext,
+    approvals_reviewer: Option<ApprovalsReviewer>,
+) -> Option<ApprovalsReviewer> {
+    let reviewer = approvals_reviewer?;
+    if let Err(err) = turn
+        .config
+        .config_layer_stack
+        .requirements()
+        .approvals_reviewer
+        .can_set(&reviewer)
+    {
+        tracing::warn!(
+            error = %err,
+            ?reviewer,
+            "exec-policy reviewer override is disallowed by requirements; using the configured reviewer"
+        );
+        return None;
+    }
+    Some(reviewer)
+}
+
+/// Removes reviewer-specific wording when requirements reject a rule override.
+///
+/// Approval reasons generated for exec-policy prompt rules use one of these
+/// controlled phrases. If the override cannot be honored, the inherited
+/// reviewer is intentionally left implicit rather than claiming the wrong
+/// route in the UI or history.
+pub(crate) fn reason_for_allowed_approval_reviewer_override(
+    reason: Option<String>,
+    requested_reviewer: Option<ApprovalsReviewer>,
+    allowed_reviewer: Option<ApprovalsReviewer>,
+) -> Option<String> {
+    if requested_reviewer == allowed_reviewer {
+        return reason;
+    }
+
+    reason.map(|reason| {
+        reason
+            .replacen("requires human approval", "requires approval", 1)
+            .replacen("requires automatic approval review", "requires approval", 1)
+    })
+}
+
 /// Whether an approval with its own reviewer selection should be routed through guardian.
 pub(crate) fn routes_approval_to_guardian_with_reviewer(
     turn: &TurnContext,

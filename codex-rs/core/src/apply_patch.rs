@@ -64,6 +64,7 @@ pub(crate) async fn apply_patch(
                 auto_approved: false,
                 exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
                     reason: None,
+                    reviewer: None,
                     proposed_execpolicy_amendment: None,
                 },
             })

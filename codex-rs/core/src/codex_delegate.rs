@@ -33,7 +33,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::allowed_approval_reviewer_override;
 use crate::guardian::new_guardian_review_id;
+use crate::guardian::reason_for_allowed_approval_reviewer_override;
 use crate::guardian::routes_approval_to_guardian;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::guardian::spawn_approval_request_review;
@@ -504,13 +506,26 @@ async fn handle_exec_approval(
         command,
         cwd,
         reason,
+        approvals_reviewer,
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
         available_decisions,
         ..
     } = event;
-    let decision = if routes_approval_to_guardian(parent_ctx) {
+    let requested_approvals_reviewer = approvals_reviewer;
+    let approvals_reviewer =
+        allowed_approval_reviewer_override(parent_ctx, requested_approvals_reviewer);
+    let reason = reason_for_allowed_approval_reviewer_override(
+        reason,
+        requested_approvals_reviewer,
+        approvals_reviewer,
+    );
+    let use_guardian = approvals_reviewer.map_or_else(
+        || routes_approval_to_guardian(parent_ctx),
+        |reviewer| routes_approval_to_guardian_with_reviewer(parent_ctx, reviewer),
+    );
+    let decision = if use_guardian {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
@@ -550,6 +565,7 @@ async fn handle_exec_approval(
                 command,
                 cwd,
                 reason,
+                approvals_reviewer,
                 network_approval_context,
                 proposed_execpolicy_amendment,
                 additional_permissions,

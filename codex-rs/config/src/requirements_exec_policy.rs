@@ -1,6 +1,7 @@
 use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleRef;
+use codex_execpolicy::RuleReviewer;
 use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
@@ -58,6 +59,12 @@ pub struct RequirementsExecPolicyToml {
 pub struct RequirementsExecPolicyPrefixRuleToml {
     pub pattern: Vec<RequirementsExecPolicyPatternTokenToml>,
     pub decision: Option<RequirementsExecPolicyDecisionToml>,
+    /// Optional reviewer override for prompt rules.
+    ///
+    /// This mirrors reviewer on the Starlark prefix_rule(...) builtin.
+    /// A reviewer only has meaning for rules that request approval, so it is
+    /// rejected for non-prompt decisions during conversion.
+    pub reviewer: Option<RuleReviewer>,
     pub justification: Option<String>,
 }
 
@@ -117,6 +124,11 @@ pub enum RequirementsExecPolicyParseError {
         "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: Codex merges these rules with other config and uses the most restrictive result (use 'prompt' or 'forbidden')"
     )]
     AllowDecisionNotAllowed { rule_index: usize },
+
+    #[error(
+        "rules prefix_rule at index {rule_index} has a reviewer, but reviewer is only valid with decision 'prompt'"
+    )]
+    ReviewerRequiresPromptDecision { rule_index: usize },
 }
 
 impl RequirementsExecPolicyToml {
@@ -158,6 +170,11 @@ impl RequirementsExecPolicyToml {
                     return Err(RequirementsExecPolicyParseError::MissingDecision { rule_index });
                 }
             };
+            if rule.reviewer.is_some() && decision != Decision::Prompt {
+                return Err(
+                    RequirementsExecPolicyParseError::ReviewerRequiresPromptDecision { rule_index },
+                );
+            }
             let justification = rule.justification.clone();
 
             let (first_token, remaining_tokens) = pattern_tokens
@@ -173,6 +190,7 @@ impl RequirementsExecPolicyToml {
                         rest: rest.clone(),
                     },
                     decision,
+                    reviewer: rule.reviewer,
                     justification: justification.clone(),
                 });
                 rules_by_program.insert(head.clone(), rule);
@@ -234,3 +252,7 @@ fn parse_pattern_token(
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "requirements_exec_policy_tests.rs"]
+mod tests;
