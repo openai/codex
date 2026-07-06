@@ -1876,6 +1876,11 @@ async fn drain_in_flight(
     Ok(())
 }
 
+/// Missing IDs preserve the legacy single-active-item fallback.
+fn response_item_ids_match_when_present(left: Option<&str>, right: Option<&str>) -> bool {
+    left.zip(right).is_none_or(|(left, right)| left == right)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -1993,49 +1998,32 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone { item, .. } => {
                 let completed_item_id = item.id().map(str::to_owned);
-                let completes_current_response_item = match (
+                let is_current_response_item = response_item_ids_match_when_present(
                     completed_item_id.as_deref(),
                     current_response_item_id.as_deref(),
-                ) {
-                    (Some(completed_item_id), Some(current_response_item_id)) => {
-                        completed_item_id == current_response_item_id
-                    }
-                    // Preserve the old fallback for providers that omit item IDs.
-                    (None, _) | (_, None) => true,
-                };
-                if completes_current_response_item
+                );
+                if is_current_response_item
                     && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
 
-                let completes_active_item =
-                    match (completed_item_id.as_deref(), active_item.as_ref()) {
-                        (Some(completed_item_id), Some(active_item)) => {
-                            completed_item_id == active_item.id()
-                        }
-                        // Preserve the old fallback for providers that omit item IDs.
-                        (None, Some(_)) => true,
-                        _ => false,
-                    };
-                let item_was_streamed_to_client = completed_item_id
-                    .as_deref()
-                    .is_some_and(|item_id| streamed_response_item_ids.remove(item_id))
-                    || (completed_item_id.is_none()
-                        && completes_active_item
-                        && active_item_is_streaming_to_client);
-                let previously_active_item = if completes_active_item {
-                    active_item.take()
-                } else {
-                    None
+                let active_item_id = active_item.as_ref().map(TurnItem::id);
+                let matches_active_item = active_item.is_some()
+                    && response_item_ids_match_when_present(
+                        completed_item_id.as_deref(),
+                        active_item_id.as_deref(),
+                    );
+                let item_was_streamed_to_client = match completed_item_id.as_deref() {
+                    Some(item_id) => streamed_response_item_ids.remove(item_id),
+                    None => matches_active_item && active_item_is_streaming_to_client,
                 };
-                if completes_active_item {
+                if matches_active_item {
+                    active_item = None;
                     active_item_is_streaming_to_client = false;
                 }
-                let completed_or_active_item_id = completed_item_id
-                    .clone()
-                    .or_else(|| previously_active_item.as_ref().map(TurnItem::id));
+                let completed_or_active_item_id = completed_item_id.or(active_item_id);
                 if item_was_streamed_to_client
                     && matches!(&item, ResponseItem::Message { .. })
                     && let Some(item_id) = completed_or_active_item_id.as_deref()
