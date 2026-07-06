@@ -206,6 +206,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     item_ids_enabled: bool,
+    parallel_reasoning_summaries_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -399,16 +400,6 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
 }
 
 impl ModelClient {
-    pub(crate) fn should_request_concurrent_reasoning_summaries(
-        provider_info: &ModelProviderInfo,
-        model_info: &ModelInfo,
-        summary: ReasoningSummaryConfig,
-    ) -> bool {
-        provider_info.is_openai()
-            && model_info.supports_reasoning_summaries
-            && summary != ReasoningSummaryConfig::None
-    }
-
     #[allow(clippy::too_many_arguments)]
     /// Creates a new session-scoped `ModelClient`.
     ///
@@ -426,6 +417,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         item_ids_enabled: bool,
+        parallel_reasoning_summaries_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -448,6 +440,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 item_ids_enabled,
+                parallel_reasoning_summaries_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -865,16 +858,11 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        // Keep setup and background requests byte-for-byte compatible; only normal turns
-        // consume concurrent summary delivery in the turn event loop.
-        let stream_options = (matches!(
-            responses_metadata.request_kind,
-            Some(CodexResponsesRequestKind::Turn)
-        ) && Self::should_request_concurrent_reasoning_summaries(
-            self.state.provider.info(),
-            model_info,
-            summary,
-        ))
+        let stream_options = (self.state.parallel_reasoning_summaries_enabled
+            && matches!(
+                responses_metadata.request_kind,
+                Some(CodexResponsesRequestKind::Turn)
+            ))
         .then_some(StreamOptions {
             reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::ConcurrentCutoff,
         });
@@ -1107,6 +1095,10 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
+    }
+
+    pub(crate) fn uses_concurrent_reasoning_summaries(&self) -> bool {
+        self.client.state.parallel_reasoning_summaries_enabled
     }
 
     fn reset_websocket_session(&mut self) {
@@ -1571,7 +1563,6 @@ impl ModelClientSession {
             };
             if warmup {
                 ws_payload.generate = Some(false);
-                ws_payload.stream_options = None;
             }
 
             match self

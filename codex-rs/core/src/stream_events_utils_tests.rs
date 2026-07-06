@@ -304,9 +304,10 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("assistant message should complete");
+    let output =
+        handle_output_item_done(&mut ctx, item, /*item_was_streamed_to_client*/ false)
+            .await
+            .expect("assistant message should complete");
 
     assert_eq!(
         output.last_agent_message.as_deref(),

@@ -1334,6 +1334,8 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+        /*parallel_reasoning_summaries_enabled*/
+        config.features.enabled(Feature::ParallelReasoningSummaries),
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
@@ -2376,6 +2378,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2956,6 +2959,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*parallel_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);

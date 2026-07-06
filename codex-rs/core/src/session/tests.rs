@@ -490,6 +490,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*parallel_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
     )
     .new_session()
@@ -5443,6 +5444,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+            /*parallel_reasoning_summaries_enabled*/
+            config.features.enabled(Feature::ParallelReasoningSummaries),
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
@@ -7569,6 +7572,8 @@ where
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+            /*parallel_reasoning_summaries_enabled*/
+            config.features.enabled(Feature::ParallelReasoningSummaries),
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
@@ -8761,9 +8766,13 @@ async fn handle_output_item_done_records_image_save_history_message() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should succeed");
+    handle_output_item_done(
+        &mut ctx,
+        item.clone(),
+        /*item_was_streamed_to_client*/ false,
+    )
+    .await
+    .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
@@ -8818,9 +8827,13 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should still complete");
+    handle_output_item_done(
+        &mut ctx,
+        item.clone(),
+        /*item_was_streamed_to_client*/ false,
+    )
+    .await
+    .expect("image generation item should still complete");
 
     let history = session.clone_history().await;
     let expected = vec![item];
@@ -10449,9 +10462,10 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("tool call should be handled");
+    let output =
+        handle_output_item_done(&mut ctx, item, /*item_was_streamed_to_client*/ false)
+            .await
+            .expect("tool call should be handled");
 
     assert!(output.needs_follow_up);
     assert!(output.tool_future.is_some());

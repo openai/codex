@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
-use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -1780,7 +1779,7 @@ async fn emit_turn_item_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
     turn_item: TurnItem,
-    previously_active_item: Option<&TurnItem>,
+    item_was_streamed_to_client: bool,
     state: &mut PlanModeStreamState,
 ) {
     match turn_item {
@@ -1788,7 +1787,7 @@ async fn emit_turn_item_in_plan_mode(
             emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
         }
         _ => {
-            if previously_active_item.is_none() {
+            if !item_was_streamed_to_client {
                 sess.emit_turn_item_started(turn_context, &turn_item).await;
             }
             sess.emit_turn_item_completed(turn_context, turn_item).await;
@@ -1803,7 +1802,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     turn_store: &codex_extension_api::ExtensionData,
     item: &ResponseItem,
     state: &mut PlanModeStreamState,
-    previously_active_item: Option<&TurnItem>,
+    item_was_streamed_to_client: bool,
     last_agent_message: &mut Option<String>,
 ) -> bool {
     if let ResponseItem::Message { role, .. } = item
@@ -1826,7 +1825,7 @@ async fn handle_assistant_item_done_in_plan_mode(
                 sess,
                 turn_context,
                 finalized_turn_item.turn_item,
-                previously_active_item,
+                item_was_streamed_to_client,
                 state,
             )
             .await;
@@ -1910,15 +1909,7 @@ async fn try_run_sampling_request(
         turn_context.provider.info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
-    let uses_concurrent_reasoning_summaries = matches!(
-        responses_metadata.request_kind,
-        Some(CodexResponsesRequestKind::Turn)
-    )
-        && ModelClient::should_request_concurrent_reasoning_summaries(
-            turn_context.provider.info(),
-            &turn_context.model_info,
-            turn_context.reasoning_summary,
-        );
+    let uses_concurrent_reasoning_summaries = client_session.uses_concurrent_reasoning_summaries();
     let mut stream = client_session
         .stream(
             prompt,
@@ -1939,6 +1930,10 @@ async fn try_run_sampling_request(
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut current_response_item_id: Option<String> = None;
+    // Concurrent cutoff can complete an older reasoning item after a newer item starts.
+    // Keep only the IDs needed to avoid emitting a second start when those done events
+    // are reordered back into response order.
+    let mut streamed_response_item_ids = HashSet::<String>::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1997,28 +1992,60 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone { item, .. } => {
-                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                let completed_item_id = item.id().map(str::to_owned);
+                let completes_current_response_item = match (
+                    completed_item_id.as_deref(),
+                    current_response_item_id.as_deref(),
+                ) {
+                    (Some(completed_item_id), Some(current_response_item_id)) => {
+                        completed_item_id == current_response_item_id
+                    }
+                    // Preserve the old fallback for providers that omit item IDs.
+                    (None, _) | (_, None) => true,
+                };
+                if completes_current_response_item
+                    && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
+
+                let completes_active_item =
+                    match (completed_item_id.as_deref(), active_item.as_ref()) {
+                        (Some(completed_item_id), Some(active_item)) => {
+                            completed_item_id == active_item.id()
+                        }
+                        // Preserve the old fallback for providers that omit item IDs.
+                        (None, Some(_)) => true,
+                        _ => false,
+                    };
+                let item_was_streamed_to_client = completed_item_id
+                    .as_deref()
+                    .is_some_and(|item_id| streamed_response_item_ids.remove(item_id))
+                    || (completed_item_id.is_none()
+                        && completes_active_item
+                        && active_item_is_streaming_to_client);
+                let previously_active_item = if completes_active_item {
+                    active_item.take()
                 } else {
                     None
                 };
-                active_item_is_streaming_to_client = false;
-                if let Some(previous) = previously_streamed_item.as_ref()
-                    && matches!(previous, TurnItem::AgentMessage(_))
+                if completes_active_item {
+                    active_item_is_streaming_to_client = false;
+                }
+                let completed_or_active_item_id = completed_item_id
+                    .clone()
+                    .or_else(|| previously_active_item.as_ref().map(TurnItem::id));
+                if item_was_streamed_to_client
+                    && matches!(&item, ResponseItem::Message { .. })
+                    && let Some(item_id) = completed_or_active_item_id.as_deref()
                 {
-                    let item_id = previous.id();
                     flush_assistant_text_segments_for_item(
                         &sess,
                         &turn_context,
                         plan_mode_state.as_mut(),
                         &mut assistant_message_stream_parsers,
-                        &item_id,
+                        item_id,
                     )
                     .await;
                 }
@@ -2029,7 +2056,7 @@ async fn try_run_sampling_request(
                         turn_store.as_ref(),
                         &item,
                         state,
-                        previously_streamed_item.as_ref(),
+                        item_was_streamed_to_client,
                         &mut last_agent_message,
                     )
                     .await
@@ -2068,7 +2095,7 @@ async fn try_run_sampling_request(
                 };
 
                 let output_result =
-                    match handle_output_item_done(&mut ctx, item, previously_streamed_item)
+                    match handle_output_item_done(&mut ctx, item, item_was_streamed_to_client)
                         .instrument(handle_responses)
                         .await
                     {
@@ -2140,6 +2167,11 @@ async fn try_run_sampling_request(
                         seeded_item_id = Some(item_id);
                     }
                     if stream_item_to_client {
+                        streamed_response_item_ids.insert(
+                            item.id()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| turn_item.id()),
+                        );
                         if let Some(state) = plan_mode_state.as_mut()
                             && matches!(turn_item, TurnItem::AgentMessage(_))
                         {

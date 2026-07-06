@@ -405,7 +405,7 @@ pub(crate) async fn finalize_non_tool_response_item(
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
-    previously_active_item: Option<TurnItem>,
+    item_was_streamed_to_client: bool,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
@@ -456,7 +456,7 @@ pub(crate) async fn handle_output_item_done(
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
             if let Some(finalized_turn_item) = finalized_turn_item {
-                if previously_active_item.is_none() {
+                if !item_was_streamed_to_client {
                     let mut started_item = finalized_turn_item.turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
                         item.status = "in_progress".to_string();

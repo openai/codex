@@ -54,7 +54,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
         &turn_store,
         &item,
         &mut state,
-        /*previously_active_item*/ None,
+        /*item_was_streamed_to_client*/ false,
         &mut last_agent_message,
     )
     .await;

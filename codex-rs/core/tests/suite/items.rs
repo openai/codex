@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1086,6 +1087,63 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-1", &[""]),
+        ev_reasoning_summary_text_delta("step one"),
+        ev_reasoning_item("reasoning-1", &["step one"], &[]),
+        ev_completed("resp-1"),
+    ]);
+    let response_mock = mount_sse_once(&server, stream).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "reason through it".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let reasoning_item = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::Reasoning(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+
+    let delta_event = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ReasoningContentDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(delta_event.item_id, reasoning_item.id);
+    assert_eq!(delta_event.delta, "step one");
+    assert_eq!(
+        response_mock
+            .single_request()
+            .body_json()
+            .get("stream_options"),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1097,6 +1155,7 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
         })
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -1125,12 +1184,12 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
             summary_done("reasoning-1", 1, "late step"),
             ev_output_text_delta("Done"),
             with_output_index(
-                ev_reasoning_item("reasoning-1", &["step one", "late step"], &[]),
-                /*output_index*/ 0,
-            ),
-            with_output_index(
                 ev_assistant_message("message-1", "Done"),
                 /*output_index*/ 1,
+            ),
+            with_output_index(
+                ev_reasoning_item("reasoning-1", &["step one", "late step"], &[]),
+                /*output_index*/ 0,
             ),
             ev_completed("resp-1"),
         ]),
@@ -1159,10 +1218,22 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
     })
     .await;
 
+    let mut started_item_ids = vec![reasoning_item.id.clone()];
+    let mut completed_item_ids = Vec::new();
     let mut summary_deltas = Vec::new();
     let mut summary_sections = Vec::new();
     loop {
         match wait_for_event(&codex, |_| true).await {
+            EventMsg::ItemStarted(ItemStartedEvent { item, .. })
+                if matches!(&item, TurnItem::Reasoning(_) | TurnItem::AgentMessage(_)) =>
+            {
+                started_item_ids.push(item.id());
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent { item, .. })
+                if matches!(&item, TurnItem::Reasoning(_) | TurnItem::AgentMessage(_)) =>
+            {
+                completed_item_ids.push(item.id());
+            }
             EventMsg::ReasoningContentDelta(event) => {
                 summary_deltas.push((event.item_id, event.delta, event.summary_index));
             }
@@ -1178,6 +1249,8 @@ async fn concurrent_cutoff_emits_only_current_reasoning_summary_done() -> anyhow
         summary_deltas,
         vec![(reasoning_item.id, "step one".to_string(), 0)]
     );
+    assert_eq!(started_item_ids, vec!["reasoning-1", "message-1"]);
+    assert_eq!(completed_item_ids, vec!["reasoning-1", "message-1"]);
     assert_eq!(summary_sections, Vec::new());
     assert_eq!(
         response_mock.single_request().body_json()["stream_options"]["reasoning_summary_delivery"]
