@@ -126,9 +126,10 @@ pub(super) fn enable_keyboard_enhancement() {
     let _ = execute!(
         stdout(),
         DisableModifyOtherKeys,
+        // Codex exits on key presses, so a matching release can otherwise arrive after shutdown
+        // and leak into the parent shell.
         PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
         )
     );

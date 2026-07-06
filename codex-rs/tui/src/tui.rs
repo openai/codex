@@ -305,9 +305,6 @@ pub fn restore_after_exit() -> Result<()> {
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
-    // Discard key events queued while shutdown was in progress so the parent shell does not
-    // receive CSI-u sequences that were encoded before keyboard reporting was reset.
-    flush_terminal_input_buffer();
 
     match first_error {
         Some(err) => Err(err),
