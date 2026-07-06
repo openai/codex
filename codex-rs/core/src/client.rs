@@ -56,6 +56,7 @@ use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
+use codex_api::StreamOptions;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::auth_header_telemetry;
@@ -203,6 +204,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     item_ids_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -311,6 +313,7 @@ fn responses_request_properties_match(
         reasoning: previous_reasoning,
         store: previous_store,
         stream: previous_stream,
+        stream_options: _,
         include: previous_include,
         service_tier: previous_service_tier,
         prompt_cache_key: previous_prompt_cache_key,
@@ -327,6 +330,7 @@ fn responses_request_properties_match(
         reasoning: current_reasoning,
         store: current_store,
         stream: current_stream,
+        stream_options: _,
         include: current_include,
         service_tier: current_service_tier,
         prompt_cache_key: current_prompt_cache_key,
@@ -342,6 +346,8 @@ fn responses_request_properties_match(
         && previous_reasoning == current_reasoning
         && previous_store == current_store
         && previous_stream == current_stream
+        // Stream options control delivery for this response, not the context
+        // referenced by `previous_response_id`.
         && previous_include == current_include
         && previous_service_tier == current_service_tier
         && previous_prompt_cache_key == current_prompt_cache_key
@@ -409,6 +415,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         item_ids_enabled: bool,
+        concurrent_reasoning_summaries_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -431,6 +438,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 item_ids_enabled,
+                concurrent_reasoning_summaries_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -848,6 +856,13 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
+        let stream_options =
+            self.state
+                .concurrent_reasoning_summaries_enabled
+                .then_some(StreamOptions {
+                    reasoning_summary_delivery:
+                        codex_api::ReasoningSummaryDelivery::SequentialCutoff,
+                });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -882,6 +897,7 @@ impl ModelClient {
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
+            stream_options,
             include,
             service_tier,
             prompt_cache_key,
@@ -1076,6 +1092,10 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
+    }
+
+    pub(crate) fn uses_sequential_cutoff_reasoning_summaries(&self) -> bool {
+        self.client.state.concurrent_reasoning_summaries_enabled
     }
 
     fn reset_websocket_session(&mut self) {
@@ -1537,6 +1557,7 @@ impl ModelClientSession {
             };
             if warmup {
                 ws_payload.generate = Some(false);
+                ws_payload.stream_options = None;
             }
 
             match self
