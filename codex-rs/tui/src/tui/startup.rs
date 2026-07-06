@@ -37,7 +37,7 @@ impl Drop for PreparedTerminal {
 }
 
 #[derive(Default)]
-pub(super) struct StartupInputBuffer {
+pub(crate) struct StartupInputBuffer {
     text: String,
     char_count: usize,
     pending_plain_whitespace: String,
@@ -143,6 +143,20 @@ impl StartupInputBuffer {
         }
     }
 
+    #[cfg(unix)]
+    fn handle_startup_probe_input(&mut self, input: &[crate::terminal_probe::StartupInput]) {
+        for input in input {
+            match input {
+                crate::terminal_probe::StartupInput::Plain(input) => {
+                    self.handle_probe_input(input);
+                }
+                crate::terminal_probe::StartupInput::Paste(input) => {
+                    self.push_text(&String::from_utf8_lossy(input));
+                }
+            }
+        }
+    }
+
     pub(super) fn into_text(self) -> Option<String> {
         (!self.text.is_empty()).then_some(self.text)
     }
@@ -222,6 +236,7 @@ impl PreparedTerminal {
         self.terminal_modes_active = true;
         super::set_base_modes()?;
         let mut startup_input = StartupInputBuffer::default();
+        #[cfg(not(unix))]
         capture_startup_input(&mut startup_input)?;
 
         #[cfg(unix)]
@@ -251,6 +266,14 @@ impl PreparedTerminal {
                     );
                     probe
                 }
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Err(err);
+                }
                 Err(err) => {
                     tracing::warn!(
                         duration_ms = %started_at.elapsed().as_millis(),
@@ -267,7 +290,7 @@ impl PreparedTerminal {
         };
 
         #[cfg(unix)]
-        startup_input.handle_probe_input(&startup_probe.input);
+        startup_input.handle_startup_probe_input(&startup_probe.input);
 
         #[cfg(unix)]
         crate::terminal_palette::set_default_colors_from_startup_probe(
@@ -310,7 +333,7 @@ impl PreparedTerminal {
             terminal,
             enhanced_keys_supported,
             stderr_guard,
-            startup_text: startup_input.into_text(),
+            startup_input,
         };
         self.active = false;
         Ok(initialized)

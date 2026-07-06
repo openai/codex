@@ -61,6 +61,17 @@ fn startup_probe_input_preserves_internal_plain_whitespace_across_phases() {
     assert_eq!(input.into_text(), Some("a\nb".to_string()));
 }
 
+#[cfg(unix)]
+#[test]
+fn startup_probe_preserves_bracketed_paste_whitespace() {
+    let mut input = StartupInputBuffer::default();
+    input.handle_startup_probe_input(&[crate::terminal_probe::StartupInput::Paste(
+        b"a\r\n\t".to_vec(),
+    )]);
+
+    assert_eq!(input.into_text(), Some("a\n\t".to_string()));
+}
+
 #[test]
 fn startup_input_is_bounded() {
     let mut input = StartupInputBuffer::default();

@@ -24,6 +24,6 @@ pub(crate) fn make_test_tui() -> io::Result<Tui> {
         terminal,
         /*enhanced_keys_supported*/ false,
         stderr_guard,
-        /*startup_text*/ None,
+        /*startup_input*/ None,
     ))
 }

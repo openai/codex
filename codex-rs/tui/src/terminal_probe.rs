@@ -25,10 +25,18 @@ pub(crate) struct DefaultColors {
     pub(crate) bg: (u8, u8, u8),
 }
 
+/// User input read while the Unix startup probe owns the terminal.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum StartupInput {
+    Plain(Vec<u8>),
+    Paste(Vec<u8>),
+}
+
 #[cfg(unix)]
 #[cfg_attr(test, allow(dead_code))]
 mod imp {
     use super::DefaultColors;
+    use super::StartupInput;
     use super::parse_default_colors;
     use std::fs::File;
     use std::fs::OpenOptions;
@@ -42,13 +50,15 @@ mod imp {
     use crossterm::event::KeyboardEnhancementFlags;
     use ratatui::layout::Position;
 
+    const MAX_PROBE_BUFFER_BYTES: usize = 32 * 1024;
+
     /// Results from the TUI's one-shot startup terminal probe.
     #[derive(Debug, Clone, Eq, PartialEq)]
     pub(crate) struct StartupProbe {
         pub(crate) cursor_position: Option<Position>,
         pub(crate) default_colors: Option<DefaultColors>,
         pub(crate) keyboard_enhancement_supported: Option<bool>,
-        pub(crate) input: Vec<u8>,
+        pub(crate) input: Vec<StartupInput>,
     }
 
     /// Whether the startup probe should query keyboard enhancement support.
@@ -140,32 +150,40 @@ mod imp {
             self.writer.flush()
         }
 
-        fn read_available(&mut self, buffer: &mut Vec<u8>) -> io::Result<()> {
-            let mut chunk = [0_u8; 256];
-            loop {
-                let count = unsafe {
-                    libc::read(
-                        self.reader.as_raw_fd(),
-                        chunk.as_mut_ptr().cast::<libc::c_void>(),
-                        chunk.len(),
-                    )
-                };
-                if count > 0 {
-                    buffer.extend_from_slice(&chunk[..count as usize]);
-                    continue;
-                }
-                if count == 0 {
-                    return Ok(());
-                }
-                let err = io::Error::last_os_error();
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                ) {
-                    return Ok(());
-                }
-                return Err(err);
+        fn read_once(&mut self, buffer: &mut Vec<u8>) -> io::Result<()> {
+            let remaining = MAX_PROBE_BUFFER_BYTES.saturating_sub(buffer.len());
+            if remaining == 0 {
+                return Ok(());
             }
+            let mut chunk = [0_u8; 256];
+            let limit = remaining.min(chunk.len());
+            let count = self.read_into(&mut chunk[..limit])?;
+            buffer.extend_from_slice(&chunk[..count]);
+            Ok(())
+        }
+
+        fn read_into(&mut self, chunk: &mut [u8]) -> io::Result<usize> {
+            let count = unsafe {
+                libc::read(
+                    self.reader.as_raw_fd(),
+                    chunk.as_mut_ptr().cast::<libc::c_void>(),
+                    chunk.len(),
+                )
+            };
+            if count > 0 {
+                return Ok(count as usize);
+            }
+            if count == 0 {
+                return Ok(0);
+            }
+            let err = io::Error::last_os_error();
+            if matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) {
+                return Ok(0);
+            }
+            Err(err)
         }
 
         fn poll_readable(&self, timeout: Duration) -> io::Result<bool> {
@@ -276,7 +294,7 @@ mod imp {
         let deadline = Instant::now() + timeout;
         let mut buffer = Vec::new();
         loop {
-            tty.read_available(&mut buffer)?;
+            tty.read_once(&mut buffer)?;
             if let Some(value) = parse(&buffer) {
                 return Ok(Some(value));
             }
@@ -307,7 +325,7 @@ mod imp {
         let mut probe_done = false;
         let mut input_handoff_deadline = None;
         loop {
-            tty.read_available(&mut buffer)?;
+            tty.read_once(&mut buffer)?;
             if !probe_done {
                 update_startup_probe(
                     &mut probe,
@@ -324,7 +342,11 @@ mod imp {
             }
 
             if probe_done {
-                let extracted = parse_plain_input(&buffer);
+                let extracted = parse_startup_input(&buffer);
+                if extracted.paste_open {
+                    finish_open_startup_paste(tty, &mut buffer)?;
+                    continue;
+                }
                 if extracted.complete {
                     probe.input = extracted.input;
                     return Ok(probe);
@@ -334,8 +356,14 @@ mod imp {
                 if now >= handoff_deadline
                     || !tty.poll_readable(handoff_deadline.saturating_duration_since(now))?
                 {
-                    probe.input = extracted.input;
-                    return Ok(probe);
+                    if let Some(input) = settle_lone_escape(&buffer) {
+                        probe.input = input;
+                        return Ok(probe);
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "startup input sequence did not terminate",
+                    ));
                 }
                 continue;
             }
@@ -401,22 +429,69 @@ mod imp {
     }
 
     #[derive(Debug, Eq, PartialEq)]
-    struct ExtractedPlainInput {
-        input: Vec<u8>,
+    struct ExtractedStartupInput {
+        input: Vec<StartupInput>,
         complete: bool,
+        paste_open: bool,
     }
 
-    fn parse_plain_input(buffer: &[u8]) -> ExtractedPlainInput {
+    fn parse_startup_input(buffer: &[u8]) -> ExtractedStartupInput {
         const MAX_INPUT_BYTES: usize = 16 * 1024;
+        const PASTE_START: &[u8] = b"\x1b[200~";
+        const PASTE_END: &[u8] = b"\x1b[201~";
 
         let mut input = Vec::new();
+        let mut input_bytes = 0;
+        let mut input_truncated = false;
         let mut index = 0;
         let mut complete = true;
-        while index < buffer.len() && input.len() < MAX_INPUT_BYTES {
-            if buffer[index] != b'\x1b' {
-                input.push(buffer[index]);
+        let mut in_paste = false;
+        while index < buffer.len() {
+            if in_paste {
+                let remaining = &buffer[index..];
+                if remaining.starts_with(PASTE_END) {
+                    in_paste = false;
+                    index += PASTE_END.len();
+                    continue;
+                }
+                if PASTE_END.starts_with(remaining) {
+                    complete = false;
+                    break;
+                }
+                push_startup_input_byte(
+                    &mut input,
+                    &mut input_bytes,
+                    &mut input_truncated,
+                    /*paste*/ true,
+                    buffer[index],
+                    MAX_INPUT_BYTES,
+                );
                 index += 1;
                 continue;
+            }
+
+            if buffer[index] != b'\x1b' {
+                push_startup_input_byte(
+                    &mut input,
+                    &mut input_bytes,
+                    &mut input_truncated,
+                    /*paste*/ false,
+                    buffer[index],
+                    MAX_INPUT_BYTES,
+                );
+                index += 1;
+                continue;
+            }
+
+            let remaining = &buffer[index..];
+            if remaining.starts_with(PASTE_START) {
+                in_paste = true;
+                index += PASTE_START.len();
+                continue;
+            }
+            if PASTE_START.starts_with(remaining) {
+                complete = false;
+                break;
             }
 
             match buffer.get(index + 1) {
@@ -471,16 +546,113 @@ mod imp {
             }
         }
 
-        if let Some(incomplete_start) = incomplete_utf8_suffix_start(&input) {
-            input.truncate(incomplete_start);
+        let paste_open = in_paste;
+        if paste_open {
             complete = false;
         }
-        ExtractedPlainInput { input, complete }
+        if let Some(input) = input.last_mut() {
+            let bytes = match input {
+                StartupInput::Plain(bytes) | StartupInput::Paste(bytes) => bytes,
+            };
+            if let Some(incomplete_start) = incomplete_utf8_suffix_start(bytes) {
+                bytes.truncate(incomplete_start);
+                if !input_truncated {
+                    complete = false;
+                }
+            }
+        }
+        ExtractedStartupInput {
+            input,
+            complete,
+            paste_open,
+        }
     }
 
     #[cfg(test)]
-    fn extract_plain_input(buffer: &[u8]) -> Vec<u8> {
-        parse_plain_input(buffer).input
+    fn extract_startup_input(buffer: &[u8]) -> Vec<StartupInput> {
+        parse_startup_input(buffer).input
+    }
+
+    fn settle_lone_escape(buffer: &[u8]) -> Option<Vec<StartupInput>> {
+        let (b'\x1b', before_escape) = buffer.split_last()? else {
+            return None;
+        };
+        let extracted = parse_startup_input(before_escape);
+        (extracted.complete && !extracted.paste_open).then_some(extracted.input)
+    }
+
+    fn push_startup_input_byte(
+        input: &mut Vec<StartupInput>,
+        input_bytes: &mut usize,
+        input_truncated: &mut bool,
+        paste: bool,
+        byte: u8,
+        max_input_bytes: usize,
+    ) {
+        if *input_bytes >= max_input_bytes {
+            *input_truncated = true;
+            return;
+        }
+        match (input.last_mut(), paste) {
+            (Some(StartupInput::Plain(bytes)), false)
+            | (Some(StartupInput::Paste(bytes)), true) => bytes.push(byte),
+            (_, false) => input.push(StartupInput::Plain(vec![byte])),
+            (_, true) => input.push(StartupInput::Paste(vec![byte])),
+        }
+        *input_bytes += 1;
+    }
+
+    fn finish_open_startup_paste(tty: &mut Tty, buffer: &mut Vec<u8>) -> io::Result<()> {
+        const PASTE_END: &[u8] = b"\x1b[201~";
+        const PASTE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
+
+        let deadline = Instant::now() + PASTE_COMPLETION_TIMEOUT;
+        let prefix_len = (1..PASTE_END.len())
+            .rev()
+            .find(|len| buffer.ends_with(&PASTE_END[..*len]))
+            .unwrap_or(0);
+        let mut candidate = buffer.split_off(buffer.len() - prefix_len);
+        loop {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "startup paste did not terminate",
+                ));
+            }
+            let mut incoming = [0_u8; 256];
+            let count = tty.read_into(&mut incoming)?;
+            for (index, byte) in incoming[..count].iter().copied().enumerate() {
+                if byte == b'\x03' {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "startup paste interrupted",
+                    ));
+                }
+                candidate.push(byte);
+                while !PASTE_END.starts_with(&candidate) {
+                    let byte = candidate.remove(0);
+                    if buffer.len() < MAX_PROBE_BUFFER_BYTES - PASTE_END.len() {
+                        buffer.push(byte);
+                    }
+                }
+                if candidate == PASTE_END {
+                    if buffer.len() + PASTE_END.len() > MAX_PROBE_BUFFER_BYTES {
+                        buffer.truncate(MAX_PROBE_BUFFER_BYTES - PASTE_END.len());
+                    }
+                    buffer.extend_from_slice(PASTE_END);
+                    buffer.extend(
+                        incoming[index + 1..count]
+                            .iter()
+                            .copied()
+                            .take(MAX_PROBE_BUFFER_BYTES.saturating_sub(buffer.len())),
+                    );
+                    return Ok(());
+                }
+            }
+            if !tty.poll_readable(deadline.saturating_duration_since(Instant::now()))? {
+                continue;
+            }
+        }
     }
 
     fn incomplete_utf8_suffix_start(mut input: &[u8]) -> Option<usize> {
@@ -685,41 +857,142 @@ mod imp {
         }
 
         #[test]
-        fn extracts_plain_input_around_terminal_responses() {
+        fn extracts_startup_input_around_terminal_responses() {
             assert_eq!(
-                extract_plain_input(
+                extract_startup_input(
                     b"draft\x1B[20;10R\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[200~ text\x1B[201~"
                 ),
-                b"draft text"
+                vec![
+                    StartupInput::Plain(b"draft".to_vec()),
+                    StartupInput::Paste(b" text".to_vec()),
+                ]
             );
         }
 
         #[test]
-        fn extracts_plain_input_around_ss3_key_sequences() {
-            assert_eq!(extract_plain_input(b"draft\x1BOP text"), b"draft text");
+        fn extracts_startup_input_around_ss3_key_sequences() {
+            assert_eq!(
+                extract_startup_input(b"draft\x1BOP text"),
+                vec![StartupInput::Plain(b"draft text".to_vec())]
+            );
+        }
+
+        #[test]
+        fn preserves_whitespace_inside_bracketed_paste() {
+            assert_eq!(
+                parse_startup_input(b"\x1B[200~a\r\n\tb\x1B[201~"),
+                ExtractedStartupInput {
+                    input: vec![StartupInput::Paste(b"a\r\n\tb".to_vec())],
+                    complete: true,
+                    paste_open: false,
+                }
+            );
         }
 
         #[test]
         fn startup_input_stays_owned_until_trailing_sequences_are_complete() {
-            let cases: &[(&[u8], &[u8], bool)] = &[
-                (b"draft\x1B[", b"draft", false),
-                (b"draft\x1B[A", b"draft", true),
-                (b"draft\x1BO", b"draft", false),
-                (b"draft\x1BOP", b"draft", true),
-                (b"draft\x1B[200", b"draft", false),
-                (b"draft\x1B[200~", b"draft", true),
-                (b"draft \xc3", b"draft ", false),
-                (b"draft \xc3\xa9", "draft é".as_bytes(), true),
+            let cases: &[(&[u8], Vec<StartupInput>, bool, bool)] = &[
+                (
+                    b"draft\x1B[",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    false,
+                    false,
+                ),
+                (
+                    b"draft\x1B[A",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    true,
+                    false,
+                ),
+                (
+                    b"draft\x1BO",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    false,
+                    false,
+                ),
+                (
+                    b"draft\x1BOP",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    true,
+                    false,
+                ),
+                (
+                    b"draft\x1B[200",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    false,
+                    false,
+                ),
+                (
+                    b"draft\x1B[200~",
+                    vec![StartupInput::Plain(b"draft".to_vec())],
+                    false,
+                    true,
+                ),
+                (
+                    b"draft\x1B[200~paste\x1B[201",
+                    vec![
+                        StartupInput::Plain(b"draft".to_vec()),
+                        StartupInput::Paste(b"paste".to_vec()),
+                    ],
+                    false,
+                    true,
+                ),
+                (
+                    b"draft\x1B[200~paste\x1B[201~",
+                    vec![
+                        StartupInput::Plain(b"draft".to_vec()),
+                        StartupInput::Paste(b"paste".to_vec()),
+                    ],
+                    true,
+                    false,
+                ),
+                (
+                    b"draft \xc3",
+                    vec![StartupInput::Plain(b"draft ".to_vec())],
+                    false,
+                    false,
+                ),
+                (
+                    b"draft \xc3\xa9",
+                    vec![StartupInput::Plain("draft é".as_bytes().to_vec())],
+                    true,
+                    false,
+                ),
             ];
-            for &(buffer, input, complete) in cases {
+            for (buffer, input, complete, paste_open) in cases {
                 assert_eq!(
-                    parse_plain_input(buffer),
-                    ExtractedPlainInput {
-                        input: input.to_vec(),
-                        complete,
+                    parse_startup_input(buffer),
+                    ExtractedStartupInput {
+                        input: input.clone(),
+                        complete: *complete,
+                        paste_open: *paste_open,
                     }
                 );
             }
+        }
+
+        #[test]
+        fn startup_input_cap_does_not_split_utf8() {
+            let mut buffer = vec![b'x'; 16 * 1024 - 1];
+            buffer.extend_from_slice("é".as_bytes());
+
+            assert_eq!(
+                parse_startup_input(&buffer),
+                ExtractedStartupInput {
+                    input: vec![StartupInput::Plain(vec![b'x'; 16 * 1024 - 1])],
+                    complete: true,
+                    paste_open: false,
+                }
+            );
+        }
+
+        #[test]
+        fn lone_escape_settles_as_an_ignored_action() {
+            assert_eq!(
+                settle_lone_escape(b"draft\x1b"),
+                Some(vec![StartupInput::Plain(b"draft".to_vec())])
+            );
+            assert_eq!(settle_lone_escape(b"draft\x1b]partial\x1b"), None);
         }
     }
 }

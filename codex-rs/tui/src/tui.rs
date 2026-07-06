@@ -72,7 +72,7 @@ pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
-    pub(crate) startup_text: Option<String>,
+    pub(crate) startup_input: StartupInputBuffer,
 }
 
 pub(crate) use startup::PreparedTerminal;
@@ -108,6 +108,7 @@ impl Drop for Tui {
 mod tests {
     use std::io::Write as _;
 
+    use super::StartupInputBuffer;
     use super::clear_for_viewport_change;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
@@ -134,6 +135,22 @@ mod tests {
 
         let _events = tui.event_stream();
         assert!(!tui.startup_input_active);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_input_keeps_pending_whitespace_until_final_capture() -> std::io::Result<()> {
+        let mut tui = make_test_tui()?;
+        let mut startup_input = StartupInputBuffer::default();
+        startup_input.handle_probe_input(b"a\n");
+        tui.startup_input = Some(startup_input);
+
+        let startup_text = tui.take_startup_text_with_capture(|input| {
+            input.handle_probe_input(b"b");
+            Ok(())
+        })?;
+
+        assert_eq!(startup_text.as_deref(), Some("a\nb"));
         Ok(())
     }
 
@@ -443,7 +460,7 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
-    startup_text: Option<String>,
+    startup_input: Option<StartupInputBuffer>,
     startup_input_active: bool,
     // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
     is_zellij: bool,
@@ -475,7 +492,7 @@ impl Tui {
         terminal: Terminal,
         enhanced_keys_supported: bool,
         stderr_guard: terminal_stderr::TerminalStderrGuard,
-        startup_text: Option<String>,
+        startup_input: Option<StartupInputBuffer>,
     ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
@@ -501,7 +518,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
-            startup_text,
+            startup_input,
             startup_input_active: true,
             is_zellij,
             alt_screen_enabled: true,
@@ -637,7 +654,7 @@ impl Tui {
 
     fn claim_startup_input(&mut self) -> bool {
         if self.startup_input_active {
-            self.startup_text = None;
+            self.startup_input = None;
             discard_terminal_input();
             self.startup_input_active = false;
             true
@@ -684,10 +701,7 @@ impl Tui {
             return Ok(None);
         }
 
-        let mut input = StartupInputBuffer::default();
-        if let Some(text) = self.startup_text.take() {
-            input.push_text(&text);
-        }
+        let mut input = self.startup_input.take().unwrap_or_default();
         capture(&mut input)?;
         // Keep ownership until `event_stream()` performs the final flush immediately before the
         // crossterm stream takes over stdin.

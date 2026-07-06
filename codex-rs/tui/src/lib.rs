@@ -1326,7 +1326,7 @@ async fn run_ratatui_app(
         initialized_terminal.terminal,
         initialized_terminal.enhanced_keys_supported,
         initialized_terminal.stderr_guard,
-        initialized_terminal.startup_text,
+        Some(initialized_terminal.startup_input),
     );
 
     #[cfg(not(debug_assertions))]
