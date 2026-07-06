@@ -678,7 +678,7 @@ impl Session {
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_config = mcp_manager_for_mcp
+            let mcp_projection = mcp_manager_for_mcp
                 .runtime_config_for_step(
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
@@ -686,8 +686,9 @@ impl Session {
                     /*available_environment_ids*/ &[],
                 )
                 .await;
-            let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
+            let mcp_config = &mcp_projection.config;
+            let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
+            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -698,7 +699,7 @@ impl Session {
             .await;
             (
                 auth,
-                mcp_config,
+                mcp_projection,
                 mcp_servers,
                 auth_statuses,
                 tool_plugin_provenance,
@@ -713,7 +714,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_config, mcp_servers, auth_statuses, tool_plugin_provenance),
+            (auth, mcp_projection, mcp_servers, auth_statuses, tool_plugin_provenance),
         ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
@@ -1204,7 +1205,10 @@ impl Session {
                 sess.services.mcp_manager.codex_apps_tools_cache(),
                 codex_apps_tools_cache_key(auth),
                 config.prefix_mcp_tool_names(),
-                mcp_config.client_elicitation_capability.clone(),
+                mcp_projection
+                    .config
+                    .client_elicitation_capability
+                    .clone(),
                 sess.services
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),
@@ -1221,7 +1225,8 @@ impl Session {
             .await;
             sess.services
                 .install_mcp_connection_manager(
-                    Arc::new(mcp_config),
+                    Arc::new(mcp_projection.config),
+                    mcp_projection.plugins_available,
                     mcp_runtime_context,
                     /*available_environment_ids*/ Vec::new(),
                     mcp_connection_manager,

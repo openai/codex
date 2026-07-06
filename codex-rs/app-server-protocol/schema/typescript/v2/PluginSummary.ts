@@ -14,6 +14,10 @@ export type PluginSummary = { id: string,
  */
 remotePluginId: string | null,
 /**
+ * Version advertised by the remote marketplace backend when available.
+ */
+version: string | null,
+/**
  * Version of the locally materialized plugin package when available.
  */
 localVersion: string | null, name: string,

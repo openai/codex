@@ -93,8 +93,8 @@ pub enum McpServerContribution {
         selection_order: usize,
         config: Box<McpServerConfig>,
     },
-    /// Adds connector IDs declared by a plugin selected for this thread.
-    SelectedPluginConnectors {
+    /// Records a plugin selected for this thread and any connector IDs it declares.
+    SelectedPluginPackage {
         plugin_id: String,
         plugin_display_name: String,
         connector_ids: Vec<String>,

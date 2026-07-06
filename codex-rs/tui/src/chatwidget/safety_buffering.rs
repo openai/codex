@@ -4,6 +4,7 @@ use super::*;
 use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 
 const SAFETY_BUFFERING_PROMPT_VIEW_ID: &str = "safety-buffering-prompt";
+const SAFETY_BUFFERING_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
 
 const SAFETY_BUFFERING_MESSAGE_WITH_RETRY: &str = "This request requires additional safety checks, which can take extra time. Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests.";
 const SAFETY_BUFFERING_MESSAGE_WITHOUT_RETRY: &str =
@@ -12,7 +13,7 @@ const SAFETY_BUFFERING_MESSAGE_WITHOUT_RETRY: &str =
 #[derive(Debug)]
 struct ActiveSafetyBuffering {
     turn_id: String,
-    retry_prompt_shown: bool,
+    last_prompt_had_retry: bool,
     agent_message_started: bool,
 }
 
@@ -119,22 +120,18 @@ impl ChatWidget {
             .map(|(_, turn)| turn.clone());
         let thread_id = self.thread_id;
         let can_offer_retry = faster_model.is_some() && retry_turn.is_some() && thread_id.is_some();
-        if !can_offer_retry {
-            self.bottom_pane
-                .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
-        }
         let previous_active = self
             .safety_buffering
             .active
             .as_ref()
             .filter(|active| active.turn_id == turn_id);
-        let retry_prompt_shown = previous_active.is_some_and(|active| active.retry_prompt_shown);
-        let should_show_retry_prompt = can_offer_retry && !retry_prompt_shown;
+        let should_show_prompt =
+            previous_active.is_none_or(|active| active.last_prompt_had_retry != can_offer_retry);
         let agent_message_started =
             previous_active.is_some_and(|active| active.agent_message_started);
         self.safety_buffering.active = Some(ActiveSafetyBuffering {
             turn_id: turn_id.clone(),
-            retry_prompt_shown: retry_prompt_shown || should_show_retry_prompt,
+            last_prompt_had_retry: can_offer_retry,
             agent_message_started,
         });
 
@@ -151,45 +148,54 @@ impl ChatWidget {
             /*details_max_lines*/ 6,
         );
 
-        let (Some(faster_model), Some(turn), Some(thread_id)) =
-            (faster_model, retry_turn, thread_id)
-        else {
-            return;
-        };
-        if !should_show_retry_prompt {
+        if !should_show_prompt {
             return;
         }
+        self.bottom_pane
+            .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
 
         let header = ColumnRenderable::with(vec![
             Box::new(Line::from("Additional safety checks").bold()) as Box<dyn Renderable>,
-            Box::new(
-                Paragraph::new(Line::from(SAFETY_BUFFERING_MESSAGE_WITH_RETRY).dim())
-                    .wrap(Wrap { trim: false }),
-            ),
+            Box::new(Paragraph::new(Line::from(message).dim()).wrap(Wrap { trim: false })),
+        ]);
+        let mut items = Vec::new();
+        if let (Some(faster_model), Some(turn), Some(thread_id)) =
+            (faster_model, retry_turn, thread_id)
+        {
+            items.push(SelectionItem {
+                name: "Retry with a faster model".to_string(),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::RetrySafetyBufferedTurn {
+                        thread_id,
+                        turn_id: turn_id.clone(),
+                        model: faster_model.clone(),
+                        turn: turn.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+        items.extend([
+            SelectionItem {
+                name: "Keep waiting".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Learn more".to_string(),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenUrlInBrowser {
+                        url: SAFETY_BUFFERING_LEARN_MORE_URL.to_string(),
+                    });
+                })],
+                ..Default::default()
+            },
         ]);
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(SAFETY_BUFFERING_PROMPT_VIEW_ID),
             header: Box::new(header),
-            items: vec![
-                SelectionItem {
-                    name: "Retry with a faster model".to_string(),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::RetrySafetyBufferedTurn {
-                            thread_id,
-                            turn_id: turn_id.clone(),
-                            model: faster_model.clone(),
-                            turn: turn.clone(),
-                        });
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Keep waiting".to_string(),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
+            items,
             ..Default::default()
         });
     }
