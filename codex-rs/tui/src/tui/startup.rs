@@ -4,14 +4,11 @@ use std::io::stdin;
 use std::io::stdout;
 use std::time::Duration;
 
-use crossterm::event::DisableBracketedPaste;
-use crossterm::event::EnableBracketedPaste;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 
@@ -30,11 +27,10 @@ pub(crate) struct PreparedTerminal {
 impl Drop for PreparedTerminal {
     fn drop(&mut self) {
         if self.active {
-            discard_terminal_input();
             if self.terminal_modes_active {
                 let _ = super::restore_after_exit();
             } else {
-                let _ = disable_startup_paste_capture();
+                discard_terminal_input();
             }
         }
     }
@@ -44,6 +40,7 @@ impl Drop for PreparedTerminal {
 pub(super) struct StartupInputBuffer {
     text: String,
     char_count: usize,
+    pending_plain_whitespace: String,
 }
 
 impl StartupInputBuffer {
@@ -54,11 +51,19 @@ impl StartupInputBuffer {
                 modifiers,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            }) if modifiers.difference(KeyModifiers::SHIFT).is_empty() => match code {
-                KeyCode::Char(ch) if !ch.is_control() => self.push_char(ch),
-                KeyCode::Backspace => self.pop_char(),
-                _ => {}
-            },
+            }) => {
+                if modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+                    match code {
+                        KeyCode::Char(ch) if !ch.is_control() => self.push_plain_char(ch),
+                        KeyCode::Backspace => self.pop_char(),
+                        KeyCode::Enter => self.push_pending_plain_whitespace('\n'),
+                        KeyCode::Tab => self.push_pending_plain_whitespace('\t'),
+                        _ => self.pending_plain_whitespace.clear(),
+                    }
+                } else {
+                    self.pending_plain_whitespace.clear();
+                }
+            }
             Event::Paste(text) => self.push_text(&text),
             _ => {}
         }
@@ -71,13 +76,37 @@ impl StartupInputBuffer {
         }
     }
 
+    fn push_plain_char(&mut self, ch: char) {
+        self.commit_pending_plain_whitespace();
+        self.push_char(ch);
+    }
+
+    fn push_pending_plain_whitespace(&mut self, ch: char) {
+        if self.char_count + self.pending_plain_whitespace.len() < MAX_STARTUP_INPUT_CHARS {
+            self.pending_plain_whitespace.push(ch);
+        }
+    }
+
+    fn commit_pending_plain_whitespace(&mut self) {
+        let pending = std::mem::take(&mut self.pending_plain_whitespace);
+        for ch in pending.chars() {
+            self.push_char(ch);
+        }
+    }
+
     fn pop_char(&mut self) {
+        if self.pending_plain_whitespace.pop().is_some() {
+            return;
+        }
         if self.text.pop().is_some() {
             self.char_count -= 1;
         }
     }
 
     pub(super) fn push_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.commit_pending_plain_whitespace();
+        }
         let mut chars = text.chars().peekable();
         while let Some(ch) = chars.next() {
             match ch {
@@ -95,10 +124,20 @@ impl StartupInputBuffer {
     }
 
     pub(super) fn handle_probe_input(&mut self, input: &[u8]) {
-        for ch in String::from_utf8_lossy(input).chars() {
+        let input = String::from_utf8_lossy(input);
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
             match ch {
                 '\u{8}' | '\u{7f}' => self.pop_char(),
-                ch if !ch.is_control() => self.push_char(ch),
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    self.push_pending_plain_whitespace('\n');
+                }
+                '\n' => self.push_pending_plain_whitespace('\n'),
+                '\t' => self.push_pending_plain_whitespace('\t'),
+                ch if !ch.is_control() => self.push_plain_char(ch),
                 _ => {}
             }
         }
@@ -152,11 +191,6 @@ pub(crate) fn discard_terminal_input() {
 
 pub(crate) fn abandon_prepared_terminal() {
     discard_terminal_input();
-    let _ = disable_startup_paste_capture();
-}
-
-fn disable_startup_paste_capture() -> Result<()> {
-    execute!(stdout(), DisableBracketedPaste)
 }
 
 pub(super) fn capture_startup_input(input: &mut StartupInputBuffer) -> Result<()> {
@@ -167,7 +201,7 @@ pub(super) fn capture_startup_input(input: &mut StartupInputBuffer) -> Result<()
 }
 
 impl PreparedTerminal {
-    /// Start preserving terminal paste boundaries before slower startup work begins.
+    /// Claim queued terminal input before slower startup work begins.
     pub(crate) fn prepare() -> Result<Self> {
         if !stdin().is_terminal() {
             return Err(std::io::Error::other("stdin is not a terminal"));
@@ -177,7 +211,6 @@ impl PreparedTerminal {
         }
         super::ensure_virtual_terminal_processing()?;
         super::set_panic_hook();
-        execute!(stdout(), EnableBracketedPaste)?;
         Ok(Self {
             active: true,
             terminal_modes_active: false,

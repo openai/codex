@@ -15,10 +15,10 @@ fn startup_input_keeps_text_without_replaying_actions() {
         Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
         Event::Key(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT)),
         Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         Event::Paste("ello\r\n\tworld".to_string()),
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         Event::Key(KeyEvent::new_with_kind(
             KeyCode::Char('!'),
             KeyModifiers::NONE,
@@ -29,6 +29,36 @@ fn startup_input_keeps_text_without_replaying_actions() {
     }
 
     assert_eq!(input.into_text(), Some("hello\n\tworld".to_string()));
+}
+
+#[test]
+fn startup_input_preserves_internal_plain_whitespace_but_drops_trailing_actions() {
+    let mut input = StartupInputBuffer::default();
+    for code in [
+        KeyCode::Char('a'),
+        KeyCode::Enter,
+        KeyCode::Char('b'),
+        KeyCode::Tab,
+        KeyCode::Char('c'),
+        KeyCode::Enter,
+    ] {
+        input.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    assert_eq!(input.into_text(), Some("a\nb\tc".to_string()));
+}
+
+#[test]
+fn startup_probe_input_preserves_internal_plain_whitespace_across_phases() {
+    let mut input = StartupInputBuffer::default();
+    input.handle_probe_input(b"a\r\n");
+    input.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::NONE,
+    )));
+    input.handle_probe_input(b"\t");
+
+    assert_eq!(input.into_text(), Some("a\nb".to_string()));
 }
 
 #[test]
