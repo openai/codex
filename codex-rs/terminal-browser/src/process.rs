@@ -7,15 +7,18 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_utils_pty::ProcessHandle;
-use codex_utils_pty::spawn_pty_process;
+#[cfg(unix)]
+use codex_utils_pty::pty::ChildFdMapping;
+#[cfg(unix)]
+use codex_utils_pty::pty::spawn_process_with_fd_mappings;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::cdp::CdpClient;
+#[cfg(unix)]
+use crate::cdp::ConnectedPage;
 use crate::devtools::deny_downloads;
-use crate::devtools::discover_page_target;
-use crate::devtools::prepare_devtools_active_port;
 use crate::handles::BrowserHandles;
 use crate::network::BrowserNetworkPolicy;
 use crate::profile::BrowserProfileLock;
@@ -192,6 +195,7 @@ impl Inner {
         Ok(path)
     }
 
+    #[cfg(unix)]
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "the session guard is explicitly dropped before the conditional close await"
@@ -206,9 +210,7 @@ impl Inner {
         let persistent_profile = self.selected_profile_resources()?;
         let runtime =
             BrowserRuntime::create(persistent_profile.as_ref().map(|(profile, _lock)| profile))?;
-        prepare_devtools_active_port(&runtime.profile)?;
         let args = carbonyl_args(
-            /*debugging_port*/ 0,
             runtime.profile.as_path().to_string_lossy().as_ref(),
             &config.network_policy,
             config.render_mode,
@@ -225,14 +227,32 @@ impl Inner {
             &config.network_policy,
             &self.launch_context,
         )?;
+        let (browser_read, codex_write) = std::os::unix::net::UnixStream::pair()
+            .context("create Carbonyl DevTools input pipe")?;
+        let (codex_read, browser_write) = std::os::unix::net::UnixStream::pair()
+            .context("create Carbonyl DevTools output pipe")?;
+        codex_write
+            .set_nonblocking(/*nonblocking*/ true)
+            .context("configure Carbonyl DevTools input pipe")?;
+        codex_read
+            .set_nonblocking(/*nonblocking*/ true)
+            .context("configure Carbonyl DevTools output pipe")?;
+        let child_fd_mappings = [
+            ChildFdMapping::new(&browser_read, /*child_fd*/ 3),
+            ChildFdMapping::new(&browser_write, /*child_fd*/ 4),
+        ];
+        // `dup2` clears `FD_CLOEXEC` on these fixed targets. Bubblewrap's monitor close-fd path
+        // explicitly passes any other non-CLOEXEC fds on to the child, so the Linux sandbox
+        // wrapper needs no fd-specific flag or ambient-descriptor widening for the CDP pipe pair.
         let size = *self.resize_tx.borrow();
-        let spawned = match spawn_pty_process(
+        let spawned = match spawn_process_with_fd_mappings(
             &launch.program,
             &launch.args,
             launch.cwd.as_path(),
             &launch.env,
             &launch.arg0,
             size.into(),
+            &child_fd_mappings,
         )
         .await
         {
@@ -241,6 +261,8 @@ impl Inner {
                 return Err(error).context("launch Carbonyl");
             }
         };
+        drop(browser_read);
+        drop(browser_write);
 
         let process = Arc::new(spawned.session);
         let writer = process.writer_sender();
@@ -270,12 +292,11 @@ impl Inner {
         startup.set_output_task(output_task);
         let mut exit_rx = spawned.exit_rx;
 
-        let target = tokio::select! {
-            target = discover_page_target(&runtime.profile) => target,
+        let connection = tokio::select! {
+            connection = CdpClient::connect_pipe(codex_read, codex_write) => connection,
             exit = &mut exit_rx => Err(anyhow!("Carbonyl exited during startup: {exit:?}")),
         };
-        let target = target?;
-        let cdp = CdpClient::connect(&target.websocket_url).await?;
+        let ConnectedPage { client: cdp, title } = connection?;
         deny_downloads(&cdp).await?;
         startup.set_navigation_policy_task(spawn_navigation_policy_task(self.clone(), cdp.clone()));
         let exit_inner = self.clone();
@@ -314,8 +335,8 @@ impl Inner {
         self.update_view(|view| {
             if !self.terminated.load(Ordering::SeqCst) {
                 view.status = BrowserStatus::Running;
-                if !target.title.is_empty() {
-                    view.title = Some(target.title);
+                if !title.is_empty() {
+                    view.title = Some(title);
                 }
             }
         });
@@ -324,6 +345,11 @@ impl Inner {
             anyhow::bail!("terminal browser has been terminated");
         }
         Ok(())
+    }
+
+    #[cfg(not(unix))]
+    async fn start_session(self: &Arc<Self>, _config: SessionConfig) -> Result<()> {
+        anyhow::bail!("Carbonyl terminal browsing is only supported on macOS and Linux")
     }
 
     fn selected_profile_resources(
@@ -516,14 +542,12 @@ async fn wait_for_exit(process: Arc<ProcessHandle>) {
 }
 
 pub(crate) fn carbonyl_args(
-    debugging_port: u16,
     profile: &str,
     network_policy: &BrowserNetworkPolicy,
     render_mode: RenderMode,
 ) -> Vec<String> {
     let mut args = vec![
-        "--remote-debugging-address=127.0.0.1".to_string(),
-        format!("--remote-debugging-port={debugging_port}"),
+        "--remote-debugging-pipe".to_string(),
         format!("--user-data-dir={profile}"),
         "--disable-extensions".to_string(),
         "--disable-background-networking".to_string(),

@@ -6,7 +6,6 @@ use crate::BrowserNetworkPolicy;
 use crate::TerminalBrowser;
 use crate::TerminalSize;
 use crate::actions::bounded_snapshot_json;
-use crate::devtools::validated_websocket_url;
 use crate::handles::BrowserHandles;
 use crate::human_control::HumanControlStateTransition;
 use crate::process::carbonyl_args;
@@ -331,6 +330,28 @@ async fn configured_real_carbonyl_opens_local_page_and_snapshots() {
     };
 
     assert!(snapshot.contains("Smoke button"));
+    let render_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(/*secs*/ 5);
+    loop {
+        let view = browser.view();
+        let rendered = (0..view.screen.rows)
+            .map(|row| {
+                (0..view.screen.cols)
+                    .filter_map(|col| view.screen.cell(row, col))
+                    .map(|cell| cell.text.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if rendered.contains("Smoke button") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < render_deadline,
+            "Carbonyl did not render the smoke page in its PTY:\n{rendered}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 20)).await;
+    }
     browser.close().await;
     server.join().expect("smoke server thread");
 }
@@ -406,7 +427,6 @@ fn terminal_query_responder_handles_queries_split_across_chunks() {
 #[test]
 fn carbonyl_uses_the_managed_proxy_only_when_policy_provides_one() {
     let direct = carbonyl_args(
-        /*debugging_port*/ 9_222,
         "/tmp/profile",
         &BrowserNetworkPolicy::Direct,
         RenderMode::NativeText,
@@ -415,46 +435,12 @@ fn carbonyl_uses_the_managed_proxy_only_when_policy_provides_one() {
 
     let http_addr = "127.0.0.1:43128".parse().expect("valid proxy address");
     let proxied = carbonyl_args(
-        /*debugging_port*/ 9_222,
         "/tmp/profile",
         &BrowserNetworkPolicy::ManagedProxy { http_addr },
         RenderMode::NativeText,
     );
     assert!(proxied.contains(&"--proxy-server=http://127.0.0.1:43128".to_string()));
     assert!(proxied.contains(&"--proxy-bypass-list=<-loopback>".to_string()));
-}
-
-#[test]
-fn carbonyl_devtools_websocket_must_match_the_private_loopback_listener() {
-    assert_eq!(
-        validated_websocket_url(
-            "ws://127.0.0.1:9222/devtools/page/1",
-            /*expected_port*/ 9_222,
-        )
-        .unwrap(),
-        "ws://127.0.0.1:9222/devtools/page/1"
-    );
-    assert!(
-        validated_websocket_url(
-            "ws://192.0.2.10:9222/devtools/page/1",
-            /*expected_port*/ 9_222,
-        )
-        .is_err()
-    );
-    assert!(
-        validated_websocket_url(
-            "ws://127.0.0.1:9223/devtools/page/1",
-            /*expected_port*/ 9_222,
-        )
-        .is_err()
-    );
-    assert!(
-        validated_websocket_url(
-            "wss://127.0.0.1:9222/devtools/page/1",
-            /*expected_port*/ 9_222,
-        )
-        .is_err()
-    );
 }
 
 #[test]

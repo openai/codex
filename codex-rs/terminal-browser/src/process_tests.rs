@@ -5,13 +5,14 @@ use std::sync::atomic::Ordering;
 
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::spawn_from_driver;
-use pretty_assertions::assert_eq;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::StartupGuard;
-use crate::devtools::prepare_devtools_active_port;
+use super::carbonyl_args;
+use crate::network::BrowserNetworkPolicy;
+use crate::session::RenderMode;
 
 #[tokio::test]
 async fn canceled_startup_terminates_the_process_and_aborts_output() {
@@ -47,52 +48,22 @@ async fn canceled_startup_terminates_the_process_and_aborts_output() {
 }
 
 #[test]
-fn stale_devtools_active_port_is_removed_before_spawn() {
-    let profile = tempfile::tempdir().expect("profile directory");
-    let active_port = profile.path().join("DevToolsActivePort");
-    std::fs::write(&active_port, "9222\n").expect("stale active port");
-
-    prepare_devtools_active_port(profile.path()).expect("prepare active port");
-
-    assert!(!active_port.exists());
-    prepare_devtools_active_port(profile.path()).expect("missing active port is valid");
-}
-
-#[test]
-fn non_file_devtools_active_port_is_rejected() {
-    let profile = tempfile::tempdir().expect("profile directory");
-    let active_port = profile.path().join("DevToolsActivePort");
-    std::fs::create_dir(&active_port).expect("active port directory");
-
-    let error = prepare_devtools_active_port(profile.path())
-        .expect_err("active port directory must be rejected");
-
-    assert_eq!(
-        error.to_string(),
-        "refusing non-file Carbonyl DevToolsActivePort"
+fn carbonyl_uses_only_the_inherited_devtools_pipe() {
+    let args = carbonyl_args(
+        "/tmp/profile",
+        &BrowserNetworkPolicy::Direct,
+        RenderMode::NativeText,
     );
-}
 
-#[cfg(unix)]
-#[test]
-fn symbolic_link_devtools_active_port_is_rejected() {
-    use std::os::unix::fs::symlink;
-
-    let profile = tempfile::tempdir().expect("profile directory");
-    let target = profile.path().join("target");
-    let active_port = profile.path().join("DevToolsActivePort");
-    std::fs::write(&target, "9222\n").expect("target active port");
-    symlink(&target, &active_port).expect("active port symlink");
-
-    let error = prepare_devtools_active_port(profile.path())
-        .expect_err("active port symlink must be rejected");
-
-    assert_eq!(
-        error.to_string(),
-        "refusing symbolic-link Carbonyl DevToolsActivePort"
+    assert!(args.contains(&"--remote-debugging-pipe".to_string()));
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg.starts_with("--remote-debugging-address="))
     );
-    assert_eq!(
-        std::fs::read_to_string(target).expect("target remains"),
-        "9222\n"
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg.starts_with("--remote-debugging-port="))
     );
 }
