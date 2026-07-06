@@ -3176,32 +3176,32 @@ impl Session {
         {
             developer_sections.push(model_switch_message);
         }
+        let is_guardian_reviewer = crate::guardian::is_guardian_reviewer_source(&session_source);
         if turn_context.config.include_permissions_instructions {
-            developer_sections.push(
-                PermissionsInstructions::from_permission_profile(
-                    &turn_context.permission_profile,
-                    turn_context.approval_policy.value(),
-                    turn_context.config.approvals_reviewer,
-                    self.services.exec_policy.current().as_ref(),
-                    #[allow(deprecated)]
-                    &turn_context.cwd,
-                    turn_context
-                        .config
-                        .features
-                        .enabled(Feature::ExecPermissionApprovals),
-                    turn_context
-                        .config
-                        .features
-                        .enabled(Feature::RequestPermissionsTool),
-                )
-                .render(),
+            let mut permissions_instructions = PermissionsInstructions::from_permission_profile(
+                &turn_context.permission_profile,
+                turn_context.approval_policy.value(),
+                turn_context.config.approvals_reviewer,
+                self.services.exec_policy.current().as_ref(),
+                #[allow(deprecated)]
+                &turn_context.cwd,
+                turn_context
+                    .config
+                    .features
+                    .enabled(Feature::ExecPermissionApprovals),
+                turn_context
+                    .config
+                    .features
+                    .enabled(Feature::RequestPermissionsTool),
             );
+            if is_guardian_reviewer {
+                permissions_instructions = permissions_instructions.for_guardian_reviewer();
+            }
+            developer_sections.push(permissions_instructions.render());
         }
-        let separate_guardian_developer_message =
-            crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
         // stays isolated as its own top-level developer message for guardian subagents.
-        if !separate_guardian_developer_message
+        if !is_guardian_reviewer
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
         {
@@ -3435,7 +3435,7 @@ impl Session {
         }
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
-        if separate_guardian_developer_message
+        if is_guardian_reviewer
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =

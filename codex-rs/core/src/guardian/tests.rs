@@ -1743,7 +1743,18 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     let request = request_log.single_request();
     let request_body = request.body_json();
+    let guardian_developer_text = request.message_input_texts("developer").join("\n");
     let guardian_user_text = request.message_input_texts("user").join("\n");
+    assert!(
+        guardian_developer_text.contains(
+            "These are the permissions of this reviewer thread only. They are not the permissions of the Codex session being reviewed."
+        ),
+        "guardian request should distinguish reviewer permissions from the reviewed session"
+    );
+    assert!(
+        !guardian_developer_text.contains("Approval policy is currently never."),
+        "guardian request should omit the reviewer thread's approval policy reminder"
+    );
     assert!(
         guardian_user_text.contains(&format!("${GUARDIAN_SKILL_NAME}")),
         "guardian request should contain the untrusted skill mention from the parent transcript"

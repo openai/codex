@@ -34,23 +34,25 @@ fn build_permissions_update_item(
         return None;
     }
 
-    Some(
-        PermissionsInstructions::from_permission_profile(
-            &next.permission_profile,
-            next.approval_policy.value(),
-            next.config.approvals_reviewer,
-            exec_policy,
-            #[allow(deprecated)]
-            &next.cwd,
-            next.config
-                .features
-                .enabled(Feature::ExecPermissionApprovals),
-            next.config
-                .features
-                .enabled(Feature::RequestPermissionsTool),
-        )
-        .render(),
-    )
+    let mut permissions_instructions = PermissionsInstructions::from_permission_profile(
+        &next.permission_profile,
+        next.approval_policy.value(),
+        next.config.approvals_reviewer,
+        exec_policy,
+        #[allow(deprecated)]
+        &next.cwd,
+        next.config
+            .features
+            .enabled(Feature::ExecPermissionApprovals),
+        next.config
+            .features
+            .enabled(Feature::RequestPermissionsTool),
+    );
+    if crate::guardian::is_guardian_reviewer_source(&next.session_source) {
+        permissions_instructions = permissions_instructions.for_guardian_reviewer();
+    }
+
+    Some(permissions_instructions.render())
 }
 
 fn build_collaboration_mode_update_item(

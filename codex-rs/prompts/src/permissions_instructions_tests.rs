@@ -55,6 +55,28 @@ fn builds_permissions_with_network_access_override() {
 }
 
 #[test]
+fn guardian_reviewer_permissions_distinguish_the_reviewed_session() {
+    let instructions = PermissionsInstructions::from_permissions_with_network(
+        SandboxMode::ReadOnly,
+        NetworkAccess::Restricted,
+        PermissionsPromptConfig {
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            exec_policy: &Policy::empty(),
+            exec_permission_approvals_enabled: false,
+            request_permissions_tool_enabled: false,
+        },
+        /*writable_roots*/ None,
+    )
+    .for_guardian_reviewer();
+
+    assert_eq!(
+        instructions.body(),
+        "These are the permissions of this reviewer thread only. They are not the permissions of the Codex session being reviewed.\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted.\n"
+    );
+}
+
+#[test]
 fn builds_permissions_from_profile() {
     let cwd = PathBuf::from("/tmp");
     let writable_root =
