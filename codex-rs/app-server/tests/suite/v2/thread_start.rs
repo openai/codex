@@ -153,10 +153,9 @@ async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> 
         range,
     } = warning;
     assert_eq!(
-        (summary, path, range),
+        (summary, range),
         (
             "Error parsing rules; custom rules not applied.".to_string(),
-            Some(rules_path.to_string_lossy().to_string()),
             Some(TextRange {
                 start: TextPosition {
                     line: 1,
@@ -169,12 +168,14 @@ async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> 
             }),
         )
     );
+    let path = path.context("warning should include a path")?;
+    assert_eq!(
+        normalize_path_for_comparison(path),
+        normalize_path_for_comparison(&rules_path)
+    );
     let details = details.context("warning should include details")?;
     assert!(
-        details.contains(&format!(
-            "failed to parse rules file {}",
-            rules_path.display()
-        )),
+        details.contains("failed to parse rules file") && details.contains("broken.rules"),
         "unexpected warning details: {details}"
     );
     assert!(
