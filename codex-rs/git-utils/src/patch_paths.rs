@@ -4,32 +4,30 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::apply::run_git;
-use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
-use crate::git_config_sources::ensure_no_worktree_config_sources;
+use crate::guarded_config::GuardedGitConfig;
 
 // Path discovery must not turn a repository's whitespace policy into an
 // API-level parser failure before the real apply can report its status.
 const APPLY_NUMSTAT_ARGS: [&str; 3] = ["--numstat", "--whitespace=nowarn", "-z"];
 
-/// Extract paths with Git from a cwd whose config sources have already been
-/// authorized for `git_config_args`.
-pub(crate) fn extract_effective_paths_from_patch(
-    git: &GitRunner,
-    authorized_cwd: &Path,
+/// Extract effective patch paths through a bound operation configuration.
+pub(crate) fn extract_effective_paths_from_patch_guarded(
+    config: &GuardedGitConfig<'_>,
     patch_path: &Path,
     revert: bool,
-    git_config_args: &[String],
 ) -> io::Result<Vec<String>> {
-    let forward_paths =
-        git_apply_numstat_paths(git, authorized_cwd, patch_path, revert, git_config_args)?;
-    // `git apply --numstat` reports only the destination of a rename. Parse the
-    // opposite orientation too so both endpoints are included in the result.
-    let reverse_paths =
-        git_apply_numstat_paths(git, authorized_cwd, patch_path, !revert, git_config_args)?;
+    let forward_paths = git_apply_numstat_paths_guarded(config, patch_path, revert)?;
+    let reverse_paths = git_apply_numstat_paths_guarded(config, patch_path, !revert)?;
+    normalize_effective_patch_paths(forward_paths, reverse_paths)
+}
+
+fn normalize_effective_patch_paths(
+    forward_paths: Vec<String>,
+    reverse_paths: Vec<String>,
+) -> io::Result<Vec<String>> {
     if forward_paths.len() != reverse_paths.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -48,6 +46,30 @@ pub(crate) fn extract_effective_paths_from_patch(
         .into_iter()
         .map(validate_patch_path)
         .collect()
+}
+
+fn git_apply_numstat_paths_guarded(
+    config: &GuardedGitConfig<'_>,
+    patch_path: &Path,
+    revert: bool,
+) -> io::Result<Vec<String>> {
+    let mut command = config.apply_command()?;
+    command.args(APPLY_NUMSTAT_ARGS);
+    if revert {
+        command.arg("-R");
+    }
+    command.arg("--").arg(patch_path);
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "failed to parse patch paths: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    parse_numstat_paths(&output.stdout)
 }
 
 /// Best-effort extraction of the paths Git would apply.
@@ -71,46 +93,12 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
             .map(std::fs::canonicalize)
             .transpose()?
             .unwrap_or(std::fs::canonicalize(cwd)?);
-        ensure_no_worktree_config_sources(&git, &authorized_cwd, &[])?;
-        extract_effective_paths_from_patch(
-            &git,
-            &authorized_cwd,
-            &patch_path,
-            /*revert*/ false,
-            &[],
-        )
+        let config = GuardedGitConfig::authorize(&git, &authorized_cwd, Vec::new())?;
+        extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ false)
     })()
     .unwrap_or_default();
     drop(tmpdir);
     paths
-}
-
-fn git_apply_numstat_paths(
-    git: &GitRunner,
-    authorized_cwd: &Path,
-    patch_path: &Path,
-    revert: bool,
-    git_config_args: &[String],
-) -> io::Result<Vec<String>> {
-    let mut cmd = git.command_for_cwd(authorized_cwd)?;
-    cmd.args(git_config_args);
-    cmd.arg("apply").args(APPLY_NUMSTAT_ARGS);
-    if revert {
-        cmd.arg("-R");
-    }
-    cmd.arg("--").arg(patch_path);
-    let out = git.output(cmd)?;
-    if !out.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "failed to parse patch paths: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        ));
-    }
-
-    parse_numstat_paths(&out.stdout)
 }
 
 fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
@@ -255,30 +243,28 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let git = GitRunner::for_cwd_io(git_root)?;
-    let git_config_args = safe_git_config_parts();
-    ensure_no_worktree_config_sources(&git, git_root, &git_config_args)?;
+    let requested_cwd = std::fs::canonicalize(git_root)?;
+    let canonical_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| io::Error::other("not a Git repository"))
+        .and_then(std::fs::canonicalize)?;
+    let config = GuardedGitConfig::authorize(&git, &canonical_root, Vec::new())?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
-    let paths = extract_effective_paths_from_patch(
-        &git,
-        git_root,
-        &patch_path,
-        /*revert*/ true,
-        &git_config_args,
-    )?;
+    let paths =
+        extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ true)?;
     let _guard = tmpdir;
-    stage_effective_paths(&git, git_root, &paths, &git_config_args)
+    stage_effective_paths_guarded(&config, &paths)
 }
 
-pub(crate) fn stage_effective_paths(
-    git: &GitRunner,
-    git_root: &Path,
+/// Preserve the existing reverse staging behavior while constructing every
+/// Git child from the operation-owned configuration capability.
+pub(crate) fn stage_effective_paths_guarded(
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<()> {
-    let confined = confine_patch_paths(git, git_root, paths)?;
+    let confined = confine_patch_paths_guarded(config, paths)?;
     let mut existing = Vec::new();
     for path in confined.into_exact_leaves()? {
-        let joined = git_root.join(&path);
+        let joined = config.canonical_root().join(&path);
         if let Ok(metadata) = std::fs::symlink_metadata(&joined) {
             if leaf_is_traversable_directory(metadata.file_type()) {
                 return Err(containment_error(
@@ -291,14 +277,12 @@ pub(crate) fn stage_effective_paths(
     if existing.is_empty() {
         return Ok(());
     }
-    let mut args = vec![
-        "--literal-pathspecs".to_string(),
-        "add".to_string(),
-        "--".to_string(),
-    ];
+    let mut args = vec!["--".to_string()];
     args.extend(existing);
-    let (_code, _, _) = run_git(git, git_root, git_config_args, &args)?;
-    // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
+    let mut command = config.literal_add_command()?;
+    command.args(&args);
+    let _output = command.output()?;
+    // Preserve the existing best-effort staging contract on non-zero status.
     Ok(())
 }
 
@@ -386,10 +370,29 @@ impl ConfinedPatchPaths {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn confine_patch_paths(
     git: &GitRunner,
     git_root: &Path,
     paths: &[String],
+) -> io::Result<ConfinedPatchPaths> {
+    let config = GuardedGitConfig::authorize(git, git_root, Vec::new())?;
+    confine_patch_paths_guarded(&config, paths)
+}
+
+fn confine_patch_paths_guarded(
+    config: &GuardedGitConfig<'_>,
+    paths: &[String],
+) -> io::Result<ConfinedPatchPaths> {
+    let canonical_root = std::fs::canonicalize(config.canonical_root())?;
+    let metadata_dirs = canonical_git_metadata_dirs_guarded(config)?;
+    confine_patch_paths_with_metadata(&canonical_root, paths, &metadata_dirs)
+}
+
+fn confine_patch_paths_with_metadata(
+    canonical_root: &Path,
+    paths: &[String],
+    metadata_dirs: &[PathBuf],
 ) -> io::Result<ConfinedPatchPaths> {
     if paths.is_empty() {
         return Ok(ConfinedPatchPaths {
@@ -412,8 +415,6 @@ pub(crate) fn confine_patch_paths(
         });
     }
 
-    let canonical_root = std::fs::canonicalize(git_root)?;
-    let metadata_dirs = canonical_git_metadata_dirs(git, &canonical_root)?;
     let mut entries = Vec::with_capacity(paths.len());
     let mut prefix_cache = std::collections::BTreeMap::new();
 
@@ -427,9 +428,9 @@ pub(crate) fn confine_patch_paths(
         );
 
         let (existing_len, mut projected) = longest_existing_strict_prefix(
-            &canonical_root,
+            canonical_root,
             &components,
-            &metadata_dirs,
+            metadata_dirs,
             &mut prefix_cache,
         )?;
         projected.extend(
@@ -524,22 +525,25 @@ fn containment_error(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message)
 }
 
-fn canonical_git_metadata_dirs(git: &GitRunner, git_root: &Path) -> io::Result<Vec<PathBuf>> {
-    let config_parts = safe_git_config_parts();
+fn canonical_git_metadata_dirs_guarded(config: &GuardedGitConfig<'_>) -> io::Result<Vec<PathBuf>> {
     let queries = [
-        vec!["rev-parse".to_string(), "--absolute-git-dir".to_string()],
-        vec!["rev-parse".to_string(), "--git-common-dir".to_string()],
+        ["rev-parse", "--absolute-git-dir"],
+        ["rev-parse", "--git-common-dir"],
     ];
     let mut metadata_dirs = std::collections::BTreeSet::new();
     for args in queries {
-        let (code, stdout, stderr) = run_git(git, git_root, &config_parts, &args)?;
-        if code != 0 {
+        let mut command = config.rev_parse_command()?;
+        command.args(&args[1..]);
+        let output = command.output()?;
+        if !output.status.success() {
             return Err(io::Error::other(format!(
-                "failed to resolve Git repository metadata (exit {code}): {}",
-                stderr.trim()
+                "failed to resolve Git repository metadata (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        let path = stdout.trim_end_matches(['\r', '\n']);
+        let path = String::from_utf8_lossy(&output.stdout);
+        let path = path.trim_end_matches(['\r', '\n']);
         if path.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -550,7 +554,7 @@ fn canonical_git_metadata_dirs(git: &GitRunner, git_root: &Path) -> io::Result<V
         let absolute = if path.is_absolute() {
             path
         } else {
-            git_root.join(path)
+            config.canonical_root().join(path)
         };
         metadata_dirs.insert(std::fs::canonicalize(absolute)?);
     }

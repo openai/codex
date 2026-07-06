@@ -180,6 +180,27 @@ impl RepositoryAuthority {
         })
     }
 
+    pub(crate) fn ensure_active_worktree_root(&self, root: &Path) -> io::Result<()> {
+        let canonical_root = std::fs::canonicalize(root)?;
+        let same_root = if let Some(expected) = &self.active_worktree_identity {
+            Handle::from_path(&canonical_root)? == *expected
+        } else {
+            canonical_root == self.active_worktree_root
+                || same_file::is_same_file(&canonical_root, &self.active_worktree_root)?
+        };
+        if !same_root {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "guarded Git repository identity {} does not match runner repository {}",
+                    canonical_root.display(),
+                    self.active_worktree_root.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn revalidate_active_worktree_identity(&self) -> io::Result<()> {
         let Some(expected) = &self.active_worktree_identity else {
             return Ok(());
