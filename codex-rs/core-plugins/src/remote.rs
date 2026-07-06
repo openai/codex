@@ -18,6 +18,7 @@ use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
+use reqwest::header::RETRY_AFTER;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -82,6 +83,7 @@ const OPENAI_CURATED_REMOTE_COLLECTION_KEY: &str = "vertical";
 const OAI_PRODUCT_SKU_HEADER: &str = "OAI-Product-Sku";
 const CODEX_PRODUCT_SKU: &str = "codex";
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY: Duration = Duration::from_millis(250);
 const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_RECOMMENDED_PLUGINS: usize = 50;
@@ -831,7 +833,8 @@ pub async fn fetch_recommended_plugins(
     let request = authenticated_request(client.get(&url), auth)?
         .timeout(RECOMMENDED_PLUGINS_TIMEOUT)
         .query(&[("scope", "GLOBAL")]);
-    let response: RecommendedPluginsResponse = send_and_decode(request, &url).await?;
+    let response: RecommendedPluginsResponse =
+        send_and_decode_idempotent_get_with_retry(request, &url).await?;
     Ok(recommended_plugins_mode(response))
 }
 
@@ -1137,7 +1140,8 @@ pub async fn fetch_remote_plugin_skill_detail(
     let url = remote_plugin_skill_detail_url(config, plugin_id, skill_name)?;
     let client = build_reqwest_client();
     let request = authenticated_request(client.get(&url), auth)?;
-    let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginSkillDetailResponse =
+        send_and_decode_idempotent_get_with_retry(request, &url).await?;
     if response.plugin_id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -1807,7 +1811,7 @@ async fn get_remote_plugin_list_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode_idempotent_get_with_retry(request, &url).await
 }
 
 async fn get_remote_shared_workspace_plugins_page(
@@ -1823,7 +1827,7 @@ async fn get_remote_shared_workspace_plugins_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode_idempotent_get_with_retry(request, &url).await
 }
 
 async fn get_remote_plugin_installed_page(
@@ -1844,7 +1848,7 @@ async fn get_remote_plugin_installed_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode_idempotent_get_with_retry(request, &url).await
 }
 
 async fn fetch_plugin_detail(
@@ -1860,7 +1864,7 @@ async fn fetch_plugin_detail(
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode_idempotent_get_with_retry(request, &url).await
 }
 
 fn remote_plugin_skill_detail_url(
@@ -1908,25 +1912,150 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
     request: RequestBuilder,
     url: &str,
 ) -> Result<T, RemotePluginCatalogError> {
-    let response = request
-        .send()
+    send_and_decode_attempt(request, url)
         .await
-        .map_err(|source| RemotePluginCatalogError::Request {
+        .map_err(|err| err.error)
+}
+
+struct RemotePluginCatalogAttemptError {
+    error: RemotePluginCatalogError,
+    retry_after: RetryAfterDelay,
+}
+
+impl RemotePluginCatalogAttemptError {
+    fn new(error: RemotePluginCatalogError) -> Self {
+        Self {
+            error,
+            retry_after: RetryAfterDelay::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryAfterDelay {
+    None,
+    Delay(Duration),
+    Unparsable,
+}
+
+async fn send_and_decode_attempt<T: for<'de> Deserialize<'de>>(
+    request: RequestBuilder,
+    url: &str,
+) -> Result<T, RemotePluginCatalogAttemptError> {
+    let response = request.send().await.map_err(|source| {
+        RemotePluginCatalogAttemptError::new(RemotePluginCatalogError::Request {
             url: url.to_string(),
             source,
-        })?;
+        })
+    })?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let retry_after = parse_retry_after_delay(response.headers());
+    let body = response
+        .text()
+        .await
+        .map_err(|source| RemotePluginCatalogAttemptError {
+            error: RemotePluginCatalogError::Request {
+                url: url.to_string(),
+                source,
+            },
+            retry_after,
+        })?;
     if !status.is_success() {
-        return Err(RemotePluginCatalogError::UnexpectedStatus {
-            url: url.to_string(),
-            status,
-            body,
+        return Err(RemotePluginCatalogAttemptError {
+            error: RemotePluginCatalogError::UnexpectedStatus {
+                url: url.to_string(),
+                status,
+                body,
+            },
+            retry_after,
         });
     }
 
-    serde_json::from_str(&body).map_err(|source| RemotePluginCatalogError::Decode {
-        url: url.to_string(),
-        source,
+    serde_json::from_str(&body).map_err(|source| {
+        RemotePluginCatalogAttemptError::new(RemotePluginCatalogError::Decode {
+            url: url.to_string(),
+            source,
+        })
     })
+}
+
+async fn send_and_decode_idempotent_get_with_retry<T: for<'de> Deserialize<'de>>(
+    request: RequestBuilder,
+    url: &str,
+) -> Result<T, RemotePluginCatalogError> {
+    let retry_request = request.try_clone();
+    let err = match send_and_decode_attempt(request, url).await {
+        Ok(response) => return Ok(response),
+        Err(err) => err,
+    };
+    let retry_after = err.retry_after;
+    let err = err.error;
+
+    let Some(retry_delay) = retry_delay_for_remote_plugin_catalog_get_error(&err, retry_after)
+    else {
+        return Err(err);
+    };
+
+    let Some(retry_request) = retry_request else {
+        return Err(err);
+    };
+
+    tracing::warn!(
+        error = %err,
+        "remote plugin catalog GET failed; retrying once"
+    );
+    tokio::time::sleep(retry_delay).await;
+    send_and_decode(retry_request, url).await
+}
+
+fn retry_delay_for_remote_plugin_catalog_get_error(
+    err: &RemotePluginCatalogError,
+    retry_after: RetryAfterDelay,
+) -> Option<Duration> {
+    match err {
+        RemotePluginCatalogError::Request { source, .. } => {
+            if source.is_timeout() || source.is_connect() || source.is_body() {
+                bounded_retry_after_delay(retry_after)
+            } else {
+                None
+            }
+        }
+        RemotePluginCatalogError::UnexpectedStatus { status, .. }
+            if *status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+        {
+            bounded_retry_after_delay(retry_after)
+        }
+        RemotePluginCatalogError::UnexpectedStatus { status, .. } => {
+            if *status == reqwest::StatusCode::REQUEST_TIMEOUT || status.is_server_error() {
+                bounded_retry_after_delay(retry_after)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn bounded_retry_after_delay(retry_after: RetryAfterDelay) -> Option<Duration> {
+    match retry_after {
+        RetryAfterDelay::Delay(delay) if delay <= REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY => {
+            Some(delay)
+        }
+        RetryAfterDelay::Delay(_) | RetryAfterDelay::Unparsable => None,
+        RetryAfterDelay::None => Some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY),
+    }
+}
+
+fn parse_retry_after_delay(headers: &reqwest::header::HeaderMap) -> RetryAfterDelay {
+    let Some(retry_after) = headers.get(RETRY_AFTER) else {
+        return RetryAfterDelay::None;
+    };
+
+    retry_after
+        .to_str()
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .map(RetryAfterDelay::Delay)
+        .unwrap_or(RetryAfterDelay::Unparsable)
 }

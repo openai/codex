@@ -384,7 +384,7 @@ async fn get_created_workspace_plugins_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode_idempotent_get_with_retry(request, &url).await
 }
 
 async fn create_workspace_plugin_upload(
