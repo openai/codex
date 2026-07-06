@@ -320,6 +320,16 @@ fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Optio
     }
 }
 
+fn exec_policy_config_warning(err: &ExecPolicyError) -> ConfigWarningNotification {
+    let (path, range) = exec_policy_warning_location(err);
+    ConfigWarningNotification {
+        summary: "Error parsing rules; custom rules not applied.".to_string(),
+        details: Some(err.to_string()),
+        path,
+        range,
+    }
+}
+
 fn app_text_range(range: &CoreTextRange) -> AppTextRange {
     AppTextRange {
         start: AppTextPosition {
@@ -612,14 +622,7 @@ pub async fn run_main_with_transport_options(
     }
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
-        let (path, range) = exec_policy_warning_location(&err);
-        let message = ConfigWarningNotification {
-            summary: "Error parsing rules; custom rules not applied.".to_string(),
-            details: Some(err.to_string()),
-            path,
-            range,
-        };
-        config_warnings.push(message);
+        config_warnings.push(exec_policy_config_warning(&err));
     }
 
     if let Some(warning) = project_config_warning(&config) {

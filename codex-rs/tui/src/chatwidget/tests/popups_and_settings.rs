@@ -1200,9 +1200,10 @@ async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
 }
 
 #[tokio::test]
-async fn plugins_popup_remote_section_fallback_states_snapshot() {
+async fn plugins_popup_remote_section_fallback_states_when_remote_plugin_disabled_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ false);
 
     let select_tab_containing = |chat: &mut ChatWidget, visible_text: &str| -> String {
         for _ in 0..8 {
@@ -1266,7 +1267,6 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 
     let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    remote_chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ true);
     remote_chat.add_plugins_output();
     let remote_cwd = remote_chat.config.cwd.clone();
     remote_chat.on_plugins_loaded(
@@ -3191,7 +3191,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     preset.supported_reasoning_efforts.insert(
         2,
         ReasoningEffortPreset {
-            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            effort: ReasoningEffortConfig::Max,
             description: "Maximum available reasoning".to_string(),
         },
     );
@@ -3204,7 +3204,7 @@ async fn model_reasoning_selection_popup_snapshot() {
 #[tokio::test]
 async fn model_reasoning_selection_popup_applies_custom_effort() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    let custom_effort = ReasoningEffortConfig::Custom("future".to_string());
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let mut preset = get_available_model(&chat, "gpt-5.4");

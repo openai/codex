@@ -148,6 +148,7 @@ pub enum RemoteMarketplaceSource {
 pub struct RemoteInstalledPlugin {
     pub marketplace_name: String,
     pub id: String,
+    pub version: Option<String>,
     pub name: String,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
@@ -161,6 +162,7 @@ pub struct RemoteInstalledPlugin {
 pub struct RemotePluginSummary {
     pub id: String,
     pub remote_plugin_id: String,
+    pub version: Option<String>,
     pub local_version: Option<String>,
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
@@ -1041,6 +1043,7 @@ pub fn group_remote_installed_plugins_by_marketplaces(
         let plugin_summary = RemotePluginSummary {
             id: plugin_id.as_key(),
             remote_plugin_id: plugin.id.clone(),
+            version: plugin.version.clone(),
             local_version: None,
             name: plugin.name.clone(),
             share_context: None,
@@ -1472,6 +1475,7 @@ fn build_remote_plugin_summary(
     Ok(RemotePluginSummary {
         id: plugin_id.as_key(),
         remote_plugin_id: plugin.id.clone(),
+        version: plugin.release.version.clone(),
         local_version: installed_plugin
             .and_then(|installed| installed.plugin.release.version.clone()),
         name: plugin.name.clone(),
@@ -1554,6 +1558,7 @@ fn remote_installed_plugin_to_cache_entry(
     Ok(RemoteInstalledPlugin {
         marketplace_name: remote_plugin_canonical_marketplace_name(plugin)?.to_string(),
         id: plugin.id.clone(),
+        version: plugin.release.version.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
         install_policy: plugin.installation_policy,

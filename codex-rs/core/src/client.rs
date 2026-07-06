@@ -169,7 +169,7 @@ pub(crate) struct CompactConversationRequestSettings {
 
 fn reasoning_effort_for_request(effort: ReasoningEffortConfig) -> ReasoningEffortConfig {
     match effort {
-        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Custom("max".to_string()),
+        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Max,
         effort => effort,
     }
 }
@@ -1123,42 +1123,48 @@ impl ModelClientSession {
         }
     }
 
+    /// Checks whether the current request is an incremental extension of the previous request.
+    /// We only reuse an incremental input delta when non-input request fields are unchanged and
+    /// `input` is a strict extension of the previous known input. Server-returned output items
+    /// are treated as part of the baseline so we do not resend them.
     fn get_incremental_items(
         &self,
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
         allow_empty_delta: bool,
     ) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request is an incremental extension of the previous request.
-        // We only reuse an incremental input delta when non-input request fields are unchanged and
-        // `input` is a strict
-        // extension of the previous known input. Server-returned output items are treated as part
-        // of the baseline so we do not resend them.
         let previous_request = self.websocket_session.last_request.as_ref()?;
         if !responses_request_properties_match(previous_request, request) {
             trace!("incremental request failed, websocket reuse properties didn't match");
             return None;
         }
 
-        let Some(after_previous_input) = request
-            .input
-            .strip_prefix(previous_request.input.as_slice())
-        else {
-            trace!("incremental request failed, items didn't match");
-            return None;
-        };
-        let mut response_items =
-            last_response.map_or_else(Vec::new, |response| response.items_added.clone());
-        if !self.client.state.provider.info().is_openai() {
-            response_items
-                .iter_mut()
-                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+        // To compare the inputs, we concatenate the previous request items with the response items,
+        // then compare that against the equivalent slice of request items, ignoring metadata. If
+        // they match, we can consider the remaining items the incremental request.
+        let mut previous_items = previous_request.input.clone();
+        if let Some(response) = last_response {
+            previous_items.extend_from_slice(&response.items_added);
         }
-        let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
+        previous_items
+            .iter_mut()
+            .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+
+        let Some((request_items_to_compare, incremental_items)) =
+            request.input.split_at_checked(previous_items.len())
         else {
-            trace!("incremental request failed, items didn't match");
+            trace!("incremental request failed, incompatible request length");
             return None;
         };
+        let mut request_prefix = request_items_to_compare.to_vec();
+        request_prefix
+            .iter_mut()
+            .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+
+        if previous_items != request_prefix {
+            trace!("incremental request failed, items didn't match");
+            return None;
+        }
         if !allow_empty_delta && incremental_items.is_empty() {
             return None;
         }
@@ -1912,6 +1918,7 @@ where
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
+        let (request_start, mut ttft_ms) = (Instant::now(), None);
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1961,6 +1968,7 @@ where
                             Some(usage.cached_input_tokens),
                             Some(usage.reasoning_output_tokens),
                             usage.total_tokens,
+                            ttft_ms,
                         );
                     }
                     inference_trace_attempt.record_completed(
@@ -1988,6 +1996,11 @@ where
                     }
                 }
                 Ok(event) => {
+                    if matches!(&event, ResponseEvent::OutputItemAdded(_)) && ttft_ms.is_none() {
+                        ttft_ms = Some(
+                            i64::try_from(request_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                        );
+                    }
                     if tx_event.send(Ok(event)).await.is_err() {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,

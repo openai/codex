@@ -155,6 +155,7 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     PluginSummary {
         id: plugin.id,
         remote_plugin_id: None,
+        version: None,
         local_version: plugin.local_version,
         installed: plugin.installed,
         enabled: plugin.enabled,
@@ -1095,6 +1096,7 @@ impl PluginRequestProcessor {
                     summary: PluginSummary {
                         id: outcome.plugin.id,
                         remote_plugin_id: None,
+                        version: None,
                         local_version: outcome.plugin.local_version,
                         name: outcome.plugin.name,
                         share_context,
@@ -2168,6 +2170,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
     PluginSummary {
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
+        version: summary.version,
         local_version: summary.local_version,
         name: summary.name,
         share_context: summary

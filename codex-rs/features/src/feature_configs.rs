@@ -56,6 +56,8 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_agent_mode_hint_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
     pub tool_namespace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
