@@ -596,8 +596,6 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
-    /// Persisted thread history contract.
-    pub history_mode: Option<ThreadHistoryMode>,
 }
 
 impl ThreadMetadataPatch {
@@ -678,9 +676,6 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
-        if next.history_mode.is_some() {
-            self.history_mode = next.history_mode;
-        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -707,7 +702,6 @@ impl ThreadMetadataPatch {
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
-            && self.history_mode.is_none()
     }
 }
 

@@ -539,7 +539,13 @@ impl App {
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
-        let config = self.fresh_session_config();
+        let mut config = self.fresh_session_config();
+        apply_managed_new_thread_defaults(
+            &mut config,
+            app_server.managed_new_thread_defaults(),
+            &self.cli_kv_overrides,
+            &self.harness_overrides,
+        );
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),

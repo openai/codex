@@ -600,6 +600,9 @@ pub struct PluginSummary {
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
+    /// Version advertised by the remote marketplace backend when available.
+    #[serde(default)]
+    pub version: Option<String>,
     /// Version of the locally materialized plugin package when available.
     #[serde(default)]
     pub local_version: Option<String>,
@@ -743,6 +746,15 @@ pub enum PluginSource {
         path: Option<String>,
         ref_name: Option<String>,
         sha: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Npm {
+        package: String,
+        /// Optional npm version or version range.
+        version: Option<String>,
+        /// Optional HTTPS registry URL. Authentication stays in the user's npm config.
+        registry: Option<String>,
     },
     /// The plugin is available in the remote catalog. Download metadata is
     /// kept server-side and is not exposed through the app-server API.

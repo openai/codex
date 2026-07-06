@@ -263,7 +263,6 @@ fn smoke_config_overrides(responses_base_url: &str) -> Result<Vec<String>> {
     Ok(vec![
         "analytics.enabled=true".to_string(),
         "features.plugins=true".to_string(),
-        "features.remote_plugin=true".to_string(),
         format!("model={}", quoted(MOCK_MODEL_SLUG)?),
         format!("model_provider={}", quoted(MOCK_PROVIDER_ID)?),
         format!(

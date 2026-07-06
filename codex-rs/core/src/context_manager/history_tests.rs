@@ -22,6 +22,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -513,6 +514,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
+            namespace: None,
             input: "view_image".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -582,6 +584,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
+            namespace: None,
             input: "view_image".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1019,6 +1022,9 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
+        developer_msg(&format!(
+            "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_PLUGIN_INSTRUCTIONS"
+        )),
         developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
         developer_msg("<multi_agent_mode>ROLLED_BACK_MULTI_AGENT_MODE</multi_agent_mode>"),
         user_input_text_msg(
@@ -1090,6 +1096,7 @@ fn remove_first_item_handles_custom_tool_pair() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "my_tool".to_string(),
+            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1378,6 +1385,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         status: None,
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
+        namespace: None,
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -1393,6 +1401,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 status: None,
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
+                namespace: None,
                 input: "{}".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1512,6 +1521,7 @@ fn normalize_mixed_inserts_and_removals() {
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
+            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1556,6 +1566,7 @@ fn normalize_mixed_inserts_and_removals() {
                 status: None,
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
+                namespace: None,
                 input: "{}".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1623,6 +1634,49 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
 }
 
 #[test]
+fn for_prompt_assigns_stable_id_to_synthetic_output_without_reordering_history() {
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: Some("fc_existing".to_string()),
+            name: "do_it".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-x".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: Some("msg_later".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "later turn".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let first = create_history_with_items(items.clone()).for_prompt(&default_input_modalities());
+    let second = create_history_with_items(items).for_prompt(&default_input_modalities());
+
+    assert_eq!(
+        first, second,
+        "repeated prompt projections should assign the same ID to the synthetic output"
+    );
+    let [
+        ResponseItem::FunctionCall { .. },
+        ResponseItem::FunctionCallOutput { id: Some(id), .. },
+        ResponseItem::Message { .. },
+    ] = first.as_slice()
+    else {
+        panic!("expected the synthetic output between its call and the later message");
+    };
+    assert!(
+        id.starts_with("fco_"),
+        "the synthetic function call output should use the Responses API output ID prefix"
+    );
+}
+
+#[test]
 fn normalize_adds_missing_output_for_tool_search_call() {
     let items = vec![ResponseItem::ToolSearchCall {
         id: None,
@@ -1668,6 +1722,7 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
         status: None,
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
+        namespace: None,
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -1810,6 +1865,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
+            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },

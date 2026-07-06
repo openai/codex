@@ -107,18 +107,25 @@ impl SessionServices {
     pub(crate) async fn install_mcp_connection_manager(
         &self,
         config: Arc<McpConfig>,
+        plugins_available: bool,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        let runtime =
-            self.publish_mcp_runtime(config, runtime_context, available_environment_ids, manager);
+        let runtime = self.publish_mcp_runtime(
+            config,
+            plugins_available,
+            runtime_context,
+            available_environment_ids,
+            manager,
+        );
         runtime.manager().validate_required_servers().await
     }
 
     pub(crate) fn publish_mcp_runtime(
         &self,
         config: Arc<McpConfig>,
+        plugins_available: bool,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
         manager: McpConnectionManager,
@@ -129,6 +136,7 @@ impl SessionServices {
         self.mcp_connection_manager.store(Arc::clone(&manager));
         let runtime = Arc::new(McpRuntimeSnapshot::new(
             config,
+            plugins_available,
             manager,
             runtime_context,
             available_environment_ids,

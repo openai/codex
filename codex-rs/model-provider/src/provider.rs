@@ -659,7 +659,16 @@ mod tests {
             .map(|model| model.slug.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(model_ids, vec!["openai.gpt-5.5", "openai.gpt-5.4"]);
+        assert_eq!(
+            model_ids,
+            vec![
+                "openai.gpt-5.5",
+                "openai.gpt-5.4",
+                "openai.gpt-5.6-sol",
+                "openai.gpt-5.6-terra",
+                "openai.gpt-5.6-luna",
+            ]
+        );
 
         let default_model = manager
             .list_models(RefreshStrategy::Online)

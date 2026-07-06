@@ -8414,6 +8414,16 @@
               "object",
               "null"
             ]
+          },
+          "models": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelsRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -12834,14 +12844,45 @@
         "title": "ModelVerificationNotification",
         "type": "object"
       },
+      "ModelsRequirements": {
+        "properties": {
+          "newThread": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/NewThreadModelDefaults"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "MultiAgentMode": {
-        "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-        "enum": [
-          "none",
-          "explicitRequestOnly",
-          "proactive"
-        ],
-        "type": "string"
+        "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+        "oneOf": [
+          {
+            "enum": [
+              "explicitRequestOnly",
+              "proactive"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "custom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "title": "CustomMultiAgentMode",
+            "type": "object"
+          }
+        ]
       },
       "NetworkAccess": {
         "enum": [
@@ -12980,6 +13021,33 @@
           "deny"
         ],
         "type": "string"
+      },
+      "NewThreadModelDefaults": {
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "NonSteerableTurnKind": {
         "enum": [
@@ -14156,6 +14224,40 @@
             "type": "object"
           },
           {
+            "properties": {
+              "package": {
+                "type": "string"
+              },
+              "registry": {
+                "description": "Optional HTTPS registry URL. Authentication stays in the user's npm config.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "npm"
+                ],
+                "title": "NpmPluginSourceType",
+                "type": "string"
+              },
+              "version": {
+                "description": "Optional npm version or version range.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "package",
+              "type"
+            ],
+            "title": "NpmPluginSource",
+            "type": "object"
+          },
+          {
             "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
             "properties": {
               "type": {
@@ -14248,6 +14350,14 @@
           },
           "source": {
             "$ref": "#/definitions/v2/PluginSource"
+          },
+          "version": {
+            "default": null,
+            "description": "Version advertised by the remote marketplace backend when available.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -15423,6 +15533,12 @@
               },
               "name": {
                 "type": "string"
+              },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "type": [
@@ -17192,6 +17308,13 @@
           },
           "ephemeral": {
             "type": "boolean"
+          },
+          "lastTurnId": {
+            "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "model": {
             "description": "Configuration overrides for the forked thread, if any.",

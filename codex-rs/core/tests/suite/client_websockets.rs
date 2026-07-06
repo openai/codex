@@ -966,41 +966,92 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
 async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     skip_if_no_network!();
 
+    let mut assistant_output_with_turn_id = ev_assistant_message("msg-1", "assistant output");
+    assistant_output_with_turn_id["item"]["internal_chat_message_metadata_passthrough"] =
+        json!({ "turn_id": "turn-1" });
+
+    let assistant_output_without_turn_id = ev_assistant_message("msg-2", "second assistant output");
+
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "assistant output"),
+            assistant_output_with_turn_id,
             ev_completed("resp-1"),
         ],
-        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+        vec![
+            ev_response_created("resp-2"),
+            assistant_output_without_turn_id,
+            ev_completed("resp-2"),
+        ],
+        vec![ev_response_created("resp-3"), ev_completed("resp-3")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
-    let prompt_one = prompt_with_input(vec![message_item("hello")]);
-    let prompt_two = prompt_with_input(vec![
-        message_item("hello"),
-        assistant_message_item("msg-1", "assistant output"),
-        message_item("second"),
-    ]);
+    // use OpenAI provider to check metadata logic
+    let mut provider = websocket_provider(&server);
+    provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
+    let harness =
+        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ false).await;
 
+    // Turn one: initiate
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
     {
         let mut client_session = harness.client.new_session();
         stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     }
 
-    let mut client_session = harness.client.new_session();
-    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+    // Turn two: the response and reconstructed history have matching metadata.
+    let mut first_assistant_output = assistant_message_item("msg-1", "assistant output");
+    first_assistant_output.set_turn_id_if_missing("turn-1");
+
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        first_assistant_output.clone(),
+        message_item("second"),
+    ]);
+
+    {
+        let mut client_session = harness.client.new_session();
+        stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+    }
+
+    // Turn three: the reconstructed history has metadata that the response omitted.
+    let mut second_assistant_output = assistant_message_item("msg-2", "second assistant output");
+    second_assistant_output.set_turn_id_if_missing("turn-2");
+
+    let prompt_three = prompt_with_input(vec![
+        message_item("hello"),
+        first_assistant_output,
+        message_item("second"),
+        second_assistant_output,
+        message_item("third"),
+    ]);
+
+    {
+        let mut client_session = harness.client.new_session();
+        stream_until_complete(&mut client_session, &harness, &prompt_three).await;
+    }
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
+    assert_eq!(connection.len(), 3);
+
+    // validate second turn
     let second = connection.get(1).expect("missing request").body_json();
     assert_eq!(second["type"].as_str(), Some("response.create"));
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
         serde_json::to_value(&prompt_two.input[2..]).unwrap()
+    );
+
+    // validate third turn
+    let third = connection.get(2).expect("missing request").body_json();
+    assert_eq!(third["type"].as_str(), Some("response.create"));
+    assert_eq!(third["previous_response_id"].as_str(), Some("resp-2"));
+    assert_eq!(
+        third["input"],
+        serde_json::to_value(&prompt_three.input[4..]).unwrap()
     );
 
     server.shutdown().await;

@@ -126,6 +126,13 @@
     "ephemeral": {
       "type": "boolean"
     },
+    "lastTurnId": {
+      "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "description": "Configuration overrides for the forked thread, if any.",
       "type": [

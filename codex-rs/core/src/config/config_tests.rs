@@ -8867,6 +8867,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         enforce_residency: None,
         network: None,
         permissions: None,
+        models: None,
         guardian_policy_config: None,
     };
     let requirement_source = codex_config::RequirementSource::Unknown;
@@ -10306,6 +10307,7 @@ default_wait_timeout_ms = 30000
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
@@ -10341,6 +10343,10 @@ non_code_mode_only = true
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
+    );
+    assert_eq!(
+        config.multi_agent_v2.multi_agent_mode_hint_text.as_deref(),
+        Some("Custom mode guidance.")
     );
     assert_eq!(
         config.multi_agent_v2.tool_namespace.as_deref(),
@@ -10402,6 +10408,22 @@ max_concurrent_threads_per_session = 17
         .into_iter()
         .all(|hint| hint.is_some_and(|hint| hint.ends_with(expected_suffix.as_str())))
     );
+}
+
+#[test]
+fn multi_agent_v2_preserves_empty_mode_hint_override() {
+    let config_toml = toml::from_str(
+        r#"[features.multi_agent_v2]
+multi_agent_mode_hint_text = ""
+"#,
+    )
+    .expect("multi-agent v2 config should parse");
+
+    let expected = MultiAgentV2Config {
+        multi_agent_mode_hint_text: Some(String::new()),
+        ..Default::default()
+    };
+    assert_eq!(resolve_multi_agent_v2_config(&config_toml), expected);
 }
 
 #[tokio::test]

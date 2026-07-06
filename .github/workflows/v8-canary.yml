@@ -1,44 +1,12 @@
 name: v8-canary
 
+# Do not use trigger-level path filters here. This workflow is also called by
+# postmerge-ci, and GitHub cannot share a path filter between pull_request and
+# workflow_call. v8_canary_changes.py is the single source of truth instead;
+# unrelated events run only the cheap metadata job below.
 on:
-  pull_request:
-    paths:
-      - ".bazelrc"
-      - ".github/actions/setup-bazel-ci/**"
-      - ".github/scripts/run_bazel_with_buildbuddy.py"
-      - ".github/scripts/rusty_v8_bazel.py"
-      - ".github/scripts/rusty_v8_module_bazel.py"
-      - ".github/scripts/v8_canary_changes.py"
-      - ".github/workflows/rusty-v8-release.yml"
-      - ".github/workflows/v8-canary.yml"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - "codex-rs/Cargo.toml"
-      - "patches/BUILD.bazel"
-      - "patches/llvm_*.patch"
-      - "patches/rules_cc_*.patch"
-      - "patches/v8_*.patch"
-      - "third_party/v8/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".bazelrc"
-      - ".github/actions/setup-bazel-ci/**"
-      - ".github/scripts/run_bazel_with_buildbuddy.py"
-      - ".github/scripts/rusty_v8_bazel.py"
-      - ".github/scripts/rusty_v8_module_bazel.py"
-      - ".github/scripts/v8_canary_changes.py"
-      - ".github/workflows/rusty-v8-release.yml"
-      - ".github/workflows/v8-canary.yml"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - "codex-rs/Cargo.toml"
-      - "patches/BUILD.bazel"
-      - "patches/llvm_*.patch"
-      - "patches/rules_cc_*.patch"
-      - "patches/v8_*.patch"
-      - "third_party/v8/**"
+  workflow_call:
+  pull_request: {}
   workflow_dispatch:
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
@@ -54,6 +22,10 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
+      # A stale PR head can contain the old detector, which does not emit this
+      # output. Missing must mean "run" so older branches cannot silently skip
+      # the expensive V8 coverage while reporting success.
+      canary_required: ${{ steps.changes.outputs.canary_required || 'true' }}
       v8_version: ${{ steps.v8_version.outputs.version }}
       windows_source_required: ${{ steps.changes.outputs.windows_source_required }}
 
@@ -77,7 +49,7 @@ jobs:
           version="$(python3 .github/scripts/rusty_v8_bazel.py resolved-v8-crate-version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Detect whether Windows source artifacts need rebuilding
+      - name: Detect V8 canary changes
         id: changes
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
@@ -87,6 +59,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Manual runs have no meaningful before/after range. Force every V8
+          # variant so workflow_dispatch remains a reliable retry path.
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             output="$(python3 .github/scripts/v8_canary_changes.py --force)"
           else
@@ -104,6 +78,8 @@ jobs:
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
+    # Metadata always runs; only relevant changes pay for the large matrix.
+    if: ${{ needs.metadata.outputs.canary_required == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
