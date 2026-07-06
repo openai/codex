@@ -143,6 +143,12 @@ pub struct EnvironmentSkillLoadOutcome {
 }
 
 /// Discovers skills without converting environment-owned paths to host paths.
+#[tracing::instrument(
+    name = "skills.environment.load",
+    level = "info",
+    skip_all,
+    fields(skill_count = tracing::field::Empty)
+)]
 pub async fn load_environment_skills_from_root(
     file_system: &dyn ExecutorFileSystem,
     root: &PathUri,
@@ -235,6 +241,7 @@ pub async fn load_environment_skills_from_root(
             warnings: vec![format!("failed to walk skills root {root}: {error:#}")],
         },
     };
+    tracing::Span::current().record("skill_count", discovery.skills.len());
     outcome.warnings.extend(discovery.warnings);
     if discovery.skills.is_empty() {
         return outcome;

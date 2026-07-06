@@ -66,6 +66,12 @@ impl SkillsThreadState {
     /// Environment availability only controls whether the root is projected into the current
     /// step; it never invalidates the cache. There is intentionally no filesystem watcher or
     /// content-based invalidation because selected environment roots are treated as stable.
+    #[tracing::instrument(
+        name = "skills.executor.catalog_snapshot",
+        level = "info",
+        skip_all,
+        fields(root_count = query.executor_roots.len())
+    )]
     pub(crate) async fn executor_catalog_snapshot(
         &self,
         providers: &SkillProviders,
@@ -157,6 +163,7 @@ impl SkillsThreadState {
         next_cache
     }
 
+    #[tracing::instrument(name = "skills.executor.catalog_root", level = "info", skip_all)]
     async fn executor_root_catalog(
         &self,
         providers: &SkillProviders,
