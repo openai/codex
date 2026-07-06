@@ -77,6 +77,7 @@ impl McpRuntimeSnapshot {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: config.features.use_legacy_landlock(),
             apps_enabled: config.features.enabled(Feature::Apps),
+            plugin_service_preview: config.features.enabled(Feature::PluginServicePreview),
             prefix_mcp_tool_names: config.prefix_mcp_tool_names(),
             client_elicitation_capability: ElicitationCapability::default(),
             mcp_server_catalog: ResolvedMcpCatalog::default(),

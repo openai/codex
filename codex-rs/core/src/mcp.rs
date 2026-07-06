@@ -181,6 +181,7 @@ impl McpManager {
                 codex_apps_mcp_server_config(
                     &mcp_config.chatgpt_base_url,
                     mcp_config.apps_mcp_product_sku.as_deref(),
+                    mcp_config.plugin_service_preview,
                 ),
             ));
         } else {

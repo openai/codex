@@ -29,7 +29,7 @@ use crate::tools::ToolInfo;
 
 const MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC: &str = "codex.mcp.tools.cache_publish.duration_ms";
 
-/// The CodexAuth bits that identify a Codex Apps catalog.
+/// The auth and routing inputs that identify a Codex Apps catalog.
 ///
 /// Debug bearer-token overrides bypass the shared cache, so shared entries only
 /// need the CodexAuth-backed identity.
@@ -38,14 +38,20 @@ pub struct CodexAppsToolsCacheKey {
     pub(crate) account_id: Option<String>,
     pub(crate) chatgpt_user_id: Option<String>,
     pub(crate) is_workspace_account: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) plugin_service_preview: bool,
 }
 
 /// Builds the CodexAuth-backed Codex Apps cache key.
-pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
+pub fn codex_apps_tools_cache_key(
+    auth: Option<&CodexAuth>,
+    plugin_service_preview: bool,
+) -> CodexAppsToolsCacheKey {
     CodexAppsToolsCacheKey {
         account_id: auth.and_then(CodexAuth::get_account_id),
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
+        plugin_service_preview,
     }
 }
 
