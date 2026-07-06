@@ -1290,7 +1290,7 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd,
-            mcp_server_names,
+            mcp_server_names: Some(mcp_server_names),
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),

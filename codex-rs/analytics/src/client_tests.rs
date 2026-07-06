@@ -309,7 +309,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
-        mcp_server_names: Vec::new(),
+        mcp_server_names: None,
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,

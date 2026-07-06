@@ -81,7 +81,7 @@ url = "{mcp_server_url}/mcp"
     let thread_start_response: ThreadStartResponse = to_response(thread_start_response)?;
     assert_eq!(
         thread_start_response.mcp_server_names,
-        vec!["some-server".to_string()]
+        Some(vec!["some-server".to_string()])
     );
 
     let request_id = mcp

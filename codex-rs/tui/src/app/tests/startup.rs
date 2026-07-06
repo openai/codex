@@ -165,7 +165,7 @@ async fn restored_startup_draft_waits_for_effective_mcp_settlement() {
         Ok(AppServerStartedThread {
             session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
             turns: Vec::new(),
-            mcp_server_names: vec!["test".to_string()],
+            mcp_server_names: Some(vec!["test".to_string()]),
         }),
     )
     .await
@@ -228,6 +228,44 @@ async fn restored_startup_draft_waits_for_effective_mcp_settlement() {
     app.chat_widget.insert_str("later round");
     app.chat_widget.handle_key_event(enter);
     assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+}
+
+#[tokio::test]
+async fn restored_startup_draft_loads_mcp_names_from_older_app_servers() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.pending_startup_thread_start = true;
+    app.chat_widget
+        .set_queue_submissions_until_session_configured(/*queue*/ true);
+    app.chat_widget
+        .restore_startup_draft("captured during startup");
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let mut started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("startup thread");
+    started.mcp_server_names = None;
+
+    app.handle_startup_thread_started(&mut app_server, Ok(started))
+        .await
+        .expect("older app-server startup should attach");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_user_turn_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "captured during startup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected restored startup input submission, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -306,7 +344,7 @@ fn stale_startup_thread_started_removes_local_routing_state() -> Result<()> {
                 Ok(AppServerStartedThread {
                     session: test_thread_session(stale_thread_id, test_path_buf("/tmp/project")),
                     turns: Vec::new(),
-                    mcp_server_names: Vec::new(),
+                    mcp_server_names: None,
                 }),
             )
             .await?;
