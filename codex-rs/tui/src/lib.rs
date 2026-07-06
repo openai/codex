@@ -1826,7 +1826,6 @@ async fn run_ratatui_app(
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
 fn restore() {
-    tui::discard_terminal_input();
     if let Err(err) = tui::restore_after_exit() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"

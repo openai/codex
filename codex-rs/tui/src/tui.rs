@@ -347,13 +347,15 @@ pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
 /// Restore the terminal after Codex is exiting.
 ///
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
-/// terminal missed the stack pop that normally pairs with [`set_modes`].
+/// terminal missed the stack pop that normally pairs with [`set_modes`]. Queued input is flushed
+/// only after restoration so late key repeats cannot escape to the parent shell.
 pub fn restore_after_exit() -> Result<()> {
     let mut first_error =
         restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
+    flush_terminal_input_buffer();
 
     match first_error {
         Some(err) => Err(err),
