@@ -4,6 +4,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::openai_models::ModelMessages;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -11,7 +12,11 @@ async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
-    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let (session, mut turn_context) = crate::session::tests::make_session_and_context().await;
+    turn_context.model_info.model_messages = Some(ModelMessages {
+        instructions_template: Some("current model instructions".to_string()),
+        instructions_variables: None,
+    });
     let turn_context = Arc::new(turn_context);
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())

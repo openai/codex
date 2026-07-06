@@ -239,7 +239,6 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,

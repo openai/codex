@@ -57,6 +57,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -1262,20 +1263,21 @@ async fn get_base_instructions_no_user_content() {
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
+        let model_instructions = model_info.get_model_instructions(config.personality);
         if test_case.expects_apply_patch_description {
             assert_eq!(
-                model_info.base_instructions.as_str(),
+                model_instructions.as_str(),
                 prompt_with_apply_patch_instructions
             );
         }
 
         {
             let mut state = session.state.lock().await;
-            state.session_configuration.base_instructions = model_info.base_instructions.clone();
+            state.session_configuration.base_instructions = model_instructions.clone();
         }
 
         let base_instructions = session.get_base_instructions().await;
-        assert_eq!(base_instructions.text, model_info.base_instructions);
+        assert_eq!(base_instructions.text, model_instructions);
     }
 }
 
@@ -9128,7 +9130,11 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
 
 #[tokio::test]
 async fn build_initial_context_prepends_model_switch_message() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.model_info.model_messages = Some(ModelMessages {
+        instructions_template: Some("current model instructions".to_string()),
+        instructions_variables: None,
+    });
     let previous_turn_settings = PreviousTurnSettings {
         model: "previous-regular-model".to_string(),
         comp_hash: None,

@@ -69,7 +69,6 @@ fn test_model_info(
         service_tiers,
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,

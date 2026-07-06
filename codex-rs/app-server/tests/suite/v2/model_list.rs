@@ -177,7 +177,6 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "supported_in_api": true,
         "priority": 0,
         "upgrade": null,
-        "base_instructions": "base instructions",
         "supports_reasoning_summaries": false,
         "support_verbosity": false,
         "default_verbosity": null,

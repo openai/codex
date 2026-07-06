@@ -1372,7 +1372,6 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,

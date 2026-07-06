@@ -153,7 +153,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let base_instructions = thread_manager
+    let model_info = thread_manager
         .get_models_manager()
         .get_model_info(
             config
@@ -162,8 +162,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .expect("test config should have a model"),
             &config.to_models_manager_config(),
         )
-        .await
-        .base_instructions;
+        .await;
+    let base_instructions = model_info.get_model_instructions(config.personality);
 
     codex
         .submit(Op::UserInput {

@@ -52,10 +52,7 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         };
     }
 
-    if let Some(base_instructions) = &config.base_instructions {
-        model.base_instructions = base_instructions.clone();
-        model.model_messages = None;
-    } else if !config.personality_enabled {
+    if config.base_instructions.is_some() || !config.personality_enabled {
         model.model_messages = None;
     }
 
@@ -80,7 +77,6 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         default_service_tier: None,
         availability_nux: None,
         upgrade: None,
-        base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: local_personality_messages_for_slug(slug),
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,

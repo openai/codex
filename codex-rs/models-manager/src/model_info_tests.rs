@@ -72,3 +72,34 @@ fn model_context_window_uses_model_value_without_override() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn base_instructions_override_disables_model_messages() {
+    let model = model_info_from_slug("gpt-5.2-codex");
+    let config = ModelsManagerConfig {
+        base_instructions: Some("custom instructions".to_string()),
+        personality_enabled: true,
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model.clone(), &config);
+    let mut expected = model;
+    expected.model_messages = None;
+
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn disabled_personality_clears_model_messages() {
+    let model = model_info_from_slug("gpt-5.2-codex");
+    let config = ModelsManagerConfig {
+        personality_enabled: false,
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model.clone(), &config);
+    let mut expected = model;
+    expected.model_messages = None;
+
+    assert_eq!(updated, expected);
+}

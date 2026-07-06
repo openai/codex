@@ -21,7 +21,6 @@ use serde::de::DeserializeOwned;
 use serde::de::Error;
 use strum_macros::Display;
 use strum_macros::EnumIter;
-use tracing::warn;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
@@ -370,7 +369,6 @@ pub struct ModelInfo {
     pub default_service_tier: Option<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
-    pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     #[serde(default)]
@@ -466,21 +464,16 @@ impl ModelInfo {
                 .get_personality_message(personality)
                 .unwrap_or_default();
             template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
-        } else if let Some(personality) = personality {
-            warn!(
-                model = %self.slug,
-                %personality,
-                "Model personality requested but model_messages is missing, falling back to base instructions."
-            );
-            self.base_instructions.clone()
         } else {
-            self.base_instructions.clone()
+            String::new()
         }
     }
 }
 
-/// A strongly-typed template for assembling model instructions and developer messages. If
-/// instructions_* is populated and valid, it will override base_instructions.
+/// A strongly-typed template for assembling model instructions and developer messages.
+///
+/// When `instructions_template` is present, it is used even if `instructions_variables` is absent
+/// or incomplete.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelMessages {
     pub instructions_template: Option<String>,
@@ -668,7 +661,6 @@ mod tests {
             default_service_tier: None,
             availability_nux: None,
             upgrade: None,
-            base_instructions: "base".to_string(),
             model_messages: spec,
             include_skills_usage_instructions: false,
             supports_reasoning_summaries: false,
@@ -783,6 +775,18 @@ mod tests {
     }
 
     #[test]
+    fn get_model_instructions_uses_template_without_variables() {
+        let model = test_model(Some(ModelMessages {
+            instructions_template: Some("Hello {{ personality }}".to_string()),
+            instructions_variables: None,
+        }));
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "Hello ");
+    }
+
+    #[test]
     fn get_model_instructions_always_strips_placeholder() {
         let model = test_model(Some(ModelMessages {
             instructions_template: Some("Hello\n{{ personality }}".to_string()),
@@ -836,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn get_model_instructions_falls_back_when_template_is_missing() {
+    fn get_model_instructions_is_empty_when_template_is_missing() {
         let model = test_model(Some(ModelMessages {
             instructions_template: None,
             instructions_variables: Some(ModelInstructionsVariables {
@@ -848,7 +852,16 @@ mod tests {
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
 
-        assert_eq!(instructions, "base");
+        assert_eq!(instructions, "");
+    }
+
+    #[test]
+    fn get_model_instructions_is_empty_when_model_messages_is_missing() {
+        let model = test_model(None);
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "");
     }
 
     #[test]
@@ -937,7 +950,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 1,
             "upgrade": null,
-            "base_instructions": "base",
             "model_messages": null,
             "supports_reasoning_summaries": false,
             "default_reasoning_summary": "auto",

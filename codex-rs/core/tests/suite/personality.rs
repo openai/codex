@@ -89,7 +89,7 @@ fn read_only_text_turn_with_personality(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn personality_does_not_mutate_base_instructions_without_template() {
+async fn personality_without_template_has_empty_model_instructions() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config
@@ -98,11 +98,8 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
         .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
 
-    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.4", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
-    );
+    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.2", &config);
+    assert_eq!(model_info.get_model_instructions(config.personality), "");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -119,11 +116,8 @@ async fn base_instructions_override_disables_personality_template() {
     let model_info =
         codex_core::test_support::construct_model_info_offline("gpt-5.3-codex", &config);
 
-    assert_eq!(model_info.base_instructions, "override instructions");
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        "override instructions"
-    );
+    assert_eq!(model_info.model_messages, None);
+    assert_eq!(model_info.get_model_instructions(config.personality), "");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -449,7 +443,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
+async fn instructions_are_empty_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config
@@ -460,10 +454,7 @@ async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
 
     let model_info =
         codex_core::test_support::construct_model_info_offline("gpt-5.3-codex", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
-    );
+    assert_eq!(model_info.get_model_instructions(config.personality), "");
 
     Ok(())
 }
@@ -565,7 +556,6 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
             instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {
@@ -681,7 +671,6 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
             instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {

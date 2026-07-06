@@ -414,7 +414,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 0,
             "upgrade": null,
-            "base_instructions": "base instructions",
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,

@@ -10,6 +10,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
@@ -73,12 +74,10 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     );
     let specific = ModelInfo {
         display_name: "GPT 5.3 Codex".to_string(),
-        base_instructions: "use specific prefix".to_string(),
         ..specific
     };
     let generic = ModelInfo {
         display_name: "GPT 5.3".to_string(),
-        base_instructions: "use generic prefix".to_string(),
         ..generic
     };
     mount_models_once(
@@ -110,7 +109,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
         .await;
 
     assert_eq!(model_info.slug, "gpt-5.3-codex-test");
-    assert_eq!(model_info.base_instructions, specific.base_instructions);
+    assert_eq!(model_info.display_name, specific.display_name);
 
     Ok(())
 }
@@ -483,7 +482,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
@@ -701,7 +699,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_apply_remote_base_instructions() -> Result<()> {
+async fn remote_models_apply_remote_instructions_template() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -712,7 +710,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     let model = "test-gpt-5-remote";
 
-    let remote_base = "Use the remote base instructions only.";
+    let remote_instructions = "Use the remote instructions template only.";
     let remote_model = ModelInfo {
         slug: model.to_string(),
         display_name: "Parallel Remote".to_string(),
@@ -737,8 +735,10 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: remote_base.to_string(),
-        model_messages: None,
+        model_messages: Some(ModelMessages {
+            instructions_template: Some(remote_instructions.to_string()),
+            instructions_variables: None,
+        }),
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
@@ -777,28 +777,22 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model = Some("gpt-5.2".to_string());
+        .with_config(move |config| {
+            config
+                .features
+                .enable(codex_features::Feature::Personality)
+                .expect("test config should allow feature update");
+            config.model = Some(model.to_string());
         });
     let TestCodex {
         codex,
         cwd,
-        config,
         thread_manager,
         ..
     } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model).await;
-
-    core_test_support::submit_thread_settings(
-        &codex,
-        codex_protocol::protocol::ThreadSettingsOverrides {
-            model: Some(model.to_string()),
-            ..Default::default()
-        },
-    )
-    .await?;
 
     let cwd_path = cwd.abs();
     let (sandbox_policy, permission_profile) =
@@ -825,12 +819,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let base_model_info = models_manager
-        .get_model_info("gpt-5.2", &config.to_models_manager_config())
-        .await;
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
-    assert_eq!(instructions, base_model_info.base_instructions);
+    assert_eq!(instructions, remote_instructions);
 
     Ok(())
 }
@@ -1232,7 +1223,6 @@ fn test_remote_model_with_policy(
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,

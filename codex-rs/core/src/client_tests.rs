@@ -254,7 +254,6 @@ fn test_model_info() -> ModelInfo {
         "supported_in_api": true,
         "priority": 1,
         "upgrade": null,
-        "base_instructions": "base instructions",
         "model_messages": null,
         "supports_reasoning_summaries": false,
         "support_verbosity": false,

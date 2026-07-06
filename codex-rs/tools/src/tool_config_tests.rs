@@ -25,7 +25,6 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         default_service_tier: None,
         availability_nux: None,
         upgrade: None,
-        base_instructions: String::new(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
