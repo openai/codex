@@ -1061,7 +1061,7 @@ mod tests {
             "safety_buffering": {
                 "use_cases": ["cyber"],
                 "reasons": ["user_risk"],
-                "faster_model": "gpt-fast-wire"
+                "retry_model": "gpt-fast-wire"
             }
         }))
         .expect("deserialize safety buffering event");
