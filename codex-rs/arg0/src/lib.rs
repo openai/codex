@@ -15,8 +15,6 @@ use codex_windows_sandbox::CODEX_WINDOWS_SANDBOX_ARG1;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
-mod conditional_dotenv;
-
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
@@ -100,9 +98,6 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
-    if argv1 == conditional_dotenv::TCP_CONNECT_HELPER_ARG1 {
-        conditional_dotenv::run_tcp_connect_helper(args);
-    }
     if argv1 == CODEX_FS_HELPER_ARG1 {
         codex_exec_server::run_fs_helper_main();
     }
@@ -196,7 +191,7 @@ fn prepare_path_env_var_with_aliases(
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` and matching conditional dotenv values from `~/.codex` before creating threads.
+/// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
 /// 2.  Spawn a main runtime thread with a controlled stack size.
 /// 3.  Construct a Tokio multi-thread runtime.
 /// 4.  Capture the current executable path and derive the
@@ -290,18 +285,16 @@ fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load base and conditional env vars from the startup Codex home.
+/// Load env vars from ~/.codex/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    let Ok(codex_home) = find_codex_home() else {
-        return;
-    };
-    if let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env")) {
+    if let Ok(codex_home) = find_codex_home()
+        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    {
         set_filtered(iter);
     }
-    conditional_dotenv::load(codex_home.as_path());
 }
 
 /// Helper to set vars from a dotenvy iterator while filtering out `CODEX_` keys.
@@ -310,17 +303,12 @@ where
     I: IntoIterator<Item = Result<(String, String), dotenvy::Error>>,
 {
     for (key, value) in iter.into_iter().flatten() {
-        if !is_reserved_env_var(&key) {
+        if !key.to_ascii_uppercase().starts_with(ILLEGAL_ENV_VAR_PREFIX) {
             // It is safe to call set_var() because our process is
             // single-threaded at this point in its execution.
             unsafe { std::env::set_var(&key, &value) };
         }
     }
-}
-
-fn is_reserved_env_var(key: &str) -> bool {
-    key.get(..ILLEGAL_ENV_VAR_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(ILLEGAL_ENV_VAR_PREFIX))
 }
 
 /// Creates a temporary directory with either:
