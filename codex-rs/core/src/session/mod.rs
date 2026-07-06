@@ -997,6 +997,15 @@ impl Session {
         !matches!(permission_profile, PermissionProfile::Disabled)
     }
 
+    fn managed_network_proxy_refresh_required(
+        previous: &SessionConfiguration,
+        next: &SessionConfiguration,
+    ) -> bool {
+        previous.permission_profile() != next.permission_profile()
+            || previous.original_config_do_not_use.permissions.network
+                != next.original_config_do_not_use.permissions.network
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -1080,7 +1089,7 @@ impl Session {
             .as_ref()
             .cloned()
         else {
-            self.services.network_proxy.store(None);
+            self.services.network_proxy.store(/*val*/ None);
             return;
         };
 
@@ -1090,7 +1099,7 @@ impl Session {
             Ok(spec) => spec,
             Err(err) => {
                 warn!("failed to rebuild managed network proxy policy for sandbox change: {err}");
-                self.services.network_proxy.store(None);
+                self.services.network_proxy.store(/*val*/ None);
                 return;
             }
         };
@@ -1106,17 +1115,22 @@ impl Session {
         };
         if let Some(started_proxy) = self.services.network_proxy.load_full() {
             if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
-                warn!("failed to refresh managed network proxy for sandbox change: {err}");
-                self.services.network_proxy.store(None);
+                warn!(
+                    "failed to refresh managed network proxy for sandbox change; replacing it: {err}"
+                );
+            } else {
+                return;
             }
-            return;
         }
 
         match Self::start_managed_network_proxy(
             &spec,
             current_exec_policy.as_ref(),
             &session_configuration.permission_profile(),
-            /*network_policy_decider*/ None,
+            self.services
+                .network_policy_decider
+                .as_ref()
+                .map(Arc::clone),
             self.services
                 .managed_network_requirements_configured
                 .then(|| {
@@ -1134,6 +1148,7 @@ impl Session {
             }
             Err(err) => {
                 warn!("failed to start managed network proxy for sandbox change: {err}");
+                self.services.network_proxy.store(/*val*/ None);
             }
         }
     }
@@ -1530,7 +1545,7 @@ impl Session {
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, permission_profile_changed) = {
+        let (previous_config, new_config, refresh_managed_network_proxy) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1544,20 +1559,20 @@ impl Session {
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
             let new_config =
                 notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
-            let previous_permission_profile = state.session_configuration.permission_profile();
-            let updated_permission_profile = updated.permission_profile();
-            let permission_profile_changed =
-                previous_permission_profile != updated_permission_profile;
+            let refresh_managed_network_proxy = Self::managed_network_proxy_refresh_required(
+                &state.session_configuration,
+                &updated,
+            );
             if updates.environments.is_some() {
                 self.services
                     .turn_environments
                     .update_selections(updated.environment_selections());
             }
             state.session_configuration = updated;
-            (previous_config, new_config, permission_profile_changed)
+            (previous_config, new_config, refresh_managed_network_proxy)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        if permission_profile_changed {
+        if refresh_managed_network_proxy {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }

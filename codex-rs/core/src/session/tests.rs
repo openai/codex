@@ -4829,7 +4829,12 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                             FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
                         )]),
                     }),
-                    network: None,
+                    network: Some(NetworkToml {
+                        enabled: Some(true),
+                        proxy_url: Some("http://127.0.0.1:0".to_string()),
+                        enable_socks5: Some(true),
+                        ..Default::default()
+                    }),
                 },
             ),
             (
@@ -4847,7 +4852,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                     }),
                     network: Some(NetworkToml {
                         enabled: Some(true),
-                        proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                        proxy_url: Some("http://127.0.0.1:0".to_string()),
                         enable_socks5: Some(false),
                         ..Default::default()
                     }),
@@ -4875,14 +4880,12 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
             .build()
             .await?,
     );
-    assert_ne!(
+    assert!(
         locked_config
             .permissions
             .network
             .as_ref()
-            .map(crate::config::NetworkProxySpec::proxy_host_and_port)
-            .as_deref(),
-        Some("127.0.0.1:43128")
+            .is_some_and(crate::config::NetworkProxySpec::socks_enabled)
     );
     let selected_config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -4893,6 +4896,11 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
         })
         .build()
         .await?;
+    assert_eq!(
+        locked_config.permissions.permission_profile(),
+        selected_config.permissions.permission_profile(),
+        "the profile switch should exercise proxy-spec-only refresh detection"
+    );
 
     let mut session_configuration = make_session_configuration_for_tests().await;
     session_configuration.permission_profile_state =
@@ -4913,8 +4921,50 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
         .network
         .as_ref()
         .expect("selected profile proxy should become the session proxy config");
-    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:0");
     assert!(!network.socks_enabled());
+
+    let session = make_session_with_config({
+        let locked_config = Arc::clone(&locked_config);
+        move |config| *config = (*locked_config).clone()
+    })
+    .await
+    .map_err(std::io::Error::other)?;
+    let initial_http_addr = session
+        .services
+        .network_proxy
+        .load_full()
+        .expect("initial managed network proxy should be present")
+        .proxy()
+        .http_addr();
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "proxy-spec-only-profile-change".to_string(),
+            SessionSettingsUpdate {
+                permission_profile: Some(selected_config.permissions.permission_profile().clone()),
+                active_permission_profile: selected_config.permissions.active_permission_profile(),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+    assert!(turn_context.network.is_some());
+
+    let replacement_proxy = session
+        .services
+        .network_proxy
+        .load_full()
+        .expect("replacement managed network proxy should be present");
+    let replacement_http_addr = replacement_proxy.proxy().http_addr();
+    assert_ne!(replacement_http_addr, initial_http_addr);
+    let replacement_config = replacement_proxy
+        .proxy()
+        .current_cfg()
+        .await
+        .map_err(std::io::Error::other)?;
+    assert!(!replacement_config.network.enable_socks5);
+    tokio::net::TcpStream::connect(replacement_http_addr).await?;
     Ok(())
 }
 
@@ -5548,6 +5598,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
+        network_policy_decider: None,
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
@@ -7674,6 +7725,7 @@ where
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
+        network_policy_decider: None,
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),

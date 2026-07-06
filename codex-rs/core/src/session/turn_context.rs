@@ -580,11 +580,11 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let previous_permission_profile =
-                        state.session_configuration.permission_profile();
-                    let next_permission_profile = next.permission_profile();
-                    let permission_profile_changed =
-                        previous_permission_profile != next_permission_profile;
+                    let refresh_managed_network_proxy =
+                        Self::managed_network_proxy_refresh_required(
+                            &state.session_configuration,
+                            &next,
+                        );
                     let previous_config = notify_config_contributors.then(|| {
                         Self::build_effective_session_config(&state.session_configuration)
                     });
@@ -598,7 +598,7 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
-                        permission_profile_changed,
+                        refresh_managed_network_proxy,
                         previous_config,
                         new_config,
                     ))
@@ -607,7 +607,7 @@ impl Session {
             }
         };
 
-        let (session_configuration, permission_profile_changed, previous_config, new_config) =
+        let (session_configuration, refresh_managed_network_proxy, previous_config, new_config) =
             match update_result {
                 Ok(update) => update,
                 Err(err) => {
@@ -625,7 +625,7 @@ impl Session {
             };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
-        if permission_profile_changed {
+        if refresh_managed_network_proxy {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
