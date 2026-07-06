@@ -335,6 +335,8 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
             if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
               continue
             fi
@@ -714,6 +716,8 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
             if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
               continue
             fi
@@ -993,6 +997,8 @@ jobs:
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
             verify_signed_binary "$binary_path"
 
+            # The app-server package contains the host, but its standalone archives
+            # are omitted above to avoid duplicate release asset names.
             if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
               continue
             fi
