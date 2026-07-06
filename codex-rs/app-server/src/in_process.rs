@@ -80,6 +80,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
@@ -349,7 +350,16 @@ impl InProcessClientHandle {
 /// This function sends `initialize` followed by `initialized` before returning
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
-pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    if let Ok(Some(err)) = check_execpolicy_for_warnings(&args.config.config_layer_stack).await {
+        let (path, range) = crate::exec_policy_warning_location(&err);
+        args.config_warnings.push(ConfigWarningNotification {
+            summary: "Error parsing rules; custom rules not applied.".to_string(),
+            details: Some(err.to_string()),
+            path,
+            range,
+        });
+    }
     let initialize = args.initialize.clone();
     let client = start_uninitialized(args).await?;
 
