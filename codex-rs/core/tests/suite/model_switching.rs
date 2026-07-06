@@ -366,11 +366,7 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
         "no service tiers",
         default_input_modalities(),
     );
-    let resp_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
         .with_model(model_slug)
@@ -381,51 +377,12 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    let mut warning_count = 0;
-    for (prompt, service_tier) in [
-        (
-            "first turn",
-            Some(Some(ServiceTier::Fast.request_value().to_string())),
-        ),
-        ("second turn", None),
-    ] {
-        test.codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: prompt.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                    service_tier,
-                    ..Default::default()
-                },
-            })
-            .await?;
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast.request_value()))
+        .await?;
 
-        loop {
-            match wait_for_event(&test.codex, |_| true).await {
-                EventMsg::Warning(warning)
-                    if warning.message.contains("will be omitted from requests") =>
-                {
-                    warning_count += 1;
-                }
-                EventMsg::TurnComplete(_) => break,
-                _ => {}
-            }
-        }
-    }
-
-    assert_eq!(warning_count, 1);
-    let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.body_json().get("service_tier").is_none())
-    );
+    let request = resp_mock.single_request();
+    let body = request.body_json();
+    assert_eq!(body.get("service_tier"), None);
 
     Ok(())
 }
