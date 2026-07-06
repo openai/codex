@@ -58,6 +58,8 @@ pub struct PermissionsInstructions {
     text: String,
 }
 
+const GUARDIAN_REVIEWER_SCOPE_TEXT: &str = "These are the permissions of this reviewer thread only. They are not the permissions of the Codex session being reviewed.";
+
 impl PermissionsInstructions {
     /// Builds permissions instructions from the effective permission profile and approval policy.
     pub fn from_permission_profile(
@@ -90,6 +92,21 @@ impl PermissionsInstructions {
 
     pub fn body(&self) -> String {
         self.text.clone()
+    }
+
+    /// Clarifies that these permissions belong to a guardian reviewer, not the reviewed session.
+    ///
+    /// Guardian reviewers always run with a non-requesting approval policy, so the ordinary
+    /// approval-policy reminder is omitted to avoid confusing it with the reviewed session's
+    /// permissions. If the reviewer attempts an escalation anyway, its fixed approval policy
+    /// rejects the request.
+    pub fn for_guardian_reviewer(mut self) -> Self {
+        let reviewer_permissions = self.text.replace(APPROVAL_POLICY_NEVER, "");
+        self.text = format!(
+            "{GUARDIAN_REVIEWER_SCOPE_TEXT}\n{}\n",
+            reviewer_permissions.trim()
+        );
+        self
     }
 
     #[cfg(test)]
