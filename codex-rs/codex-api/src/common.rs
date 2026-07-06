@@ -121,6 +121,7 @@ pub struct SafetyBuffering {
     pub reasons: Vec<String>,
     #[serde(skip)]
     pub show_buffering_ui: bool,
+    #[serde(rename = "retry_model")]
     pub faster_model: Option<String>,
 }
 

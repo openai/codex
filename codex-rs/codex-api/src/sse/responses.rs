@@ -236,10 +236,10 @@ impl ResponsesStreamEvent {
         treatment: &SafetyBufferingTreatment,
     ) -> Option<SafetyBuffering> {
         let value = self.safety_buffering.as_ref()?;
-        let faster_model_present = value.as_object()?.contains_key("faster_model");
+        let retry_model_present = value.as_object()?.contains_key("retry_model");
         let mut buffering: SafetyBuffering = serde_json::from_value(value.clone()).ok()?;
         buffering.show_buffering_ui = true;
-        if !faster_model_present {
+        if !retry_model_present {
             buffering.faster_model.clone_from(&treatment.faster_model);
         }
         Some(buffering)
@@ -1363,7 +1363,7 @@ mod tests {
                 "safety_buffering": {
                     "use_cases": ["cyber"],
                     "reasons": ["user_risk"],
-                    "faster_model": "gpt-fast-wire"
+                    "retry_model": "gpt-fast-wire"
                 }
             }),
             json!({
@@ -1411,12 +1411,12 @@ mod tests {
     }
 
     #[test]
-    fn safety_buffering_prefers_wire_faster_model_and_only_falls_back_when_omitted() {
+    fn safety_buffering_prefers_wire_retry_model_and_only_falls_back_when_omitted() {
         let treatment = SafetyBufferingTreatment {
             faster_model: Some("gpt-fast-header".to_string()),
         };
 
-        for (faster_model, expected_faster_model) in [
+        for (retry_model, expected_faster_model) in [
             (None, Some("gpt-fast-header")),
             (Some(Value::Null), None),
             (Some(json!("gpt-fast-wire")), Some("gpt-fast-wire")),
@@ -1428,8 +1428,8 @@ mod tests {
                     "reasons": ["user_risk"]
                 }
             });
-            if let Some(faster_model) = faster_model {
-                event["safety_buffering"]["faster_model"] = faster_model;
+            if let Some(retry_model) = retry_model {
+                event["safety_buffering"]["retry_model"] = retry_model;
             }
             let event: ResponsesStreamEvent =
                 serde_json::from_value(event).expect("deserialize safety buffering event");
