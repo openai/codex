@@ -179,7 +179,7 @@ impl ReferralClient {
         let description = eligibility
             .description
             .clone()
-            .unwrap_or_else(|| fallback_description(&eligibility));
+            .unwrap_or_else(|| "Invite someone to Codex. Rewards may apply.".to_string());
 
         Ok(Some(ReferralOffer {
             description,
@@ -316,30 +316,4 @@ fn preflight_failure(message: impl Into<String>) -> anyhow::Error {
         message: message.into(),
     }
     .into()
-}
-
-fn fallback_description(eligibility: &EligibilityResponse) -> String {
-    match (&eligibility.grant_amount, &eligibility.grant_action) {
-        (Some(amount), Some(action)) => format!(
-            "Invite someone and earn {} {}.",
-            reward_value_to_string(amount),
-            reward_value_to_string(action)
-        ),
-        (Some(amount), None) => format!(
-            "Invite someone and earn a Codex reward worth {}.",
-            reward_value_to_string(amount)
-        ),
-        (None, Some(action)) => format!(
-            "Invite someone and earn a Codex {} reward.",
-            reward_value_to_string(action)
-        ),
-        (None, None) => "Invite someone and earn a Codex reward.".to_string(),
-    }
-}
-
-fn reward_value_to_string(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
 }

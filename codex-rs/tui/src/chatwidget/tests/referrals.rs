@@ -173,7 +173,7 @@ async fn changed_referral_offer_requires_reconfirmation_before_send() {
 
 fn test_offer() -> ReferralOffer {
     ReferralOffer {
-        description: "Invite a friend and earn a usage reset.".to_string(),
+        description: "Invite someone to Codex. Rewards may apply.".to_string(),
         rules: vec!["Your friend must be new to Codex.".to_string()],
         grant_action: Some(serde_json::json!("usage_reset")),
         grant_amount: Some(serde_json::json!(1)),
