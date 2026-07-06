@@ -7,14 +7,18 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::TextPosition;
+use codex_app_server_protocol::TextRange;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -54,6 +58,17 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const EXEC_POLICY_PARSE_WARNING_SUMMARY: &str = "Error parsing rules; custom rules not applied.";
+
+fn is_exec_policy_config_warning(notification: &JSONRPCNotification) -> bool {
+    notification.method == "configWarning"
+        && notification
+            .params
+            .as_ref()
+            .and_then(|params| params.get("summary"))
+            .and_then(Value::as_str)
+            == Some(EXEC_POLICY_PARSE_WARNING_SUMMARY)
+}
 
 async fn start_thread_with_model(
     mcp: &mut TestAppServer,
@@ -101,6 +116,124 @@ model = "gpt-5.4-mini"
     let response: ThreadStartResponse = to_response(response)?;
 
     assert_eq!(response.model, "openai.gpt-5.5");
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_warns_for_exec_policy_parse_failure_after_initialize() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let rules_dir = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    let rules_path = rules_dir.join("broken.rules");
+    std::fs::write(&rules_path, "prefix_rule(")?;
+    let rules_path = std::fs::canonicalize(rules_path)?;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadStartResponse = to_response(response)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(
+            "exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
+    )
+    .await??;
+    let notification: ServerNotification = notification.try_into()?;
+    let ServerNotification::ConfigWarning(warning) = notification else {
+        anyhow::bail!("unexpected notification variant");
+    };
+    let ConfigWarningNotification {
+        summary,
+        details,
+        path,
+        range,
+    } = warning;
+    assert_eq!(
+        (summary, range),
+        (
+            "Error parsing rules; custom rules not applied.".to_string(),
+            Some(TextRange {
+                start: TextPosition {
+                    line: 1,
+                    column: 13,
+                },
+                end: TextPosition {
+                    line: 1,
+                    column: 13,
+                },
+            }),
+        )
+    );
+    let path = path.context("warning should include a path")?;
+    assert_eq!(
+        normalize_path_for_comparison(path),
+        normalize_path_for_comparison(&rules_path)
+    );
+    let details = details.context("warning should include details")?;
+    assert!(
+        details.contains("failed to parse rules file") && details.contains("broken.rules"),
+        "unexpected warning details: {details}"
+    );
+    assert!(
+        details.contains("Parse error"),
+        "unexpected warning details: {details}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_does_not_repeat_initialize_exec_policy_warning() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let rules_dir = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    std::fs::write(rules_dir.join("broken.rules"), "prefix_rule(")?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(
+            "initialize exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadStartResponse = to_response(response)?;
+
+    let duplicate_warning = timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_matching_notification(
+            "duplicate exec-policy configWarning",
+            is_exec_policy_config_warning,
+        ),
+    )
+    .await;
+    assert!(
+        duplicate_warning.is_err(),
+        "thread/start repeated the initialize exec-policy warning"
+    );
+
     Ok(())
 }
 
