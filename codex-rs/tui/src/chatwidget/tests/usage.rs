@@ -1,3 +1,6 @@
+use super::super::reset_credits::RateLimitResetScope;
+use super::super::reset_credits::ResetCreditOption;
+use super::super::reset_credits::reset_credit_options;
 use super::*;
 use chrono::TimeZone;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
@@ -6,6 +9,7 @@ use codex_app_server_protocol::RateLimitResetCredit;
 use codex_app_server_protocol::RateLimitResetCreditStatus;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RateLimitResetType;
+use pretty_assertions::assert_eq;
 use uuid::Uuid;
 
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
@@ -52,6 +56,24 @@ fn expiry_timestamp(day: u32, hour: u32, minute: u32) -> i64 {
         .single()
         .expect("valid test timestamp")
         .timestamp()
+}
+
+#[test]
+fn reset_credit_options_use_scope_label_for_unknown_reset_type() {
+    let mut credit = reset_credit("future-credit", /*expires_at*/ None);
+    credit.reset_type = RateLimitResetType::Unknown;
+
+    assert_eq!(
+        reset_credit_options(
+            &detailed_reset_credits(/*available_count*/ 1, vec![credit]),
+            RateLimitResetScope::WeeklyAndFiveHour,
+        ),
+        vec![ResetCreditOption {
+            credit_id: Some("future-credit".to_string()),
+            name: "Full reset (Weekly + 5h)".to_string(),
+            description: "Does not expire.".to_string(),
+        }]
+    );
 }
 
 #[tokio::test]

@@ -34,6 +34,7 @@ impl RateLimitResetScope {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub(super) struct ResetCreditOption {
     pub(super) credit_id: Option<String>,
     pub(super) name: String,
@@ -104,7 +105,9 @@ pub(super) fn reset_credit_options(
                 .as_deref()
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| match credit.reset_type {
-                    RateLimitResetType::CodexRateLimits => scope.picker_label(),
+                    RateLimitResetType::CodexRateLimits | RateLimitResetType::Unknown => {
+                        scope.picker_label()
+                    }
                 });
             ResetCreditOption {
                 credit_id: Some(credit.id.clone()),

@@ -355,8 +355,7 @@ impl ChatWidget {
                 let available_count = response.available_count;
                 self.available_rate_limit_reset_credits = Some(available_count);
                 format!(
-                    "Usage reset. You have {} {} left.",
-                    available_count,
+                    "Usage reset. You have {available_count} {} left.",
                     reset_label(available_count)
                 )
             }
