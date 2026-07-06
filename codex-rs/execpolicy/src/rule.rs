@@ -112,6 +112,7 @@ pub struct PrefixRule {
     pub pattern: PrefixPattern,
     pub decision: Decision,
     pub justification: Option<String>,
+    pub permissions: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -214,7 +215,7 @@ pub(crate) fn normalize_network_rule_host(raw: &str) -> Result<String> {
 pub trait Rule: Any + Debug + Send + Sync {
     fn program(&self) -> &str;
 
-    fn matches(&self, cmd: &[String]) -> Option<RuleMatch>;
+    fn matches(&self, cmd: &[String], options: &MatchOptions) -> Option<RuleMatch>;
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -226,7 +227,13 @@ impl Rule for PrefixRule {
         self.pattern.first.as_ref()
     }
 
-    fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
+    fn matches(&self, cmd: &[String], options: &MatchOptions) -> Option<RuleMatch> {
+        if let Some(permissions) = self.permissions.as_deref()
+            && options.active_permission_profile.as_deref() != Some(permissions)
+        {
+            return None;
+        }
+
         self.pattern
             .matches_prefix(cmd)
             .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
@@ -251,6 +258,7 @@ pub(crate) fn validate_match_examples(
     let mut unmatched_examples = Vec::new();
     let options = MatchOptions {
         resolve_host_executables: true,
+        active_permission_profile: validation_permissions(rules),
     };
 
     for example in matches {
@@ -281,11 +289,12 @@ pub(crate) fn validate_match_examples(
 /// Ensure that no rule matches any provided negative example.
 pub(crate) fn validate_not_match_examples(
     policy: &Policy,
-    _rules: &[RuleRef],
+    rules: &[RuleRef],
     not_matches: &[Vec<String>],
 ) -> Result<()> {
     let options = MatchOptions {
         resolve_host_executables: true,
+        active_permission_profile: validation_permissions(rules),
     };
 
     for example in not_matches {
@@ -303,4 +312,22 @@ pub(crate) fn validate_not_match_examples(
     }
 
     Ok(())
+}
+
+fn validation_permissions(rules: &[RuleRef]) -> Option<String> {
+    let mut permissions = None;
+    for rule in rules {
+        let Some(prefix_rule) = rule.as_any().downcast_ref::<PrefixRule>() else {
+            continue;
+        };
+        match (&permissions, &prefix_rule.permissions) {
+            (None, Some(rule_permissions)) => {
+                permissions = Some(rule_permissions.clone());
+            }
+            (Some(permissions), Some(rule_permissions)) if permissions == rule_permissions => {}
+            (_, None) => {}
+            (Some(_), Some(_)) => return None,
+        }
+    }
+    permissions
 }
