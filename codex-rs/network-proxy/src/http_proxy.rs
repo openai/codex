@@ -1,3 +1,4 @@
+use crate::attribution::BindConnectionAttribution;
 use crate::config::NetworkMode;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::mitm;
@@ -39,7 +40,6 @@ use rama_core::error::ErrorExt as _;
 use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
-use rama_core::layer::AddInputExtensionLayer;
 use rama_core::service::service_fn;
 use rama_core::stream::Stream;
 use rama_http::Body;
@@ -159,7 +159,11 @@ async fn run_http_proxy_with_listener(
     info!("HTTP proxy listening on {addr}");
 
     listener
-        .serve(AddInputExtensionLayer::new(state).into_layer(http_service))
+        .serve(BindConnectionAttribution::new(
+            http_service,
+            state,
+            environment_id,
+        ))
         .await;
     Ok(())
 }

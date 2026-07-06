@@ -1,5 +1,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod attribution;
 mod certs;
 mod config;
 mod connect_policy;
@@ -18,6 +19,8 @@ mod socks5;
 mod state;
 mod upstream;
 
+pub use attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
+pub use attribution::write_attribution_frame;
 pub use certs::CUSTOM_CA_ENV_KEYS;
 pub use certs::is_managed_mitm_ca_trust_bundle_path;
 pub use config::NetworkDomainPermission;

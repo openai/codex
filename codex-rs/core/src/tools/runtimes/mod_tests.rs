@@ -118,6 +118,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
+        network_proxy: None,
     };
 
     let exec_request = attempt

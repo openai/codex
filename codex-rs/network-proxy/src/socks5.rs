@@ -1,3 +1,4 @@
+use crate::attribution::BindConnectionAttribution;
 use crate::config::NetworkMode;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::mitm;
@@ -23,13 +24,11 @@ use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
 use anyhow::Context as _;
 use anyhow::Result;
-use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
 use rama_core::extensions::Extensions;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
-use rama_core::layer::AddInputExtensionLayer;
 use rama_core::service::service_fn;
 use rama_net::address::HostWithPort;
 use rama_net::client::EstablishedClientConnection;
@@ -165,11 +164,15 @@ async fn run_socks5_with_listener(
             }));
         let socks_acceptor = base.with_udp_associator(udp_relay);
         listener
-            .serve(AddInputExtensionLayer::new(state).into_layer(socks_acceptor))
+            .serve(BindConnectionAttribution::new(
+                socks_acceptor,
+                state,
+                environment_id,
+            ))
             .await;
     } else {
         listener
-            .serve(AddInputExtensionLayer::new(state).into_layer(base))
+            .serve(BindConnectionAttribution::new(base, state, environment_id))
             .await;
     }
     Ok(())

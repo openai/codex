@@ -227,6 +227,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
+        network_proxy: None,
     };
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
