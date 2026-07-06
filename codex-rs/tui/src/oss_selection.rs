@@ -39,6 +39,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Clone)]
 struct ProviderOption {
@@ -341,7 +342,6 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
 
     let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
-    crate::tui::discard_terminal_input();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -349,25 +349,72 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = loop {
+    let result = (|| {
         terminal.draw(|f| {
             (&widget).render_ref(f.area(), f.buffer_mut());
         })?;
 
-        if let Event::Key(key_event) = event::read()?
-            && let Some(selection) = widget.handle_key_event(key_event)
-        {
-            break Ok(OssProviderSelection {
-                provider: selection,
+        if discard_startup_events_until_quiet()? {
+            return Ok(OssProviderSelection {
+                provider: "__CANCELLED__".to_string(),
                 manually_selected: true,
             });
         }
-    };
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        loop {
+            if let Event::Key(key_event) = event::read()?
+                && let Some(selection) = widget.handle_key_event(key_event)
+            {
+                break Ok(OssProviderSelection {
+                    provider: selection,
+                    manually_selected: true,
+                });
+            }
+            terminal.draw(|f| {
+                (&widget).render_ref(f.area(), f.buffer_mut());
+            })?;
+        }
+    })();
+
+    let disable_raw_result = disable_raw_mode();
+    let leave_screen_result = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    disable_raw_result?;
+    leave_screen_result?;
 
     result
+}
+
+fn discard_startup_events_until_quiet() -> io::Result<bool> {
+    discard_startup_events_until_quiet_with(event::poll, event::read, Instant::now)
+}
+
+fn discard_startup_events_until_quiet_with(
+    mut poll: impl FnMut(Duration) -> io::Result<bool>,
+    mut read: impl FnMut() -> io::Result<Event>,
+    mut now: impl FnMut() -> Instant,
+) -> io::Result<bool> {
+    let mut quiet_deadline = None;
+    loop {
+        let timeout = quiet_deadline
+            .map(|deadline: Instant| deadline.saturating_duration_since(now()))
+            .unwrap_or(Duration::ZERO);
+        if !poll(timeout)? {
+            return Ok(false);
+        }
+        let event = read()?;
+        if matches!(
+            event,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) if modifiers.contains(KeyModifiers::CONTROL)
+        ) {
+            return Ok(true);
+        }
+        quiet_deadline = Some(now() + crate::tui::STARTUP_INPUT_QUIET_PERIOD);
+    }
 }
 
 async fn check_lmstudio_status() -> ProviderStatus {
@@ -402,6 +449,12 @@ async fn check_port_status(port: u16) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    use pretty_assertions::assert_eq;
+
     use super::*;
 
     #[test]
@@ -414,5 +467,61 @@ mod tests {
         assert_eq!(widget.selected_option, 1);
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(widget.selected_option, 0);
+    }
+
+    #[test]
+    fn startup_drain_waits_for_repeated_enter_to_settle() {
+        let now = Cell::new(Instant::now());
+        let poll_count = Cell::new(0);
+        let poll_timeouts = RefCell::new(Vec::new());
+        let events = RefCell::new(VecDeque::from([
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        ]));
+
+        let cancelled = discard_startup_events_until_quiet_with(
+            |timeout| {
+                poll_timeouts.borrow_mut().push(timeout);
+                let count = poll_count.get();
+                poll_count.set(count + 1);
+                if count == 1 {
+                    now.set(now.get() + crate::tui::STARTUP_INPUT_QUIET_PERIOD / 2);
+                } else if count == 2 {
+                    now.set(now.get() + timeout);
+                }
+                Ok(count < 2)
+            },
+            || Ok(events.borrow_mut().pop_front().expect("queued event")),
+            || now.get(),
+        )
+        .expect("startup drain");
+
+        assert!(!cancelled);
+        assert_eq!(
+            poll_timeouts.into_inner(),
+            vec![
+                Duration::ZERO,
+                crate::tui::STARTUP_INPUT_QUIET_PERIOD,
+                crate::tui::STARTUP_INPUT_QUIET_PERIOD,
+            ]
+        );
+    }
+
+    #[test]
+    fn startup_drain_preserves_ctrl_c_repeat_as_cancellation() {
+        let event = RefCell::new(Some(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Repeat,
+        ))));
+
+        let cancelled = discard_startup_events_until_quiet_with(
+            |_| Ok(true),
+            || Ok(event.borrow_mut().take().expect("queued event")),
+            Instant::now,
+        )
+        .expect("startup drain");
+
+        assert!(cancelled);
     }
 }
