@@ -85,6 +85,26 @@ fn test_apply_patch_cli_applies_multiple_chunks() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_apply_patch_cli_rejects_overlapping_end_of_file_chunks() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("overlapping.txt");
+    let expected_target_path = resolved_under(tmp.path(), "overlapping.txt")?;
+    fs::write(&target_path, "one\n")?;
+
+    let patch = "*** Begin Patch\n*** Update File: overlapping.txt\n@@\n-one\n+first\n@@\n-one\n+second\n*** End of File\n*** End Patch";
+
+    run_apply_patch_in_dir(tmp.path(), patch)?
+        .failure()
+        .stderr(format!(
+            "Failed to find expected lines in {}:\none\n",
+            expected_target_path.display()
+        ));
+
+    assert_eq!(fs::read_to_string(target_path)?, "one\n");
+    Ok(())
+}
+
+#[test]
 fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> {
     let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n@@\n two\n+\n+between\n three\n*** End Patch";
 

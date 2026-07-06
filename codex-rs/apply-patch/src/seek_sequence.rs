@@ -27,7 +27,7 @@ pub(crate) fn seek_sequence(
         return None;
     }
     let search_start = if eof && lines.len() >= pattern.len() {
-        lines.len() - pattern.len()
+        (lines.len() - pattern.len()).max(start)
     } else {
         start
     };
