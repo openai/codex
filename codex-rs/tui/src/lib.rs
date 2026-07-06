@@ -1018,7 +1018,6 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            tui::discard_terminal_input();
             let selection = oss_selection::select_oss_provider().await?;
             let provider = selection.provider;
             if provider == "__CANCELLED__" {

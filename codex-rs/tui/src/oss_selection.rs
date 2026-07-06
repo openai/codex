@@ -341,6 +341,7 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
 
     let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
+    crate::tui::discard_terminal_input();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
