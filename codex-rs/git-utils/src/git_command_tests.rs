@@ -1599,7 +1599,12 @@ fn active_worktree_identity_pins_repository_for_runner_lifetime() {
 
     let error = std::fs::rename(&root, &moved_root)
         .expect_err("live repository identity handle must block replacement");
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
     assert!(root.join(".git").is_dir());
     assert!(!moved_root.exists());
 
