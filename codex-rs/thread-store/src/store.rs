@@ -12,6 +12,7 @@ use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
+use crate::ListUpdatedItemsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
@@ -25,6 +26,7 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::TurnPage;
 use crate::UpdateThreadMetadataParams;
+use crate::UpdatedItemsPage;
 
 /// Future returned by [`ThreadStore`] operations.
 pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResult<T>> + Send + 'a>>;
@@ -116,6 +118,18 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "list_items",
+            })
+        })
+    }
+
+    /// Lists latest item snapshots changed within a timestamp-bounded interval.
+    fn list_updated_items(
+        &self,
+        _params: ListUpdatedItemsParams,
+    ) -> ThreadStoreFuture<'_, UpdatedItemsPage> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "list_updated_items",
             })
         })
     }

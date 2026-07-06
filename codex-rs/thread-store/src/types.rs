@@ -389,6 +389,30 @@ pub struct ListItemsParams {
     pub sort_direction: SortDirection,
 }
 
+/// Parameters for listing items changed within a timestamp-bounded interval.
+///
+/// When both bounds are present, implementations should interpret the interval as
+/// `(after_updated_at, through_updated_at]`. Bounds remain optional so each store owns validation
+/// of partial ranges. Callers should use [`crate::ThreadStore::list_items`] when neither bound is
+/// present, and must reuse the same bounds when following a page cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListUpdatedItemsParams {
+    /// Thread id to read.
+    pub thread_id: ThreadId,
+    /// Optional turn id to filter by. When omitted, returns items across the thread.
+    pub turn_id: Option<String>,
+    /// Exclusive lower bound for item updates.
+    pub after_updated_at: Option<DateTime<Utc>>,
+    /// Inclusive upper bound for item updates.
+    pub through_updated_at: Option<DateTime<Utc>>,
+    /// Opaque cursor returned by a previous list call.
+    pub cursor: Option<String>,
+    /// Maximum number of items to return.
+    pub page_size: usize,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
+}
+
 /// A projected app-server `ThreadItem` snapshot within a turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredThreadItem {
@@ -408,6 +432,20 @@ pub struct ItemPage {
     pub next_cursor: Option<String>,
     /// Opaque cursor for fetching in the opposite direction.
     pub backwards_cursor: Option<String>,
+}
+
+/// A page of items changed within a timestamp-bounded interval.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdatedItemsPage {
+    /// Latest snapshots of items changed within the requested interval.
+    pub items: Vec<StoredThreadItem>,
+    /// Opaque cursor to continue listing with the same timestamp bounds.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor for fetching in the opposite direction with the same timestamp bounds.
+    pub backwards_cursor: Option<String>,
+    /// Store-confirmed inclusive upper bound. On success, this must match the requested upper
+    /// bound, including when that bound is absent.
+    pub read_through_updated_at: Option<DateTime<Utc>>,
 }
 
 /// Store-owned thread metadata used by list/read/resume responses.
