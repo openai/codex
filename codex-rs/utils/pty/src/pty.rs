@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::ErrorKind;
 #[cfg(unix)]
+use std::os::fd::AsFd;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::fd::BorrowedFd;
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
@@ -122,6 +126,44 @@ fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     }
 }
 
+/// A Unix file descriptor to duplicate into an exact descriptor number in a
+/// spawned PTY child.
+///
+/// The source descriptor is borrowed for the duration of the spawn. The
+/// parent descriptor table is never modified: duplication and remapping take
+/// place in the child immediately before `exec`.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+pub struct ChildFdMapping<'fd> {
+    source: BorrowedFd<'fd>,
+    child_fd: RawFd,
+}
+
+#[cfg(unix)]
+struct ChildFdPlan {
+    preserved_fds: Vec<RawFd>,
+    mappings: Vec<(RawFd, RawFd)>,
+}
+
+#[cfg(unix)]
+impl<'fd> ChildFdMapping<'fd> {
+    /// Maps `source` to `child_fd` in the spawned child.
+    ///
+    /// `source` may be any owned or borrowed descriptor implementing [`AsFd`].
+    /// Descriptor numbers for standard input, output, and error are rejected
+    /// when the process is spawned because the PTY owns those streams.
+    #[must_use]
+    pub fn new<T>(source: &'fd T, child_fd: RawFd) -> Self
+    where
+        T: AsFd + ?Sized,
+    {
+        Self {
+            source: source.as_fd(),
+            child_fd,
+        }
+    }
+}
+
 /// Spawn a process attached to a PTY, returning handles for stdin, split output, and exit.
 pub async fn spawn_process(
     program: &str,
@@ -154,11 +196,106 @@ pub async fn spawn_process_with_inherited_fds(
 
     #[cfg(unix)]
     if !inherited_fds.is_empty() {
-        return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
-            .await;
+        return spawn_process_preserving_fds(
+            program,
+            args,
+            cwd,
+            env,
+            arg0,
+            size,
+            ChildFdPlan {
+                preserved_fds: inherited_fds.to_vec(),
+                mappings: Vec::new(),
+            },
+        )
+        .await;
     }
 
     spawn_process_portable(program, args, cwd, env, arg0, size).await
+}
+
+/// Spawn a process attached to a PTY and map Unix file descriptors to exact
+/// descriptor numbers in the child.
+///
+/// All sources remain untouched in the parent. In the child, every source is
+/// first duplicated to a close-on-exec temporary descriptor before any target
+/// is replaced, so mappings remain correct when sources and targets overlap or
+/// form cycles. The resulting target descriptors survive `exec`.
+///
+/// # Errors
+///
+/// Returns an error if a source or target refers to standard input, output, or
+/// error, if two mappings use the same target, or if the PTY child cannot be
+/// spawned or configured.
+#[cfg(unix)]
+pub async fn spawn_process_with_fd_mappings(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    size: TerminalSize,
+    fd_mappings: &[ChildFdMapping<'_>],
+) -> Result<SpawnedProcess> {
+    if program.is_empty() {
+        anyhow::bail!("missing program for PTY spawn");
+    }
+    validate_child_fd_mappings(fd_mappings)?;
+
+    if fd_mappings.is_empty() {
+        return spawn_process_portable(program, args, cwd, env, arg0, size).await;
+    }
+
+    let mappings = fd_mappings
+        .iter()
+        .map(|mapping| (mapping.source.as_raw_fd(), mapping.child_fd))
+        .collect::<Vec<_>>();
+    let preserved_fds = mappings.iter().map(|(_, child_fd)| *child_fd).collect();
+    spawn_process_preserving_fds(
+        program,
+        args,
+        cwd,
+        env,
+        arg0,
+        size,
+        ChildFdPlan {
+            preserved_fds,
+            mappings,
+        },
+    )
+    .await
+}
+
+#[cfg(unix)]
+fn validate_child_fd_mappings(fd_mappings: &[ChildFdMapping<'_>]) -> Result<()> {
+    for (index, mapping) in fd_mappings.iter().enumerate() {
+        let source_fd = mapping.source.as_raw_fd();
+        if source_fd <= libc::STDERR_FILENO {
+            anyhow::bail!("PTY child fd mapping source must be greater than 2, got {source_fd}");
+        }
+        if mapping.child_fd <= libc::STDERR_FILENO {
+            anyhow::bail!(
+                "PTY child fd mapping target must be greater than 2, got {}",
+                mapping.child_fd
+            );
+        }
+        if mapping.child_fd == i32::MAX {
+            anyhow::bail!(
+                "PTY child fd mapping target is too large: {}",
+                mapping.child_fd
+            );
+        }
+        if fd_mappings[..index]
+            .iter()
+            .any(|candidate| candidate.child_fd == mapping.child_fd)
+        {
+            anyhow::bail!(
+                "PTY child fd mapping target {} is specified more than once",
+                mapping.child_fd
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn spawn_process_portable(
@@ -289,7 +426,7 @@ async fn spawn_process_preserving_fds(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
-    inherited_fds: &[RawFd],
+    fd_plan: ChildFdPlan,
 ) -> Result<SpawnedProcess> {
     let (master, slave) = open_unix_pty(size)?;
     let mut command = StdCommand::new(program);
@@ -311,7 +448,10 @@ async fn spawn_process_preserving_fds(
     let stdin = slave.try_clone()?;
     let stdout = slave.try_clone()?;
     let stderr = slave.try_clone()?;
-    let inherited_fds = inherited_fds.to_vec();
+    let ChildFdPlan {
+        preserved_fds,
+        mut mappings,
+    } = fd_plan;
 
     unsafe {
         command
@@ -345,7 +485,8 @@ async fn spawn_process_preserving_fds(
                     return Err(std::io::Error::last_os_error());
                 }
 
-                close_inherited_fds_except(&inherited_fds);
+                remap_child_fds(&mut mappings)?;
+                close_inherited_fds_except(&preserved_fds);
                 Ok(())
             });
     }
@@ -433,6 +574,51 @@ async fn spawn_process_preserving_fds(
         stderr_rx,
         exit_rx,
     })
+}
+
+#[cfg(unix)]
+fn remap_child_fds(fd_mappings: &mut [(RawFd, RawFd)]) -> std::io::Result<()> {
+    let Some(highest_child_fd) = fd_mappings.iter().map(|(_, child_fd)| *child_fd).max() else {
+        return Ok(());
+    };
+    let minimum_temporary_fd = highest_child_fd
+        .checked_add(/*rhs*/ 1)
+        .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "child fd is too large"))?;
+
+    // Duplicate every source before replacing any target. This makes swaps and
+    // longer source/target cycles safe without changing the parent fd table.
+    let mut duplicated_count = 0;
+    while duplicated_count < fd_mappings.len() {
+        let source_fd = fd_mappings[duplicated_count].0;
+        let temporary_fd =
+            unsafe { libc::fcntl(source_fd, libc::F_DUPFD_CLOEXEC, minimum_temporary_fd) };
+        if temporary_fd == -1 {
+            let error = std::io::Error::last_os_error();
+            close_mapping_sources(&fd_mappings[..duplicated_count]);
+            return Err(error);
+        }
+        fd_mappings[duplicated_count].0 = temporary_fd;
+        duplicated_count += 1;
+    }
+
+    for &(temporary_fd, child_fd) in fd_mappings.iter() {
+        if unsafe { libc::dup2(temporary_fd, child_fd) } == -1 {
+            let error = std::io::Error::last_os_error();
+            close_mapping_sources(fd_mappings);
+            return Err(error);
+        }
+    }
+    close_mapping_sources(fd_mappings);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn close_mapping_sources(fd_mappings: &[(RawFd, RawFd)]) {
+    for &(source_fd, _) in fd_mappings {
+        unsafe {
+            libc::close(source_fd);
+        }
+    }
 }
 
 #[cfg(unix)]

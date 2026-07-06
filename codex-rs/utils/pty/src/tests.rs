@@ -10,6 +10,10 @@ use crate::combine_output_receivers;
 #[cfg(unix)]
 use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
 #[cfg(unix)]
+use crate::pty::ChildFdMapping;
+#[cfg(unix)]
+use crate::pty::spawn_process_with_fd_mappings;
+#[cfg(unix)]
 use crate::pty::spawn_process_with_inherited_fds;
 use crate::spawn_from_driver;
 use crate::spawn_pipe_process;
@@ -861,6 +865,117 @@ async fn pty_spawn_can_preserve_inherited_fds() -> anyhow::Result<()> {
     let mut pipe_output = String::new();
     read_end.read_to_string(&mut pipe_output)?;
     assert_eq!(pipe_output, "__preserved__");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_close_on_exec(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_maps_cloexec_fds_to_exact_child_numbers() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::io::Write;
+    use std::os::fd::AsFd;
+    use std::os::unix::net::UnixStream;
+
+    let (mut parent_writer, child_reader) = UnixStream::pair()?;
+    let (child_writer, mut parent_reader) = UnixStream::pair()?;
+    set_close_on_exec(child_reader.as_fd())?;
+    set_close_on_exec(child_writer.as_fd())?;
+
+    let mappings = [
+        ChildFdMapping::new(&child_reader, /*child_fd*/ 3),
+        ChildFdMapping::new(&child_writer, /*child_fd*/ 4),
+    ];
+    let script = "IFS= read -r message <&3; printf 'reply:%s' \"$message\" >&4";
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawned = spawn_process_with_fd_mappings(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        /*arg0*/ &None,
+        TerminalSize::default(),
+        &mappings,
+    )
+    .await?;
+    drop(child_reader);
+    drop(child_writer);
+
+    parent_writer.write_all(b"ping\n")?;
+    drop(parent_writer);
+
+    let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
+    let (_, code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 2_000).await;
+    assert_eq!(code, 0, "expected mapped-fd PTY child to exit cleanly");
+
+    let mut response = String::new();
+    parent_reader.read_to_string(&mut response)?;
+    assert_eq!(response, "reply:ping");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_fd_mappings_are_safe_when_sources_and_targets_swap() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::io::Write;
+    use std::os::fd::AsFd;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    let (mut parent_writer, child_reader) = UnixStream::pair()?;
+    let (child_writer, mut parent_reader) = UnixStream::pair()?;
+    set_close_on_exec(child_reader.as_fd())?;
+    set_close_on_exec(child_writer.as_fd())?;
+
+    let child_reader_fd = child_reader.as_raw_fd();
+    let child_writer_fd = child_writer.as_raw_fd();
+    let mappings = [
+        ChildFdMapping::new(&child_reader, child_writer_fd),
+        ChildFdMapping::new(&child_writer, child_reader_fd),
+    ];
+    let script = format!(
+        "IFS= read -r message <&{child_writer_fd}; printf 'reply:%s' \"$message\" >&{child_reader_fd}"
+    );
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawned = spawn_process_with_fd_mappings(
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Path::new("."),
+        &env_map,
+        /*arg0*/ &None,
+        TerminalSize::default(),
+        &mappings,
+    )
+    .await?;
+    drop(child_reader);
+    drop(child_writer);
+
+    parent_writer.write_all(b"swap\n")?;
+    drop(parent_writer);
+
+    let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
+    let (_, code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 2_000).await;
+    assert_eq!(code, 0, "expected swapped-fd PTY child to exit cleanly");
+
+    let mut response = String::new();
+    parent_reader.read_to_string(&mut response)?;
+    assert_eq!(response, "reply:swap");
 
     Ok(())
 }
