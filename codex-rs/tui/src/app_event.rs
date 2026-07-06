@@ -408,6 +408,11 @@ pub(crate) enum AppEvent {
     /// The browser's terminal frame, status, or visibility changed.
     TerminalBrowserUpdated,
 
+    /// Reapply a thread's network policy when it owns the shared terminal-browser process.
+    ReconcileTerminalBrowserNetworkPolicy {
+        thread_id: ThreadId,
+    },
+
     /// Complete an app-server dynamic-tool request after browser work finishes.
     TerminalBrowserToolCompleted {
         request_id: AppServerRequestId,

@@ -658,6 +658,9 @@
             "telepathy": {
               "type": "boolean"
             },
+            "terminal_browser": {
+              "type": "boolean"
+            },
             "terminal_resize_reflow": {
               "type": "boolean"
             },
@@ -5042,6 +5045,9 @@
           "type": "boolean"
         },
         "telepathy": {
+          "type": "boolean"
+        },
+        "terminal_browser": {
           "type": "boolean"
         },
         "terminal_resize_reflow": {

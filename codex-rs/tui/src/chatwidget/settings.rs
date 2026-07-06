@@ -55,6 +55,10 @@ impl ChatWidget {
         self.config.permissions.network = network;
     }
 
+    pub(crate) fn session_network_proxy(&self) -> Option<&SessionNetworkProxyRuntime> {
+        self.session_network_proxy.as_ref()
+    }
+
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;
@@ -376,7 +380,13 @@ impl ChatWidget {
             return;
         }
 
+        self.session_network_proxy = notification
+            .network_proxy
+            .as_ref()
+            .map(SessionNetworkProxyRuntime::from);
         self.apply_thread_settings(notification.thread_settings);
+        self.app_event_tx
+            .send(AppEvent::ReconcileTerminalBrowserNetworkPolicy { thread_id });
     }
 
     #[cfg(test)]

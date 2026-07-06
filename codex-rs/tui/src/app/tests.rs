@@ -6546,7 +6546,7 @@ async fn thread_setting_update_params_sync_model_and_default_reasoning() {
 }
 
 #[tokio::test]
-async fn inactive_thread_settings_notification_updates_cached_collaboration_mode() {
+async fn inactive_thread_settings_notification_updates_cached_session() {
     let mut app = make_test_app().await;
     let primary_thread_id = ThreadId::new();
     let inactive_thread_id = ThreadId::new();
@@ -6602,6 +6602,11 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
         },
+        network_proxy: Some(codex_app_server_protocol::ThreadNetworkProxyRuntime {
+            http_addr: "127.0.0.1:43128".to_string(),
+            socks_addr: "127.0.0.1:43129".to_string(),
+            mitm: false,
+        }),
     };
     app.enqueue_thread_notification(
         inactive_thread_id,
@@ -6622,6 +6627,14 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         .expect("inactive session should remain cached");
     assert_eq!(cached_session.model, "gpt-test");
     assert_eq!(cached_session.personality, Some(Personality::Pragmatic));
+    assert_eq!(
+        cached_session.network_proxy,
+        Some(crate::session_state::SessionNetworkProxyRuntime {
+            http_addr: "127.0.0.1:43128".to_string(),
+            socks_addr: "127.0.0.1:43129".to_string(),
+            mitm: false,
+        })
+    );
     assert_eq!(
         cached_session.collaboration_mode.as_deref(),
         Some(&collaboration_mode)
@@ -6644,6 +6657,14 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     assert_eq!(
         app.chat_widget.config_ref().personality,
         Some(Personality::Pragmatic)
+    );
+    assert_eq!(
+        app.chat_widget.session_network_proxy(),
+        Some(&crate::session_state::SessionNetworkProxyRuntime {
+            http_addr: "127.0.0.1:43128".to_string(),
+            socks_addr: "127.0.0.1:43129".to_string(),
+            mitm: false,
+        })
     );
 }
 

@@ -718,6 +718,9 @@ impl ChatWidget {
             SlashCommand::Browser => {
                 let parts = trimmed.split_whitespace().collect::<Vec<_>>();
                 match parts.as_slice() {
+                    [command] if command.eq_ignore_ascii_case("show") => {
+                        self.app_event_tx.send(AppEvent::ShowTerminalBrowser);
+                    }
                     [command] if command.eq_ignore_ascii_case("close") => {
                         self.app_event_tx.send(AppEvent::CloseTerminalBrowser);
                     }
@@ -787,7 +790,7 @@ impl ChatWidget {
                         );
                     }
                     _ => self.add_error_message(
-                        "Usage: /browser [close|doctor|control|profile list|profile ephemeral|profile create <name>|profile use <name>|profile forget <name> --confirm]"
+                        "Usage: /browser [show|close|doctor|control|profile list|profile ephemeral|profile create <name>|profile use <name>|profile forget <name> --confirm]"
                             .to_string(),
                     ),
                 }

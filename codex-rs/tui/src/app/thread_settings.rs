@@ -5,8 +5,8 @@ use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerSession;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
-use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::PermissionProfile;
@@ -137,18 +137,18 @@ impl App {
     pub(super) async fn apply_thread_settings_to_cached_session(
         &mut self,
         thread_id: ThreadId,
-        settings: &ThreadSettings,
+        notification: &ThreadSettingsUpdatedNotification,
     ) {
         if self.primary_thread_id == Some(thread_id)
             && let Some(session) = self.primary_session_configured.as_mut()
         {
-            apply_thread_settings_to_session(session, settings);
+            apply_thread_settings_to_session(session, notification);
         }
 
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             if let Some(session) = store.session.as_mut() {
-                apply_thread_settings_to_session(session, settings);
+                apply_thread_settings_to_session(session, notification);
             }
         }
     }
@@ -169,7 +169,11 @@ impl App {
     }
 }
 
-fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
+fn apply_thread_settings_to_session(
+    session: &mut ThreadSessionState,
+    notification: &ThreadSettingsUpdatedNotification,
+) {
+    let settings = &notification.thread_settings;
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
         session.reasoning_effort = settings.effort.clone();
@@ -192,6 +196,10 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         .clone_from(&settings.model);
     collaboration_mode.settings.reasoning_effort = settings.effort.clone();
     session.collaboration_mode = Some(Box::new(collaboration_mode));
+    session.network_proxy = notification
+        .network_proxy
+        .as_ref()
+        .map(crate::session_state::SessionNetworkProxyRuntime::from);
 }
 
 fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bool {

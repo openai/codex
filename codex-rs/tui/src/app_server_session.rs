@@ -10,6 +10,7 @@ use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
+use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
@@ -1411,9 +1412,8 @@ fn thread_start_params_from_config(
     let dynamic_tools = (matches!(thread_params_mode, ThreadParamsMode::Embedded)
         && cfg!(any(target_os = "macos", target_os = "linux"))
         && config.features.enabled(Feature::TerminalBrowser)
-        && TerminalBrowserNetworkAvailability::from_config(config)
-            == TerminalBrowserNetworkAvailability::Direct)
-        .then(dynamic_tool_specs);
+        && TerminalBrowserNetworkAvailability::dynamic_tools_supported(config))
+    .then(dynamic_tool_specs);
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()
@@ -1605,6 +1605,7 @@ async fn thread_session_state_from_thread_start_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        session_network_proxy_from_thread(&response.thread),
         config,
     )
     .await
@@ -1646,6 +1647,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        session_network_proxy_from_thread(&response.thread),
         config,
     )
     .await
@@ -1678,6 +1680,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        session_network_proxy_from_thread(&response.thread),
         config,
     )
     .await
@@ -1695,6 +1698,17 @@ fn display_permission_profile_from_thread_response(
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
         }
     }
+}
+
+pub(crate) fn session_network_proxy_from_thread(
+    thread: &Thread,
+) -> Option<SessionNetworkProxyRuntime> {
+    thread
+        .extra
+        .as_ref()?
+        .network_proxy
+        .as_ref()
+        .map(SessionNetworkProxyRuntime::from)
 }
 
 #[expect(
@@ -1717,6 +1731,7 @@ async fn thread_session_state_from_thread_response(
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    network_proxy: Option<SessionNetworkProxyRuntime>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
@@ -1751,7 +1766,7 @@ async fn thread_session_state_from_thread_response(
             log_id,
             entry_count,
         }),
-        network_proxy: None,
+        network_proxy,
         rollout_path,
     })
 }
@@ -1953,7 +1968,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
-    async fn terminal_browser_dynamic_tools_require_supported_embedded_network_mode() {
+    async fn terminal_browser_dynamic_tools_allow_non_mitm_managed_network() {
         let direct_config = build_terminal_browser_config(/*managed_network*/ false).await;
         let managed_config = build_terminal_browser_config(/*managed_network*/ true).await;
         assert_eq!(
@@ -2007,7 +2022,7 @@ mod tests {
                 "managed network",
                 &managed_config,
                 ThreadParamsMode::Embedded,
-                false,
+                true,
             ),
         ];
         for (name, config, mode, expected) in cases {
@@ -2455,7 +2470,13 @@ mod tests {
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
-                extra: None,
+                extra: Some(codex_app_server_protocol::ThreadExtra {
+                    network_proxy: Some(codex_app_server_protocol::ThreadNetworkProxyRuntime {
+                        http_addr: "127.0.0.1:43128".to_string(),
+                        socks_addr: "127.0.0.1:43129".to_string(),
+                        mitm: false,
+                    }),
+                }),
                 session_id: ThreadId::new().to_string(),
                 forked_from_id: Some(forked_from_id.to_string()),
                 parent_thread_id: None,
@@ -2542,6 +2563,14 @@ mod tests {
             response.instruction_source_path_uris()
         );
         assert_eq!(started.session.permission_profile, read_only_profile);
+        assert_eq!(
+            started.session.network_proxy,
+            Some(SessionNetworkProxyRuntime {
+                http_addr: "127.0.0.1:43128".to_string(),
+                socks_addr: "127.0.0.1:43129".to_string(),
+                mitm: false,
+            })
+        );
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
 
@@ -2636,6 +2665,11 @@ mod tests {
         codex_message_history::append_entry("newer", &thread_id, &history_config)
             .await
             .expect("history append should succeed");
+        let network_proxy = SessionNetworkProxyRuntime {
+            http_addr: "127.0.0.1:43128".to_string(),
+            socks_addr: "127.0.0.1:43129".to_string(),
+            mitm: false,
+        };
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
@@ -2653,6 +2687,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            Some(network_proxy.clone()),
             &config,
         )
         .await
@@ -2663,6 +2698,7 @@ mod tests {
             .expect("session should include message-history metadata");
         assert_ne!(metadata.log_id, 0);
         assert_eq!(metadata.entry_count, 2);
+        assert_eq!(session.network_proxy, Some(network_proxy));
     }
 
     #[tokio::test]
@@ -2688,6 +2724,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*network_proxy*/ None,
             &config,
         )
         .await

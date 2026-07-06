@@ -17,6 +17,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use color_eyre::eyre::Result;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 #[test]
 fn terminal_browser_requests_require_the_displayed_thread() {
@@ -129,7 +130,7 @@ async fn visible_browser_updates_select_the_shared_right_rail_and_hidden_updates
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
-async fn managed_network_requirements_block_browser_panel_with_explanation() {
+async fn managed_network_without_runtime_blocks_panel_but_not_doctor() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.chat_widget.owned_screen = App::owned_screen_for_behavior(
         AltScreenBehavior::Owned,
@@ -185,30 +186,44 @@ async fn managed_network_requirements_block_browser_panel_with_explanation() {
         app.owned_screen_frame.right_rail_content(),
         OwnedScreenRightRailContent::Summary
     );
-    let mut next_history_message = || {
-        std::iter::from_fn(|| app_event_rx.try_recv().ok())
-            .find_map(|event| match event {
+    let panel_message = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            AppEvent::FromConversation { event, .. } => match *event {
                 AppEvent::InsertHistoryCell(cell) => Some(cell),
-                AppEvent::FromConversation { event, .. } => match *event {
-                    AppEvent::InsertHistoryCell(cell) => Some(cell),
-                    _ => None,
-                },
                 _ => None,
-            })
-            .expect("managed network warning")
-            .display_lines(/*width*/ 80)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let panel_message = next_history_message();
+            },
+            _ => None,
+        })
+        .expect("managed network warning")
+        .display_lines(/*width*/ 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    insta::assert_snapshot!(panel_message, @"• Terminal browser is unavailable because managed network requirements are not supported yet.");
+    insta::assert_snapshot!(panel_message, @"• Terminal browser is unavailable because the managed network proxy is not ready for this session.");
 
     app.doctor_terminal_browser().await;
 
-    assert_eq!(next_history_message(), panel_message);
+    let doctor_completed = tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
+        loop {
+            match app_event_rx.recv().await {
+                Some(AppEvent::TerminalBrowserDoctorCompleted { .. }) => break true,
+                Some(AppEvent::FromConversation { event, .. })
+                    if matches!(*event, AppEvent::TerminalBrowserDoctorCompleted { .. }) =>
+                {
+                    break true;
+                }
+                Some(_) => {}
+                None => break false,
+            }
+        }
+    })
+    .await
+    .expect("terminal-browser doctor should complete");
+    assert!(doctor_completed);
+    assert!(app.terminal_browser.is_none());
 }
 
 #[tokio::test]
@@ -341,6 +356,99 @@ async fn summary_command_from_an_unfocused_pane_does_not_hide_the_focused_browse
     assert_eq!(
         app.owned_screen_frame.right_rail_content(),
         OwnedScreenRightRailContent::Browser
+    );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_reconciliation_follows_browser_ownership_across_pane_focus() -> Result<()> {
+    let mut app = make_test_app().await;
+    let parent_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Parent, app.app_event_tx.clone()).await;
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .chat_widget = parent_widget;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    let parent = app
+        .chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane");
+    parent.attach_thread(parent_thread_id, /*receiver*/ None);
+    parent
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::read_only(),
+            /*active_permission_profile*/ None,
+        )
+        .expect("set restricted parent permissions");
+    let parent_origin = parent.origin().expect("parent origin");
+    let side_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Side, app.app_event_tx.clone()).await;
+    let file_search = FileSearchManager::new(
+        side_widget.config_ref().cwd.to_path_buf(),
+        side_widget.conversation_event_sender(),
+    );
+    let owned_screen = App::owned_screen_for_behavior(
+        AltScreenBehavior::Owned,
+        &side_widget,
+        app.keymap.pager.clone(),
+    );
+    let installed = app.chat_widget.install_side(ConversationPaneInit {
+        chat_widget: side_widget,
+        file_search,
+        owned_screen,
+    });
+    assert!(installed.is_ok(), "side pane should install");
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Side)
+        .expect("side pane")
+        .attach_thread(side_thread_id, /*receiver*/ None);
+    let browser = Arc::new(TerminalBrowser::discover());
+    browser.set_visibility(/*visible*/ true);
+    app.terminal_browser = Some(Arc::clone(&browser));
+    app.terminal_browser_owner_thread_id = Some(side_thread_id);
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::FromConversation {
+            target: parent_origin,
+            event: Box::new(AppEvent::ReconcileTerminalBrowserNetworkPolicy {
+                thread_id: parent_thread_id,
+            }),
+        },
+    )
+    .await?;
+
+    assert!(
+        browser.view().visible,
+        "focused non-owner must not reconcile"
+    );
+
+    app.terminal_browser_owner_thread_id = Some(parent_thread_id);
+    browser.set_visibility(/*visible*/ true);
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::FromConversation {
+            target: parent_origin,
+            event: Box::new(AppEvent::ReconcileTerminalBrowserNetworkPolicy {
+                thread_id: parent_thread_id,
+            }),
+        },
+    )
+    .await?;
+
+    assert!(
+        !browser.view().visible,
+        "unfocused owner must still reconcile its restricted policy"
     );
     app_server.shutdown().await?;
     Ok(())

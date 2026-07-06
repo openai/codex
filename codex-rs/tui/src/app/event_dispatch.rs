@@ -535,6 +535,16 @@ impl App {
                 tui.set_raw_mouse_events(raw_mouse_events);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::ReconcileTerminalBrowserNetworkPolicy { thread_id } => {
+                let origin_thread_id = conversation_origin
+                    .and_then(|origin| self.chat_widget.by_origin(origin))
+                    .and_then(|pane| pane.active_thread_id.or(pane.chat_widget.thread_id()));
+                if self.terminal_browser_owner_thread_id == Some(thread_id)
+                    && origin_thread_id == Some(thread_id)
+                {
+                    self.reconcile_terminal_browser_network_policy().await;
+                }
+            }
             AppEvent::TerminalBrowserToolCompleted {
                 request_id,
                 response,

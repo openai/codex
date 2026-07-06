@@ -316,6 +316,7 @@ mod tests {
             ServerNotification::ThreadSettingsUpdated(ThreadSettingsUpdatedNotification {
                 thread_id: thread_id.to_string(),
                 thread_settings: test_thread_settings(),
+                network_proxy: None,
             });
 
         let target = server_notification_thread_target(&notification);

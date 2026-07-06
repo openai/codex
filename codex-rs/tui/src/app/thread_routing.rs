@@ -886,7 +886,7 @@ impl App {
             return Ok(());
         }
         if let ServerNotification::ThreadSettingsUpdated(notification) = &notification {
-            self.apply_thread_settings_to_cached_session(thread_id, &notification.thread_settings)
+            self.apply_thread_settings_to_cached_session(thread_id, notification)
                 .await;
         }
         let inferred_session = self

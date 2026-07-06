@@ -33,6 +33,7 @@ fn thread_settings_for_test(
             multi_agent_mode: Default::default(),
             personality: Some(Personality::Pragmatic),
         },
+        network_proxy: None,
     }
 }
 
@@ -363,6 +364,57 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     );
 
     assert_eq!(chat.current_model(), "gpt-5.4");
+}
+
+#[tokio::test]
+async fn thread_settings_updated_replaces_proxy_runtime_and_requests_reconciliation() {
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual(/*model_override*/ Some("gpt-5.3-codex")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let expected_runtime = crate::session_state::SessionNetworkProxyRuntime {
+        http_addr: "127.0.0.1:43128".to_string(),
+        socks_addr: "127.0.0.1:43129".to_string(),
+        mitm: false,
+    };
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.network_proxy = Some(codex_app_server_protocol::ThreadNetworkProxyRuntime {
+        http_addr: expected_runtime.http_addr.clone(),
+        socks_addr: expected_runtime.socks_addr.clone(),
+        mitm: expected_runtime.mitm,
+    });
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.session_network_proxy(), Some(&expected_runtime));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::ReconcileTerminalBrowserNetworkPolicy {
+                thread_id: event_thread_id,
+            } if event_thread_id == thread_id
+        ))
+    );
+
+    let notification = thread_settings_for_test("gpt-5.4", thread_id);
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.session_network_proxy(), None);
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::ReconcileTerminalBrowserNetworkPolicy {
+                thread_id: event_thread_id,
+            } if event_thread_id == thread_id
+        ))
+    );
 }
 
 #[tokio::test]

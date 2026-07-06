@@ -41,14 +41,21 @@ impl ReopenableTerminalBrowser {
 
 impl App {
     fn terminal_browser_network_availability(&self) -> TerminalBrowserNetworkAvailability {
-        TerminalBrowserNetworkAvailability::from_config(self.chat_widget.config_ref())
+        TerminalBrowserNetworkAvailability::from_config_and_runtime(
+            self.chat_widget.config_ref(),
+            self.chat_widget.session_network_proxy(),
+        )
     }
 
     fn terminal_browser_network_policy(&self) -> BrowserNetworkPolicy {
         match self.terminal_browser_network_availability() {
             TerminalBrowserNetworkAvailability::Direct => BrowserNetworkPolicy::Direct,
+            TerminalBrowserNetworkAvailability::ManagedProxy { http_addr } => {
+                BrowserNetworkPolicy::ManagedProxy { http_addr }
+            }
             TerminalBrowserNetworkAvailability::Restricted
-            | TerminalBrowserNetworkAvailability::ManagedProxyUnsupported => {
+            | TerminalBrowserNetworkAvailability::ManagedProxyUnavailable
+            | TerminalBrowserNetworkAvailability::ManagedProxyMitmUnsupported => {
                 BrowserNetworkPolicy::Disabled
             }
         }
@@ -423,19 +430,12 @@ impl App {
     }
 
     pub(super) async fn doctor_terminal_browser(&mut self) {
-        if let Some(message) = self
-            .terminal_browser_network_availability()
-            .unavailable_message()
-        {
-            self.chat_widget
-                .add_info_message(message.to_string(), /*hint*/ None);
-            return;
-        }
-        let Some(browser) = self.terminal_browser_for_active_thread().await else {
+        if !self.terminal_browser_enabled() {
             self.chat_widget
                 .add_error_message("Terminal browser is not enabled.".to_string());
             return;
-        };
+        }
+        let browser = self.discover_terminal_browser();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let report = browser.doctor().await;

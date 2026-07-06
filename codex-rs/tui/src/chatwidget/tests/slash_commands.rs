@@ -2969,6 +2969,22 @@ async fn bare_browser_slash_command_emits_show_event() {
 }
 
 #[tokio::test]
+async fn browser_show_alias_emits_show_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::TerminalBrowser, /*enabled*/ true);
+
+    chat.dispatch_command_with_args(SlashCommand::Browser, "show".to_string(), Vec::new());
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::ShowTerminalBrowser)),
+        "expected /browser show to show the browser panel; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn bare_summary_slash_command_selects_summary_panel() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

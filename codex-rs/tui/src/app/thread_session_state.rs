@@ -1,4 +1,5 @@
 use super::App;
+use crate::app_server_session::session_network_proxy_from_thread;
 use crate::session_resume::read_session_model;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::AskForApproval;
@@ -129,6 +130,9 @@ impl App {
             session.model.clear();
         }
         session.message_history = None;
+        // `thread/read` is authoritative for thread-owned proxy state. In particular, a missing
+        // `extra.networkProxy` must clear any runtime inherited from the primary-session fallback.
+        session.network_proxy = session_network_proxy_from_thread(thread);
         session
     }
 
@@ -406,9 +410,14 @@ mod tests {
             ThreadId::from_string("00000000-0000-0000-0000-000000000405").expect("valid thread");
         let primary_session = ThreadSessionState {
             permission_profile: PermissionProfile::workspace_write(),
+            network_proxy: Some(crate::session_state::SessionNetworkProxyRuntime {
+                http_addr: "127.0.0.1:41000".to_string(),
+                socks_addr: "127.0.0.1:41001".to_string(),
+                mitm: false,
+            }),
             ..test_thread_session(primary_thread_id, test_path_buf("/tmp/primary"))
         };
-        let read_thread = Thread {
+        let mut read_thread = Thread {
             id: read_thread_id.to_string(),
             extra: None,
             session_id: read_thread_id.to_string(),
@@ -453,6 +462,31 @@ mod tests {
             app.config.permissions.permission_profile().clone(),
             "thread/read fallback must use the active widget permissions rather than stale app \
              config defaults"
+        );
+        assert_eq!(
+            session.network_proxy, None,
+            "missing thread/read proxy metadata must clear the primary thread runtime"
+        );
+
+        read_thread.extra = Some(codex_app_server_protocol::ThreadExtra {
+            network_proxy: Some(codex_app_server_protocol::ThreadNetworkProxyRuntime {
+                http_addr: "127.0.0.1:42000".to_string(),
+                socks_addr: "127.0.0.1:42001".to_string(),
+                mitm: false,
+            }),
+        });
+        let session = app
+            .session_state_for_thread_read(read_thread_id, &read_thread)
+            .await;
+
+        assert_eq!(
+            session.network_proxy,
+            Some(crate::session_state::SessionNetworkProxyRuntime {
+                http_addr: "127.0.0.1:42000".to_string(),
+                socks_addr: "127.0.0.1:42001".to_string(),
+                mitm: false,
+            }),
+            "thread/read must replace the primary thread runtime with its own"
         );
     }
 }

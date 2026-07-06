@@ -37,6 +37,7 @@ pub(crate) fn new_debug_config_output(
         let SessionNetworkProxyRuntime {
             http_addr,
             socks_addr,
+            mitm: _,
         } = proxy;
         let all_proxy = session_all_proxy_url(
             http_addr,

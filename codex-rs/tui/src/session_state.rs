@@ -18,6 +18,17 @@ use codex_utils_path_uri::PathUri;
 pub(crate) struct SessionNetworkProxyRuntime {
     pub(crate) http_addr: String,
     pub(crate) socks_addr: String,
+    pub(crate) mitm: bool,
+}
+
+impl From<&codex_app_server_protocol::ThreadNetworkProxyRuntime> for SessionNetworkProxyRuntime {
+    fn from(value: &codex_app_server_protocol::ThreadNetworkProxyRuntime) -> Self {
+        Self {
+            http_addr: value.http_addr.clone(),
+            socks_addr: value.socks_addr.clone(),
+            mitm: value.mitm,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
