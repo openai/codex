@@ -90,7 +90,8 @@ fn unknown_installation_policy_source_maps_to_none() {
     let plugin: RemotePluginDirectoryItem =
         serde_json::from_value(plugin_json).expect("unknown source should deserialize");
 
-    let summary = build_remote_plugin_summary(&plugin, None).expect("summary should be valid");
+    let summary = build_remote_plugin_summary(&plugin, /*installed_plugin*/ None)
+        .expect("summary should be valid");
 
     assert_eq!(summary.install_policy_source, None);
 }
