@@ -152,7 +152,7 @@ resolve_release() {
   fi
 
   if ! release_json="$(download_text "$metadata_url")"; then
-    echo "Could not fetch GitHub release metadata for Codex $requested_release. GitHub API may be unavailable or rate limited." >&2
+    echo "Could not fetch GitHub release metadata for Codex $requested_release. GitHub API may be unavailable or rate limited. Consider other installation options https://developers.openai.com/codex/cli" >&2
     exit 1
   fi
 
