@@ -141,16 +141,7 @@ impl PluginsManager {
             }
         }
         if let Some(remote_installed_marketplaces) = remote_installed_marketplaces.as_ref() {
-            let mut installed_app_connector_ids = self
-                .plugins_for_config(&input.plugins)
-                .await
-                .capability_summaries()
-                .iter()
-                .flat_map(|plugin| plugin.app_connector_ids.iter())
-                .map(|connector_id| connector_id.0.clone())
-                .collect::<HashSet<_>>();
-            installed_app_connector_ids
-                .extend(input.loaded_plugin_app_connector_ids.iter().cloned());
+            let installed_app_connector_ids = &input.loaded_plugin_app_connector_ids;
             let installed_remote_plugin_ids = remote_installed_marketplaces
                 .iter()
                 .flat_map(|marketplace| marketplace.plugins.iter())

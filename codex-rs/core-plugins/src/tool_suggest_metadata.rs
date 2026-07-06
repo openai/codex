@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_plugin::AppDeclaration;
@@ -25,8 +27,15 @@ use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplacePluginSource;
 
 const MAX_TOOL_SUGGEST_METADATA_CACHE_ENTRIES: usize = 1024;
+const TOOL_SUGGEST_METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
 
 type ToolSuggestMetadataEntry = Result<Arc<ToolSuggestMetadataFragment>, String>;
+
+#[derive(Clone)]
+struct CachedToolSuggestMetadataEntry {
+    expires_at: Instant,
+    entry: ToolSuggestMetadataEntry,
+}
 
 /// Source-derived plugin metadata cached for tool suggestions.
 ///
@@ -40,7 +49,7 @@ pub(crate) struct ToolSuggestMetadataCache {
 #[derive(Default)]
 struct ToolSuggestMetadataCacheState {
     generation: u64,
-    entries: HashMap<PluginArtifactIdentity, ToolSuggestMetadataEntry>,
+    entries: HashMap<PluginArtifactIdentity, CachedToolSuggestMetadataEntry>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -147,8 +156,12 @@ impl ToolSuggestMetadataCache {
 
     fn cached_entry(&self, artifact: &PluginArtifactIdentity) -> Option<ToolSuggestMetadataEntry> {
         match self.state.read() {
-            Ok(state) => state.entries.get(artifact).cloned(),
-            Err(err) => err.into_inner().entries.get(artifact).cloned(),
+            Ok(state) => state.entries.get(artifact).and_then(|cached| {
+                (Instant::now() < cached.expires_at).then(|| cached.entry.clone())
+            }),
+            Err(err) => err.into_inner().entries.get(artifact).and_then(|cached| {
+                (Instant::now() < cached.expires_at).then(|| cached.entry.clone())
+            }),
         }
     }
 
@@ -177,7 +190,13 @@ impl ToolSuggestMetadataCache {
         {
             state.entries.clear();
         }
-        state.entries.insert(artifact, entry);
+        state.entries.insert(
+            artifact,
+            CachedToolSuggestMetadataEntry {
+                expires_at: Instant::now() + TOOL_SUGGEST_METADATA_CACHE_TTL,
+                entry,
+            },
+        );
         true
     }
 }
@@ -236,3 +255,7 @@ async fn load_plugin_metadata(
         skill_inventory: Some(skill_inventory),
     }))
 }
+
+#[cfg(test)]
+#[path = "tool_suggest_metadata_tests.rs"]
+mod tests;

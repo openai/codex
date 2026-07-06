@@ -3,12 +3,16 @@ use super::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::RwLock;
 use tracing::warn;
 
 const REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION: u8 = 1;
 const REMOTE_PLUGIN_CATALOG_DISK_CACHE_DIR: &str = "cache/remote_plugin_catalog";
+const REMOTE_PLUGIN_CATALOG_MEMORY_CACHE_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct RemotePluginCatalogCacheKey {
@@ -35,6 +39,48 @@ struct RemotePluginCatalogDiskCache {
     plugins: Vec<RemotePluginDirectoryItem>,
 }
 
+#[derive(Clone)]
+struct MemoryCacheEntry {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    plugins: Vec<RemotePluginDirectoryItem>,
+}
+
+#[derive(Default)]
+struct MemoryCache {
+    entries: VecDeque<MemoryCacheEntry>,
+}
+
+impl MemoryCache {
+    fn get(&self, path: &Path, bytes: &[u8]) -> Option<Vec<RemotePluginDirectoryItem>> {
+        self.entries
+            .iter()
+            .find(|entry| entry.path == path && entry.bytes == bytes)
+            .map(|entry| entry.plugins.clone())
+    }
+
+    fn insert(&mut self, path: PathBuf, bytes: Vec<u8>, plugins: Vec<RemotePluginDirectoryItem>) {
+        self.entries.retain(|entry| entry.path != path);
+        if self.entries.len() == REMOTE_PLUGIN_CATALOG_MEMORY_CACHE_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(MemoryCacheEntry {
+            path,
+            bytes,
+            plugins,
+        });
+    }
+
+    fn remove(&mut self, path: &Path) {
+        self.entries.retain(|entry| entry.path != path);
+    }
+}
+
+fn memory_cache() -> &'static RwLock<MemoryCache> {
+    static CACHE: OnceLock<RwLock<MemoryCache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(MemoryCache::default()))
+}
+
 pub(crate) fn load_cached_global_directory_plugins(
     codex_home: &Path,
     config: &RemotePluginServiceConfig,
@@ -55,6 +101,19 @@ pub(crate) fn load_cached_global_directory_plugins(
             return None;
         }
     };
+    if let Some(plugins) = memory_cache()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&cache_path, &bytes)
+    {
+        return Some(plugins);
+    }
+    let mut memory_cache = memory_cache()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(plugins) = memory_cache.get(&cache_path, &bytes) {
+        return Some(plugins);
+    }
     let cache: RemotePluginCatalogDiskCache = match serde_json::from_slice(&bytes) {
         Ok(cache) => cache,
         Err(err) => {
@@ -62,15 +121,20 @@ pub(crate) fn load_cached_global_directory_plugins(
                 cache_path = %cache_path.display(),
                 "failed to parse remote plugin catalog disk cache: {err}"
             );
+            memory_cache.remove(&cache_path);
+            drop(memory_cache);
             let _ = std::fs::remove_file(cache_path);
             return None;
         }
     };
     if cache.schema_version != REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION {
+        memory_cache.remove(&cache_path);
+        drop(memory_cache);
         let _ = std::fs::remove_file(cache_path);
         return None;
     }
 
+    memory_cache.insert(cache_path, bytes, cache.plugins.clone());
     Some(cache.plugins)
 }
 
@@ -95,8 +159,17 @@ pub(crate) fn write_cached_global_directory_plugins(
     }) else {
         return;
     };
-    let _ = std::fs::write(cache_path, bytes);
+    if std::fs::write(&cache_path, &bytes).is_ok() {
+        memory_cache()
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cache_path, bytes, plugins.to_vec());
+    }
 }
+
+#[cfg(test)]
+#[path = "catalog_cache_tests.rs"]
+mod tests;
 
 fn cache_path(codex_home: &Path, cache_key: &RemotePluginCatalogCacheKey) -> PathBuf {
     let cache_key_json = serde_json::to_vec(cache_key).unwrap_or_default();
