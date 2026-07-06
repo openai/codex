@@ -89,6 +89,7 @@ use codex_core::ThreadManager;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
@@ -831,15 +832,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             // Deprecated MCP tool-call events are still fanned out for legacy clients.
             // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
         }
-        msg @ (EventMsg::CollabAgentSpawnBegin(_)
+        EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabAgentInteractionEnd(_)
-        | EventMsg::CollabWaitingBegin(_)
-        | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
+        | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::CollabResumeEnd(_) => {
+            // Deprecated non-wait collaboration events are still fanned out for raw-event and
+            // rollout compatibility consumers. App-server v2 receives the canonical
+            // CollabAgentToolCall item lifecycle instead.
+        }
+        msg @ (EventMsg::CollabWaitingBegin(_)
+        | EventMsg::CollabWaitingEnd(_)
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)
@@ -856,23 +862,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             // Deprecated sub-agent activity events are still fanned out for raw-event and
             // rollout compatibility consumers. App-server v2 receives the canonical
             // SubAgentActivity item lifecycle instead.
-        }
-        EventMsg::CollabCloseEnd(end_event) => {
-            if thread_manager
-                .get_thread(end_event.receiver_thread_id)
-                .await
-                .is_err()
-            {
-                thread_watch_manager
-                    .remove_thread(&end_event.receiver_thread_id.to_string())
-                    .await;
-            }
-            let notification = item_event_to_server_notification(
-                EventMsg::CollabCloseEnd(end_event),
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
         }
         EventMsg::ContextCompacted(..) => {
             // Core still fans out this deprecated event for legacy clients;
@@ -1350,6 +1339,11 @@ async fn apply_canonical_item_completed_side_effects(
                 activity.agent_thread_id,
             )
             .await;
+        }
+        CoreTurnItem::CollabAgentToolCall(item) if item.tool == CoreCollabAgentTool::CloseAgent => {
+            for thread_id in &item.receiver_thread_ids {
+                remove_missing_thread_watch(thread_manager, thread_watch_manager, *thread_id).await;
+            }
         }
         _ => {}
     }
