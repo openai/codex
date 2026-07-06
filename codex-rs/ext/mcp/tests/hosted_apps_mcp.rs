@@ -18,7 +18,7 @@ use pretty_assertions::assert_eq;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[tokio::test]
-async fn contributes_configured_apps_mcp_without_an_executor() -> TestResult {
+async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -36,12 +36,12 @@ async fn contributes_configured_apps_mcp_without_an_executor() -> TestResult {
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .and_then(|server| server.configured_config())
-        .ok_or("Apps MCP should be contributed as a configured server")?;
+        .ok_or("hosted plugin runtime should be contributed as a configured server")?;
     let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
-        panic!("Apps MCP should use streamable HTTP");
+        panic!("hosted plugin runtime should use streamable HTTP");
     };
-    let apps_mcp_base_url_override = std::env::var("CODEX_APPS_MCP_BASE_URL").ok();
-    let expected_config = match apps_mcp_base_url_override
+    let plugins_mcp_base_url_override = std::env::var("CODEX_PLUGINS_MCP_BASE_URL").ok();
+    let expected_config = match plugins_mcp_base_url_override
         .as_deref()
         .map(str::trim)
         .filter(|url| !url.is_empty())
@@ -58,7 +58,7 @@ async fn contributes_configured_apps_mcp_without_an_executor() -> TestResult {
         url: expected_url, ..
     } = expected_config.transport
     else {
-        panic!("expected Apps MCP config should use streamable HTTP");
+        panic!("expected hosted plugin runtime config should use streamable HTTP");
     };
     assert_eq!(url, &expected_url);
 
