@@ -4,7 +4,7 @@ mod delete_thread;
 mod helpers;
 mod list_threads;
 mod live_writer;
-mod read_model_context;
+mod load_latest_model_context;
 mod read_thread;
 mod search_threads;
 mod unarchive_thread;
@@ -283,7 +283,9 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredModelContext> {
-        Box::pin(async move { read_model_context::load_latest_model_context(self, params).await })
+        Box::pin(
+            async move { load_latest_model_context::load_latest_model_context(self, params).await },
+        )
     }
 
     fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread> {

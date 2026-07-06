@@ -23,7 +23,7 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
 #[cfg(test)]
-#[path = "read_model_context_tests.rs"]
+#[path = "load_latest_model_context_tests.rs"]
 mod tests;
 
 const READ_CHUNK_SIZE: usize = 64 * 1024;
