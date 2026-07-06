@@ -90,6 +90,7 @@ use codex_core::ThreadManager;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -1027,10 +1028,35 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
-        msg @ (EventMsg::ItemStarted(_)
-        | EventMsg::ItemCompleted(_)
-        | EventMsg::PatchApplyUpdated(_)
-        | EventMsg::TerminalInteraction(_)) => {
+        EventMsg::ItemStarted(event) => {
+            let should_emit = match &event.item {
+                CoreTurnItem::CommandExecution(item) => thread_state
+                    .lock()
+                    .await
+                    .turn_summary
+                    .command_execution_started
+                    .insert(item.id.clone()),
+                _ => true,
+            };
+            if should_emit {
+                let notification = item_event_to_server_notification(
+                    EventMsg::ItemStarted(event),
+                    &conversation_id.to_string(),
+                    &event_turn_id,
+                );
+                outgoing.send_server_notification(notification).await;
+            }
+        }
+        EventMsg::ItemCompleted(event) => {
+            apply_canonical_item_completed_side_effects(&thread_state, &event.item).await;
+            let notification = item_event_to_server_notification(
+                EventMsg::ItemCompleted(event),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
+        }
+        msg @ (EventMsg::PatchApplyUpdated(_) | EventMsg::TerminalInteraction(_)) => {
             let notification = item_event_to_server_notification(
                 msg,
                 &conversation_id.to_string(),
@@ -1106,61 +1132,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             // Core still fans out these deprecated events for legacy clients;
             // v2 clients receive the canonical FileChange item instead.
         }
-        EventMsg::ExecCommandBegin(exec_command_begin_event) => {
-            if matches!(
-                exec_command_begin_event.source,
-                codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
-            ) {
-                // TerminalInteraction is the v2 surface for unified exec
-                // stdin/poll events. Suppress the legacy CommandExecution
-                // item so clients do not render the same wait twice.
-                return;
-            }
-            let item_id = exec_command_begin_event.call_id.clone();
-            let first_start = {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .insert(item_id.clone())
-            };
-            if first_start {
-                let notification = item_event_to_server_notification(
-                    EventMsg::ExecCommandBegin(exec_command_begin_event),
-                    &conversation_id.to_string(),
-                    &event_turn_id,
-                );
-                outgoing.send_server_notification(notification).await;
-            }
+        EventMsg::ExecCommandBegin(_) | EventMsg::ExecCommandEnd(_) => {
+            // Deprecated command-execution events are still fanned out for raw-event and rollout
+            // compatibility consumers. App-server v2 receives the canonical CommandExecution
+            // item lifecycle instead.
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let notification = item_event_to_server_notification(
                 EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event),
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
-        }
-        EventMsg::ExecCommandEnd(exec_command_end_event) => {
-            let call_id = exec_command_end_event.call_id.clone();
-            {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .remove(&call_id);
-            }
-            if matches!(
-                exec_command_end_event.source,
-                codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
-            ) {
-                // The paired begin event is suppressed above; keep the
-                // completion out of v2 as well so no orphan legacy item is
-                // emitted for unified exec interactions.
-                return;
-            }
-            let notification = item_event_to_server_notification(
-                EventMsg::ExecCommandEnd(exec_command_end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
             );
@@ -1367,6 +1346,20 @@ async fn emit_turn_completed_with_status(
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
+}
+
+async fn apply_canonical_item_completed_side_effects(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    item: &CoreTurnItem,
+) {
+    if let CoreTurnItem::CommandExecution(item) = item {
+        thread_state
+            .lock()
+            .await
+            .turn_summary
+            .command_execution_started
+            .remove(&item.id);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
