@@ -469,6 +469,9 @@
             "computer_use": {
               "type": "boolean"
             },
+            "concurrent_reasoning_summaries": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -4836,6 +4839,9 @@
           "type": "boolean"
         },
         "computer_use": {
+          "type": "boolean"
+        },
+        "concurrent_reasoning_summaries": {
           "type": "boolean"
         },
         "connectors": {

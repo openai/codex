@@ -2052,17 +2052,16 @@ where
                     token_usage,
                     end_turn,
                 }) => {
-                    if let Some(buffer) = output_item_done_buffer.as_mut() {
-                        if !forward_completed_items(&tx_event, &mut items_added, buffer.finish())
+                    if let Some(buffer) = output_item_done_buffer.as_mut()
+                        && !forward_completed_items(&tx_event, &mut items_added, buffer.finish())
                             .await
-                        {
-                            inference_trace_attempt.record_cancelled(
-                                STREAM_DROPPED_REASON,
-                                upstream_request_id,
-                                &items_added,
-                            );
-                            return;
-                        }
+                    {
+                        inference_trace_attempt.record_cancelled(
+                            STREAM_DROPPED_REASON,
+                            upstream_request_id,
+                            &items_added,
+                        );
+                        return;
                     }
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
