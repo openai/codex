@@ -4309,6 +4309,10 @@ pub struct CollabResumeEndEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::CommandExecutionItem;
+    use crate::items::CommandExecutionStatus;
+    use crate::items::DynamicToolCallItem;
+    use crate::items::DynamicToolCallStatus;
     use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::McpToolCallItem;
@@ -5288,6 +5292,139 @@ mod tests {
             }
             _ => panic!("expected McpToolCallEnd event"),
         }
+    }
+
+    #[test]
+    fn command_execution_item_lifecycle_emits_legacy_exec_events() {
+        let cwd = PathUri::from_abs_path(&test_path_buf("/tmp").abs());
+        let started = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            started_at_ms: 10,
+            item: TurnItem::CommandExecution(CommandExecutionItem {
+                id: "exec-1".into(),
+                process_id: Some("pid-1".into()),
+                command: vec!["echo".into(), "done".into()],
+                cwd: cwd.clone(),
+                parsed_cmd: vec![ParsedCommand::Unknown {
+                    cmd: "echo done".into(),
+                }],
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                status: CommandExecutionStatus::InProgress,
+                stdout: None,
+                stderr: None,
+                aggregated_output: None,
+                exit_code: None,
+                duration: None,
+                formatted_output: None,
+            }),
+        };
+        let completed = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 20,
+            item: TurnItem::CommandExecution(CommandExecutionItem {
+                id: "exec-1".into(),
+                process_id: Some("pid-1".into()),
+                command: vec!["echo".into(), "done".into()],
+                cwd,
+                parsed_cmd: vec![ParsedCommand::Unknown {
+                    cmd: "echo done".into(),
+                }],
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                status: CommandExecutionStatus::Completed,
+                stdout: Some("done\n".into()),
+                stderr: Some(String::new()),
+                aggregated_output: Some("done\n".into()),
+                exit_code: Some(0),
+                duration: Some(Duration::from_millis(5)),
+                formatted_output: Some("done\n".into()),
+            }),
+        };
+
+        assert!(matches!(
+            started.as_legacy_events(/*show_raw_agent_reasoning*/ false).as_slice(),
+            [EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id,
+                turn_id,
+                started_at_ms: 10,
+                ..
+            })] if call_id == "exec-1" && turn_id == "turn-1"
+        ));
+        assert!(matches!(
+            completed
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .as_slice(),
+            [EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id,
+                turn_id,
+                completed_at_ms: 20,
+                aggregated_output,
+                ..
+            })] if call_id == "exec-1" && turn_id == "turn-1" && aggregated_output == "done\n"
+        ));
+    }
+
+    #[test]
+    fn dynamic_tool_call_item_lifecycle_emits_legacy_dynamic_tool_events() {
+        let started = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            started_at_ms: 10,
+            item: TurnItem::DynamicToolCall(DynamicToolCallItem {
+                id: "dynamic-1".into(),
+                namespace: Some("apps".into()),
+                tool: "lookup".into(),
+                arguments: json!({"id": "123"}),
+                status: DynamicToolCallStatus::InProgress,
+                content_items: None,
+                success: None,
+                error: None,
+                duration: None,
+            }),
+        };
+        let completed = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 20,
+            item: TurnItem::DynamicToolCall(DynamicToolCallItem {
+                id: "dynamic-1".into(),
+                namespace: Some("apps".into()),
+                tool: "lookup".into(),
+                arguments: json!({"id": "123"}),
+                status: DynamicToolCallStatus::Completed,
+                content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "ok".into(),
+                }]),
+                success: Some(true),
+                error: None,
+                duration: Some(Duration::from_millis(5)),
+            }),
+        };
+
+        assert!(matches!(
+            started.as_legacy_events(/*show_raw_agent_reasoning*/ false).as_slice(),
+            [EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+                call_id,
+                turn_id,
+                started_at_ms: 10,
+                ..
+            })] if call_id == "dynamic-1" && turn_id == "turn-1"
+        ));
+        assert!(matches!(
+            completed
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .as_slice(),
+            [EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+                call_id,
+                turn_id,
+                completed_at_ms: 20,
+                success: true,
+                ..
+            })] if call_id == "dynamic-1" && turn_id == "turn-1"
+        ));
     }
 
     #[test]
