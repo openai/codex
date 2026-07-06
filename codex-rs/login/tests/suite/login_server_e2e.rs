@@ -144,13 +144,20 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     );
     let login_port = server.actual_port;
 
-    // Simulate browser callback, and follow redirect to /success
+    // Simulate browser callback and assert the local success redirect before following it.
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
     let resp = client.get(&url).send().await?;
-    assert!(resp.status().is_success());
+    assert_eq!(resp.status(), 302);
+    let success_url = resp.headers()["location"].to_str()?;
+    let success_url = Url::parse(success_url)?;
+    assert_eq!(success_url.host_str(), Some("localhost"));
+    assert_eq!(success_url.path(), "/success");
+
+    let success_resp = client.get(success_url).send().await?;
+    assert!(success_resp.status().is_success());
 
     // Wait for server shutdown
     server.block_until_done().await?;

@@ -107,11 +107,12 @@ pub enum LoginAccountParams {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
 pub enum LoginAppBrand {
+    #[default]
     Codex,
     Chatgpt,
 }

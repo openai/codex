@@ -260,7 +260,7 @@ impl AccountRequestProcessor {
                 use_hosted_login_success_page,
             } => {
                 let login_success_page = if use_hosted_login_success_page {
-                    let app_brand = match app_brand.unwrap_or(LoginAppBrand::Codex) {
+                    let app_brand = match app_brand.unwrap_or_default() {
                         LoginAppBrand::Codex => LoginSuccessPageBrand::Codex,
                         LoginAppBrand::Chatgpt => LoginSuccessPageBrand::Chatgpt,
                     };
@@ -355,9 +355,11 @@ impl AccountRequestProcessor {
         }
     }
 
-    // Build shared options for a ChatGPT login attempt; performs validation.
-    async fn login_chatgpt_options(
+    // Build options for a ChatGPT login attempt; performs validation.
+    async fn login_chatgpt_common(
         &self,
+        codex_streamlined_login: bool,
+        login_success_page: LoginSuccessPage,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -373,6 +375,8 @@ impl AccountRequestProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
+            codex_streamlined_login,
+            login_success_page,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -389,6 +393,14 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
+            }
+            if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
+                && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
+                && !open_app_url.trim().is_empty()
+            {
+                *url = open_app_url
+                    .parse()
+                    .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
             }
             opts
         };
@@ -422,18 +434,9 @@ impl AccountRequestProcessor {
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let mut opts = self.login_chatgpt_options().await?;
-        opts.codex_streamlined_login = codex_streamlined_login;
-        opts.login_success_page = login_success_page;
-        #[cfg(debug_assertions)]
-        if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
-            && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
-            && !open_app_url.trim().is_empty()
-        {
-            *url = open_app_url
-                .parse()
-                .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
-        }
+        let opts = self
+            .login_chatgpt_common(codex_streamlined_login, login_success_page)
+            .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -504,7 +507,12 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_device_code_response(
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_options().await?;
+        let opts = self
+            .login_chatgpt_common(
+                /*codex_streamlined_login*/ false,
+                LoginSuccessPage::default(),
+            )
+            .await?;
         let device_code = request_device_code(&opts)
             .await
             .map_err(Self::login_chatgpt_device_code_start_error)?;
