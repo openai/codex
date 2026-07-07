@@ -1759,7 +1759,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
 
     assert_eq!(
         request,
-        GuardianApprovalRequest::McpToolCall {
+        ApprovalAction::McpToolCall {
             id: "call-1".to_string(),
             server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             tool_name: "browser_navigate".to_string(),
@@ -1804,7 +1804,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
 
     assert_eq!(
         request,
-        GuardianApprovalRequest::McpToolCall {
+        ApprovalAction::McpToolCall {
             id: "call-1".to_string(),
             server: "custom_server".to_string(),
             tool_name: "dangerous_tool".to_string(),
@@ -1842,7 +1842,7 @@ fn guardian_mcp_review_request_ignores_untrusted_connected_account_email() {
 
     assert_eq!(
         request,
-        GuardianApprovalRequest::McpToolCall {
+        ApprovalAction::McpToolCall {
             id: "call-1".to_string(),
             server: "custom_server".to_string(),
             tool_name: "dangerous_tool".to_string(),
@@ -1858,62 +1858,42 @@ fn guardian_mcp_review_request_ignores_untrusted_connected_account_email() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn guardian_review_decision_maps_to_mcp_tool_decision() {
-    let (session, _) = make_session_and_context().await;
-    let session = Arc::new(session);
-
+#[test]
+fn approval_resolution_maps_to_mcp_tool_decision() {
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(
-            session.as_ref(),
-            "review-id",
-            ReviewDecision::Approved
-        )
-        .await,
+        mcp_tool_approval_decision_from_resolution(ApprovalResolution {
+            decision: ReviewDecision::Approved,
+            rejection: None,
+            source: crate::approval_coordinator::ApprovalResolutionSource::Guardian,
+        }),
         McpToolApprovalDecision::Accept
     );
-    session.services.guardian_rejections.lock().await.insert(
-        "review-id".to_string(),
-        crate::guardian::GuardianRejection {
-            rationale: "too risky".to_string(),
-            source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
-        },
-    );
-    let denial = mcp_tool_approval_decision_from_guardian(
-        session.as_ref(),
-        "review-id",
-        ReviewDecision::Denied,
-    )
-    .await;
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = denial
-    else {
-        panic!("guardian denial should carry a rejection message");
-    };
-    assert!(message.contains("Reason: too risky"));
-    assert!(message.contains("The agent must not attempt to achieve the same outcome"));
-    let timeout = mcp_tool_approval_decision_from_guardian(
-        session.as_ref(),
-        "review-id",
-        ReviewDecision::TimedOut,
-    )
-    .await;
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = timeout
-    else {
-        panic!("guardian timeout should carry a timeout message");
-    };
-    assert!(message.contains("did not finish before its deadline"));
-    assert!(!message.contains("unacceptable risk"));
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(
-            session.as_ref(),
-            "review-id",
-            ReviewDecision::Abort
-        )
-        .await,
+        mcp_tool_approval_decision_from_resolution(ApprovalResolution {
+            decision: ReviewDecision::Denied,
+            rejection: Some("too risky".to_string()),
+            source: crate::approval_coordinator::ApprovalResolutionSource::Guardian,
+        }),
+        McpToolApprovalDecision::Decline {
+            message: Some("too risky".to_string()),
+        }
+    );
+    assert_eq!(
+        mcp_tool_approval_decision_from_resolution(ApprovalResolution {
+            decision: ReviewDecision::TimedOut,
+            rejection: Some("review timed out".to_string()),
+            source: crate::approval_coordinator::ApprovalResolutionSource::Guardian,
+        }),
+        McpToolApprovalDecision::Decline {
+            message: Some("review timed out".to_string()),
+        }
+    );
+    assert_eq!(
+        mcp_tool_approval_decision_from_resolution(ApprovalResolution {
+            decision: ReviewDecision::Abort,
+            rejection: Some("ignored for abort".to_string()),
+            source: crate::approval_coordinator::ApprovalResolutionSource::Guardian,
+        }),
         McpToolApprovalDecision::Decline { message: None }
     );
 }

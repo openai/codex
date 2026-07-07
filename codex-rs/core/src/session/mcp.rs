@@ -34,7 +34,7 @@ const TOOL_SUGGESTION_TOOL_TYPE_KEY: &str = "tool_type";
 enum GuardianElicitationReview {
     NotRequested,
     Decline(&'static str),
-    ApprovalRequest(Box<crate::guardian::GuardianApprovalRequest>),
+    ApprovalRequest(Box<crate::approval_coordinator::ApprovalAction>),
 }
 
 struct GuardianMcpElicitationReviewer {
@@ -599,12 +599,12 @@ async fn review_guardian_mcp_elicitation(
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );
-    if !crate::guardian::routes_approval_to_guardian_with_reviewer(
+    let Some(reviewer) = crate::approval_coordinator::ApprovalReviewer::automatic_for_reviewer(
         turn_context.as_ref(),
         approvals_reviewer,
-    ) {
+    ) else {
         return Ok(None);
-    }
+    };
 
     let guardian_request = match guardian_elicitation_review_request(&request) {
         GuardianElicitationReview::NotRequested => return Ok(None),
@@ -620,19 +620,18 @@ async fn review_guardian_mcp_elicitation(
         GuardianElicitationReview::ApprovalRequest(guardian_request) => *guardian_request,
     };
 
-    let review_id = crate::guardian::new_guardian_review_id();
-    let decision = crate::guardian::review_approval_request(
+    let resolution = crate::approval_coordinator::ApprovalCoordinator::resolve_automatic_event(
         &session,
         &turn_context,
-        review_id.clone(),
-        guardian_request,
-        /*retry_reason*/ None,
+        reviewer,
+        /*hook_request*/ None,
+        crate::approval_coordinator::ApprovalReview::main_turn(
+            guardian_request,
+            /*retry_reason*/ None,
+        ),
     )
     .await;
-    Ok(Some(
-        mcp_elicitation_response_from_guardian_decision(session.as_ref(), &review_id, decision)
-            .await,
-    ))
+    Ok(Some(mcp_elicitation_response_from_resolution(resolution)))
 }
 
 fn guardian_elicitation_review_request(
@@ -696,7 +695,7 @@ fn guardian_elicitation_review_request(
     };
 
     GuardianElicitationReview::ApprovalRequest(Box::new(
-        crate::guardian::GuardianApprovalRequest::McpToolCall {
+        crate::approval_coordinator::ApprovalAction::McpToolCall {
             id: format!(
                 "mcp_elicitation:{}:{}",
                 request.server_name,
@@ -776,18 +775,10 @@ fn mcp_elicitation_request_id(id: &RequestId) -> String {
     }
 }
 
-async fn mcp_elicitation_response_from_guardian_decision(
-    session: &Session,
-    review_id: &str,
-    decision: ReviewDecision,
+fn mcp_elicitation_response_from_resolution(
+    resolution: crate::approval_coordinator::ApprovalResolution,
 ) -> ElicitationResponse {
-    let denial_message = match decision {
-        ReviewDecision::Denied => {
-            Some(crate::guardian::guardian_rejection_message(session, review_id).await)
-        }
-        _ => None,
-    };
-    mcp_elicitation_response_from_guardian_decision_parts(decision, denial_message)
+    mcp_elicitation_response_from_guardian_decision_parts(resolution.decision, resolution.rejection)
 }
 
 fn mcp_elicitation_response_from_guardian_decision_parts(

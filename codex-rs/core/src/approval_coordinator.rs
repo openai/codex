@@ -64,6 +64,13 @@ impl ApprovalReviewer {
         }
     }
 
+    pub(crate) fn automatic_for_reviewer(
+        turn: &TurnContext,
+        reviewer: ApprovalsReviewer,
+    ) -> Option<Self> {
+        Self::routes_to_guardian(turn, reviewer).then_some(Self::Guardian)
+    }
+
     fn routes_to_guardian(turn: &TurnContext, reviewer: ApprovalsReviewer) -> bool {
         matches!(
             turn.approval_policy.value(),
@@ -84,6 +91,16 @@ pub(crate) struct ApprovalResolution {
     pub(crate) decision: ReviewDecision,
     pub(crate) rejection: Option<String>,
     pub(crate) source: ApprovalResolutionSource,
+}
+
+pub(crate) struct ApprovalUserReview<T> {
+    pub(crate) decision: ReviewDecision,
+    pub(crate) output: T,
+}
+
+pub(crate) struct ApprovalEventResolution<T> {
+    pub(crate) resolution: ApprovalResolution,
+    pub(crate) user_output: Option<T>,
 }
 
 impl ApprovalResolution {
@@ -194,14 +211,64 @@ impl ApprovalCoordinator {
         F: FnOnce() -> Fut,
         Fut: Future<Output = ReviewDecision>,
     {
+        Self::resolve_event_with_user_output(
+            session,
+            turn,
+            reviewer,
+            hook_request,
+            review,
+            || async {
+            ApprovalUserReview {
+                decision: user_review().await,
+                output: (),
+            }
+        },
+        )
+        .await
+        .resolution
+    }
+
+    pub(crate) async fn resolve_automatic_event(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+    ) -> ApprovalResolution {
+        debug_assert_eq!(reviewer, ApprovalReviewer::Guardian);
+        Self::resolve_event_with_user_output(session, turn, reviewer, hook_request, review, || async {
+            ApprovalUserReview {
+                decision: ReviewDecision::Denied,
+                output: (),
+            }
+        })
+        .await
+        .resolution
+    }
+
+    pub(crate) async fn resolve_event_with_user_output<T, F, Fut>(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+        user_review: F,
+    ) -> ApprovalEventResolution<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ApprovalUserReview<T>>,
+    {
         if let Some(hook_request) = hook_request
             && let Some(resolution) =
                 Self::resolve_hook(session, turn, hook_request.run_id, hook_request.payload).await
         {
-            return resolution;
+            return ApprovalEventResolution {
+                resolution,
+                user_output: None,
+            };
         }
 
-        let resolution = match reviewer {
+        let (resolution, user_output) = match reviewer {
             ApprovalReviewer::Guardian => {
                 let review_id = new_guardian_review_id();
                 let decision = review_approval_request(
@@ -212,15 +279,27 @@ impl ApprovalCoordinator {
                     review.retry_reason.clone(),
                 )
                 .await;
-                Self::normalize_guardian(session, review_id, decision).await
+                (
+                    Self::normalize_guardian(session, review_id, decision).await,
+                    None,
+                )
             }
-            ApprovalReviewer::User => ApprovalResolution {
-                decision: user_review().await,
-                rejection: None,
-                source: ApprovalResolutionSource::User,
-            },
+            ApprovalReviewer::User => {
+                let user_review = user_review().await;
+                (
+                    ApprovalResolution {
+                        decision: user_review.decision,
+                        rejection: None,
+                        source: ApprovalResolutionSource::User,
+                    },
+                    Some(user_review.output),
+                )
+            }
         };
-        Self::normalize_user_rejection(resolution)
+        ApprovalEventResolution {
+            resolution: Self::normalize_user_rejection(resolution),
+            user_output,
+        }
     }
 
     async fn resolve_hook(
