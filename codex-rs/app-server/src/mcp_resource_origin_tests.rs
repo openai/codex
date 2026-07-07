@@ -22,17 +22,6 @@ fn bounds_entries_and_keeps_updated_origins() {
 }
 
 #[test]
-fn history_does_not_replace_live_origin() {
-    let mut index = McpResourceOriginIndex::default();
-    insert(&mut index, "call-1", "live-connector");
-
-    let resolved = index.insert_if_absent("call-1", origin_with_app_context("history-connector"));
-
-    assert_eq!(resolved, origin_with_app_context("live-connector"));
-    assert_eq!(index.get("call-1"), Some(resolved));
-}
-
-#[test]
 fn seeds_origins_from_materialized_items() {
     let mut index = McpResourceOriginIndex::default();
     let items = [ThreadItem::McpToolCall {
@@ -72,8 +61,8 @@ fn origin_with_app_context(connector_id: &str) -> McpResourceOrigin {
     McpResourceOrigin {
         server: "plugin-runtime".to_string(),
         tool: "search".to_string(),
-        connector_id: Some(connector_id.to_string()),
+        connector_id: connector_id.to_string(),
         link_id: Some("link".to_string()),
-        resource_uri: Some("ui://shared/widget.html".to_string()),
+        resource_uri: "ui://shared/widget.html".to_string(),
     }
 }

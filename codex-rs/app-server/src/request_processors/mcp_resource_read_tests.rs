@@ -15,7 +15,7 @@ const TOOL_NAME: &str = "catalog_a_search";
 #[test]
 fn rejects_connector_link_uri_and_route_identity_mismatches() {
     let mut mismatched_connector = origin(Some(LINK_ID));
-    mismatched_connector.connector_id = Some("catalog-b".to_string());
+    mismatched_connector.connector_id = "catalog-b".to_string();
     assert_error_contains(
         build_plugin_runtime_fetch_resource_meta(&mismatched_connector, RESOURCE_URI, &tool_info()),
         "does not match app context connector",
@@ -118,9 +118,9 @@ fn origin(link_id: Option<&str>) -> McpResourceOrigin {
     McpResourceOrigin {
         server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         tool: TOOL_NAME.to_string(),
-        connector_id: Some(CONNECTOR_ID.to_string()),
+        connector_id: CONNECTOR_ID.to_string(),
         link_id: link_id.map(str::to_string),
-        resource_uri: Some(RESOURCE_URI.to_string()),
+        resource_uri: RESOURCE_URI.to_string(),
     }
 }
 

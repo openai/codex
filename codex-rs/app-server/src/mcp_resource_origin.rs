@@ -7,9 +7,9 @@ const MAX_MCP_RESOURCE_ORIGINS: usize = 1024;
 pub(crate) struct McpResourceOrigin {
     pub(crate) server: String,
     pub(crate) tool: String,
-    pub(crate) connector_id: Option<String>,
+    pub(crate) connector_id: String,
     pub(crate) link_id: Option<String>,
-    pub(crate) resource_uri: Option<String>,
+    pub(crate) resource_uri: String,
 }
 
 #[derive(Default)]
@@ -34,24 +34,15 @@ impl McpResourceOrigin {
         else {
             return None;
         };
-        let (connector_id, link_id, resource_uri) = app_context
-            .as_ref()
-            .map(|context| {
-                (
-                    Some(context.connector_id.clone()),
-                    context.link_id.clone(),
-                    context.resource_uri.clone(),
-                )
-            })
-            .unwrap_or_default();
+        let app_context = app_context.as_ref()?;
         Some((
             id,
             Self {
                 server: server.clone(),
                 tool: tool.clone(),
-                connector_id,
-                link_id,
-                resource_uri,
+                connector_id: app_context.connector_id.clone(),
+                link_id: app_context.link_id.clone(),
+                resource_uri: app_context.resource_uri.clone()?,
             },
         ))
     }
@@ -64,32 +55,15 @@ impl McpResourceOriginIndex {
         })
     }
 
-    pub(crate) fn insert_if_absent(
-        &mut self,
-        call_id: &str,
-        origin: McpResourceOrigin,
-    ) -> McpResourceOrigin {
-        if let Some(origin) = self.get(call_id) {
-            return origin;
-        }
-        self.insert(call_id.to_string(), origin.clone());
-        origin
-    }
-
     pub(crate) fn seed<'a>(&mut self, items: impl IntoIterator<Item = &'a ThreadItem>) {
         for (call_id, origin) in items.into_iter().filter_map(McpResourceOrigin::from_item) {
             self.insert(call_id.to_string(), origin);
         }
     }
 
-    fn insert(&mut self, call_id: String, origin: McpResourceOrigin) {
-        if let Some(index) = self
-            .0
-            .iter()
-            .position(|(existing_call_id, _)| existing_call_id == &call_id)
-        {
-            self.0.remove(index);
-        }
+    pub(crate) fn insert(&mut self, call_id: String, origin: McpResourceOrigin) {
+        self.0
+            .retain(|(existing_call_id, _)| existing_call_id != &call_id);
         self.0.push_back((call_id, origin));
         if self.0.len() > MAX_MCP_RESOURCE_ORIGINS {
             self.0.pop_front();

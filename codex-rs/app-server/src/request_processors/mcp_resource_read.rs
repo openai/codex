@@ -1,12 +1,14 @@
 use super::mcp_processor::with_mcp_tool_call_thread_id_meta;
 use super::*;
 use crate::mcp_resource_origin::McpResourceOrigin;
+use anyhow::Context;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::ToolInfo;
+use serde_json::Value;
 
-const LEGACY_CODEX_APPS_MCP_SERVER_NAME: &str = "codex-connectors-mcp";
-const PLUGIN_RUNTIME_MCP_SERVER_NAME: &str = "plugin-runtime";
+const LEGACY_CODEX_APPS_IMPLEMENTATION_NAME: &str = "codex-connectors-mcp";
+const PLUGIN_RUNTIME_IMPLEMENTATION_NAME: &str = "plugin-runtime";
 const FETCH_RESOURCE_TOOL_NAME: &str = "fetch_resource";
 
 pub(super) async fn read_thread_mcp_resource(
@@ -28,11 +30,11 @@ pub(super) async fn read_thread_mcp_resource(
     let runtime = thread.current_mcp_runtime().await;
     let connection = runtime.manager().server_connection(server).await?;
     match connection.server_info().name.as_str() {
-        LEGACY_CODEX_APPS_MCP_SERVER_NAME => {
+        LEGACY_CODEX_APPS_IMPLEMENTATION_NAME => {
             let result = connection.read_resource(uri).await?;
             return Ok(serde_json::to_value(result)?);
         }
-        PLUGIN_RUNTIME_MCP_SERVER_NAME => {}
+        PLUGIN_RUNTIME_IMPLEMENTATION_NAME => {}
         implementation => {
             anyhow::bail!("unsupported codex_apps MCP server implementation `{implementation}`")
         }
@@ -41,29 +43,26 @@ pub(super) async fn read_thread_mcp_resource(
     let origin =
         resolve_mcp_resource_origin(thread_state_manager, thread_id, thread, origin_call_id)
             .await?;
-    if origin.connector_id.is_none() {
-        anyhow::bail!("originating MCP tool call `{origin_call_id}` has no app context");
-    }
     if origin.server != server {
         anyhow::bail!(
             "originating MCP tool call server `{}` does not match resource server `{server}`",
             origin.server
         );
     }
-    if origin.resource_uri.as_deref() != Some(uri) {
+    if origin.resource_uri != uri {
         anyhow::bail!(
-            "originating MCP tool call resource URI {:?} does not match requested URI `{uri}`",
+            "originating MCP tool call resource URI `{}` does not match requested URI `{uri}`",
             origin.resource_uri
         );
     }
 
-    let tool_info = connection.tool_info(&origin.tool).ok_or_else(|| {
-        anyhow::anyhow!(
+    let tool_info = connection.tool_info(&origin.tool).with_context(|| {
+        format!(
             "originating MCP tool `{}` is not available on server `{server}`",
             origin.tool
         )
     })?;
-    let meta = build_plugin_runtime_fetch_resource_meta(&origin, uri, tool_info)?;
+    let meta = build_plugin_runtime_fetch_resource_meta(&origin, uri, &tool_info)?;
     let meta = with_mcp_tool_call_thread_id_meta(Some(meta), thread_id_string);
     let result = connection
         .call_tool(
@@ -104,16 +103,15 @@ async fn resolve_mcp_resource_origin(
         .rev()
         .find_map(|turn| McpResourceOrigin::find(&turn.items, origin_call_id));
     let mut thread_state = thread_state.lock().await;
-    history_origin
-        .map(|origin| {
-            thread_state
-                .mcp_resource_origins
-                .insert_if_absent(origin_call_id, origin)
-        })
-        .or_else(|| thread_state.mcp_resource_origin(origin_call_id))
-        .ok_or_else(|| {
-            anyhow::anyhow!("originating MCP tool call `{origin_call_id}` was not found")
-        })
+    if let Some(origin) = thread_state.mcp_resource_origin(origin_call_id) {
+        return Ok(origin);
+    }
+    let origin = history_origin
+        .with_context(|| format!("originating MCP tool call `{origin_call_id}` was not found"))?;
+    thread_state
+        .mcp_resource_origins
+        .insert(origin_call_id.to_string(), origin.clone());
+    Ok(origin)
 }
 
 fn build_plugin_runtime_fetch_resource_meta(
@@ -121,42 +119,45 @@ fn build_plugin_runtime_fetch_resource_meta(
     uri: &str,
     tool_info: &ToolInfo,
 ) -> anyhow::Result<serde_json::Value> {
+    // Resolve the current server-owned tool identity.
     let tool_meta = tool_info
         .tool
         .meta
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing metadata"))?;
+        .context("originating MCP tool is missing metadata")?;
     let connector_id = tool_info
         .connector_id
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing connector_id"))?;
+        .context("originating MCP tool is missing connector_id")?;
     let link_id = tool_meta
         .0
         .get("link_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing link_id"))?;
+        .and_then(Value::as_str)
+        .context("originating MCP tool is missing link_id")?;
     let codex_apps_meta = tool_meta
         .0
         .get(MCP_TOOL_CODEX_APPS_META_KEY)
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing _codex_apps metadata"))?;
+        .and_then(Value::as_object)
+        .context("originating MCP tool is missing _codex_apps metadata")?;
     let resource_uri = mcp_app_resource_uri(&tool_meta.0)
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing its app resource URI"))?;
+        .context("originating MCP tool is missing its app resource URI")?;
+
+    // Cross-check persisted provenance, the request, and current tool metadata.
     if resource_uri != uri {
         anyhow::bail!(
             "originating MCP tool resource URI `{resource_uri}` does not match requested URI `{uri}`"
         );
     }
-    if Some(connector_id) != origin.connector_id.as_deref() {
+    if connector_id != origin.connector_id {
         anyhow::bail!(
-            "originating MCP tool connector `{connector_id}` does not match app context connector {:?}",
+            "originating MCP tool connector `{connector_id}` does not match app context connector `{}`",
             origin.connector_id
         );
     }
 
     let synthetic_link = codex_apps_meta
         .get("synthetic_link")
-        .and_then(serde_json::Value::as_bool)
+        .and_then(Value::as_bool)
         == Some(true);
     match origin.link_id.as_deref() {
         Some(origin_link_id) if origin_link_id == link_id => {}
@@ -166,80 +167,53 @@ fn build_plugin_runtime_fetch_resource_meta(
 
     let tool_resource_route = codex_apps_meta
         .get("resource_uri")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool is missing its resource route"))?;
+        .and_then(Value::as_str)
+        .context("originating MCP tool is missing its resource route")?;
     let route_segments = tool_resource_route
         .strip_prefix('/')
         .map(|route| route.split('/').collect::<Vec<_>>())
         .filter(|segments| segments.len() == 3 && segments.iter().all(|part| !part.is_empty()))
-        .ok_or_else(|| anyhow::anyhow!("originating MCP tool has an invalid resource route"))?;
+        .context("originating MCP tool has an invalid resource route")?;
     if route_segments[0] != connector_id || route_segments[1] != link_id {
         anyhow::bail!("originating MCP tool resource route does not match connector and link");
     }
 
-    let mut fetch_resource_meta = serde_json::Map::from_iter([
-        (
-            "resource_uri".to_string(),
-            serde_json::Value::String(format!(
-                "/{connector_id}/{link_id}/{FETCH_RESOURCE_TOOL_NAME}"
-            )),
-        ),
-        (
-            "contains_mcp_source".to_string(),
-            serde_json::Value::Bool(
-                codex_apps_meta
-                    .get("contains_mcp_source")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true),
-            ),
-        ),
-    ]);
+    // Construct the canonical route without forwarding client-provided routing.
+    let mut fetch_resource_meta = serde_json::json!({
+        "resource_uri": format!("/{connector_id}/{link_id}/{FETCH_RESOURCE_TOOL_NAME}"),
+        "contains_mcp_source": codex_apps_meta
+            .get("contains_mcp_source")
+            .and_then(Value::as_bool)
+            == Some(true),
+    });
     if synthetic_link {
-        fetch_resource_meta.insert("synthetic_link".to_string(), serde_json::Value::Bool(true));
+        fetch_resource_meta["synthetic_link"] = Value::Bool(true);
     }
 
-    let mut meta = serde_json::Map::from_iter([
-        (
-            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
-            serde_json::Value::Object(fetch_resource_meta),
-        ),
-        (
-            "x-codex-turn-metadata".to_string(),
-            serde_json::json!({
-                "mcp_request_meta": {
-                    "selected_connector_ids": [connector_id],
-                }
-            }),
-        ),
-    ]);
+    let mut meta = serde_json::json!({
+        "_codex_apps": fetch_resource_meta,
+        "x-codex-turn-metadata": {
+            "mcp_request_meta": {
+                "selected_connector_ids": [connector_id],
+            }
+        },
+    });
     if let Some(connector_name) = tool_info.connector_name.as_ref() {
-        meta.insert(
-            "connector_name".to_string(),
-            serde_json::Value::String(connector_name.clone()),
-        );
+        meta["connector_name"] = Value::String(connector_name.clone());
     }
     if let Some(connector_description) = tool_info.namespace_description.as_ref() {
-        meta.insert(
-            "connector_description".to_string(),
-            serde_json::Value::String(connector_description.clone()),
-        );
+        meta["connector_description"] = Value::String(connector_description.clone());
     }
-    Ok(serde_json::Value::Object(meta))
+    Ok(meta)
 }
 
-fn mcp_app_resource_uri(meta: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+fn mcp_app_resource_uri(meta: &serde_json::Map<String, Value>) -> Option<&str> {
     meta.get("ui")
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
         .and_then(|ui| ui.get("resourceUri"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            meta.get("ui/resourceUri")
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            meta.get("openai/outputTemplate")
-                .and_then(serde_json::Value::as_str)
-        })
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("ui/resourceUri").and_then(Value::as_str))
+        .or_else(|| meta.get("openai/outputTemplate").and_then(Value::as_str))
 }
 
 fn plugin_runtime_fetch_resource_response(
@@ -250,13 +224,11 @@ fn plugin_runtime_fetch_resource_response(
     }
     let mut structured_content = result
         .structured_content
-        .ok_or_else(|| anyhow::anyhow!("plugin-runtime fetch_resource returned no contents"))?;
+        .context("plugin-runtime fetch_resource returned no contents")?;
     let contents = structured_content
         .get_mut("contents")
-        .and_then(serde_json::Value::as_array_mut)
-        .ok_or_else(|| {
-            anyhow::anyhow!("plugin-runtime fetch_resource returned invalid contents")
-        })?;
+        .and_then(Value::as_array_mut)
+        .context("plugin-runtime fetch_resource returned invalid contents")?;
     for content in contents {
         if let Some(content) = content.as_object_mut()
             && !content.contains_key("_meta")
