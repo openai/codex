@@ -7,7 +7,7 @@ use reqwest::header::HeaderValue;
 
 use crate::chatgpt_hosts::is_allowed_chatgpt_host;
 
-// WARNING: this store is process-global and may be shared across auth contexts.
+// WARNING: this HTTP cookie store is process-global and may be shared across auth contexts.
 // It must only ever contain Cloudflare infrastructure cookies. Never extend this
 // store to persist ChatGPT account, session, auth, or other user-specific cookie
 // data.

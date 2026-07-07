@@ -10,9 +10,9 @@
 //! - error messages guide users when CA files are invalid.
 //! - optional HTTPS probes can complete a request through the constructed client.
 //!
-//! The detailed explanation of what "hermetic" means here lives in `codex_client::custom_ca`.
+//! The detailed explanation of what "hermetic" means here lives in `codex_http_client::custom_ca`.
 //! This binary exists so the tests can exercise
-//! [`codex_client::build_reqwest_client_for_subprocess_tests`] in a separate process without
+//! [`codex_http_client::build_reqwest_client_for_subprocess_tests`] in a separate process without
 //! duplicating client-construction logic.
 
 use std::env;
@@ -69,11 +69,11 @@ fn build_probe_client(
     if let Some(proxy_url) = proxy_url {
         let proxy = reqwest::Proxy::https(proxy_url)
             .map_err(|error| format!("failed to configure probe proxy {proxy_url}: {error}"))?;
-        return codex_client::build_reqwest_client_with_custom_ca(builder.proxy(proxy))
+        return codex_http_client::build_reqwest_client_with_custom_ca(builder.proxy(proxy))
             .map_err(|error| error.to_string());
     }
 
-    codex_client::build_reqwest_client_for_subprocess_tests(builder)
+    codex_http_client::build_reqwest_client_for_subprocess_tests(builder)
         .map_err(|error| error.to_string())
 }
 

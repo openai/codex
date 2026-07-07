@@ -1,4 +1,4 @@
-//! Custom CA handling for Codex outbound HTTP and websocket clients.
+//! Custom CA handling shared by Codex outbound HTTP and websocket clients.
 //!
 //! Codex constructs outbound reqwest clients and secure websocket connections in a few crates, but
 //! they all need the same trust-store policy when enterprise proxies or gateways intercept TLS.
