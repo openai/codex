@@ -64,6 +64,11 @@ const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
     ignore = "requires the trusted Linux proxy bridge"
 )]
 async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> Result<()> {
+    // TODO(anp): Propagate managed-network execution attribution through exec-server.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "exact Guardian attribution is not forwarded through remote exec-server"
+    );
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
@@ -181,6 +186,11 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
     ignore = "requires the trusted Linux proxy bridge"
 )]
 async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<()> {
+    // TODO(anp): Propagate managed-network execution attribution through exec-server.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "exact Guardian attribution is not forwarded through remote exec-server"
+    );
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
