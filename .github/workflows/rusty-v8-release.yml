@@ -322,12 +322,6 @@ jobs:
           python-version: "3.11"
           architecture: x64
 
-      - name: Check out pinned V8 source and dependencies
-        shell: bash
-        run: |
-          python3 .github/scripts/rusty_v8_bazel.py sync-upstream-source \
-            --source-root upstream-rusty-v8
-
       - name: Set up Codex Rust toolchain for Cargo smoke
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:

@@ -282,53 +282,6 @@ def stage_artifacts(
     print(staged_checksums)
 
 
-def v8_checkout_version(source_root: Path) -> str:
-    version_header = source_root / "v8" / "include" / "v8-version.h"
-    values: dict[str, str] = {}
-    for name, value in re.findall(
-        r"^#define V8_(MAJOR_VERSION|MINOR_VERSION|BUILD_NUMBER|PATCH_LEVEL) ([0-9]+)$",
-        version_header.read_text(),
-        flags=re.MULTILINE,
-    ):
-        values[name] = value
-    expected_names = {"MAJOR_VERSION", "MINOR_VERSION", "BUILD_NUMBER", "PATCH_LEVEL"}
-    if values.keys() != expected_names:
-        raise SystemExit(f"could not resolve V8 version from {version_header}")
-    return ".".join(
-        values[name]
-        for name in ["MAJOR_VERSION", "MINOR_VERSION", "BUILD_NUMBER", "PATCH_LEVEL"]
-    )
-
-
-def sync_upstream_v8_source(
-    source_root: Path,
-    source_version: str | None = None,
-) -> None:
-    source_root = source_root.resolve()
-    source_version = source_version or resolved_v8_source_version()
-    v8_root = source_root / "v8"
-    subprocess.run(
-        ["git", "fetch", "--depth=1", "origin", f"refs/tags/{source_version}"],
-        cwd=v8_root,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "checkout", "--detach", "FETCH_HEAD"],
-        cwd=v8_root,
-        check=True,
-    )
-    subprocess.run(
-        [sys.executable, "tools/update_deps.py"],
-        cwd=source_root,
-        check=True,
-    )
-    actual_version = v8_checkout_version(source_root)
-    if actual_version != source_version:
-        raise SystemExit(
-            f"expected V8 {source_version} after source sync, found {actual_version}"
-        )
-
-
 def upstream_release_pair_paths(source_root: Path, target: str) -> tuple[Path, Path]:
     lib_name = (
         "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
@@ -407,12 +360,6 @@ def parse_args() -> argparse.Namespace:
     stage_upstream_release_pair_parser.add_argument("--output-dir", required=True)
     stage_upstream_release_pair_parser.add_argument("--sandbox", action="store_true")
 
-    sync_upstream_source_parser = subparsers.add_parser("sync-upstream-source")
-    sync_upstream_source_parser.add_argument(
-        "--source-root", type=Path, required=True
-    )
-    sync_upstream_source_parser.add_argument("--v8-version")
-
     subparsers.add_parser("resolved-v8-crate-version")
     subparsers.add_parser("resolved-v8-source-version")
     subparsers.add_parser("rusty-v8-release-tag")
@@ -456,12 +403,6 @@ def main() -> int:
             target=args.target,
             output_dir=Path(args.output_dir),
             sandbox=args.sandbox,
-        )
-        return 0
-    if args.command == "sync-upstream-source":
-        sync_upstream_v8_source(
-            source_root=args.source_root,
-            source_version=args.v8_version,
         )
         return 0
     if args.command == "resolved-v8-crate-version":

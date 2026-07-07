@@ -93,10 +93,10 @@ The same run also builds the matching sandbox pair targets:
 
 The workflow also builds sandbox-enabled
 `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` archive/binding pairs
-from the matching upstream `rusty_v8` crate source, after synchronizing its V8
-checkout and Chromium dependencies to the source version pinned in
-`MODULE.bazel`. Those ABI-specific outputs cannot be produced by Codex's Bazel
-Windows GNU toolchain.
+from the upstream `rusty_v8` crate source. These outputs use that crate's own V8
+checkout, which may differ from the V8 source version in the Codex artifact tag.
+This is a known temporary exception: those ABI-specific outputs cannot be
+produced by Codex's Bazel Windows GNU toolchain.
 
 The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
 used by `rusty_v8 v149.2.0`, compiles published artifact targets with
@@ -119,6 +119,8 @@ assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
 hardcodes a `v<crate_version>` tag layout, while our artifacts are published
 under `rusty-v8-v<crate_version>-v8-<source_version>`.
 
-Do not mix artifacts across crate or source versions. The archive and binding
-must match both the exact resolved `v8` crate version in `codex-rs/Cargo.lock`
-and the embedded V8 source version in `MODULE.bazel`.
+For Codex-built artifacts, do not mix artifacts across crate or source versions.
+The archive and binding must match both the exact resolved `v8` crate version in
+`codex-rs/Cargo.lock` and the embedded V8 source version in `MODULE.bazel`. The
+Windows MSVC exception above matches the crate version but does not yet
+guarantee the tagged Codex source version.

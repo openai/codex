@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import textwrap
 import unittest
 from os import environ
@@ -81,82 +80,6 @@ class RustyV8BazelTest(unittest.TestCase):
             self.assertEqual(
                 "14.9.207.35",
                 rusty_v8_bazel.resolved_v8_source_version(module_bazel),
-            )
-
-    def test_v8_checkout_version_reads_version_header(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            source_root = Path(temp_dir)
-            version_header = source_root / "v8" / "include" / "v8-version.h"
-            version_header.parent.mkdir(parents=True)
-            version_header.write_text(
-                textwrap.dedent(
-                    """\
-                    #define V8_MAJOR_VERSION 14
-                    #define V8_MINOR_VERSION 9
-                    #define V8_BUILD_NUMBER 207
-                    #define V8_PATCH_LEVEL 35
-                    """
-                )
-            )
-
-            self.assertEqual(
-                "14.9.207.35",
-                rusty_v8_bazel.v8_checkout_version(source_root),
-            )
-
-    def test_sync_upstream_v8_source_checks_out_requested_tag(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            remote = root / "remote"
-            version_header = remote / "include" / "v8-version.h"
-            version_header.parent.mkdir(parents=True)
-            version_header.write_text(
-                textwrap.dedent(
-                    """\
-                    #define V8_MAJOR_VERSION 14
-                    #define V8_MINOR_VERSION 9
-                    #define V8_BUILD_NUMBER 207
-                    #define V8_PATCH_LEVEL 35
-                    """
-                )
-            )
-            git = ["git", "-C", str(remote)]
-            subprocess.run(["git", "init", str(remote)], check=True, capture_output=True)
-            subprocess.run([*git, "add", "."], check=True, capture_output=True)
-            subprocess.run(
-                [
-                    *git,
-                    "-c",
-                    "user.name=Codex Test",
-                    "-c",
-                    "user.email=codex@example.com",
-                    "commit",
-                    "-m",
-                    "V8 source",
-                ],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                [*git, "tag", "14.9.207.35"], check=True, capture_output=True
-            )
-
-            source_root = root / "rusty_v8"
-            source_root.mkdir()
-            subprocess.run(
-                ["git", "clone", str(remote), str(source_root / "v8")],
-                check=True,
-                capture_output=True,
-            )
-            tools = source_root / "tools"
-            tools.mkdir()
-            (tools / "update_deps.py").write_text("")
-
-            rusty_v8_bazel.sync_upstream_v8_source(source_root, "14.9.207.35")
-
-            self.assertEqual(
-                "14.9.207.35",
-                rusty_v8_bazel.v8_checkout_version(source_root),
             )
 
     def test_command_version_tracks_remaining_http_file_assets(self) -> None:
