@@ -2,6 +2,10 @@
 version = 1
 name = "codex"
 
+# TODO(anp) make it optional to specify this field
+[setup]
+script = ""
+
 [[actions]]
 name = "Run"
 icon = "run"
