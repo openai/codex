@@ -25,8 +25,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CollabAgentRef;
-use codex_protocol::protocol::CollabWaitingBeginEvent;
-use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
