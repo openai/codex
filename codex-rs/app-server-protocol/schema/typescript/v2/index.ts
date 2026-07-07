@@ -294,6 +294,7 @@ export type { PluginDetail } from "./PluginDetail";
 export type { PluginHookSummary } from "./PluginHookSummary";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallPolicy } from "./PluginInstallPolicy";
+export type { PluginInstallPolicySource } from "./PluginInstallPolicySource";
 export type { PluginInstallResponse } from "./PluginInstallResponse";
 export type { PluginInstalledParams } from "./PluginInstalledParams";
 export type { PluginInstalledResponse } from "./PluginInstalledResponse";

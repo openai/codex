@@ -33,6 +33,69 @@ fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only
     );
 }
 
+#[test]
+fn installation_policy_source_is_preserved_across_remote_summary_paths() {
+    let mut directory_plugin = directory_plugin("plugin-linear", "linear");
+    directory_plugin.installation_policy_source =
+        Some(RemotePluginInstallPolicySource::ImplicitCanonicalApp);
+    let installed_plugin = RemotePluginInstalledItem {
+        plugin: directory_plugin.clone(),
+        enabled: true,
+        disabled_skill_names: Vec::new(),
+    };
+
+    let marketplace = build_remote_marketplace(
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME,
+        vec![directory_plugin],
+        vec![installed_plugin.clone()],
+        /*include_installed_only*/ false,
+    )
+    .expect("marketplace should be valid")
+    .expect("marketplace should not be empty");
+    assert_eq!(
+        marketplace
+            .plugins
+            .into_iter()
+            .map(|plugin| plugin.install_policy_source)
+            .collect::<Vec<_>>(),
+        vec![Some(PluginInstallPolicySource::ImplicitCanonicalApp)]
+    );
+
+    let mut installed_plugin = installed_plugin;
+    installed_plugin.plugin.installation_policy_source =
+        Some(RemotePluginInstallPolicySource::WorkspaceSetting);
+    let installed_plugin = remote_installed_plugin_to_cache_entry(&installed_plugin)
+        .expect("installed plugin should be valid");
+    let marketplaces = group_remote_installed_plugins_by_marketplaces(
+        &[installed_plugin],
+        &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+    );
+    assert_eq!(
+        marketplaces
+            .into_iter()
+            .flat_map(|marketplace| marketplace.plugins)
+            .map(|plugin| plugin.install_policy_source)
+            .collect::<Vec<_>>(),
+        vec![Some(PluginInstallPolicySource::WorkspaceSetting)]
+    );
+}
+
+#[test]
+fn unknown_installation_policy_source_maps_to_none() {
+    let plugin = directory_plugin("plugin-linear", "linear");
+    let mut plugin_json = serde_json::to_value(plugin).expect("plugin should serialize");
+    plugin_json["installation_policy_source"] =
+        serde_json::Value::String("FUTURE_POLICY_SOURCE".to_string());
+    let plugin: RemotePluginDirectoryItem =
+        serde_json::from_value(plugin_json).expect("unknown source should deserialize");
+
+    let summary = build_remote_plugin_summary(&plugin, /*installed_plugin*/ None)
+        .expect("summary should be valid");
+
+    assert_eq!(summary.install_policy_source, None);
+}
+
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
     RemotePluginDirectoryItem {
         id: id.to_string(),
@@ -44,6 +107,7 @@ fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
         share_url: None,
         share_principals: None,
         installation_policy: PluginInstallPolicy::Available,
+        installation_policy_source: None,
         authentication_policy: PluginAuthPolicy::OnUse,
         availability: PluginAvailability::Available,
         release: RemotePluginReleaseResponse {

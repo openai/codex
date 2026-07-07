@@ -9,6 +9,7 @@ use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInstalledParams;
 use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginListMarketplaceKind;
@@ -196,6 +197,12 @@ enabled = true
         ]
     );
     assert_eq!(response.marketplace_load_errors, Vec::new());
+    assert!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .all(|plugin| plugin.install_policy_source.is_none())
+    );
     Ok(())
 }
 
@@ -289,11 +296,17 @@ enabled = true
         remote_marketplace
             .plugins
             .iter()
-            .map(|plugin| plugin.id.clone())
+            .map(|plugin| (plugin.id.clone(), plugin.install_policy_source))
             .collect::<Vec<_>>(),
         vec![
-            "linear@openai-curated-remote".to_string(),
-            "remote-only@openai-curated-remote".to_string(),
+            (
+                "linear@openai-curated-remote".to_string(),
+                Some(PluginInstallPolicySource::WorkspaceSetting),
+            ),
+            (
+                "remote-only@openai-curated-remote".to_string(),
+                Some(PluginInstallPolicySource::WorkspaceSetting),
+            ),
         ]
     );
     assert_eq!(response.marketplace_load_errors, Vec::new());
@@ -462,6 +475,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 installed: false,
                 enabled: false,
                 install_policy: PluginInstallPolicy::Available,
+                install_policy_source: None,
                 auth_policy: PluginAuthPolicy::OnInstall,
                 availability: codex_app_server_protocol::PluginAvailability::Available,
                 interface: None,
@@ -754,6 +768,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     installed: false,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: None,
                     auth_policy: PluginAuthPolicy::OnInstall,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(codex_app_server_protocol::PluginInterface {
@@ -794,6 +809,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     installed: false,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: None,
                     auth_policy: PluginAuthPolicy::OnInstall,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: None,
@@ -1683,6 +1699,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
+      "installation_policy_source": "IMPLICIT_CANONICAL_APP",
       "authentication_policy": "ON_USE",
       "status": "ENABLED",
       "release": {
@@ -1722,6 +1739,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
+      "installation_policy_source": "WORKSPACE_SETTING",
       "authentication_policy": "ON_USE",
       "status": "ENABLED",
       "release": {
@@ -1846,6 +1864,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     assert_eq!(remote_marketplace.plugins[0].installed, true);
     assert_eq!(remote_marketplace.plugins[0].enabled, true);
     assert_eq!(
+        remote_marketplace.plugins[0].install_policy_source,
+        Some(PluginInstallPolicySource::ImplicitCanonicalApp)
+    );
+    assert_eq!(
         remote_marketplace.plugins[0].availability,
         codex_app_server_protocol::PluginAvailability::Available
     );
@@ -1880,6 +1902,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let cached_catalog: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache_files[0])?)?;
     assert_eq!(cached_catalog["schema_version"], serde_json::json!(1));
+    assert_eq!(
+        cached_catalog["plugins"][0]["installation_policy_source"],
+        serde_json::json!("IMPLICIT_CANONICAL_APP")
+    );
     assert_eq!(
         cached_catalog["plugins"][0]["release"]["interface"]["default_prompts"],
         serde_json::json!(["Create a Linear issue", "Review my Linear projects"])
@@ -3938,6 +3964,7 @@ fn remote_installed_plugin_body_with_optional_app_manifest(
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
+      "installation_policy_source": "WORKSPACE_SETTING",
       "authentication_policy": "ON_USE",
       "release": {{
         "version": "{release_version}",
