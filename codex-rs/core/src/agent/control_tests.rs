@@ -1950,6 +1950,11 @@ async fn spawn_child_completion_notifies_parent_history() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
+    harness
+        .manager
+        .remove_thread(&child_thread_id)
+        .await
+        .expect("child removal should succeed");
     let _ = child_thread
         .submit(Op::Shutdown {})
         .await
@@ -2099,6 +2104,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         })),
         tester_path.to_string(),
         Some(tester_path.clone()),
+        /*completion_child*/ None,
     );
     let tester_turn = tester_thread.codex.session.new_default_turn().await;
     tester_thread
@@ -2187,6 +2193,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
         })),
         child_thread_id.to_string(),
         /*child_agent_path*/ None,
+        /*completion_child*/ None,
     );
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);

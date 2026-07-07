@@ -328,6 +328,27 @@ impl AgentControl {
             (None, _, _) => Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
+        let completion_child = if multi_agent_version != MultiAgentVersion::V2
+            && matches!(
+                &notification_source,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
+            ) {
+            let Some(completion_watcher) =
+                new_thread.thread.codex.session.try_reserve_turn_activity()
+            else {
+                let _ = state.remove_thread(&new_thread.thread_id).await;
+                let _ = new_thread.thread.shutdown_and_wait().await;
+                return Err(CodexErr::InvalidRequest(
+                    "parent thread is shutting down".to_string(),
+                ));
+            };
+            Some(CompletionWatcherChild {
+                status: new_thread.thread.subscribe_status(),
+                _activity: completion_watcher,
+            })
+        } else {
+            None
+        };
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
@@ -415,6 +436,7 @@ impl AgentControl {
                 notification_source,
                 child_reference,
                 agent_metadata.agent_path.clone(),
+                completion_child,
             );
         }
 
@@ -737,6 +759,30 @@ impl AgentControl {
                 inherited_exec_policy,
             })
             .await?;
+        let completion_child = if multi_agent_version != MultiAgentVersion::V2
+            && matches!(
+                &notification_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ) {
+            let Some(completion_watcher) = resumed_thread
+                .thread
+                .codex
+                .session
+                .try_reserve_turn_activity()
+            else {
+                let _ = state.remove_thread(&resumed_thread.thread_id).await;
+                let _ = resumed_thread.thread.shutdown_and_wait().await;
+                return Err(CodexErr::InvalidRequest(
+                    "parent thread is shutting down".to_string(),
+                ));
+            };
+            Some(CompletionWatcherChild {
+                status: resumed_thread.thread.subscribe_status(),
+                _activity: completion_watcher,
+            })
+        } else {
+            None
+        };
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -754,6 +800,7 @@ impl AgentControl {
                 Some(notification_source.clone()),
                 child_reference,
                 agent_metadata.agent_path.clone(),
+                completion_child,
             );
         }
         self.persist_thread_spawn_edge_for_source(

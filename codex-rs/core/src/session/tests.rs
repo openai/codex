@@ -10194,7 +10194,7 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
         Vec::<TurnInput>::new(),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
-
+    assert!(sess.thread_activity.try_reserve_idle_shutdown().is_none());
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
@@ -10235,6 +10235,38 @@ async fn interrupt_waits_for_idle_turn_start_to_install_task() {
         .expect("idle turn should be accepted");
     interrupt.await.expect("interrupt task should not panic");
     assert!(sess.active_turn.lock().await.is_none());
+    assert!(sess.thread_activity.try_reserve_idle_shutdown().is_some());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds session state to pause replacement at a deterministic boundary"
+)]
+async fn replacement_holds_thread_activity_through_startup() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let task = || NeverEndingTask {
+        kind: TaskKind::Regular,
+        listen_to_cancellation_token: true,
+    };
+    sess.spawn_task(Arc::clone(&tc), Vec::new(), task()).await;
+    let replacement_context = sess.new_default_turn().await;
+    let state = sess.state.lock().await;
+    let replacement = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        async move {
+            sess.spawn_task(replacement_context, Vec::new(), task())
+                .await
+        }
+    });
+    while sess.active_turn.lock().await.is_some() {
+        tokio::task::yield_now().await;
+    }
+    assert!(sess.thread_activity.try_reserve_idle_shutdown().is_none());
+    drop(state);
+    replacement.await.expect("replacement should not panic");
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    assert!(sess.thread_activity.try_reserve_idle_shutdown().is_some());
 }
 
 #[tokio::test]

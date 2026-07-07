@@ -18,6 +18,7 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_activity::ThreadActivityGate;
 use crate::thread_activity::ThreadActivityHandle;
 use crate::thread_activity::ThreadActivityRegistrationError;
+use crate::thread_activity::ThreadActivityReservation;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
@@ -79,6 +80,11 @@ pub(crate) struct LiveAgent {
     pub(crate) thread_id: ThreadId,
     pub(crate) metadata: AgentMetadata,
     pub(crate) status: AgentStatus,
+}
+
+struct CompletionWatcherChild {
+    status: watch::Receiver<AgentStatus>,
+    _activity: ThreadActivityReservation,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -153,6 +159,33 @@ impl AgentControl {
 
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
         self.rollout_budget.as_ref()
+    }
+
+    pub(crate) async fn has_thread_spawn_descendant_idle_shutdown_blocker(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> bool {
+        let Ok(state) = self.upgrade() else {
+            return false;
+        };
+        for descendant_id in self
+            .thread_activity_gate
+            .descendant_thread_ids(parent_thread_id)
+        {
+            let Ok(descendant) = state.get_thread(descendant_id).await else {
+                continue;
+            };
+            if !is_final(&descendant.agent_status().await)
+                || descendant
+                    .codex
+                    .session
+                    .has_local_idle_shutdown_blocker()
+                    .await
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Send rich user input items to an existing agent thread.
@@ -479,6 +512,7 @@ impl AgentControl {
         session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
+        completion_child: Option<CompletionWatcherChild>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -488,19 +522,13 @@ impl AgentControl {
         };
         let control = self.clone();
         tokio::spawn(async move {
-            let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
-                    let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
-                        if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
-                            break;
-                        }
-                        status = status_rx.borrow().clone();
-                    }
-                    status
-                }
-                Err(_) => control.get_status(child_thread_id).await,
+            let mut completion_child = completion_child;
+            let status = match completion_child.as_mut() {
+                Some(child) => wait_for_final_status(&mut child.status).await,
+                None => match control.subscribe_status(child_thread_id).await {
+                    Ok(mut status) => wait_for_final_status(&mut status).await,
+                    Err(_) => control.get_status(child_thread_id).await,
+                },
             };
             if !is_final(&status) {
                 return;
@@ -509,12 +537,13 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
-            let child_thread = state.get_thread(child_thread_id).await.ok();
-            let child_uses_multi_agent_v2 = match child_thread.as_ref() {
-                Some(child_thread) => {
-                    child_thread.multi_agent_version() == Some(MultiAgentVersion::V2)
-                }
-                None => true,
+            let child_uses_multi_agent_v2 = match completion_child.as_ref() {
+                Some(_) => false,
+                None => state
+                    .get_thread(child_thread_id)
+                    .await
+                    .ok()
+                    .is_none_or(|child| child.multi_agent_version() == Some(MultiAgentVersion::V2)),
             };
             if child_agent_path.is_some() && child_uses_multi_agent_v2 {
                 let Some(child_agent_path) = child_agent_path.clone() else {
@@ -767,6 +796,17 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
                 .strip_prefix(prefix.as_str())
                 .is_some_and(|suffix| suffix.starts_with('/'))
     })
+}
+
+async fn wait_for_final_status(status: &mut watch::Receiver<AgentStatus>) -> AgentStatus {
+    let mut current = status.borrow().clone();
+    while !is_final(&current) {
+        if status.changed().await.is_err() {
+            return AgentStatus::NotFound;
+        }
+        current = status.borrow().clone();
+    }
+    current
 }
 
 pub(crate) fn render_input_preview(input: &[UserInput]) -> String {

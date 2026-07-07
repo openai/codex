@@ -139,6 +139,36 @@ impl ThreadActivityGate {
         })
     }
 
+    pub(crate) fn descendant_thread_ids(&self, ancestor_id: ThreadId) -> Vec<ThreadId> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .nodes
+            .iter()
+            .filter_map(|(thread_id, node)| {
+                if *thread_id == ancestor_id {
+                    return None;
+                }
+                let mut parent_thread_id = node.parent_thread_id;
+                let mut visited = HashSet::new();
+                while let Some(parent_id) = parent_thread_id
+                    && visited.insert(parent_id)
+                {
+                    if parent_id == ancestor_id {
+                        return Some(*thread_id);
+                    }
+                    parent_thread_id = state
+                        .nodes
+                        .get(&parent_id)
+                        .and_then(|node| node.parent_thread_id);
+                }
+                None
+            })
+            .collect()
+    }
+
     fn validate_ancestors(
         state: &ThreadActivityState,
         mut parent_thread_id: Option<ThreadId>,
@@ -186,6 +216,42 @@ impl ThreadActivityGate {
             thread_id,
             generation,
             clear_closing_on_drop: close,
+            delivery_prepared: false,
+            active: true,
+        })
+    }
+
+    fn try_reserve_dispatched_turn(
+        self: &Arc<Self>,
+        thread_id: ThreadId,
+        generation: u64,
+    ) -> Option<ThreadActivityReservation> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let node = state.nodes.get(&thread_id)?;
+        if node.generation != generation
+            || node.closed
+            || node.initializing
+            // One committed slot is the queued Shutdown itself; a turn may start only while an
+            // earlier FIFO submission is also still committed.
+            || (node.closing && node.committed <= 1)
+            || !Self::validate_ancestors(
+                &state,
+                node.parent_thread_id,
+                /*allow_closing*/ false,
+            )
+        {
+            return None;
+        }
+        let node = state.nodes.get_mut(&thread_id)?;
+        node.active = node.active.checked_add(1)?;
+        Some(ThreadActivityReservation {
+            gate: Arc::clone(self),
+            thread_id,
+            generation,
+            clear_closing_on_drop: false,
             delivery_prepared: false,
             active: true,
         })
@@ -415,6 +481,11 @@ impl ThreadActivityHandle {
     pub(crate) fn try_reserve(&self, close: bool) -> Option<ThreadActivityReservation> {
         self.gate
             .try_reserve(self.thread_id, self.generation, close)
+    }
+
+    pub(crate) fn try_reserve_dispatched_turn(&self) -> Option<ThreadActivityReservation> {
+        self.gate
+            .try_reserve_dispatched_turn(self.thread_id, self.generation)
     }
 
     pub(crate) fn try_reserve_idle_shutdown(&self) -> Option<ThreadActivityReservation> {

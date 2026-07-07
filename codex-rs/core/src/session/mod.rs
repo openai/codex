@@ -1048,13 +1048,22 @@ fn push_prompt_fragment(
 }
 
 impl Session {
-    async fn has_idle_shutdown_blocker(&self) -> bool {
+    pub(crate) async fn has_local_idle_shutdown_blocker(&self) -> bool {
         matches!(self.agent_status.borrow().clone(), AgentStatus::Running)
             || self.conversation.running_state().await.is_some()
             || *self.services.elicitations.subscribe().borrow()
             || self.input_queue.has_pending_mailbox_items().await
             || self.active_turn.lock().await.is_some()
             || !self.list_background_terminals().await.is_empty()
+    }
+
+    async fn has_idle_shutdown_blocker(&self) -> bool {
+        self.has_local_idle_shutdown_blocker().await
+            || self
+                .services
+                .agent_control
+                .has_thread_spawn_descendant_idle_shutdown_blocker(self.thread_id)
+                .await
     }
 
     pub(crate) async fn try_claim_idle_shutdown(

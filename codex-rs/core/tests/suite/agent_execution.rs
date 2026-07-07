@@ -1,13 +1,19 @@
 use anyhow::Result;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
@@ -129,5 +135,97 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     );
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_parent_cannot_shutdown_while_unpublished_child_waits_for_approval() -> Result<()> {
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": FIRST_TASK,
+        "task_name": "first",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
+        sse(vec![
+            ev_response_created("parent-spawn-response"),
+            ev_function_call_with_namespace(
+                "spawn-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("parent-spawn-response"),
+        ]),
+    )
+    .await;
+    let shell_args = json!({
+        "command": "printf child",
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "hold the child at a deterministic approval boundary",
+    });
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_TASK) && !has_function_call_output(request, "spawn-call")
+        },
+        sse(vec![
+            ev_response_created("child-response"),
+            ev_shell_command_call_with_args("child-shell", &shell_args),
+            ev_completed("child-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "spawn-call"),
+        sse(vec![
+            ev_response_created("parent-followup-response"),
+            ev_assistant_message("parent-followup-message", "spawned"),
+            ev_completed("parent-followup-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("koffing").with_config(|config| {
+        for feature in [Feature::Collab, Feature::MultiAgentV2] {
+            config
+                .features
+                .enable(feature)
+                .expect("test config should allow feature update");
+        }
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        FIRST_PROMPT,
+        AskForApproval::OnRequest,
+        PermissionProfile::read_only(),
+    )
+    .await?;
+
+    let child_thread_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != test.session_configured.thread_id)
+        .expect("spawned child thread");
+    let child = test.thread_manager.get_thread(child_thread_id).await?;
+    wait_for_event(&child, |event| {
+        matches!(event, EventMsg::ExecApprovalRequest(_))
+    })
+    .await;
+    assert!(!test.codex.try_shutdown_if_idle().await?);
+    let child = test
+        .thread_manager
+        .remove_thread(&child_thread_id)
+        .await
+        .expect("remove child while preserving its lifecycle");
+
+    assert!(!test.codex.try_shutdown_if_idle().await?);
+
+    child.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }

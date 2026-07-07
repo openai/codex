@@ -612,6 +612,14 @@ impl Session {
         self.try_reserve_submission(/*close*/ false)
     }
 
+    pub(crate) fn try_reserve_turn_activity(&self) -> Option<ThreadActivityReservation> {
+        self.thread_activity.try_reserve(/*close*/ false)
+    }
+
+    pub(crate) fn try_reserve_dispatched_turn_activity(&self) -> Option<ThreadActivityReservation> {
+        self.thread_activity.try_reserve_dispatched_turn()
+    }
+
     pub(crate) fn try_reserve_idle_shutdown(&self) -> Option<SessionActivityReservation<'_>> {
         let thread = self.thread_activity.try_reserve_idle_shutdown()?;
         let submission = self.submission_lifecycle.try_reserve_idle_shutdown()?;

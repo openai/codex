@@ -322,9 +322,11 @@ impl Session {
         task: T,
     ) {
         let _turn_start = self.turn_start_lock.lock().await;
-        self.abort_all_tasks_locked(TurnAbortReason::Replaced).await;
+        let (_, replaced_turn_activity) =
+            self.abort_all_tasks_locked(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
         self.start_task_locked(turn_context, input, task).await;
+        drop(replaced_turn_activity);
     }
 
     pub(crate) async fn start_task_locked<T: SessionTask>(
@@ -333,6 +335,30 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            if active.is_none() {
+                let Some(thread_activity) = self.try_reserve_dispatched_turn_activity() else {
+                    return;
+                };
+                *active = Some(ActiveTurn {
+                    thread_activity: Some(thread_activity),
+                    ..Default::default()
+                });
+            }
+            let Some(turn) = active.as_mut() else {
+                return;
+            };
+            debug_assert!(turn.task.is_none());
+            if turn.thread_activity.is_none() {
+                let Some(thread_activity) = self.try_reserve_dispatched_turn_activity() else {
+                    return;
+                };
+                turn.thread_activity = Some(thread_activity);
+            }
+            Arc::clone(&turn.turn_state)
+        };
+
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -354,14 +380,7 @@ impl Session {
             .lock()
             .await
             .clear_turn(&turn_context.sub_id);
-
         let pending_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
-            Arc::clone(&turn.turn_state)
-        };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
@@ -371,8 +390,15 @@ impl Session {
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.task.is_none());
+        let Some(turn) = active.as_mut() else {
+            return;
+        };
+        if turn.task.is_some()
+            || turn.thread_activity.is_none()
+            || !Arc::ptr_eq(&turn.turn_state, &turn_state)
+        {
+            return;
+        }
         let agent_execution_guard = self.services.agent_control.execution_guard(
             turn_context.multi_agent_version,
             &turn_context.session_source,
@@ -494,12 +520,18 @@ impl Session {
         let Some(reservation) = self.try_reserve_activity() else {
             return;
         };
+        let Some(thread_activity) = self.try_reserve_turn_activity() else {
+            return;
+        };
         {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
                 return;
             }
-            *active_turn = Some(ActiveTurn::default());
+            *active_turn = Some(ActiveTurn {
+                thread_activity: Some(thread_activity),
+                ..Default::default()
+            });
         }
         drop(reservation);
 
@@ -516,14 +548,21 @@ impl Session {
     )]
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         let turn_start = self.turn_start_lock.lock().await;
-        let restart_pending = self.abort_all_tasks_locked(reason).await;
+        let (restart_pending, transition_activity) = self.abort_all_tasks_locked(reason).await;
         drop(turn_start);
         if restart_pending {
             self.maybe_start_turn_for_pending_work().await;
         }
+        drop(transition_activity);
     }
 
-    async fn abort_all_tasks_locked(self: &Arc<Self>, reason: TurnAbortReason) -> bool {
+    async fn abort_all_tasks_locked(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+    ) -> (
+        bool,
+        Option<crate::thread_activity::ThreadActivityReservation>,
+    ) {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -548,7 +587,12 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(active_turn).await;
         }
-        reason == TurnAbortReason::Interrupted && aborted_turn
+        let transition_activity =
+            active_turn_to_clear.and_then(|mut active_turn| active_turn.thread_activity.take());
+        (
+            reason == TurnAbortReason::Interrupted && aborted_turn,
+            transition_activity,
+        )
     }
 
     #[expect(
@@ -620,15 +664,18 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let turn_state = {
+        let completed_turn = {
             let mut active = self.active_turn.lock().await;
             active.as_mut().and_then(|active_turn| {
                 let task = active_turn.task.take()?;
                 task.handle.detach();
-                Some(Arc::clone(&active_turn.turn_state))
+                Some((
+                    Arc::clone(&active_turn.turn_state),
+                    active_turn.thread_activity.take(),
+                ))
             })
         };
-        let Some(turn_state) = turn_state else {
+        let Some((turn_state, thread_activity)) = completed_turn else {
             return;
         };
         let pending_input = self
@@ -818,6 +865,7 @@ impl Session {
             })
         };
         self.send_event(turn_context.as_ref(), event).await;
+        drop(thread_activity);
         self.services
             .guardian_rejection_circuit_breaker
             .lock()

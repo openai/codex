@@ -73,6 +73,12 @@ impl Session {
                 input,
             ));
         };
+        let Some(thread_activity) = self.try_reserve_turn_activity() else {
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
+                input,
+            ));
+        };
         let turn_state = {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
@@ -82,6 +88,7 @@ impl Session {
                 ));
             }
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+            active_turn.thread_activity = Some(thread_activity);
             Arc::clone(&active_turn.turn_state)
         };
         drop(reservation);

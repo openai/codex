@@ -112,27 +112,28 @@ fn unpublication_holds_activity_through_a_provisional_close() {
 fn activity_reservations_are_atomic_and_survive_session_teardown() {
     let gate = Arc::new(ThreadActivityGate::default());
     let parent_id = ThreadId::new();
-    let child_id = ThreadId::new();
+    let intermediate_id = ThreadId::new();
+    let leaf_id = ThreadId::new();
     let parent = register(&gate, parent_id, /*parent_thread_id*/ None);
-    let child = register(&gate, child_id, Some(parent_id));
+    let intermediate = register(&gate, intermediate_id, Some(parent_id));
+    let leaf = register(&gate, leaf_id, Some(intermediate_id));
 
-    let child_activity = child
+    let completion_activity = leaf
         .try_reserve(/*close*/ false)
-        .expect("reserve child activity");
+        .expect("reserve child completion watcher");
     assert!(parent.try_reserve_idle_shutdown().is_none());
-    drop(child_activity);
-    let parent_activity = parent
-        .try_reserve(/*close*/ false)
-        .expect("reserve parent activity");
-    assert!(parent.try_reserve_idle_shutdown().is_none());
+    drop(intermediate);
+    let descendants = gate.descendant_thread_ids(parent_id);
+    assert!(descendants.contains(&intermediate_id));
+    assert!(descendants.contains(&leaf_id));
     drop(parent);
     assert!(gate.register(parent_id, /*parent_thread_id*/ None).is_err());
-    drop(parent_activity);
+    drop(completion_activity);
     let parent = register(&gate, parent_id, /*parent_thread_id*/ None);
     let shutdown = parent
         .try_reserve_idle_shutdown()
         .expect("reserve idle shutdown");
-    assert!(child.try_reserve(/*close*/ false).is_none());
+    assert!(leaf.try_reserve(/*close*/ false).is_none());
     drop(shutdown);
 
     let mut failed_shutdown = parent
@@ -163,4 +164,30 @@ fn receiver_can_finish_before_sender_observes_delivery() {
     let state = gate.state.lock().expect("gate state");
     let node = state.nodes.get(&thread_id).expect("thread node");
     assert_eq!((node.active, node.committed), (0, 0));
+}
+
+#[test]
+fn accepted_submission_can_start_before_queued_shutdown() {
+    let gate = Arc::new(ThreadActivityGate::default());
+    let thread_id = ThreadId::new();
+    let thread = register(&gate, thread_id, /*parent_thread_id*/ None);
+
+    let mut user_submission = thread
+        .try_reserve(/*close*/ false)
+        .expect("reserve user submission");
+    assert!(user_submission.prepare_delivery());
+    user_submission.commit();
+    let mut queued_shutdown = thread
+        .try_reserve(/*close*/ true)
+        .expect("reserve later shutdown");
+    assert!(queued_shutdown.prepare_delivery());
+    queued_shutdown.commit();
+
+    let turn = thread
+        .try_reserve_dispatched_turn()
+        .expect("accepted user submission starts before shutdown");
+    thread.finish_submission();
+    assert!(thread.try_reserve_dispatched_turn().is_none());
+    drop(turn);
+    thread.finish_submission();
 }
