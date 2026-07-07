@@ -305,26 +305,6 @@ fn is_unrecoverable_windows_network_config_error(err: &std::io::Error) -> bool {
         .is_some_and(ConstraintError::is_windows_network_configuration_error)
 }
 
-async fn recover_config_for_cloud_config_bootstrap(
-    config_manager: &ConfigManager,
-    err: std::io::Error,
-) -> IoResult<Option<Config>> {
-    warn!(error = %err, "Failed to preload config for cloud config bundle");
-    if is_unrecoverable_windows_network_config_error(&err) {
-        // The elevated-only requirement may itself come from the cloud bundle.
-        // Use defaults only to bootstrap auth; the authoritative load below
-        // still validates the effective config after installing the loader.
-        Config::load_default_with_cli_overrides_for_codex_home(
-            config_manager.codex_home().to_path_buf(),
-            Vec::new(),
-        )
-        .await
-        .map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
 fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
     match err {
         ExecPolicyError::ParsePolicy { path, source } => {
@@ -521,20 +501,26 @@ pub async fn run_main_with_transport_options(
         arg0_paths.clone(),
         Arc::new(NoopThreadConfigLoader),
     );
-    let bootstrap_config = match config_manager
-        .load_latest_config(/*fallback_cwd*/ None)
+    match config_manager
+        .load_config_for_cloud_config_bootstrap()
         .await
     {
-        Ok(config) => Some(config),
-        Err(err) => recover_config_for_cloud_config_bootstrap(&config_manager, err).await?,
+        Ok(config) => {
+            let discovered_thread_config_loader = configured_thread_config_loader(&config);
+            config_manager
+                .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
+            let auth_manager =
+                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+            config_manager
+                .replace_cloud_config_bundle_loader(auth_manager, config.chatgpt_base_url);
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to preload config for cloud config bundle");
+            // TODO: Decide whether bootstrap config preload failures should block startup.
+            // If this fails, we cannot install cloud/thread config loaders, so non-strict
+            // startup may continue without managed cloud config.
+        }
     };
-    if let Some(config) = bootstrap_config {
-        let discovered_thread_config_loader = configured_thread_config_loader(&config);
-        config_manager.replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-        config_manager.replace_cloud_config_bundle_loader(auth_manager, config.chatgpt_base_url);
-    }
     let mut config_warnings = Vec::new();
     let (mut config, should_run_personality_migration) = match config_manager
         .load_latest_config(/*fallback_cwd*/ None)
@@ -1389,8 +1375,6 @@ mod tests {
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
     #[cfg(target_os = "windows")]
-    use super::recover_config_for_cloud_config_bootstrap;
-    #[cfg(target_os = "windows")]
     use crate::config_manager::ConfigManager;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
@@ -1400,20 +1384,47 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
-    async fn cloud_config_bootstrap_tolerates_missing_network_requirements() {
+    async fn cloud_config_bootstrap_defers_network_validation_and_preserves_cli_overrides() {
         let codex_home = tempfile::tempdir().expect("create Codex home");
-        let config_manager =
-            ConfigManager::without_managed_config_for_tests(codex_home.path().to_path_buf());
-        let err = std::io::Error::from(
-            codex_config::ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement,
+        std::fs::write(
+            codex_home.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+network_proxy = true
+
+[windows]
+sandbox = "elevated"
+"#,
+        )
+        .expect("write config");
+        let chatgpt_base_url = "https://cloud-config.example.test".to_string();
+        let config_manager = ConfigManager::new_for_tests(
+            codex_home.path().to_path_buf(),
+            vec![(
+                "chatgpt_base_url".to_string(),
+                toml::Value::String(chatgpt_base_url.clone()),
+            )],
+            codex_config::LoaderOverrides::without_managed_config_for_tests(),
+            codex_config::CloudConfigBundleLoader::default(),
         );
 
-        let config = recover_config_for_cloud_config_bootstrap(&config_manager, err)
+        let config = config_manager
+            .load_config_for_cloud_config_bootstrap()
             .await
-            .expect("load bootstrap config")
-            .expect("network configuration error should use bootstrap defaults");
+            .expect("bootstrap config should defer Windows network validation");
+        assert_eq!(config.chatgpt_base_url, chatgpt_base_url);
+        assert!(config.permissions.network.is_some());
 
-        assert!(config.permissions.network.is_none());
+        let err = config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .expect_err("authoritative config should enforce Windows network validation");
+        assert!(is_unrecoverable_windows_network_config_error(&err));
     }
 
     #[test]

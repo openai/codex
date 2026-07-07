@@ -1287,6 +1287,7 @@ pub struct ConfigBuilder {
     cloud_config_bundle: CloudConfigBundleLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
+    defer_windows_network_validation: bool,
 }
 
 impl ConfigBuilder {
@@ -1333,6 +1334,13 @@ impl ConfigBuilder {
         self
     }
 
+    /// Defers Windows network compatibility checks until an authoritative
+    /// config load that includes cloud requirements.
+    pub fn defer_windows_network_validation_for_bootstrap(mut self) -> Self {
+        self.defer_windows_network_validation = true;
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         // Keep the large config-loading future off small runtime thread stacks.
         Box::pin(self.build_inner()).await
@@ -1348,6 +1356,7 @@ impl ConfigBuilder {
             cloud_config_bundle,
             thread_config_loader,
             fallback_cwd,
+            defer_windows_network_validation,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -1423,12 +1432,13 @@ impl ConfigBuilder {
                 config_layer_stack.requirements().clone(),
                 config_layer_stack.requirements_toml().clone(),
             )?;
-            let mut config = Config::load_config_with_layer_stack(
+            let mut config = Config::load_config_with_layer_stack_and_options(
                 LOCAL_FS.as_ref(),
                 lock_config_toml,
                 harness_overrides,
                 codex_home,
                 lock_config_layer_stack,
+                defer_windows_network_validation,
             )
             .await?;
             config.config_lock_toml = Some(Arc::new(expected_lock_config));
@@ -1437,12 +1447,13 @@ impl ConfigBuilder {
                 save_fields_resolved_from_model_catalog;
             return Ok(config);
         }
-        Config::load_config_with_layer_stack(
+        Config::load_config_with_layer_stack_and_options(
             LOCAL_FS.as_ref(),
             config_toml,
             harness_overrides,
             codex_home,
             config_layer_stack,
+            defer_windows_network_validation,
         )
         .await
     }
@@ -2992,6 +3003,25 @@ impl Config {
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        Self::load_config_with_layer_stack_and_options(
+            fs,
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+            /*defer_windows_network_validation*/ false,
+        )
+        .await
+    }
+
+    async fn load_config_with_layer_stack_and_options(
+        fs: &dyn ExecutorFileSystem,
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: AbsolutePathBuf,
+        config_layer_stack: ConfigLayerStack,
+        defer_windows_network_validation: bool,
+    ) -> std::io::Result<Self> {
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
         if cfg.experimental_thread_store_endpoint.is_some() {
@@ -3788,15 +3818,17 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
-        let network_proxy_enabled = network.as_ref().is_some_and(NetworkProxySpec::enabled);
-        validate_windows_network_proxy_requirements(
-            config_layer_stack.requirements_toml(),
-            network_proxy_enabled,
-        )?;
-        validate_windows_sandbox_network_proxy_compatibility(
-            windows_sandbox_level,
-            network_proxy_enabled,
-        )?;
+        if !defer_windows_network_validation {
+            let network_proxy_enabled = network.as_ref().is_some_and(NetworkProxySpec::enabled);
+            validate_windows_network_proxy_requirements(
+                config_layer_stack.requirements_toml(),
+                network_proxy_enabled,
+            )?;
+            validate_windows_sandbox_network_proxy_compatibility(
+                windows_sandbox_level,
+                network_proxy_enabled,
+            )?;
+        }
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
