@@ -372,11 +372,12 @@ async fn operation_timeout_bounds_unauthorized_refresh_wait() -> anyhow::Result<
                     .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
             }
         })
-        // The later operation starts immediately, so it can send A once before its own 401 joins
-        // the in-flight recovery. Exactly four requests use A: initialize, initialized, and one
-        // rejected tools/list per operation. The single provider request below proves both 401s
-        // converge on the same refresh transaction.
-        .expect(4)
+        // Three requests always use A: initialize, initialized, and the first tools/list. The next
+        // operation may wait for the in-flight authorization-manager guard and send B directly,
+        // or it may send A once, receive 401, and join the same refresh transaction. Both
+        // interleavings are valid. The exact provider and B expectations below prove that neither
+        // path performs a second refresh or sends more than one successful retry.
+        .expect(3..=4)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
