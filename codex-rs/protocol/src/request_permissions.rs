@@ -66,7 +66,7 @@ pub struct RequestPermissionsResponse {
     pub permissions: RequestPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
-    /// Review every subsequent command in this turn before normal sandboxed execution.
+    /// Review subsequent commands in this turn unless a permission hook resolves the request.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict_auto_review: bool,
 }
