@@ -20,10 +20,8 @@ pub(crate) fn validate_bundle(
     let CloudConfigBundleLayers {
         baseline_config: _,
         system_overlay_config: _,
-        enterprise_managed_config: _,
         mut baseline_requirements,
         system_overlay_requirements,
-        enterprise_managed_requirements: _,
     } = bundle_layers;
 
     baseline_requirements.extend(system_overlay_requirements);

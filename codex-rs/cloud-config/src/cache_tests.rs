@@ -13,7 +13,6 @@ use tempfile::tempdir;
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: Vec::new(),
             managed_layers: CloudConfigTomlManagedLayers {
                 baseline: vec![CloudConfigFragment {
                     id: "cfg_1".to_string(),
@@ -24,7 +23,6 @@ fn test_bundle() -> CloudConfigBundle {
             },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: Vec::new(),
             managed_layers: CloudRequirementsTomlManagedLayers {
                 baseline: Vec::new(),
                 system_overlay: vec![CloudRequirementsFragment {
@@ -89,8 +87,6 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let cache_file: CloudConfigBundleCacheFile =
         serde_json::from_slice(&std::fs::read(cache.path()).expect("read cache"))
             .expect("parse cache");
-    let cache_json = serde_json::to_string(&cache_file).expect("serialize cache as JSON");
-    assert!(!cache_json.contains("enterprise_managed"));
     assert!(
         cache_file.signed_payload.expires_at
             <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)

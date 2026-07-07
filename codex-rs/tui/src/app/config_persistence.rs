@@ -1134,7 +1134,7 @@ mod tests {
         let codex_home = tempdir()?;
         let required_policy = codex_protocol::protocol::AskForApproval::Never;
         let cloud_config_bundle =
-            codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            codex_config::test_support::CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approval_policies = ["never"]"#,
             );
 

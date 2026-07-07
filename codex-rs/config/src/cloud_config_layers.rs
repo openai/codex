@@ -78,18 +78,6 @@ pub fn cloud_config_layers_from_fragments(
     )
 }
 
-pub(crate) fn cloud_config_layers_from_fragments_strict(
-    fragments: impl IntoIterator<Item = CloudConfigFragment>,
-    base_dir: &AbsolutePathBuf,
-) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(
-        fragments,
-        base_dir,
-        |id, name| ConfigLayerSource::EnterpriseManaged { id, name },
-        /*strict_config*/ true,
-    )
-}
-
 pub(crate) fn cloud_managed_config_layers_from_fragments(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,

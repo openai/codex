@@ -135,7 +135,6 @@ async fn managed_bundle_layers_follow_contract_precedence() {
             CloudManagedLayer::Baseline,
             "model = \"baseline\"\nmodel_provider = \"baseline\"",
         )
-        .add_enterprise_config("model_provider = \"enterprise\"\nreview_model = \"enterprise\"")
         .add_managed_config(
             CloudManagedLayer::SystemOverlay,
             "model_provider = \"overlay\"\nreview_model = \"overlay\"",
@@ -144,12 +143,9 @@ async fn managed_bundle_layers_follow_contract_precedence() {
             CloudManagedLayer::Baseline,
             "allow_appshots = true\nguardian_policy_config = \"baseline\"",
         )
-        .add_enterprise_requirement(
-            "allow_managed_hooks_only = true\nguardian_policy_config = \"enterprise\"",
-        )
         .add_managed_requirement(
             CloudManagedLayer::SystemOverlay,
-            "guardian_policy_config = \"overlay\"",
+            "allow_managed_hooks_only = true\nguardian_policy_config = \"overlay\"",
         )
         .into_loader();
 
@@ -186,10 +182,6 @@ async fn managed_bundle_layers_follow_contract_precedence() {
             ConfigLayerSource::System {
                 file: AbsolutePathBuf::from_absolute_path(&system_config_path)
                     .expect("absolute system config path"),
-            },
-            ConfigLayerSource::EnterpriseManaged {
-                id: "cfg_1".to_string(),
-                name: "Base config".to_string(),
             },
             ConfigLayerSource::CloudManaged {
                 layer: CloudManagedLayer::SystemOverlay,

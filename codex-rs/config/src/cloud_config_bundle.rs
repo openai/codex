@@ -10,10 +10,8 @@ use crate::ConfigLayerEntry;
 use crate::RequirementSource;
 use crate::RequirementsLayerEntry;
 use crate::cloud_config_layers::CloudConfigLayerError;
-use crate::cloud_config_layers::cloud_config_layers_from_fragments_strict;
 use crate::cloud_config_layers::cloud_managed_config_layers_from_fragments;
 use crate::cloud_config_layers::cloud_managed_config_layers_from_fragments_strict;
-use crate::cloud_config_layers_from_fragments;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
@@ -37,18 +35,14 @@ impl CloudConfigBundle {
             requirements_toml,
         } = self;
         let CloudConfigTomlBundle {
-            enterprise_managed: config_enterprise_managed,
             managed_layers: config_managed_layers,
         } = config_toml;
         let CloudRequirementsTomlBundle {
-            enterprise_managed: requirements_enterprise_managed,
             managed_layers: requirements_managed_layers,
         } = requirements_toml;
 
-        config_enterprise_managed.is_empty()
-            && config_managed_layers.baseline.is_empty()
+        config_managed_layers.baseline.is_empty()
             && config_managed_layers.system_overlay.is_empty()
-            && requirements_enterprise_managed.is_empty()
             && requirements_managed_layers.baseline.is_empty()
             && requirements_managed_layers.system_overlay.is_empty()
     }
@@ -56,8 +50,6 @@ impl CloudConfigBundle {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigTomlBundle {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub enterprise_managed: Vec<CloudConfigFragment>,
     #[serde(
         default,
         skip_serializing_if = "CloudConfigTomlManagedLayers::is_empty"
@@ -79,8 +71,6 @@ impl CloudConfigTomlManagedLayers {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudRequirementsTomlBundle {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub enterprise_managed: Vec<CloudRequirementsFragment>,
     #[serde(
         default,
         skip_serializing_if = "CloudRequirementsTomlManagedLayers::is_empty"
@@ -117,14 +107,10 @@ pub struct CloudConfigBundleLayers {
     pub baseline_config: Vec<ConfigLayerEntry>,
     /// System-overlay config layers in `ConfigLayerStack` order.
     pub system_overlay_config: Vec<ConfigLayerEntry>,
-    /// Enterprise-managed config layers in `ConfigLayerStack` order.
-    pub enterprise_managed_config: Vec<ConfigLayerEntry>,
     /// Baseline requirements layers in requirements merge order.
     pub baseline_requirements: Vec<RequirementsLayerEntry>,
     /// System-overlay requirements layers in requirements merge order.
     pub system_overlay_requirements: Vec<RequirementsLayerEntry>,
-    /// Enterprise-managed requirements layers in requirements merge order.
-    pub enterprise_managed_requirements: Vec<RequirementsLayerEntry>,
 }
 
 impl CloudConfigBundleLayers {
@@ -152,7 +138,6 @@ impl CloudConfigBundleLayers {
         let CloudConfigBundle {
             config_toml:
                 CloudConfigTomlBundle {
-                    enterprise_managed: config_enterprise_managed,
                     managed_layers:
                         CloudConfigTomlManagedLayers {
                             baseline: config_baseline,
@@ -161,7 +146,6 @@ impl CloudConfigBundleLayers {
                 },
             requirements_toml:
                 CloudRequirementsTomlBundle {
-                    enterprise_managed: requirements_enterprise_managed,
                     managed_layers:
                         CloudRequirementsTomlManagedLayers {
                             baseline: requirements_baseline,
@@ -179,11 +163,6 @@ impl CloudConfigBundleLayers {
         };
         let baseline_config =
             parse_managed_config_fragments(config_baseline, CloudManagedLayer::Baseline)?;
-        let enterprise_managed_config = if strict_config {
-            cloud_config_layers_from_fragments_strict(config_enterprise_managed, base_dir)?
-        } else {
-            cloud_config_layers_from_fragments(config_enterprise_managed, base_dir)?
-        };
         let system_overlay_config = parse_managed_config_fragments(
             config_system_overlay,
             CloudManagedLayer::SystemOverlay,
@@ -197,11 +176,6 @@ impl CloudConfigBundleLayers {
                     name,
                 }
             });
-        let enterprise_managed_requirements = requirements_layers_from_fragments(
-            requirements_enterprise_managed,
-            base_dir,
-            |id, name| RequirementSource::EnterpriseManaged { id, name },
-        );
         let system_overlay_requirements = requirements_layers_from_fragments(
             requirements_system_overlay,
             base_dir,
@@ -214,10 +188,8 @@ impl CloudConfigBundleLayers {
 
         Ok(Self {
             baseline_config,
-            enterprise_managed_config,
             system_overlay_config,
             baseline_requirements,
-            enterprise_managed_requirements,
             system_overlay_requirements,
         })
     }

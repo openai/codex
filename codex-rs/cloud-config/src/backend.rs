@@ -104,7 +104,6 @@ pub(crate) fn bundle_from_response(
                 "config_toml",
             )?;
             CloudConfigTomlBundle {
-                enterprise_managed: Vec::new(),
                 managed_layers: CloudConfigTomlManagedLayers {
                     baseline,
                     system_overlay,
@@ -121,7 +120,6 @@ pub(crate) fn bundle_from_response(
                 "requirements_toml",
             )?;
             CloudRequirementsTomlBundle {
-                enterprise_managed: Vec::new(),
                 managed_layers: CloudRequirementsTomlManagedLayers {
                     baseline,
                     system_overlay,
