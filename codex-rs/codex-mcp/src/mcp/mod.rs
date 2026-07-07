@@ -29,6 +29,7 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorSnapshot;
 use codex_login::CodexAuth;
+use codex_login::default_client::originator;
 use codex_model_provider::CHATGPT_CODEX_BASE_URL;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
@@ -521,15 +522,16 @@ fn mcp_server_config_for_url(
     apps_mcp_product_sku: Option<&str>,
     auth_mode: McpServerAuth,
 ) -> McpServerConfig {
-    let http_headers = apps_mcp_product_sku.map(|product_sku| {
-        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())])
-    });
+    let mut http_headers = HashMap::from([("originator".to_string(), originator().value)]);
+    if let Some(product_sku) = apps_mcp_product_sku {
+        http_headers.insert("X-OpenAI-Product-Sku".to_string(), product_sku.to_string());
+    }
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers,
+            http_headers: Some(http_headers),
             env_http_headers: None,
         },
         auth: auth_mode,

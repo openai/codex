@@ -263,8 +263,10 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
 }
 
 #[test]
-fn codex_apps_server_config_forwards_configured_product_sku_header() {
-    let config = codex_apps_mcp_server_config("https://chatgpt.com", Some("tpp"));
+fn codex_apps_server_config_forwards_originator_header() {
+    let expected_originator = codex_login::default_client::originator().value;
+    let config =
+        codex_apps_mcp_server_config("https://chatgpt.com", /*apps_mcp_product_sku*/ None);
 
     match &config.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -275,9 +277,33 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
             assert_eq!(
                 http_headers,
                 &Some(HashMap::from([(
-                    "X-OpenAI-Product-Sku".to_string(),
-                    "tpp".to_string(),
+                    "originator".to_string(),
+                    expected_originator,
                 )]))
+            );
+            assert!(env_http_headers.is_none());
+        }
+        other => panic!("expected streamable http transport, got {other:?}"),
+    }
+}
+
+#[test]
+fn codex_apps_server_config_forwards_originator_and_configured_product_sku_headers() {
+    let expected_originator = codex_login::default_client::originator().value;
+    let config = codex_apps_mcp_server_config("https://chatgpt.com", Some("tpp"));
+
+    match &config.transport {
+        McpServerTransportConfig::StreamableHttp {
+            http_headers,
+            env_http_headers,
+            ..
+        } => {
+            assert_eq!(
+                http_headers,
+                &Some(HashMap::from([
+                    ("originator".to_string(), expected_originator),
+                    ("X-OpenAI-Product-Sku".to_string(), "tpp".to_string()),
+                ]))
             );
             assert!(env_http_headers.is_none());
         }
