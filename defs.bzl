@@ -538,7 +538,7 @@ def codex_rust_crate(
             wine_exec_server = wine_test_name + "-windows-exec-server"
             foreign_platform_binary(
                 name = wine_exec_server,
-                binary = "//codex-rs/exec-server/testing:windows-exec-server",
+                binary = "//codex-rs/exec-server/testing:exec-server",
                 extra_rustc_flags = WINDOWS_GNULLVM_RUSTC_LINK_FLAGS,
                 platform = "//:windows_x86_64_gnullvm",
                 tags = ["manual"],

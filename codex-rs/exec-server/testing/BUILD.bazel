@@ -32,13 +32,11 @@ rust_binary(
 )
 
 rust_binary(
-    name = "windows-exec-server",
+    name = "exec-server",
     testonly = True,
-    srcs = ["windows_exec_server.rs"],
-    crate_name = "windows_exec_server",
-    crate_root = "windows_exec_server.rs",
-    tags = ["manual"],
-    target_compatible_with = ["@platforms//os:windows"],
+    srcs = ["exec_server.rs"],
+    crate_name = "exec_server",
+    crate_root = "exec_server.rs",
     visibility = ["//visibility:public"],
     deps = [
         "//codex-rs/exec-server",
