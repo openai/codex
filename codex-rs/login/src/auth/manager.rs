@@ -2213,8 +2213,7 @@ impl AuthManager {
         *self.external_auth.write().map_err(|_| {
             RefreshTokenError::Transient(std::io::Error::other("external auth lock is poisoned"))
         })? = Some(external_auth);
-        self.set_cached_auth(Some(auth));
-        Ok(())
+        self.commit_external_auth(auth)
     }
 
     pub fn clear_external_auth(&self) {
@@ -2516,7 +2515,29 @@ impl AuthManager {
             .await
             .map_err(RefreshTokenError::Transient)?;
         self.validate_external_auth(&refreshed)?;
-        self.set_cached_auth(Some(refreshed));
+        self.commit_external_auth(refreshed)?;
+        Ok(())
+    }
+
+    fn commit_external_auth(&self, auth: CodexAuth) -> Result<(), RefreshTokenError> {
+        if auth.is_external_chatgpt_tokens() {
+            let auth_dot_json = auth.get_current_auth_json().ok_or_else(|| {
+                RefreshTokenError::Transient(std::io::Error::other(
+                    "external ChatGPT auth tokens are missing auth state",
+                ))
+            })?;
+            // App/connectors paths still construct independent AuthManagers from Config. Mirror
+            // external ChatGPT auth into the process-local store so those managers see it too.
+            save_auth(
+                &self.codex_home,
+                &auth_dot_json,
+                AuthCredentialsStoreMode::Ephemeral,
+                AuthKeyringBackendKind::default(),
+            )
+            .map_err(RefreshTokenError::Transient)?;
+        }
+
+        self.set_cached_auth(Some(auth));
         Ok(())
     }
 
