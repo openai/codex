@@ -15,6 +15,7 @@ mod directory_cache;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
+mod metadata_store;
 mod plugin_config;
 mod snapshot;
 
@@ -29,6 +30,8 @@ pub use app_tool_policy::AppToolPolicyInput;
 pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
 pub use directory_cache::ConnectorDirectoryCacheContext;
+pub use metadata_store::ConnectorMetadata;
+pub use metadata_store::ConnectorMetadataStore;
 pub use plugin_config::parse_plugin_app_config;
 pub use plugin_config::parse_plugin_app_config_value;
 pub use snapshot::ConnectorSnapshot;

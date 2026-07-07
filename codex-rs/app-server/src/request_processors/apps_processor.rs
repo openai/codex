@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_info::app_info_to_api;
+use crate::app_info::connector_metadata_to_api;
 
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -30,6 +31,55 @@ impl AppsRequestProcessor {
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         }
+    }
+
+    pub(crate) async fn apps_read(
+        &self,
+        params: AppsReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let AppsReadParams { app_ids } = params;
+        if app_ids.len() > APP_READ_MAX_IDS {
+            return Err(invalid_params(format!(
+                "app/read accepts at most {APP_READ_MAX_IDS} appIds"
+            )));
+        }
+
+        let mut seen_app_ids = HashSet::new();
+        let app_ids = app_ids
+            .into_iter()
+            .filter(|app_id| seen_app_ids.insert(app_id.clone()))
+            .collect::<Vec<_>>();
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let auth = self.auth_manager.auth().await;
+        if !config
+            .features
+            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
+            || !self
+                .workspace_codex_plugins_enabled(&config, auth.as_ref())
+                .await
+        {
+            return Ok(Some(
+                AppsReadResponse {
+                    apps: Vec::new(),
+                    missing_app_ids: app_ids,
+                }
+                .into(),
+            ));
+        }
+
+        let connectors::ConnectorMetadataReadResult {
+            apps,
+            missing_app_ids,
+        } = connectors::read_connector_metadata(&config, &app_ids)
+            .await
+            .map_err(|err| internal_error(format!("failed to read app metadata: {err}")))?;
+        Ok(Some(
+            AppsReadResponse {
+                apps: apps.into_iter().map(connector_metadata_to_api).collect(),
+                missing_app_ids,
+            }
+            .into(),
+        ))
     }
 
     pub(crate) async fn apps_list(
@@ -390,6 +440,7 @@ fn record_legacy_apps_installed_duration(started_at: Instant, reload: bool) {
         );
     }
 }
+const APP_READ_MAX_IDS: usize = 100;
 
 enum AppListLoadResult {
     Accessible(Result<AccessibleConnectorsStatus, String>),

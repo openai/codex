@@ -1856,6 +1856,39 @@ The server also emits `app/list/updated` notifications whenever either source (a
 }
 ```
 
+Use `app/read` when a client already has app ids and only needs metadata. The request accepts at
+most 100 `appIds`; repeated ids are deduplicated while preserving first-request order. Both `apps`
+and `missingAppIds` follow that order. Unknown or unauthorized ids are returned as partial misses
+instead of failing the whole request.
+
+```json
+{ "method": "app/read", "id": 51, "params": {
+    "appIds": ["demo-app", "missing-app"]
+} }
+{ "id": 51, "result": {
+    "apps": [
+        {
+            "id": "demo-app",
+            "name": "Demo App",
+            "description": "Example connector for documentation.",
+            "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
+            "installUrl": "https://chatgpt.com/apps/demo-app/demo-app"
+        }
+    ],
+    "missingAppIds": ["missing-app"]
+} }
+```
+
+`app/read` reads fresh metadata records from a cache partitioned by backend URL and ChatGPT
+account/workspace identity, then makes at most one `POST /ps/connectors/batch` for missing or
+expired ids with `include_actions=false` and `include_model_descriptions=false`. Backend or
+transport failures return an RPC error without replacing existing cache records. Its metadata
+shape intentionally excludes runtime state, MCP tools, actions, model descriptions, and icon
+fields.
+
 Connected apps may override the thread's approval reviewer in `config.toml`.
 Use `apps._default.approvals_reviewer` to set the reviewer for all apps, and a
 per-app value to override that default. When both are omitted, the app inherits

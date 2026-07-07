@@ -1,8 +1,10 @@
 use codex_core::config::Config;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 
 use anyhow::Context;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
@@ -60,6 +62,60 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
 
     if response.status().is_success() {
         let result: T = response
+            .json()
+            .await
+            .context("Failed to parse JSON response")?;
+        Ok(result)
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Request failed with status {status}: {body}")
+    }
+}
+
+/// Make a POST request to the ChatGPT backend API.
+pub(crate) async fn chatgpt_post_request_with_timeout<
+    TRequest: Serialize + ?Sized,
+    TResponse: DeserializeOwned,
+>(
+    config: &Config,
+    auth: &CodexAuth,
+    path: &str,
+    body: &TRequest,
+    timeout: Option<Duration>,
+) -> anyhow::Result<TResponse> {
+    let chatgpt_base_url = &config.chatgpt_base_url;
+    anyhow::ensure!(
+        auth.uses_codex_backend(),
+        "ChatGPT backend requests require Codex backend auth"
+    );
+    anyhow::ensure!(
+        auth.get_account_id().is_some(),
+        "ChatGPT account ID not available, please re-run codex login"
+    );
+
+    let client = create_client();
+    let url = format!(
+        "{}/{}",
+        chatgpt_base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+
+    let mut request = client
+        .post(&url)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
+        .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
+        .header("Content-Type", "application/json")
+        .json(body);
+
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+
+    let response = request.send().await.context("Failed to send request")?;
+
+    if response.status().is_success() {
+        let result: TResponse = response
             .json()
             .await
             .context("Failed to parse JSON response")?;

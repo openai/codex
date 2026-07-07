@@ -3,11 +3,13 @@ use codex_app_server_protocol::AppInfo as ApiAppInfo;
 use codex_app_server_protocol::AppMetadata as ApiAppMetadata;
 use codex_app_server_protocol::AppReview as ApiAppReview;
 use codex_app_server_protocol::AppScreenshot as ApiAppScreenshot;
+use codex_app_server_protocol::ConnectorMetadata as ApiConnectorMetadata;
 use codex_connectors::AppBranding;
 use codex_connectors::AppInfo;
 use codex_connectors::AppMetadata;
 use codex_connectors::AppReview;
 use codex_connectors::AppScreenshot;
+use codex_connectors::ConnectorMetadata;
 
 /// Converts connector-domain app metadata owned by `codex-connectors` into the app-server wire
 /// type owned by `codex-app-server-protocol`.
@@ -49,6 +51,33 @@ pub(crate) fn app_info_to_api(app: AppInfo) -> ApiAppInfo {
         is_accessible,
         is_enabled,
         plugin_display_names,
+    }
+}
+
+/// Converts metadata-only connector data into the app-server wire type.
+///
+/// Keeping this separate from app_info_to_api makes it impossible for app/read to accidentally
+/// grow runtime state or icon fields from the broader app/list shape.
+pub(crate) fn connector_metadata_to_api(metadata: ConnectorMetadata) -> ApiConnectorMetadata {
+    let ConnectorMetadata {
+        id,
+        name,
+        description,
+        distribution_channel,
+        branding,
+        app_metadata,
+        labels,
+        install_url,
+    } = metadata;
+    ApiConnectorMetadata {
+        id,
+        name,
+        description,
+        distribution_channel,
+        branding: branding.map(app_branding_to_api),
+        app_metadata: app_metadata.map(app_metadata_to_api),
+        labels,
+        install_url,
     }
 }
 

@@ -3,10 +3,17 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
+use crate::chatgpt_client::chatgpt_post_request_with_timeout;
 
+use codex_connectors::AppBranding;
 use codex_connectors::AppInfo;
+use codex_connectors::AppMetadata;
+use codex_connectors::AppReview;
+use codex_connectors::AppScreenshot;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
+use codex_connectors::ConnectorMetadata;
+use codex_connectors::ConnectorMetadataStore;
 use codex_connectors::DirectoryListResponse;
 use codex_connectors::merge::merge_connectors;
 use codex_connectors::merge::merge_plugin_connectors;
@@ -21,8 +28,11 @@ pub use codex_core::connectors::with_app_enabled_state;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
+use serde::Deserialize;
+use serde::Serialize;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECTOR_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn apps_enabled(config: &Config) -> bool {
     let auth_manager =
@@ -114,6 +124,226 @@ pub async fn list_all_connectors_with_options(
         connectors,
         plugin_apps,
     ))
+}
+
+pub struct ConnectorMetadataReadResult {
+    pub apps: Vec<ConnectorMetadata>,
+    pub missing_app_ids: Vec<String>,
+}
+
+/// Reads metadata without loading connector tools or runtime state.
+///
+/// The store is created before awaiting the backend request, so a response that arrives after an
+/// account or backend change can only commit to the scope under which it was requested.
+pub async fn read_connector_metadata(
+    config: &Config,
+    app_ids: &[String],
+) -> anyhow::Result<ConnectorMetadataReadResult> {
+    let auth = connector_auth(config).await?;
+    let store = ConnectorMetadataStore::new(
+        config.chatgpt_base_url.clone(),
+        auth.get_account_id(),
+        auth.get_chatgpt_user_id(),
+        auth.is_workspace_account(),
+    );
+    let mut metadata_by_id = store.fresh_records(app_ids);
+    let missing_ids = app_ids
+        .iter()
+        .filter(|app_id| !metadata_by_id.contains_key(app_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if !missing_ids.is_empty() {
+        let response: GetConnectorsResponse = chatgpt_post_request_with_timeout(
+            config,
+            &auth,
+            "/ps/connectors/batch",
+            &GetConnectorsRequest {
+                connector_ids: &missing_ids,
+                include_actions: false,
+                include_model_descriptions: false,
+            },
+            Some(CONNECTOR_METADATA_TIMEOUT),
+        )
+        .await?;
+        let mut requested_ids = missing_ids.iter().cloned().collect::<HashSet<_>>();
+        let fetched = response
+            .connectors
+            .into_iter()
+            .map(batch_connector_to_metadata)
+            .filter(|metadata| requested_ids.remove(&metadata.id))
+            .collect::<Vec<_>>();
+        store.commit(&fetched);
+        metadata_by_id.extend(
+            fetched
+                .into_iter()
+                .map(|metadata| (metadata.id.clone(), metadata)),
+        );
+    }
+
+    let mut apps = Vec::new();
+    let mut missing_app_ids = Vec::new();
+    for app_id in app_ids {
+        if let Some(metadata) = metadata_by_id.remove(app_id) {
+            apps.push(metadata);
+        } else {
+            missing_app_ids.push(app_id.clone());
+        }
+    }
+
+    Ok(ConnectorMetadataReadResult {
+        apps,
+        missing_app_ids,
+    })
+}
+
+#[derive(Serialize)]
+struct GetConnectorsRequest<'a> {
+    connector_ids: &'a [String],
+    include_actions: bool,
+    include_model_descriptions: bool,
+}
+
+#[derive(Deserialize)]
+struct GetConnectorsResponse {
+    connectors: Vec<BatchConnector>,
+}
+
+/// The explicit metadata-only projection of plugin-service's broader Connector response.
+///
+/// Serde ignores all other backend fields, including actions, model descriptions, runtime state,
+/// and icons.
+#[derive(Deserialize)]
+struct BatchConnector {
+    id: String,
+    name: String,
+    description: Option<String>,
+    distribution_channel: Option<String>,
+    branding: Option<BatchAppBranding>,
+    app_metadata: Option<BatchAppMetadata>,
+    labels: Option<HashMap<String, String>>,
+    install_url: Option<String>,
+}
+
+fn batch_connector_to_metadata(connector: BatchConnector) -> ConnectorMetadata {
+    let BatchConnector {
+        id,
+        name,
+        description,
+        distribution_channel,
+        branding,
+        app_metadata,
+        labels,
+        install_url,
+    } = connector;
+    ConnectorMetadata {
+        id,
+        name,
+        description,
+        distribution_channel,
+        branding: branding.map(batch_app_branding_to_app_branding),
+        app_metadata: app_metadata.map(batch_app_metadata_to_app_metadata),
+        labels,
+        install_url,
+    }
+}
+
+#[derive(Deserialize)]
+struct BatchAppBranding {
+    category: Option<String>,
+    developer: Option<String>,
+    website: Option<String>,
+    privacy_policy: Option<String>,
+    terms_of_service: Option<String>,
+    #[serde(default)]
+    is_discoverable_app: bool,
+}
+
+fn batch_app_branding_to_app_branding(branding: BatchAppBranding) -> AppBranding {
+    let BatchAppBranding {
+        category,
+        developer,
+        website,
+        privacy_policy,
+        terms_of_service,
+        is_discoverable_app,
+    } = branding;
+    AppBranding {
+        category,
+        developer,
+        website,
+        privacy_policy,
+        terms_of_service,
+        is_discoverable_app,
+    }
+}
+
+#[derive(Deserialize)]
+struct BatchAppMetadata {
+    review: Option<BatchAppReview>,
+    categories: Option<Vec<String>>,
+    sub_categories: Option<Vec<String>>,
+    seo_description: Option<String>,
+    screenshots: Option<Vec<BatchAppScreenshot>>,
+    developer: Option<String>,
+    version: Option<String>,
+    version_id: Option<String>,
+    version_notes: Option<String>,
+    first_party_type: Option<String>,
+    first_party_requires_install: Option<bool>,
+}
+
+fn batch_app_metadata_to_app_metadata(metadata: BatchAppMetadata) -> AppMetadata {
+    let BatchAppMetadata {
+        review,
+        categories,
+        sub_categories,
+        seo_description,
+        screenshots,
+        developer,
+        version,
+        version_id,
+        version_notes,
+        first_party_type,
+        first_party_requires_install,
+    } = metadata;
+    AppMetadata {
+        review: review.map(|review| AppReview {
+            status: review.status,
+        }),
+        categories,
+        sub_categories,
+        seo_description,
+        screenshots: screenshots.map(|screenshots| {
+            screenshots
+                .into_iter()
+                .map(|screenshot| AppScreenshot {
+                    url: screenshot.url,
+                    file_id: screenshot.file_id,
+                    user_prompt: screenshot.user_prompt,
+                })
+                .collect()
+        }),
+        developer,
+        version,
+        version_id,
+        version_notes,
+        first_party_type,
+        first_party_requires_install,
+        show_in_composer_when_unlinked: None,
+    }
+}
+
+#[derive(Deserialize)]
+struct BatchAppReview {
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct BatchAppScreenshot {
+    url: Option<String>,
+    file_id: Option<String>,
+    user_prompt: String,
 }
 
 fn connector_directory_cache_context(

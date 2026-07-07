@@ -134,6 +134,40 @@ fn non_empty_category(category: Option<&str>) -> Option<String> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - read metadata for specific apps/connectors.
+pub struct AppsReadParams {
+    /// App ids to read. The server accepts at most 100 ids and deduplicates repeated ids while
+    /// preserving their first-request order.
+    pub app_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL - metadata returned by app/read.
+pub struct ConnectorMetadata {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub distribution_channel: Option<String>,
+    pub branding: Option<AppBranding>,
+    pub app_metadata: Option<AppMetadata>,
+    pub labels: Option<HashMap<String, String>>,
+    pub install_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app/read response.
+pub struct AppsReadResponse {
+    pub apps: Vec<ConnectorMetadata>,
+    pub missing_app_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
     pub id: String,

@@ -1004,6 +1004,48 @@
       "title": "AppsListResponse",
       "type": "object"
     },
+    "AppsReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL - read metadata for specific apps/connectors.",
+      "properties": {
+        "appIds": {
+          "description": "App ids to read. The server accepts at most 100 ids and deduplicates repeated ids while preserving their first-request order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appIds"
+      ],
+      "title": "AppsReadParams",
+      "type": "object"
+    },
+    "AppsReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL - app/read response.",
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/ConnectorMetadata"
+          },
+          "type": "array"
+        },
+        "missingAppIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "apps",
+        "missingAppIds"
+      ],
+      "title": "AppsReadResponse",
+      "type": "object"
+    },
     "AskForApproval": {
       "oneOf": [
         {
@@ -2098,6 +2140,30 @@
             "params"
           ],
           "title": "Plugin/share/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "app/read"
+              ],
+              "title": "App/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AppsReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "App/readRequest",
           "type": "object"
         },
         {
@@ -4891,6 +4957,69 @@
       },
       "required": [
         "hooks"
+      ],
+      "type": "object"
+    },
+    "ConnectorMetadata": {
+      "description": "EXPERIMENTAL - metadata returned by app/read.",
+      "properties": {
+        "appMetadata": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branding": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppBranding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "distributionChannel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
       ],
       "type": "object"
     },
