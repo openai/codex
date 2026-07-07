@@ -5,6 +5,9 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::RequirementSource;
+use codex_config::RequirementsExecPolicy;
+use codex_config::Sourced;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
 use codex_execpolicy::Decision;
@@ -12,6 +15,8 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::fs;
+use tempfile::tempdir;
 
 #[test]
 fn higher_precedence_profile_network_overlays_domain_entries() {
@@ -222,6 +227,51 @@ fn execpolicy_network_rules_overlay_network_lists() {
     assert_eq!(
         config.network.denied_domains(),
         Some(vec!["api.example.com".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn malformed_custom_rules_preserve_managed_denied_domain() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let policy_dir = temp_dir.path().join("rules");
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(policy_dir.join("broken.rules"), "prefix_rule(").expect("write malformed policy");
+
+    let mut requirements_exec_policy = Policy::empty();
+    requirements_exec_policy
+        .add_network_rule(
+            "blocked.example.com",
+            NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            /*justification*/ None,
+        )
+        .expect("managed network rule should be valid");
+    let requirements = ConfigRequirements {
+        exec_policy: Some(Sourced::new(
+            RequirementsExecPolicy::new(requirements_exec_policy),
+            RequirementSource::Unknown,
+        )),
+        ..ConfigRequirements::default()
+    };
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+        .expect("dot codex folder should be absolute");
+    let layers = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            toml::Value::Table(Default::default()),
+        )],
+        requirements,
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let state = build_config_state_from_layers(&layers)
+        .await
+        .expect("proxy state should tolerate malformed custom rules");
+
+    assert_eq!(
+        state.config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
     );
 }
 
