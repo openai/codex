@@ -9,7 +9,6 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
-use crate::metrics::PLUGIN_INSTALL_SUGGESTION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
@@ -279,16 +278,6 @@ impl SessionTelemetry {
         user_confirmed: bool,
         completed: bool,
     ) {
-        let completed_tag = if completed { "true" } else { "false" };
-        self.counter(
-            PLUGIN_INSTALL_SUGGESTION_METRIC,
-            /*inc*/ 1,
-            &[
-                ("tool_type", tool_type),
-                ("response_action", response_action),
-                ("completed", completed_tag),
-            ],
-        );
         log_and_trace_event!(
             self,
             common: {

@@ -66,6 +66,11 @@ use crate::facts::PluginInstallRequestSource;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginInstallRequestedPlugin;
+use crate::facts::PluginInstallSuggestionOutcome;
+use crate::facts::PluginInstallSuggestionOutcomeInput;
+use crate::facts::PluginInstallSuggestionOutcomeTool;
+use crate::facts::PluginInstallSuggestionResponseAction;
+use crate::facts::PluginInstallSuggestionToolType;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -3675,6 +3680,121 @@ async fn reducer_ingests_plugin_install_requested_fact() {
                 "turn_id": "turn-1",
                 "model_slug": "gpt-5",
                 "product_client_id": originator().value,
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_suggestion_outcome_facts() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    for outcome in [
+        PluginInstallSuggestionOutcome {
+            suggestion_id: "request_plugin_install_plugin-1".to_string(),
+            source: PluginInstallRequestSource::EndpointRecommendation,
+            tools: vec![
+                PluginInstallSuggestionOutcomeTool {
+                    tool_type: PluginInstallSuggestionToolType::Plugin,
+                    tool_id: "calendar@openai-curated-remote".to_string(),
+                    tool_name: "Calendar".to_string(),
+                    remote_plugin_id: Some("plugin_calendar".to_string()),
+                    connector_ids: vec!["connector_calendar".to_string()],
+                    selected: true,
+                },
+                PluginInstallSuggestionOutcomeTool {
+                    tool_type: PluginInstallSuggestionToolType::Plugin,
+                    tool_id: "github@openai-curated-remote".to_string(),
+                    tool_name: "GitHub".to_string(),
+                    remote_plugin_id: None,
+                    connector_ids: vec!["connector_github".to_string()],
+                    selected: false,
+                },
+            ],
+            response_action: PluginInstallSuggestionResponseAction::Accept,
+            user_confirmed: true,
+            completed: true,
+        },
+        PluginInstallSuggestionOutcome {
+            suggestion_id: "request_plugin_install_connector-1".to_string(),
+            source: PluginInstallRequestSource::LegacyDiscovery,
+            tools: vec![PluginInstallSuggestionOutcomeTool {
+                tool_type: PluginInstallSuggestionToolType::Connector,
+                tool_id: "connector_drive".to_string(),
+                tool_name: "Drive".to_string(),
+                remote_plugin_id: None,
+                connector_ids: vec!["connector_drive".to_string()],
+                selected: false,
+            }],
+            response_action: PluginInstallSuggestionResponseAction::Decline,
+            user_confirmed: false,
+            completed: false,
+        },
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallSuggestionOutcome(
+                    PluginInstallSuggestionOutcomeInput {
+                        tracking: test_tracking_context("thread-1", "turn-1"),
+                        outcome,
+                    },
+                )),
+                &mut events,
+            )
+            .await;
+    }
+
+    assert_eq!(
+        serde_json::to_value(&events).expect("serialize events"),
+        json!([{
+            "event_type": "codex_plugin_install_suggestion_outcome",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_plugin-1",
+                "source": "endpoint_recommendation",
+                "tools": [{
+                    "tool_type": "plugin",
+                    "tool_id": "calendar@openai-curated-remote",
+                    "tool_name": "Calendar",
+                    "remote_plugin_id": "plugin_calendar",
+                    "connector_ids": ["connector_calendar"],
+                    "selected": true,
+                }, {
+                    "tool_type": "plugin",
+                    "tool_id": "github@openai-curated-remote",
+                    "tool_name": "GitHub",
+                    "remote_plugin_id": null,
+                    "connector_ids": ["connector_github"],
+                    "selected": false,
+                }],
+                "response_action": "accept",
+                "user_confirmed": true,
+                "completed": true,
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "model_slug": "gpt-5",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
+            }
+        }, {
+            "event_type": "codex_plugin_install_suggestion_outcome",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_connector-1",
+                "source": "legacy_discovery",
+                "tools": [{
+                    "tool_type": "connector",
+                    "tool_id": "connector_drive",
+                    "tool_name": "Drive",
+                    "remote_plugin_id": null,
+                    "connector_ids": ["connector_drive"],
+                    "selected": false,
+                }],
+                "response_action": "decline",
+                "user_confirmed": false,
+                "completed": false,
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "model_slug": "gpt-5",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
             }
         }])
     );

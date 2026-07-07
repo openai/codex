@@ -510,6 +510,7 @@ pub(crate) enum CustomAnalyticsFact {
     HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
     PluginInstallRequested(PluginInstallRequestedInput),
+    PluginInstallSuggestionOutcome(PluginInstallSuggestionOutcomeInput),
     PluginStateChanged(PluginStateChangedInput),
     PluginInstallFailed(PluginInstallFailedInput),
     ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
@@ -572,6 +573,47 @@ pub struct PluginInstallRequestedPlugin {
 pub(crate) struct PluginInstallRequestedInput {
     pub tracking: TrackEventsContext,
     pub request: PluginInstallRequested,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstallSuggestionToolType {
+    Connector,
+    Plugin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstallSuggestionResponseAction {
+    Accept,
+    Decline,
+    Cancel,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstallSuggestionOutcome {
+    pub suggestion_id: String,
+    pub source: PluginInstallRequestSource,
+    pub tools: Vec<PluginInstallSuggestionOutcomeTool>,
+    pub response_action: PluginInstallSuggestionResponseAction,
+    pub user_confirmed: bool,
+    pub completed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstallSuggestionOutcomeTool {
+    pub tool_type: PluginInstallSuggestionToolType,
+    pub tool_id: String,
+    pub tool_name: String,
+    pub remote_plugin_id: Option<String>,
+    pub connector_ids: Vec<String>,
+    pub selected: bool,
+}
+
+pub(crate) struct PluginInstallSuggestionOutcomeInput {
+    pub tracking: TrackEventsContext,
+    pub outcome: PluginInstallSuggestionOutcome,
 }
 
 pub(crate) struct PluginStateChangedInput {

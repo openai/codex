@@ -18,6 +18,8 @@ use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginInstallSuggestionOutcome;
+use crate::facts::PluginInstallSuggestionOutcomeInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -322,6 +324,18 @@ impl AnalyticsEventsClient {
                 tracking,
                 request,
             }),
+        ));
+    }
+
+    pub fn track_plugin_install_suggestion_outcome(
+        &self,
+        tracking: TrackEventsContext,
+        outcome: PluginInstallSuggestionOutcome,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginInstallSuggestionOutcome(
+                PluginInstallSuggestionOutcomeInput { tracking, outcome },
+            ),
         ));
     }
 

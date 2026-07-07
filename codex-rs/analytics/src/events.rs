@@ -15,6 +15,7 @@ use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallRequested;
+use crate::facts::PluginInstallSuggestionOutcome;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -82,6 +83,7 @@ pub(crate) enum TrackEventRequest {
     ReviewEvent(CodexReviewEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstallRequested(CodexPluginInstallRequestedEventRequest),
+    PluginInstallSuggestionOutcome(CodexPluginInstallSuggestionOutcomeEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
     PluginEnabled(CodexPluginEventRequest),
@@ -982,6 +984,36 @@ pub(crate) struct CodexPluginInstallRequestedEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexPluginInstallSuggestionOutcomeToolMetadata {
+    pub(crate) tool_type: crate::facts::PluginInstallSuggestionToolType,
+    pub(crate) tool_id: String,
+    pub(crate) tool_name: String,
+    pub(crate) remote_plugin_id: Option<String>,
+    pub(crate) connector_ids: Vec<String>,
+    pub(crate) selected: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginInstallSuggestionOutcomeMetadata {
+    pub(crate) suggestion_id: String,
+    pub(crate) source: crate::facts::PluginInstallRequestSource,
+    pub(crate) tools: Vec<CodexPluginInstallSuggestionOutcomeToolMetadata>,
+    pub(crate) response_action: crate::facts::PluginInstallSuggestionResponseAction,
+    pub(crate) user_confirmed: bool,
+    pub(crate) completed: bool,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) model_slug: String,
+    pub(crate) product_client_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginInstallSuggestionOutcomeEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexPluginInstallSuggestionOutcomeMetadata,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexPluginEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexPluginMetadata,
@@ -1122,6 +1154,35 @@ pub(crate) fn codex_plugin_install_requested_metadata(
         turn_id: tracking.turn_id.clone(),
         model_slug: tracking.model_slug.clone(),
         product_client_id: Some(originator().value),
+    }
+}
+
+pub(crate) fn codex_plugin_install_suggestion_outcome_metadata(
+    tracking: &TrackEventsContext,
+    outcome: PluginInstallSuggestionOutcome,
+) -> CodexPluginInstallSuggestionOutcomeMetadata {
+    CodexPluginInstallSuggestionOutcomeMetadata {
+        suggestion_id: outcome.suggestion_id,
+        source: outcome.source,
+        tools: outcome
+            .tools
+            .into_iter()
+            .map(|tool| CodexPluginInstallSuggestionOutcomeToolMetadata {
+                tool_type: tool.tool_type,
+                tool_id: tool.tool_id,
+                tool_name: tool.tool_name,
+                remote_plugin_id: tool.remote_plugin_id,
+                connector_ids: tool.connector_ids,
+                selected: tool.selected,
+            })
+            .collect(),
+        response_action: outcome.response_action,
+        user_confirmed: outcome.user_confirmed,
+        completed: outcome.completed,
+        thread_id: tracking.thread_id.clone(),
+        turn_id: tracking.turn_id.clone(),
+        model_slug: tracking.model_slug.clone(),
+        product_client_id: Some(tracking.product_client_id.clone()),
     }
 }
 
