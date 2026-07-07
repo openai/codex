@@ -2187,17 +2187,30 @@ impl Session {
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let mut tx_approve = Some(tx_approve);
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    tx_approve.take().and_then(|tx_approve| {
+                        ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    })
                 }
                 None => None,
             }
         };
-        if prev_entry.is_some() {
+        let previous_out_of_turn = if network_approval_context.is_some()
+            && let Some(tx_approve) = tx_approve
+        {
+            self.services
+                .network_approval
+                .insert_out_of_turn_approval(effective_approval_id.clone(), tx_approve)
+                .await
+        } else {
+            None
+        };
+        if prev_entry.is_some() || previous_out_of_turn.is_some() {
             warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
         }
 
@@ -2755,9 +2768,27 @@ impl Session {
                 tx_approve.send(decision).ok();
             }
             None => {
-                warn!("No pending approval found for call_id: {approval_id}");
+                if !self
+                    .services
+                    .network_approval
+                    .notify_out_of_turn_approval(approval_id, decision)
+                    .await
+                {
+                    warn!("No pending approval found for call_id: {approval_id}");
+                }
             }
         }
+    }
+
+    pub(crate) async fn notify_out_of_turn_network_approval(
+        &self,
+        approval_id: &str,
+        decision: ReviewDecision,
+    ) -> bool {
+        self.services
+            .network_approval
+            .notify_out_of_turn_approval(approval_id, decision)
+            .await
     }
 
     /// Records conversation items: append to history, persist to rollout, and

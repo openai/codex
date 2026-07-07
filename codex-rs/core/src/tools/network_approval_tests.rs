@@ -234,6 +234,39 @@ async fn pending_waiters_receive_owner_decision() {
     assert_eq!(decision, PendingApprovalDecision::AllowOnce);
 }
 
+#[tokio::test]
+async fn out_of_turn_approval_receives_the_submitted_decision() {
+    let service = NetworkApprovalService::default();
+    let (sender, receiver) = oneshot::channel();
+    assert!(
+        service
+            .insert_out_of_turn_approval("approval-1".to_string(), sender)
+            .await
+            .is_none()
+    );
+
+    assert!(
+        service
+            .notify_out_of_turn_approval("approval-1", ReviewDecision::Approved)
+            .await
+    );
+    assert_eq!(
+        receiver.await.expect("approval sender should remain open"),
+        ReviewDecision::Approved
+    );
+}
+
+#[tokio::test]
+async fn out_of_turn_approval_rejects_unknown_ids() {
+    let service = NetworkApprovalService::default();
+
+    assert!(
+        !service
+            .notify_out_of_turn_approval("missing", ReviewDecision::Approved)
+            .await
+    );
+}
+
 #[test]
 fn allow_once_and_allow_for_session_both_allow_network() {
     assert_eq!(

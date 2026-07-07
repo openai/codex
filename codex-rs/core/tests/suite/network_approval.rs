@@ -55,6 +55,100 @@ use tempfile::TempDir;
 
 const NETWORK_TEST_HOST: &str = "codex-network-test.invalid";
 const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
+const NETWORK_ABORT_HOST: &str = "codex-network-abort.invalid";
+const NETWORK_ABORT_TARGET: &str = "http://codex-network-abort.invalid:80";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_proxy_request_can_be_approved_without_an_active_turn() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a local managed-network proxy");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    let test = test_codex()
+        .with_home(home)
+        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .permissions
+                .set_permission_profile(permission_profile)
+                .expect("set permission profile");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let http_addr = test
+        .session_configured
+        .network_proxy
+        .as_ref()
+        .context("expected runtime managed network proxy addresses")?
+        .http_addr
+        .clone();
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::http(format!("http://{http_addr}"))?)
+        .build()?;
+    let request_client = client.clone();
+    let request = tokio::spawn(async move { request_client.get(NETWORK_TEST_TARGET).send().await });
+
+    let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: Some(approval.turn_id),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), request)
+        .await
+        .context("host proxy request did not resume after approval")??
+        .context("host proxy request failed before receiving a proxy response")?;
+
+    let request = tokio::spawn(async move { client.get(NETWORK_ABORT_TARGET).send().await });
+    let approval = expect_network_approval_for(
+        &test,
+        LOCAL_ENVIRONMENT_ID,
+        NETWORK_ABORT_HOST,
+        NETWORK_ABORT_TARGET,
+    )
+    .await?;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: Some(approval.turn_id),
+            decision: ReviewDecision::Abort,
+        })
+        .await?;
+    let response = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), request)
+        .await
+        .context("host proxy request did not resume after abort")??
+        .context("host proxy request failed before receiving its denial")?;
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_network_host_for_one_environment_still_prompts_in_another() -> Result<()> {
@@ -285,6 +379,21 @@ async fn expect_network_approval(
     test: &TestCodex,
     expected_environment_id: &str,
 ) -> Result<ExecApprovalRequestEvent> {
+    expect_network_approval_for(
+        test,
+        expected_environment_id,
+        NETWORK_TEST_HOST,
+        NETWORK_TEST_TARGET,
+    )
+    .await
+}
+
+async fn expect_network_approval_for(
+    test: &TestCodex,
+    expected_environment_id: &str,
+    expected_host: &str,
+    expected_target: &str,
+) -> Result<ExecApprovalRequestEvent> {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let remaining = deadline
         .checked_duration_since(std::time::Instant::now())
@@ -304,15 +413,12 @@ async fn expect_network_approval(
         EventMsg::ExecApprovalRequest(approval) => {
             assert_eq!(
                 approval.command,
-                vec![
-                    "network-access".to_string(),
-                    NETWORK_TEST_TARGET.to_string()
-                ]
+                vec!["network-access".to_string(), expected_target.to_string()]
             );
             assert_eq!(
                 approval.network_approval_context,
                 Some(NetworkApprovalContext {
-                    host: NETWORK_TEST_HOST.to_string(),
+                    host: expected_host.to_string(),
                     protocol: NetworkApprovalProtocol::Http,
                 })
             );

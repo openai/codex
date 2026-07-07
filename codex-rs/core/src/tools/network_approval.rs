@@ -35,6 +35,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -250,6 +251,7 @@ struct NetworkApprovalCallState {
 pub(crate) struct NetworkApprovalService {
     calls: Mutex<NetworkApprovalCallState>,
     pending_host_approvals: Mutex<HashMap<HostApprovalKey, Arc<PendingHostApproval>>>,
+    pending_out_of_turn_approvals: Mutex<HashMap<String, oneshot::Sender<ReviewDecision>>>,
     session_approved_hosts: Mutex<HashSet<HostApprovalKey>>,
     session_denied_hosts: Mutex<HashSet<HostApprovalKey>>,
 }
@@ -259,6 +261,7 @@ impl Default for NetworkApprovalService {
         Self {
             calls: Mutex::new(NetworkApprovalCallState::default()),
             pending_host_approvals: Mutex::new(HashMap::new()),
+            pending_out_of_turn_approvals: Mutex::new(HashMap::new()),
             session_approved_hosts: Mutex::new(HashSet::new()),
             session_denied_hosts: Mutex::new(HashSet::new()),
         }
@@ -266,6 +269,30 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
+    pub(crate) async fn insert_out_of_turn_approval(
+        &self,
+        approval_id: String,
+        sender: oneshot::Sender<ReviewDecision>,
+    ) -> Option<oneshot::Sender<ReviewDecision>> {
+        self.pending_out_of_turn_approvals
+            .lock()
+            .await
+            .insert(approval_id, sender)
+    }
+
+    pub(crate) async fn notify_out_of_turn_approval(
+        &self,
+        approval_id: &str,
+        decision: ReviewDecision,
+    ) -> bool {
+        let sender = self
+            .pending_out_of_turn_approvals
+            .lock()
+            .await
+            .remove(approval_id);
+        sender.is_some_and(|sender| sender.send(decision).is_ok())
+    }
+
     /// Replace the target session's approval cache with the source session's
     /// currently approved hosts.
     pub(crate) async fn sync_session_approved_hosts_to(&self, other: &Self) {
@@ -453,7 +480,14 @@ impl NetworkApprovalService {
                     }
                 }
             };
-        let turn_context = Self::active_turn_context(session.as_ref()).await;
+        let turn_context = match Self::active_turn_context(session.as_ref()).await {
+            Some(turn_context) => Some(turn_context),
+            // The untagged proxy listener is exposed to trusted host clients such as the
+            // terminal browser. Environment-tagged listeners belong to sandboxed commands and
+            // remain fail-closed after their originating turn ends.
+            None if request.environment_id.is_none() => Some(session.new_default_turn().await),
+            None => None,
+        };
         let Some(environment_id) = active_environment_id.or_else(|| {
             turn_context
                 .as_ref()
