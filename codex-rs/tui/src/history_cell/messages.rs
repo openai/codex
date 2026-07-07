@@ -1,6 +1,7 @@
 //! User, assistant, reasoning, and streaming message history cells.
 
 use super::*;
+use crate::terminal_text::sanitize_untrusted_text;
 
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
@@ -93,6 +94,12 @@ fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>
 
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let message = sanitize_untrusted_text(&self.message);
+        let text_elements = if message.as_ref() == self.message.as_str() {
+            self.text_elements.as_slice()
+        } else {
+            &[]
+        };
         let wrap_width = width
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
@@ -117,10 +124,10 @@ impl HistoryCell for UserHistoryCell {
             ))
         };
 
-        let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
+        let wrapped_message = if message.is_empty() && text_elements.is_empty() {
             None
-        } else if self.text_elements.is_empty() {
-            let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
+        } else if text_elements.is_empty() {
+            let message_without_trailing_newlines = message.trim_end_matches(['\r', '\n']);
             let wrapped = adaptive_wrap_lines(
                 message_without_trailing_newlines
                     .split('\n')
@@ -133,8 +140,8 @@ impl HistoryCell for UserHistoryCell {
             (!wrapped.is_empty()).then_some(wrapped)
         } else {
             let raw_lines = build_user_message_lines_with_elements(
-                &self.message,
-                &self.text_elements,
+                message.as_ref(),
+                text_elements,
                 style,
                 element_style,
             );

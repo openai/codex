@@ -7561,29 +7561,19 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        let needs_redraw = composer.handle_paste("hello".to_string());
+        let sanitized = "_count_rows\tindent\ntwo";
+        let needs_redraw =
+            composer.handle_paste("_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}".to_string());
         assert!(needs_redraw);
-        assert_eq!(composer.draft.textarea.text(), "hello");
+        assert_eq!(composer.draft.textarea.text(), sanitized);
         assert!(composer.draft.pending_pastes.is_empty());
 
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted { text, .. } => assert_eq!(text, "hello"),
+            InputResult::Submitted { text, .. } => assert_eq!(text, sanitized),
             _ => panic!("expected Submitted"),
         }
-    }
-
-    #[test]
-    fn handle_paste_strips_terminal_control_sequences_snapshot() {
-        snapshot_composer_state(
-            "paste_terminal_control_sequence_sanitized",
-            /*enhanced_keys_supported*/ false,
-            |composer| {
-                composer.handle_paste("_count_r\x1b[13;2:3uows".to_string());
-                assert_eq!(composer.draft.textarea.text(), "_count_rows");
-            },
-        );
     }
 
     #[test]

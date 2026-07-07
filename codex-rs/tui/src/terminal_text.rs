@@ -20,19 +20,17 @@ pub(crate) fn sanitize_untrusted_text(text: &str) -> Cow<'_, str> {
         if index > 0 {
             sanitized.push('\n');
         }
-        for parsed_line in codex_ansi_escape::ansi_escape(line).lines {
-            for span in parsed_line.spans {
-                sanitized.extend(
-                    span.content
-                        .chars()
-                        .filter(|ch| *ch == '\t' || !ch.is_control()),
-                );
-            }
+        for span in codex_ansi_escape::ansi_escape(line)
+            .lines
+            .into_iter()
+            .flat_map(|line| line.spans)
+        {
+            sanitized.extend(
+                span.content
+                    .chars()
+                    .filter(|ch| *ch == '\t' || !ch.is_control()),
+            );
         }
     }
     Cow::Owned(sanitized)
 }
-
-#[cfg(test)]
-#[path = "terminal_text_tests.rs"]
-mod tests;

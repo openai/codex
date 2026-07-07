@@ -20,7 +20,6 @@ use unicode_width::UnicodeWidthStr;
 use url::Url;
 
 use crate::render::line_utils::line_to_static;
-use crate::terminal_text::sanitize_untrusted_text;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 
@@ -38,20 +37,17 @@ pub(crate) struct HyperlinkLine {
 
 impl HyperlinkLine {
     pub(crate) fn new(line: Line<'static>) -> Self {
-        let mut line = Self {
+        Self {
             line,
             hyperlinks: Vec::new(),
-        };
-        line.sanitize();
-        line
+        }
     }
 
     pub(crate) fn width(&self) -> usize {
         self.line.width()
     }
 
-    pub(crate) fn push_span(&mut self, mut span: Span<'static>, destination: Option<&str>) {
-        sanitize_span(&mut span);
+    pub(crate) fn push_span(&mut self, span: Span<'static>, destination: Option<&str>) {
         let start = self.width();
         let end = start + span.content.width();
         self.line.push_span(span);
@@ -65,30 +61,10 @@ impl HyperlinkLine {
         }
     }
 
-    pub(crate) fn sanitize(&mut self) {
-        let mut changed = false;
-        for span in &mut self.line.spans {
-            changed |= sanitize_span(span);
-        }
-        if changed {
-            self.hyperlinks.clear();
-        }
-    }
-
     pub(crate) fn style(mut self, style: ratatui::style::Style) -> Self {
         self.line = self.line.style(style);
         self
     }
-}
-
-fn sanitize_span(span: &mut Span<'static>) -> bool {
-    let sanitized = sanitize_untrusted_text(span.content.as_ref());
-    if sanitized.as_ref() == span.content.as_ref() {
-        return false;
-    }
-
-    span.content = sanitized.into_owned().into();
-    true
 }
 
 impl From<Line<'static>> for HyperlinkLine {
@@ -110,13 +86,7 @@ impl From<String> for HyperlinkLine {
 }
 
 pub(crate) fn visible_lines(lines: Vec<HyperlinkLine>) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .map(|mut line| {
-            line.sanitize();
-            line.line
-        })
-        .collect()
+    lines.into_iter().map(|line| line.line).collect()
 }
 
 pub(crate) fn plain_hyperlink_lines(lines: Vec<Line<'static>>) -> Vec<HyperlinkLine> {
@@ -179,13 +149,12 @@ pub(crate) fn annotate_web_urls(lines: Vec<Line<'static>>) -> Vec<HyperlinkLine>
 }
 
 pub(crate) fn annotate_web_urls_in_line(line: Line<'static>) -> HyperlinkLine {
-    let mut out = HyperlinkLine::new(line);
-    let text = out
-        .line
+    let text = line
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
+    let mut out = HyperlinkLine::new(line);
     out.hyperlinks = web_links_in_text(&text);
     out
 }
@@ -571,32 +540,6 @@ mod tests {
                 columns: 5..26,
                 destination: "https://example.com/a".to_string(),
             }]
-        );
-    }
-
-    #[test]
-    fn discovers_web_url_columns_after_sanitizing_text() {
-        let destination = "https://example.com";
-        assert_eq!(
-            annotate_web_urls_in_line(Line::from(format!("\x1b[13;2:3u{destination}"))),
-            HyperlinkLine {
-                line: Line::from(destination),
-                hyperlinks: vec![TerminalHyperlink {
-                    columns: 0..destination.width(),
-                    destination: destination.to_string(),
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn visible_lines_sanitize_spans_appended_directly() {
-        let mut line = HyperlinkLine::new(Line::from("before"));
-        line.line.push_span("\x1b[13;2:3uafter");
-
-        assert_eq!(
-            visible_lines(vec![line]),
-            vec![Line::from(vec![Span::from("before"), Span::from("after")])]
         );
     }
 

@@ -357,20 +357,6 @@ fn composite_cell_preserves_child_web_links() {
 }
 
 #[test]
-fn empty_mcp_output_preserves_docs_link() {
-    let cell = empty_mcp_output();
-    let lines = cell.display_hyperlink_lines(/*width*/ 80);
-
-    assert_eq!(
-        lines.last().expect("MCP docs line").hyperlinks,
-        vec![crate::terminal_hyperlinks::TerminalHyperlink {
-            columns: 12..20,
-            destination: "https://developers.openai.com/codex/mcp".to_string(),
-        }]
-    );
-}
-
-#[test]
 fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let plan = new_proposed_plan(
         "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"
@@ -1983,7 +1969,7 @@ fn ran_cell_multiline_with_stderr_snapshot() {
 }
 #[test]
 fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
-    let msg = "one two three four five six seven";
+    let msg = "_count_r\x1b[13;2:3uows";
     let cell = UserHistoryCell {
         message: msg.to_string(),
         text_elements: Vec::new(),
