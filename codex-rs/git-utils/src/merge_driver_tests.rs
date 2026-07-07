@@ -1242,6 +1242,12 @@ fn malformed_shared_repository_refuses_before_reverse_index_staging() {
     let diff = build_three_way_fixture(root);
     let index_path = root.join(".git/index");
     let before_index = std::fs::read(&index_path).expect("read index before refusal");
+    let unused_filter = run(root, &["git", "config", "filter.lfs.clean", "cat"]);
+    assert_eq!(
+        unused_filter.0, 0,
+        "configure unused filter: {}",
+        unused_filter.2
+    );
     let configured = run(
         root,
         &["git", "config", "core.sharedRepository", "not-a-permission"],
