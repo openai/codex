@@ -4,6 +4,29 @@ use std::process::Command;
 
 use crate::safe_git::DISABLED_HOOKS_PATH;
 
+#[test]
+fn alternate_object_directory_uses_git_c_style_byte_quoting() {
+    assert_eq!(
+        quote_git_c_style_bytes(b"/repo:colon;semi\\slash\"quote\n\xff/objects"),
+        b"\"/repo:colon;semi\\\\slash\\\"quote\\012\\377/objects\""
+    );
+}
+
+#[test]
+fn alternate_object_directory_preserves_windows_wide_paths_and_escapes_backslashes() {
+    let mut path = r"C:\repo;semi:colon\wide-"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    path.push(0xd800);
+    path.extend(r"\objects".encode_utf16());
+
+    let mut expected = r#""C:\\repo;semi:colon\\wide-"#.encode_utf16().collect::<Vec<_>>();
+    expected.push(0xd800);
+    expected.extend(r#"\\objects""#.encode_utf16());
+
+    assert_eq!(quote_git_c_style_windows_units(&path), expected);
+}
+
 #[cfg(unix)]
 fn write_executable(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;

@@ -762,6 +762,10 @@ async fn status_replaces_filter_config_with_an_owned_helper_free_context() {
         .expect("owned attributes path");
     let config_contents = std::fs::read_to_string(&owned_config).expect("read owned config");
     assert!(!config_contents.contains("filter.demo"));
+    assert!(
+        !config_contents.contains("symlinks"),
+        "unset core.symlinks must remain unset in the owned projection: {config_contents}"
+    );
     let attribute_contents =
         std::fs::read_to_string(&owned_attributes).expect("read owned attributes");
     assert!(attribute_contents.contains("!filter"));
@@ -783,4 +787,38 @@ async fn status_replaces_filter_config_with_an_owned_helper_free_context() {
         !owned_attributes.exists(),
         "owned attributes must be removed"
     );
+}
+
+#[tokio::test]
+async fn status_projection_freezes_explicit_core_symlinks_values() {
+    for value in ["true", "false"] {
+        let repo = tempfile::tempdir().expect("repo");
+        run_git(repo.path(), &["init", "-q"]);
+        std::fs::write(repo.path().join("file.txt"), "contents\n").expect("tracked file");
+        run_git(repo.path(), &["add", "file.txt"]);
+        run_git(repo.path(), &["config", "core.symlinks", value]);
+
+        let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+        let mut config = GuardedGitConfig::authorize_status_async(&git)
+            .await
+            .expect("authorized status capability");
+        config
+            .verify_status_root_async(repo.path())
+            .await
+            .expect("matching root");
+        config
+            .install_status_policy_async()
+            .await
+            .expect("installed status policy");
+        let status = config.status.as_ref().expect("Status context");
+        let owned_config = status
+            .context
+            .config_path(&config.identity)
+            .expect("owned config path");
+        let contents = std::fs::read_to_string(owned_config).expect("read owned config");
+        assert!(
+            contents.contains(&format!("symlinks = {value}")),
+            "core.symlinks={value} was not frozen: {contents}"
+        );
+    }
 }

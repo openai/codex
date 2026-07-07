@@ -374,6 +374,44 @@ async fn frozen_status_blocks_a_new_filter_namespace_and_attribute_after_prepara
 }
 
 #[tokio::test]
+async fn status_refuses_core_symlinks_drift_between_filter_gate_and_projection() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    run_git(&repo, &["config", "core.symlinks", "true"]).await;
+
+    let wrapper = temp_dir.path().join("git-wrapper");
+    let log = temp_dir.path().join("git-wrapper.log");
+    let real_git = shell_quote(&real_git());
+    write_wrapper(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>{}\ncase \"$*\" in\n  *\"ls-files -z --cached --stage\"*)\n    {real_git} \"$@\" >\"$0.output\"\n    status=$?\n    {real_git} -C {} config core.symlinks false || exit 125\n    /bin/cat \"$0.output\"\n    /bin/rm -f \"$0.output\"\n    exit $status\n    ;;\nesac\nexec {real_git} \"$@\"\n",
+            shell_quote(&log),
+            shell_quote(&repo),
+        ),
+    );
+    let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
+    let mut config = GuardedGitConfig::authorize_status_async(&git)
+        .await
+        .expect("authorized status capability");
+    config
+        .verify_status_root_async(&repo)
+        .await
+        .expect("matching root");
+
+    let result = config.install_status_policy_async().await;
+    let commands = std::fs::read_to_string(log).expect("read wrapper log");
+    let configured = run_git(&repo, &["config", "--get", "core.symlinks"]).await;
+    assert_eq!(
+        configured.stdout, b"false\n",
+        "wrapper did not mutate core.symlinks; commands:\n{commands}"
+    );
+    assert!(commands.contains("ls-files -z --cached --stage"));
+    let error = result.expect_err("core.symlinks drift must fail before publishing Status context");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[tokio::test]
 async fn frozen_status_preserves_info_global_core_and_system_attribute_selection() {
     const MARKER: &str = "CODEX_GIT_UTILS_STATUS_ATTRIBUTE_ENV_CHILD";
     if std::env::var_os(MARKER).is_none() {
@@ -594,10 +632,10 @@ async fn frozen_untracked_presence_honors_all_standard_ignore_sources() {
 async fn frozen_status_reports_an_ordinary_unmerged_index_as_dirty() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
-    std::fs::write(repo.join(".gitattributes"), "* filter\n")
-        .expect("write special filter attribute");
+    std::fs::write(repo.join(".gitattributes"), "test.txt filter=evil\n")
+        .expect("write literal filter attribute");
     run_git(&repo, &["add", ".gitattributes"]).await;
-    run_git(&repo, &["commit", "-m", "special filter attribute"]).await;
+    run_git(&repo, &["commit", "-m", "literal filter attribute"]).await;
     let base_branch = String::from_utf8(
         run_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
             .await
@@ -628,7 +666,7 @@ async fn frozen_status_reports_an_ordinary_unmerged_index_as_dirty() {
         &repo,
         &[
             "config",
-            "filter.set.clean",
+            "filter.evil.clean",
             "git config codex.unmerged-filter-ran true && git hash-object --stdin",
         ],
     )
@@ -1033,7 +1071,7 @@ async fn ordinary_driver_uses_one_bulk_path_and_attribute_probe() {
     assert_eq!(
         lines
             .lines()
-            .filter(|line| line.contains(" ls-files -z --cached"))
+            .filter(|line| line.contains(" ls-files -z --cached --stage"))
             .count(),
         1
     );
@@ -1151,7 +1189,7 @@ async fn zero_driver_status_builds_the_same_frozen_context_without_an_overlay() 
         .await
         .expect("zero-driver status capability");
     let lines = std::fs::read_to_string(log).expect("read wrapper log");
-    assert!(lines.contains(" ls-files -z --cached"), "{lines}");
+    assert!(lines.contains(" ls-files -z --cached --stage"), "{lines}");
     assert!(!lines.contains(" check-attr --stdin -z filter"), "{lines}");
     assert!(!lines.contains(" check-attr --stdin -z"), "{lines}");
     assert!(lines.contains("config --file "), "{lines}");
@@ -1200,7 +1238,7 @@ async fn status_driver_limit_fails_before_paths_or_overlay_writes() {
         .expect_err("257th driver must fail closed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     let lines = std::fs::read_to_string(log).expect("read wrapper log");
-    assert!(!lines.contains(" ls-files -z --cached"), "{lines}");
+    assert!(!lines.contains(" ls-files -z --cached --stage"), "{lines}");
     assert!(!lines.contains(" check-attr --stdin -z filter"), "{lines}");
     assert!(!lines.contains(" config --file "), "{lines}");
 }

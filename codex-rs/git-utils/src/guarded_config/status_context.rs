@@ -65,6 +65,7 @@ impl GuardedGitConfig<'_> {
         &self,
         head_oid: Option<&str>,
         has_untracked: bool,
+        configured_core_symlinks: Option<bool>,
     ) -> io::Result<SealedStatusReadContext> {
         if self.sources.git.attribute_source_is_custom() {
             return Err(io::Error::new(
@@ -83,8 +84,12 @@ impl GuardedGitConfig<'_> {
             .sources
             .git
             .create_isolated_read_context(head_oid, &operation_identity)?;
-        self.write_status_projection_config_async(&context, core_attributes_file.as_deref())
-            .await?;
+        self.write_status_projection_config_async(
+            &context,
+            core_attributes_file.as_deref(),
+            configured_core_symlinks,
+        )
+        .await?;
         std::fs::write(
             context.attributes_path(),
             status_info_attributes(info_attributes)?,
@@ -101,6 +106,7 @@ impl GuardedGitConfig<'_> {
         &self,
         context: &IsolatedGitReadContext,
         core_attributes_file: Option<&OsStr>,
+        configured_core_symlinks: Option<bool>,
     ) -> io::Result<()> {
         let entries = self
             .sources
@@ -119,6 +125,13 @@ impl GuardedGitConfig<'_> {
             ));
         }
         refuse_sparse_status(&entries)?;
+        let projected_core_symlinks = configured_status_core_symlinks(&entries)?;
+        if projected_core_symlinks != configured_core_symlinks {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "core.symlinks changed during Status preparation",
+            ));
+        }
         let projected_bytes = entries.iter().chain(repository_format.iter()).try_fold(
             0_usize,
             |total, (key, entry)| {
@@ -140,7 +153,10 @@ impl GuardedGitConfig<'_> {
                 "status config projection exceeds its byte limit",
             ));
         }
-        for entry in entries.values() {
+        for entry in entries
+            .values()
+            .filter(|entry| entry.key != "core.symlinks")
+        {
             self.write_status_config_value_async(&context.config_path(), &entry.key, &entry.value)
                 .await?;
         }
@@ -150,6 +166,14 @@ impl GuardedGitConfig<'_> {
         }
         self.write_status_config_value_async(&context.config_path(), "core.bare", "false")
             .await?;
+        if let Some(core_symlinks) = configured_core_symlinks {
+            self.write_status_config_value_async(
+                &context.config_path(),
+                "core.symlinks",
+                if core_symlinks { "true" } else { "false" },
+            )
+            .await?;
+        }
         if let Some(core_attributes_file) = core_attributes_file {
             self.write_status_config_value_async(
                 &context.config_path(),
@@ -242,6 +266,22 @@ impl GuardedGitConfig<'_> {
                 .into_os_string(),
         ))
     }
+}
+
+fn configured_status_core_symlinks(
+    entries: &BTreeMap<String, crate::git_config::GitConfigEntry>,
+) -> io::Result<Option<bool>> {
+    let Some(entry) = entries.get("core.symlinks") else {
+        return Ok(None);
+    };
+    parse_git_boolean(entry.value.as_bytes())
+        .map(Some)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Status config value for core.symlinks",
+            )
+        })
 }
 
 fn refuse_sparse_status(

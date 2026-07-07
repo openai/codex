@@ -613,6 +613,65 @@ async fn configured_filter_ran(repo_path: &Path) -> bool {
     output.status.success()
 }
 
+#[cfg(unix)]
+async fn assert_filter_policy_for_index_entry(
+    repo_path: &Path,
+    tracked_path: &str,
+    expected_mode: &str,
+    expect_selected_filter: bool,
+) {
+    let stage = TokioCommand::new("git")
+        .args(["ls-files", "--stage", "--", tracked_path])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .expect("read index mode");
+    assert!(
+        stage.status.success(),
+        "ls-files failed: {}",
+        String::from_utf8_lossy(&stage.stderr)
+    );
+    assert!(
+        stage
+            .stdout
+            .starts_with(format!("{expected_mode} ").as_bytes()),
+        "unexpected index entry: {}",
+        String::from_utf8_lossy(&stage.stdout)
+    );
+
+    for (key, command) in [
+        (
+            "filter.evil.clean",
+            "git config codex.filterran true && git hash-object --stdin",
+        ),
+        (
+            "filter.evil.process",
+            "git config codex.filterran true; exit 1",
+        ),
+    ] {
+        run_git_async(repo_path, &["config", key, command]).await;
+        run_git_async(repo_path, &["config", "filter.evil.required", "true"]).await;
+        let expected = if expect_selected_filter {
+            Err(GitReadError::SelectedExecutableFilter {
+                driver: "evil".to_string(),
+                path: tracked_path.to_string(),
+            })
+        } else {
+            Ok(false)
+        };
+        assert_eq!(
+            try_get_has_changes_with_test_timeout(repo_path).await,
+            expected,
+            "unexpected {key} policy for index mode {expected_mode}"
+        );
+        assert!(
+            !configured_filter_ran(repo_path).await,
+            "{key} unexpectedly ran for index mode {expected_mode}"
+        );
+        run_git_async(repo_path, &["config", "--unset-all", key]).await;
+    }
+}
+
 async fn add_submodule_with_clean_filter(parent: &Path) {
     let source = tempfile::tempdir().expect("submodule source");
     let source_path = source.path();
@@ -668,6 +727,87 @@ async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
         })
     );
     assert!(!configured_filter_ran(&repo_path).await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_has_changes_skips_executable_filters_selected_only_by_a_symlink() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    std::fs::write(repo_path.join("target"), "target contents\n").expect("write link target");
+    std::os::unix::fs::symlink("target", repo_path.join("link")).expect("create symlink");
+    std::fs::write(repo_path.join(".gitattributes"), "link filter=evil\n")
+        .expect("write attributes");
+    run_git_async(&repo_path, &["add", ".gitattributes", "link", "target"]).await;
+    run_git_async(&repo_path, &["commit", "-m", "add filtered symlink"]).await;
+    run_git_async(&repo_path, &["config", "core.symlinks", "true"]).await;
+
+    assert_filter_policy_for_index_entry(
+        &repo_path, "link", "120000", /*expect_selected_filter*/ false,
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_has_changes_rejects_filters_for_an_emulated_symlink() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    std::fs::write(repo_path.join("target"), "target contents\n").expect("write link target");
+    std::os::unix::fs::symlink("target", repo_path.join("link")).expect("create symlink");
+    std::fs::write(repo_path.join(".gitattributes"), "link filter=evil\n")
+        .expect("write attributes");
+    run_git_async(&repo_path, &["add", ".gitattributes", "link", "target"]).await;
+    run_git_async(&repo_path, &["commit", "-m", "add filtered symlink"]).await;
+
+    std::fs::remove_file(repo_path.join("link")).expect("remove native symlink");
+    run_git_async(&repo_path, &["config", "core.symlinks", "false"]).await;
+    run_git_async(&repo_path, &["checkout", "--", "link"]).await;
+    let metadata =
+        std::fs::symlink_metadata(repo_path.join("link")).expect("read emulated symlink metadata");
+    assert!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "core.symlinks=false must materialize an ordinary worktree file"
+    );
+    let contents = std::fs::read(repo_path.join("link")).expect("read emulated symlink");
+    assert_eq!(contents, b"target");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::fs::write(repo_path.join("link"), contents).expect("refresh emulated symlink stat");
+
+    assert_filter_policy_for_index_entry(
+        &repo_path, "link", "120000", /*expect_selected_filter*/ true,
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_has_changes_skips_executable_filters_selected_only_by_a_gitlink() {
+    let source_temp = tempfile::tempdir().expect("create source temp dir");
+    let source_path = create_test_git_repo(&source_temp).await;
+    let parent_temp = tempfile::tempdir().expect("create parent temp dir");
+    let repo_path = create_test_git_repo(&parent_temp).await;
+    run_git_async(
+        &repo_path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source_path.to_str().expect("UTF-8 source path"),
+            "nested",
+        ],
+    )
+    .await;
+    std::fs::write(repo_path.join(".gitattributes"), "nested filter=evil\n")
+        .expect("write attributes");
+    run_git_async(&repo_path, &["add", ".gitattributes"]).await;
+    run_git_async(&repo_path, &["commit", "-m", "add filtered gitlink"]).await;
+
+    assert_filter_policy_for_index_entry(
+        &repo_path, "nested", "160000", /*expect_selected_filter*/ false,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -762,6 +902,24 @@ async fn checked_has_changes_accepts_non_utf8_repository_root() {
     assert_eq!(
         try_get_has_changes_with_test_timeout(&repo_path).await,
         Ok(false)
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn checked_has_changes_accepts_repository_root_with_alternate_list_separator() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let original_repo = create_test_git_repo(&temp_dir).await;
+    #[cfg(unix)]
+    let repo_path = temp_dir.path().join(r"repo:colon;semicolon\backslash");
+    #[cfg(windows)]
+    let repo_path = temp_dir.path().join("repo;semicolon");
+    std::fs::rename(&original_repo, &repo_path).expect("rename repository");
+    std::fs::write(repo_path.join("test.txt"), "modified content").expect("modify tracked file");
+
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Ok(true)
     );
 }
 

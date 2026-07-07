@@ -67,6 +67,8 @@ pub(crate) use merge_overlay::reset_merge_policy_counts;
 mod reverse_probe;
 mod status_context;
 use status_context::SealedStatusReadContext;
+mod status_index;
+use status_index::status_core_symlinks_for_filter_screening;
 
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
@@ -1197,38 +1199,6 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(())
     }
 
-    /// Return the exact tracked-path byte strings for the Status policy.
-    async fn read_status_tracked_paths_async(&self) -> io::Result<Vec<Vec<u8>>> {
-        if self.status.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "tracked paths must be read before status policy installation",
-            ));
-        }
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, /*neutralizer*/ None)?;
-        command
-            .disable_optional_locks()
-            .args(["ls-files", "-z", "--cached"]);
-        let output = command.output().await?;
-        if !output.status.success() {
-            return Err(command_failure("tracked-path probe", &output));
-        }
-        let mut paths = parse_nul_paths(&output.stdout)?;
-        if paths.len() > MAX_STATUS_TRACKED_PATHS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "tracked path record count {} exceeds the status limit {MAX_STATUS_TRACKED_PATHS}",
-                    paths.len()
-                ),
-            ));
-        }
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
-    }
-
     /// Install the mutually exclusive Status filter policy and publish one
     /// operation-owned config, attribute, HEAD, and untracked-presence view.
     pub(crate) async fn install_status_policy_async(&mut self) -> io::Result<()> {
@@ -1247,7 +1217,9 @@ impl<'git> GuardedGitConfig<'git> {
             .await?;
         let executable_drivers = status_policy_filter_drivers(&entries)?;
         validate_executable_driver_count(&executable_drivers)?;
-        let paths = self.read_status_tracked_paths_async().await?;
+        let configured_core_symlinks = self.sources.read_bool_async("core.symlinks").await?;
+        let core_symlinks = status_core_symlinks_for_filter_screening(configured_core_symlinks);
+        let paths = self.read_status_tracked_paths_async(core_symlinks).await?;
         let neutralizer = if executable_drivers.is_empty() {
             None
         } else {
@@ -1301,7 +1273,11 @@ impl<'git> GuardedGitConfig<'git> {
             .read_status_head_oid_async(neutralizer.as_ref())
             .await?;
         let context = self
-            .build_status_read_context_async(head_oid.as_deref(), has_untracked)
+            .build_status_read_context_async(
+                head_oid.as_deref(),
+                has_untracked,
+                configured_core_symlinks,
+            )
             .await?;
         self.status = Some(StatusPolicySnapshot {
             context,

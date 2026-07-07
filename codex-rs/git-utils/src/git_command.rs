@@ -775,16 +775,8 @@ impl GitRunner {
         let object_directory = storage
             .map(IsolatedGitStorage::objects_path)
             .unwrap_or_else(|| real_object_directory.clone());
-        let alternate_object_directories = storage
-            .map(|_| {
-                std::env::join_paths([&real_object_directory]).map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("cannot encode isolated Git object alternate: {error}"),
-                    )
-                })
-            })
-            .transpose()?;
+        let alternate_object_directories =
+            storage.map(|_| encode_git_alternate_object_directory(&real_object_directory));
         let system_config = isolated_root.join("system.gitconfig");
         let global_config = isolated_root.join("global.gitconfig");
         let home = isolated_root.join("home");
@@ -945,12 +937,7 @@ impl GitRunner {
 
         let real_object_directory = common_dir.join("objects");
         let alternate_object_directories =
-            std::env::join_paths([&real_object_directory]).map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("cannot encode isolated Git object alternate: {error}"),
-                )
-            })?;
+            encode_git_alternate_object_directory(&real_object_directory);
         let system_config = isolated_root.join("system.gitconfig");
         let global_config = isolated_root.join("global.gitconfig");
         command
@@ -1590,6 +1577,87 @@ fn ascii_u16_is_alphabetic(unit: u16) -> bool {
 #[cfg(any(windows, test))]
 fn ascii_u16_eq_ignore_case(unit: u16, ascii: u8) -> bool {
     unit == ascii.to_ascii_lowercase() as u16 || unit == ascii.to_ascii_uppercase() as u16
+}
+
+/// Encode one object directory using Git's alternate-object-directory grammar.
+///
+/// This environment variable is a Git path list, not a platform `PATH` list.
+/// Quoting every entry with Git's C-style syntax keeps the platform list
+/// separator literal and preserves backslashes as path data.
+#[cfg(unix)]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::OsStringExt;
+
+    OsString::from_vec(quote_git_c_style_bytes(path.as_os_str().as_bytes()))
+}
+
+#[cfg(windows)]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
+
+    let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    OsString::from_wide(&quote_git_c_style_windows_units(&units))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    let encoded = quote_git_c_style_bytes(path.to_string_lossy().as_bytes());
+    OsString::from(String::from_utf8(encoded).expect("quoted UTF-8 path remains UTF-8"))
+}
+
+#[cfg(any(not(windows), test))]
+fn quote_git_c_style_bytes(value: &[u8]) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(value.len().saturating_add(2));
+    encoded.push(b'"');
+    for &byte in value {
+        match byte {
+            b'"' | b'\\' => {
+                encoded.push(b'\\');
+                encoded.push(byte);
+            }
+            0x00..=0x1f | 0x7f..=0xff => {
+                encoded.extend([
+                    b'\\',
+                    b'0' + ((byte >> 6) & 0o7),
+                    b'0' + ((byte >> 3) & 0o7),
+                    b'0' + (byte & 0o7),
+                ]);
+            }
+            _ => encoded.push(byte),
+        }
+    }
+    encoded.push(b'"');
+    encoded
+}
+
+#[cfg(any(windows, test))]
+fn quote_git_c_style_windows_units(value: &[u16]) -> Vec<u16> {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const DOUBLE_QUOTE: u16 = b'"' as u16;
+
+    let mut encoded = Vec::with_capacity(value.len().saturating_add(2));
+    encoded.push(DOUBLE_QUOTE);
+    for &unit in value {
+        match unit {
+            DOUBLE_QUOTE | BACKSLASH => {
+                encoded.push(BACKSLASH);
+                encoded.push(unit);
+            }
+            0x00..=0x1f | 0x7f => {
+                encoded.extend([
+                    BACKSLASH,
+                    b'0' as u16 + ((unit >> 6) & 0o7),
+                    b'0' as u16 + ((unit >> 3) & 0o7),
+                    b'0' as u16 + (unit & 0o7),
+                ]);
+            }
+            _ => encoded.push(unit),
+        }
+    }
+    encoded.push(DOUBLE_QUOTE);
+    encoded
 }
 
 fn scrub_repository_and_config_environment(command: &mut Command) {
