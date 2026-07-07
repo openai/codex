@@ -6,6 +6,9 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::tool_search_diagnostics::DiagnosticToolIdentity;
+use crate::tools::tool_search_diagnostics::SearchResultDiagnostic;
+use crate::tools::tool_search_diagnostics::ToolSearchPipelineDiagnostics;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
@@ -26,11 +29,13 @@ pub struct ToolSearchHandler {
     search_infos: Vec<ToolSearchInfo>,
     spec: ToolSpec,
     search_engine: SearchEngine<usize>,
+    diagnostics: Arc<ToolSearchPipelineDiagnostics>,
 }
 
 #[derive(Default)]
 pub(crate) struct ToolSearchHandlerCache {
     cached: Mutex<Option<Arc<ToolSearchHandler>>>,
+    diagnostics: Arc<ToolSearchPipelineDiagnostics>,
 }
 
 impl ToolSearchHandlerCache {
@@ -41,20 +46,31 @@ impl ToolSearchHandlerCache {
             if let Some(cached) = cached.as_ref()
                 && cached.search_infos == search_infos
             {
+                self.diagnostics.record_index(&search_infos, "hit");
                 return Arc::clone(cached);
             }
         }
 
-        let handler = Arc::new(ToolSearchHandler::new(search_infos));
+        let handler = Arc::new(ToolSearchHandler::new_with_diagnostics(
+            search_infos,
+            Arc::clone(&self.diagnostics),
+        ));
         let mut cached = self.cached();
         if let Some(cached) = cached.as_ref()
             && cached.search_infos == handler.search_infos
         {
+            self.diagnostics
+                .record_index(&handler.search_infos, "hit_after_build");
             return Arc::clone(cached);
         }
 
         *cached = Some(Arc::clone(&handler));
+        self.diagnostics.record_index(&handler.search_infos, "miss");
         handler
+    }
+
+    pub(crate) fn diagnostics(&self) -> &ToolSearchPipelineDiagnostics {
+        self.diagnostics.as_ref()
     }
 
     fn cached(&self) -> std::sync::MutexGuard<'_, Option<Arc<ToolSearchHandler>>> {
@@ -66,12 +82,20 @@ impl ToolSearchHandlerCache {
 }
 
 impl ToolSearchHandler {
+    #[cfg(test)]
     #[instrument(
         level = "trace",
         skip_all,
         fields(search_info_count = search_infos.len())
     )]
     pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
+        Self::new_with_diagnostics(search_infos, Arc::new(Default::default()))
+    }
+
+    fn new_with_diagnostics(
+        search_infos: Vec<ToolSearchInfo>,
+        diagnostics: Arc<ToolSearchPipelineDiagnostics>,
+    ) -> Self {
         let search_source_infos = search_infos
             .iter()
             .filter_map(|search_info| search_info.source_info.clone())
@@ -90,6 +114,7 @@ impl ToolSearchHandler {
             search_infos,
             spec,
             search_engine,
+            diagnostics,
         }
     }
 }
@@ -143,6 +168,8 @@ impl ToolSearchHandler {
         }
 
         if self.search_infos.is_empty() {
+            self.diagnostics
+                .record_search(query, limit, /*returned_count*/ 0, Vec::new());
             return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
         }
 
@@ -160,9 +187,25 @@ impl ToolSearchHandler {
         query: &str,
         limit: usize,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        let results = self
-            .search_engine
-            .search(query, limit)
+        let results = self.search_engine.search(query, limit);
+        let diagnostics = results
+            .iter()
+            .enumerate()
+            .filter_map(|(rank, result)| {
+                let document_index = result.document.id;
+                self.search_infos
+                    .get(document_index)
+                    .map(|search_info| SearchResultDiagnostic {
+                        rank: rank + 1,
+                        score: result.score,
+                        document_index,
+                        identity: DiagnosticToolIdentity::from_search_info(search_info),
+                    })
+            })
+            .collect();
+        self.diagnostics
+            .record_search(query, limit, results.len(), diagnostics);
+        let results = results
             .into_iter()
             .map(|result| result.document.id)
             .filter_map(|id| self.search_infos.get(id))

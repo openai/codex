@@ -503,6 +503,20 @@ impl CodexThread {
         self.session_configured.clone()
     }
 
+    /// Returns the bounded live tool-search snapshot consumed by normal feedback uploads.
+    #[doc(hidden)]
+    pub fn tool_search_pipeline_feedback_json(&self) -> Option<Vec<u8>> {
+        self.codex
+            .session
+            .services
+            .tool_search_handler_cache
+            .diagnostics()
+            .feedback_json(
+                self.session_configured.thread_id,
+                self.session_configured.session_id,
+            )
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         !self.codex.tx_sub.is_closed()
     }

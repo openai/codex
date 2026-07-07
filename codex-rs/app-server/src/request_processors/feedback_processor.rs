@@ -1,8 +1,10 @@
 use super::*;
+use codex_feedback::FeedbackAttachment;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 
 const MAX_FEEDBACK_TREE_THREADS: usize = 8;
+const TOOL_SEARCH_PIPELINE_ATTACHMENT_FILENAME: &str = "tool-search-pipeline.json";
 
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
@@ -218,6 +220,18 @@ impl FeedbackRequestProcessor {
             for (key, value) in doctor_report.tags {
                 upload_tags.entry(key).or_insert(value);
             }
+        }
+
+        if include_logs
+            && let Some(conversation_id) = conversation_id
+            && let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
+            && let Some(buffer) = conversation.tool_search_pipeline_feedback_json()
+        {
+            extra_attachments.push(FeedbackAttachment {
+                filename: TOOL_SEARCH_PIPELINE_ATTACHMENT_FILENAME.to_string(),
+                content_type: Some("application/json".to_string()),
+                buffer,
+            });
         }
 
         let session_source = self.thread_manager.session_source();

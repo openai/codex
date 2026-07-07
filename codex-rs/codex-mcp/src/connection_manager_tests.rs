@@ -119,6 +119,10 @@ async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
         tool_filter: ToolFilter::default(),
         tool_timeout: None,
         server_instructions: None,
+        tools_list_response:
+            crate::tool_search_diagnostics::ToolSearchToolsListResponseSnapshot::not_observed(
+                "test",
+            ),
         server_supports_sandbox_state_meta_capability: false,
         codex_apps_tools_cache_context: None,
     }

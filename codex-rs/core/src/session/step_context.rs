@@ -6,7 +6,14 @@ use crate::session::McpRuntimeSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ToolInfo;
+use codex_mcp::ToolSearchMcpDiagnosticsSnapshot;
 use tokio::sync::OnceCell;
+
+#[derive(Debug)]
+pub(crate) struct McpToolSnapshot {
+    pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) diagnostics: ToolSearchMcpDiagnosticsSnapshot,
+}
 
 /// Request-scoped state that may change between model sampling requests.
 #[derive(Debug)]
@@ -17,8 +24,8 @@ pub(crate) struct StepContext {
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
     /// The exact MCP config and manager used to advertise and execute tools for this step.
     pub(crate) mcp: Arc<McpRuntimeSnapshot>,
-    /// The fixed MCP tool list used for this exact sampling request.
-    mcp_tool_snapshot: OnceCell<Vec<ToolInfo>>,
+    /// The fixed MCP tool list and compact diagnostics used for this exact sampling request.
+    mcp_tool_snapshot: OnceCell<McpToolSnapshot>,
     /// The canonical AGENTS.md value observed with this environment snapshot.
     pub(crate) loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
 }
@@ -41,9 +48,13 @@ impl StepContext {
         }
     }
 
-    pub(crate) async fn mcp_tools(&self) -> &[ToolInfo] {
+    pub(crate) async fn mcp_tools(&self) -> &McpToolSnapshot {
         self.mcp_tool_snapshot
-            .get_or_init(|| self.mcp.manager().list_all_tools())
+            .get_or_init(|| async {
+                let (tools, diagnostics) =
+                    self.mcp.manager().list_all_tools_with_diagnostics().await;
+                McpToolSnapshot { tools, diagnostics }
+            })
             .await
     }
 }

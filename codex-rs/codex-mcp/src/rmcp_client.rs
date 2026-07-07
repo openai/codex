@@ -31,6 +31,7 @@ use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerLaunch;
+use crate::tool_search_diagnostics::ToolSearchToolsListResponseSnapshot;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -106,6 +107,7 @@ pub(crate) struct ManagedClient {
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
+    pub(crate) tools_list_response: ToolSearchToolsListResponseSnapshot,
     pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -516,23 +518,26 @@ impl AsyncManagedClient {
             .map(|tools| filter_tools(tools, &self.tool_filter))
     }
 
-    pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+    pub(crate) async fn listed_tools(
+        &self,
+    ) -> Option<(Vec<ToolInfo>, Option<ToolSearchToolsListResponseSnapshot>)> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
-        let tools = if !self.startup_complete.load(Ordering::Acquire)
+        let (tools, diagnostics) = if !self.startup_complete.load(Ordering::Acquire)
             && let Some(startup_tools) = self.cached_tools()
         {
-            Some(startup_tools)
+            (startup_tools, None)
         } else {
             match self.client().await {
-                Ok(client) => Some(client.listed_tools()),
-                Err(_) => self.cached_tools(),
+                Ok(client) => (client.listed_tools(), Some(client.tools_list_response)),
+                Err(_) => (self.cached_tools()?, None),
             }
-        }?;
-        Some(if self.is_codex_apps_mcp_server {
+        };
+        let tools = if self.is_codex_apps_mcp_server {
             prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
         } else {
             prepare_regular_mcp_tools_for_model(tools, &self.tool_plugin_provenance)
-        })
+        };
+        Some((tools, diagnostics))
     }
 }
 
@@ -579,11 +584,13 @@ pub(crate) async fn list_tools_for_client_uncached(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
-) -> Result<Vec<ToolInfo>> {
+) -> Result<ListedToolsFetch> {
     let fetch_start = Instant::now();
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
         .await?;
+    let diagnostics =
+        ToolSearchToolsListResponseSnapshot::from_live_response(server_name, &resp.tools);
     let tools = resp
         .tools
         .into_iter()
@@ -609,7 +616,12 @@ pub(crate) async fn list_tools_for_client_uncached(
             &[],
         );
     }
-    Ok(tools)
+    Ok(ListedToolsFetch { tools, diagnostics })
+}
+
+pub(crate) struct ListedToolsFetch {
+    pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) diagnostics: ToolSearchToolsListResponseSnapshot,
 }
 
 /// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
@@ -849,7 +861,7 @@ async fn start_server_task(
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
-    let tools = list_tools_for_client_uncached(
+    let ListedToolsFetch { tools, diagnostics } = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
@@ -884,6 +896,7 @@ async fn start_server_task(
         tool_filter,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
+        tools_list_response: diagnostics,
         codex_apps_tools_cache_context,
     };
 

@@ -963,6 +963,14 @@ fn append_tool_search_executor(
 ) {
     let turn_context = context.step_context.turn.as_ref();
     if !search_tool_enabled(turn_context) {
+        context
+            .tool_search_handler_cache
+            .diagnostics()
+            .record_deferred(&[], "search_disabled");
+        context
+            .tool_search_handler_cache
+            .diagnostics()
+            .record_index(&[], "not_built");
         return;
     }
 
@@ -972,7 +980,15 @@ fn append_tool_search_executor(
         .filter(|executor| executor.exposure() == ToolExposure::Deferred)
         .filter_map(|executor| executor.search_info())
         .collect::<Vec<_>>();
+    context
+        .tool_search_handler_cache
+        .diagnostics()
+        .record_deferred(&search_infos, "not_checked");
     if search_infos.is_empty() {
+        context
+            .tool_search_handler_cache
+            .diagnostics()
+            .record_index(&[], "not_built");
         return;
     }
 

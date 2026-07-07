@@ -1222,10 +1222,15 @@ pub(crate) async fn built_tools(
     let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = step_context
+    let mcp_tool_snapshot = step_context
         .mcp_tools()
         .or_cancel(cancellation_token)
         .await?;
+    let all_mcp_tools = mcp_tool_snapshot.tools.as_slice();
+    sess.services
+        .tool_search_handler_cache
+        .diagnostics()
+        .record_mcp_snapshot(&mcp_tool_snapshot.diagnostics, all_mcp_tools);
     let loaded_plugins = sess
         .services
         .plugins_manager
@@ -1328,12 +1333,17 @@ pub(crate) async fn built_tools(
             .instrument(trace_span!("built_tools.load_discoverable_tools"))
             .await
         };
+    let search_tool_enabled = search_tool_enabled(turn_context);
     let mcp_tool_exposure = build_mcp_tool_exposure(
         all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
-        search_tool_enabled(turn_context),
+        search_tool_enabled,
     );
+    sess.services
+        .tool_search_handler_cache
+        .diagnostics()
+        .record_exposure(mcp_tool_exposure.diagnostic_decisions, search_tool_enabled);
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
     Ok(Arc::new(ToolRouter::from_context(
