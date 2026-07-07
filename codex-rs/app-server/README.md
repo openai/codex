@@ -404,16 +404,28 @@ Example:
 
 When `nextCursor` is `null`, you’ve reached the final page.
 
-To keep a paginated catalog current, call `threadCatalog/subscribe` before the initial
-`thread/list`. The response only acknowledges future notifications; it does not replay existing
-threads. Registration completes before the response is sent, so clients should buffer catalog
-notifications until their list request completes and apply `threadCatalog/changed` summaries
-idempotently. Its `upsert` variant contains the complete row, `delete` removes a row, and
-`invalidate` means the client fell behind and must refetch its catalog view. Reconnects require
-another subscribe and list sequence.
+`threadCatalog/subscribe` is an opt-in, future-only metadata feed. Registration completes before
+the response is sent, but the server does not replay existing threads or reconcile changes missed
+while disconnected. Older clients receive no catalog events because only connections that call the
+method are subscribed.
+
+To maintain a parent's subagent catalog without loading its history:
+
+1. Call `threadCatalog/subscribe` and buffer `threadCatalog/changed` notifications.
+2. Seed the authoritative descendant set by paging `thread/list` with `ancestorThreadId`.
+3. Apply buffered and future `upsert` summaries and `delete` IDs idempotently by thread ID. An
+   `invalidate` event means the client fell behind and must repeat the list snapshot.
+4. Merge the existing global `thread/status/changed` feed by thread ID for active or idle runtime
+   state.
+
+Reconnects repeat the subscribe-and-list sequence. Codex Apps must version-gate the subscribe call
+and retain its existing startup sweep when connected to older app servers. This feed alone does not
+replace that sweep or recover mutations missed while disconnected.
 
 `threadCatalog/changed` contains persisted sidebar metadata only. It never contains turns, items,
-messages, deltas, tool state, or loaded runtime status.
+messages, deltas, tool state, or loaded runtime status. Subagent summaries include relationship and
+display metadata such as `parentThreadId`, `threadSource`, `agentNickname`, and `agentRole`; clients
+compose runtime state from `thread/status/changed` rather than this feed.
 
 ### Example: List descendant threads
 

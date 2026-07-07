@@ -42,6 +42,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::ThreadCatalogChangedNotification;
+use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadDeletedNotification;
@@ -3927,6 +3929,16 @@ config_file = "./custom-role.toml"
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
+    let subscribe_req = mcp
+        .send_raw_request("threadCatalog/subscribe", /*params*/ None)
+        .await?;
+    let subscribe_resp = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(subscribe_req)),
+    )
+    .await??;
+    let _: ThreadCatalogSubscribeResponse = to_response(subscribe_resp)?;
+
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -3998,6 +4010,37 @@ config_file = "./custom-role.toml"
         agent_state.status
     );
     assert_eq!(agent_state.message, None);
+
+    let child_summary = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let changed = mcp
+                .read_stream_until_notification_message("threadCatalog/changed")
+                .await?;
+            let changed: ThreadCatalogChangedNotification =
+                serde_json::from_value(changed.params.expect("threadCatalog/changed params"))?;
+            if let ThreadCatalogChangedNotification::Upsert { thread: summary } = changed
+                && summary.id == receiver_thread_id
+                && summary.agent_role.as_deref() == Some("custom")
+            {
+                return Ok::<_, anyhow::Error>(summary);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(
+        (
+            child_summary.parent_thread_id.as_deref(),
+            child_summary.thread_source.as_ref(),
+            child_summary.agent_nickname.as_deref().map(str::is_empty),
+            child_summary.agent_role.as_deref(),
+        ),
+        (
+            Some(thread.id.as_str()),
+            Some(&ThreadSource::Subagent),
+            Some(false),
+            Some("custom"),
+        )
+    );
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
