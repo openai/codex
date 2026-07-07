@@ -2342,10 +2342,7 @@ async fn try_run_sampling_request(
                 let Some(active) = active_item.as_ref() else {
                     continue;
                 };
-                if !active_item_is_streaming_to_client
-                    || !matches!(active, TurnItem::Reasoning(_))
-                    || active.id() != item_id
-                {
+                if !active_item_is_streaming_to_client || active.id() != item_id {
                     continue;
                 }
                 if summary_index > 0 {
