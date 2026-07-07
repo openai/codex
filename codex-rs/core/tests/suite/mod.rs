@@ -67,6 +67,7 @@ mod items;
 mod json_result;
 mod live_cli;
 mod mcp_auth_elicitation;
+mod mcp_auth_refresh;
 #[cfg(unix)]
 mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;

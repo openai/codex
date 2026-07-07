@@ -1194,6 +1194,9 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
+            let codex_apps_auth_manager =
+                codex_mcp::host_owned_codex_apps_enabled(&mcp_projection.config, auth)
+                    .then(|| Arc::clone(&sess.services.auth_manager));
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
@@ -1218,6 +1221,7 @@ impl Session {
                     .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
                 auth,
+                codex_apps_auth_manager,
                 Some(sess.mcp_elicitation_reviewer()),
                 Some(sess.mcp_elicitation_lifecycle()),
                 codex_mcp::ElicitationRequestRouter::default(),
