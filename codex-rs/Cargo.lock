@@ -2803,6 +2803,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "url",
+ "which 8.0.0",
  "wiremock",
  "zip 2.4.2",
 ]

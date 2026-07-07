@@ -48,6 +48,7 @@ tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+which = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
