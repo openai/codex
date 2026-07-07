@@ -154,12 +154,12 @@ pub async fn read_connector_metadata(
         .collect::<Vec<_>>();
 
     if !missing_ids.is_empty() {
-        let response: GetConnectorsResponse = chatgpt_post_request_with_timeout(
+        let response: GetAppsResponse = chatgpt_post_request_with_timeout(
             config,
             &auth,
-            "/ps/connectors/batch",
-            &GetConnectorsRequest {
-                connector_ids: &missing_ids,
+            "/ps/apps/batch",
+            &GetAppsRequest {
+                app_ids: &missing_ids,
                 include_actions: false,
                 include_model_descriptions: false,
             },
@@ -168,9 +168,9 @@ pub async fn read_connector_metadata(
         .await?;
         let mut requested_ids = missing_ids.iter().cloned().collect::<HashSet<_>>();
         let fetched = response
-            .connectors
+            .apps
             .into_iter()
-            .map(batch_connector_to_metadata)
+            .map(batch_app_to_metadata)
             .filter(|metadata| requested_ids.remove(&metadata.id))
             .collect::<Vec<_>>();
         store.commit(&fetched);
@@ -198,23 +198,23 @@ pub async fn read_connector_metadata(
 }
 
 #[derive(Serialize)]
-struct GetConnectorsRequest<'a> {
-    connector_ids: &'a [String],
+struct GetAppsRequest<'a> {
+    app_ids: &'a [String],
     include_actions: bool,
     include_model_descriptions: bool,
 }
 
 #[derive(Deserialize)]
-struct GetConnectorsResponse {
-    connectors: Vec<BatchConnector>,
+struct GetAppsResponse {
+    apps: Vec<BatchApp>,
 }
 
-/// The explicit metadata-only projection of plugin-service's broader Connector response.
+/// The explicit metadata-only projection of Plugin Service's public app response.
 ///
 /// Serde ignores all other backend fields, including actions, model descriptions, runtime state,
 /// and icons.
 #[derive(Deserialize)]
-struct BatchConnector {
+struct BatchApp {
     id: String,
     name: String,
     description: Option<String>,
@@ -225,8 +225,8 @@ struct BatchConnector {
     install_url: Option<String>,
 }
 
-fn batch_connector_to_metadata(connector: BatchConnector) -> ConnectorMetadata {
-    let BatchConnector {
+fn batch_app_to_metadata(app: BatchApp) -> ConnectorMetadata {
+    let BatchApp {
         id,
         name,
         description,
@@ -235,7 +235,7 @@ fn batch_connector_to_metadata(connector: BatchConnector) -> ConnectorMetadata {
         app_metadata,
         labels,
         install_url,
-    } = connector;
+    } = app;
     ConnectorMetadata {
         id,
         name,

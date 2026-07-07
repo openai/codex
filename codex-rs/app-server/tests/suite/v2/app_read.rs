@@ -39,9 +39,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 #[tokio::test]
 async fn app_read_deduplicates_orders_partial_misses_and_reuses_cached_metadata() -> Result<()> {
     let state = BatchServerState::new(json!({
-        "connectors": [
-            connector_response("alpha", "Alpha", Some("https://chatgpt.com/apps/alpha/alpha")),
-            connector_response("beta", "Beta", Some("https://chatgpt.com/apps/beta/beta")),
+        "apps": [
+            app_response("alpha", "Alpha", Some("https://chatgpt.com/apps/alpha/alpha")),
+            app_response("beta", "Beta", Some("https://chatgpt.com/apps/beta/beta")),
         ]
     }));
     let (server_url, server_handle) = start_batch_server(state.clone()).await?;
@@ -73,7 +73,7 @@ async fn app_read_deduplicates_orders_partial_misses_and_reuses_cached_metadata(
     assert_eq!(
         state.requests(),
         vec![json!({
-            "connector_ids": ["beta", "missing", "alpha", "forbidden"],
+            "app_ids": ["beta", "missing", "alpha", "forbidden"],
             "include_actions": false,
             "include_model_descriptions": false,
         })]
@@ -104,7 +104,7 @@ async fn app_read_deduplicates_orders_partial_misses_and_reuses_cached_metadata(
 #[tokio::test]
 async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()> {
     let state = BatchServerState::new(json!({
-        "connectors": [connector_response("cached", "Cached", /*install_url*/ None)]
+        "apps": [app_response("cached", "Cached", /*install_url*/ None)]
     }));
     let (server_url, server_handle) = start_batch_server(state.clone()).await?;
     let codex_home = TempDir::new()?;
@@ -225,7 +225,7 @@ fn metadata(id: &str, name: &str, install_url: Option<&str>) -> ConnectorMetadat
     }
 }
 
-fn connector_response(id: &str, name: &str, install_url: Option<&str>) -> Value {
+fn app_response(id: &str, name: &str, install_url: Option<&str>) -> Value {
     let mut response = json!({
         "id": id,
         "name": name,
@@ -331,7 +331,7 @@ async fn start_batch_server(state: BatchServerState) -> Result<(String, JoinHand
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let router = Router::new()
-        .route("/ps/connectors/batch", post(batch_connectors))
+        .route("/ps/apps/batch", post(batch_apps))
         .with_state(state);
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -339,7 +339,7 @@ async fn start_batch_server(state: BatchServerState) -> Result<(String, JoinHand
     Ok((format!("http://{addr}"), handle))
 }
 
-async fn batch_connectors(
+async fn batch_apps(
     State(state): State<BatchServerState>,
     headers: HeaderMap,
     Json(body): Json<Value>,

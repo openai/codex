@@ -7,7 +7,7 @@ use crate::AppBranding;
 use crate::AppMetadata;
 use crate::CONNECTORS_CACHE_TTL;
 
-/// Metadata returned by the connector batch-read API.
+/// Metadata returned by the app batch-read API.
 ///
 /// This intentionally excludes connector runtime state, tools, actions, model descriptions, and
 /// icon fields. Consumers that need those concepts must use their owning APIs instead of growing

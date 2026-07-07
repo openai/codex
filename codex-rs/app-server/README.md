@@ -1870,7 +1870,7 @@ instead of failing the whole request.
         {
             "id": "demo-app",
             "name": "Demo App",
-            "description": "Example connector for documentation.",
+            "description": "Example app for documentation.",
             "distributionChannel": null,
             "branding": null,
             "appMetadata": null,
@@ -1883,7 +1883,7 @@ instead of failing the whole request.
 ```
 
 `app/read` reads fresh metadata records from a cache partitioned by backend URL and ChatGPT
-account/workspace identity, then makes at most one `POST /ps/connectors/batch` for missing or
+account/workspace identity, then makes at most one `POST /ps/apps/batch` for missing or
 expired ids with `include_actions=false` and `include_model_descriptions=false`. Backend or
 transport failures return an RPC error without replacing existing cache records. Its metadata
 shape intentionally excludes runtime state, MCP tools, actions, model descriptions, and icon
