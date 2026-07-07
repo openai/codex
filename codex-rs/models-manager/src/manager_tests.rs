@@ -7,7 +7,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
-use codex_login::ExternalAuthTokens;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelsResponse;
@@ -122,23 +121,15 @@ impl ExternalAuth for TestExternalApiKeyAuth {
         AuthMode::ApiKey
     }
 
-    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
-        Box::pin(async {
-            Ok(Some(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            )))
-        })
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<CodexAuth>> {
+        Box::pin(async { Ok(Some(CodexAuth::from_api_key("test-external-api-key"))) })
     }
 
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
-        Box::pin(async {
-            Ok(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            ))
-        })
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key("test-external-api-key")) })
     }
 }
 
@@ -153,7 +144,7 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
         Box::pin(async { Err(std::io::Error::other("unresolved test auth")) })
     }
 }
