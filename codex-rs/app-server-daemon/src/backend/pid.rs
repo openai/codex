@@ -70,12 +70,20 @@ enum PidFileState {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(not(unix), allow(dead_code))]
 enum PidCommandKind {
-    AppServer { remote_control_enabled: bool },
+    AppServer {
+        remote_control_enabled: bool,
+        analytics_default_enabled: bool,
+    },
     UpdateLoop,
 }
 
 impl PidBackend {
-    pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
+    pub(crate) fn new(
+        codex_bin: PathBuf,
+        pid_file: PathBuf,
+        remote_control_enabled: bool,
+        analytics_default_enabled: bool,
+    ) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
             codex_bin,
@@ -83,6 +91,7 @@ impl PidBackend {
             lock_file,
             command_kind: PidCommandKind::AppServer {
                 remote_control_enabled,
+                analytics_default_enabled,
             },
         }
     }
@@ -403,11 +412,19 @@ impl PidBackend {
     fn command_args(&self) -> Vec<&'static str> {
         match self.command_kind {
             PidCommandKind::AppServer {
-                remote_control_enabled: true,
-            } => vec!["app-server", "--remote-control", "--listen", "unix://"],
-            PidCommandKind::AppServer {
-                remote_control_enabled: false,
-            } => vec!["app-server", "--listen", "unix://"],
+                remote_control_enabled,
+                analytics_default_enabled,
+            } => {
+                let mut args = vec!["app-server"];
+                if remote_control_enabled {
+                    args.push("--remote-control");
+                }
+                if analytics_default_enabled {
+                    args.push("--analytics-default-enabled");
+                }
+                args.extend(["--listen", "unix://"]);
+                args
+            }
             PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
         }
     }
@@ -417,9 +434,11 @@ impl PidBackend {
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
+                ..
             } => Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1")),
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
+                ..
             }
             | PidCommandKind::UpdateLoop => None,
         }

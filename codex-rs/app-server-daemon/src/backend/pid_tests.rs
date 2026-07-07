@@ -25,6 +25,7 @@ async fn locked_empty_pid_file_is_treated_as_active_reservation() {
         temp_dir.path().join("codex"),
         pid_file.clone(),
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
     let reservation = tokio::fs::OpenOptions::new()
         .create(true)
@@ -53,6 +54,7 @@ async fn unlocked_empty_pid_file_is_treated_as_stale_reservation() {
         temp_dir.path().join("codex"),
         pid_file.clone(),
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
 
     assert_eq!(
@@ -73,6 +75,7 @@ async fn stop_waits_for_live_reservation_to_resolve() {
         temp_dir.path().join("codex"),
         pid_file.clone(),
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
     let reservation = tokio::fs::OpenOptions::new()
         .create(true)
@@ -105,6 +108,7 @@ async fn start_retries_stale_empty_pid_file_under_its_own_lock() {
         temp_dir.path().join("missing-codex"),
         pid_file,
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
 
     let err = backend.start().await.expect_err("start");
@@ -122,6 +126,7 @@ async fn stale_record_cleanup_preserves_replacement_record() {
         temp_dir.path().join("codex"),
         pid_file.clone(),
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
     let stale = PidRecord {
         pid: 1,
@@ -168,6 +173,7 @@ fn app_server_remote_control_uses_runtime_flag() {
         "codex".into(),
         "app-server.pid".into(),
         /*remote_control_enabled*/ true,
+        /*analytics_default_enabled*/ false,
     );
 
     assert_eq!(
@@ -182,6 +188,7 @@ fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
         "codex".into(),
         "app-server.pid".into(),
         /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ false,
     );
 
     assert_eq!(
@@ -191,6 +198,26 @@ fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
     assert_eq!(
         backend.command_env(),
         Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1"))
+    );
+}
+
+#[test]
+fn app_server_analytics_default_uses_runtime_flag() {
+    let backend = PidBackend::new(
+        "codex".into(),
+        "app-server.pid".into(),
+        /*remote_control_enabled*/ false,
+        /*analytics_default_enabled*/ true,
+    );
+
+    assert_eq!(
+        backend.command_args(),
+        vec![
+            "app-server",
+            "--analytics-default-enabled",
+            "--listen",
+            "unix://"
+        ]
     );
 }
 

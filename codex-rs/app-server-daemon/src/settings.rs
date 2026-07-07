@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -10,6 +11,9 @@ use tokio::fs;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
+    pub(crate) codex_bin: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) analytics_default_enabled: bool,
 }
 
 impl DaemonSettings {
@@ -55,9 +59,24 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DaemonSettings {
                 remote_control_enabled: true,
+                codex_bin: Some("/Applications/Codex.app/Contents/Resources/codex".into()),
+                analytics_default_enabled: true,
             })
             .expect("serialize"),
-            r#"{"remoteControlEnabled":true}"#
+            r#"{"remoteControlEnabled":true,"codexBin":"/Applications/Codex.app/Contents/Resources/codex","analyticsDefaultEnabled":true}"#
+        );
+    }
+
+    #[test]
+    fn daemon_settings_load_without_launch_overrides() {
+        assert_eq!(
+            serde_json::from_str::<DaemonSettings>(r#"{"remoteControlEnabled":true}"#)
+                .expect("deserialize"),
+            DaemonSettings {
+                remote_control_enabled: true,
+                codex_bin: None,
+                analytics_default_enabled: false,
+            }
         );
     }
 }

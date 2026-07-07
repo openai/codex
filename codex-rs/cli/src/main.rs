@@ -619,10 +619,10 @@ enum AppServerDaemonSubcommand {
     Bootstrap(AppServerBootstrapCommand),
 
     /// Start the local app server daemon if it is not already running.
-    Start,
+    Start(AppServerDaemonStartCommand),
 
     /// Restart the local app server daemon.
-    Restart,
+    Restart(AppServerDaemonStartCommand),
 
     /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
@@ -653,6 +653,17 @@ struct AppServerBootstrapCommand {
     /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+}
+
+#[derive(Debug, Args)]
+struct AppServerDaemonStartCommand {
+    /// Codex executable to use for the managed app-server process.
+    #[arg(long = "codex-bin", value_name = "PATH")]
+    codex_bin: Option<PathBuf>,
+
+    /// Enable analytics by default for the managed app-server process.
+    #[arg(long = "analytics-default-enabled")]
+    analytics_default_enabled: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1151,8 +1162,12 @@ async fn cli_main(
                     .await?;
                 }
                 Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
-                    AppServerDaemonSubcommand::Start => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                    AppServerDaemonSubcommand::Start(start_cli) => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Start {
+                            codex_bin: start_cli.codex_bin,
+                            analytics_default_enabled: start_cli.analytics_default_enabled,
+                        })
+                        .await?;
                     }
                     AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
                         let output =
@@ -1162,8 +1177,12 @@ async fn cli_main(
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
                     }
-                    AppServerDaemonSubcommand::Restart => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    AppServerDaemonSubcommand::Restart(restart_cli) => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart {
+                            codex_bin: restart_cli.codex_bin,
+                            analytics_default_enabled: restart_cli.analytics_default_enabled,
+                        })
+                        .await?;
                     }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
                         print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
@@ -2175,8 +2194,8 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
         None => "app-server",
         Some(AppServerSubcommand::Daemon(daemon)) => match daemon.subcommand {
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
-            AppServerDaemonSubcommand::Start => "app-server daemon start",
-            AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::Start(_) => "app-server daemon start",
+            AppServerDaemonSubcommand::Restart(_) => "app-server daemon restart",
             AppServerDaemonSubcommand::EnableRemoteControl => {
                 "app-server daemon enable-remote-control"
             }
@@ -3820,13 +3839,58 @@ mod tests {
         assert!(matches!(
             app_server_from_args(["codex", "app-server", "daemon", "start"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
-                subcommand: AppServerDaemonSubcommand::Start
+                subcommand: AppServerDaemonSubcommand::Start(AppServerDaemonStartCommand {
+                    codex_bin: None,
+                    analytics_default_enabled: false
+                })
             }))
         ));
         assert!(matches!(
             app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
-                subcommand: AppServerDaemonSubcommand::Restart
+                subcommand: AppServerDaemonSubcommand::Restart(AppServerDaemonStartCommand {
+                    codex_bin: None,
+                    analytics_default_enabled: false
+                })
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "start",
+                    "--codex-bin",
+                    "/tmp/codex"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Start(AppServerDaemonStartCommand {
+                    codex_bin: Some(codex_bin),
+                    analytics_default_enabled: false
+                })
+            })) if codex_bin == std::path::Path::new("/tmp/codex")
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "start",
+                    "--analytics-default-enabled"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Start(AppServerDaemonStartCommand {
+                    codex_bin: None,
+                    analytics_default_enabled: true
+                })
             }))
         ));
         assert!(matches!(

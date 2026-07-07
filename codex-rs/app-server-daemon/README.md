@@ -18,6 +18,7 @@ support Windows lifecycle management.
 
 ```sh
 codex app-server daemon start
+codex app-server daemon start --codex-bin /absolute/path/to/codex --analytics-default-enabled
 codex app-server daemon restart
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
@@ -28,8 +29,9 @@ codex app-server daemon bootstrap --remote-control
 
 On success, every command writes exactly one JSON object to stdout. Consumers
 should parse that JSON rather than relying on human-readable text. Lifecycle
-responses report the resolved backend, socket path, local CLI version, and
-running app-server version when applicable.
+responses report the resolved backend, socket path, local CLI version, running
+app-server version when applicable, and persisted launch settings such as
+`managedCodexPath` and `analyticsDefaultEnabled`.
 
 ## Bootstrap flow
 
@@ -44,15 +46,22 @@ $HOME/.codex/packages/standalone/current/codex app-server daemon bootstrap --rem
 settings under `CODEX_HOME/app-server-daemon/`, starts app-server as a
 pidfile-backed detached process, and launches a detached updater loop.
 
+`start` and `restart` can persist an explicit `--codex-bin` for clients that
+own the executable lifecycle, such as a desktop app bundle. The path must be
+absolute and point to an existing file. `--analytics-default-enabled` persists
+the matching app-server launch flag for first-party clients. Those overrides do
+not enable the standalone updater loop.
+
 ## Installation and update cases
 
-The daemon assumes Codex is installed through `install.sh` and always launches
-the standalone managed binary under `CODEX_HOME`.
+Without launch overrides, the daemon assumes Codex is installed through
+`install.sh` and launches the standalone managed binary under `CODEX_HOME`.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
 | `install.sh` has run, but only `start` is used | `start` uses `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
 | `install.sh` has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive and app-server is already running. After a successful fetch, the updater restarts app-server with the refreshed binary and only then replaces its own process image. |
+| `start --codex-bin /absolute/path/to/codex` is used | `start` and future lifecycle operations use the explicit executable path | No | No. The owner of that executable decides when to restart the daemon with a replacement binary. |
 | Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | Only if `bootstrap` is active, because the updater still runs `install.sh` on its normal cadence. | Without `bootstrap`, no. With `bootstrap`, the next successful updater pass compares the managed binary contents after `install.sh` runs; if app-server is running and they differ from the updater's current image, it refreshes app-server first and then itself. |
 
 ### Standalone installs

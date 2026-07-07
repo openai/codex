@@ -19,6 +19,7 @@ pub(crate) struct BackendPaths {
     pub(crate) pid_file: PathBuf,
     pub(crate) update_pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
+    pub(crate) analytics_default_enabled: bool,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
@@ -26,6 +27,7 @@ pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
         paths.codex_bin,
         paths.pid_file,
         paths.remote_control_enabled,
+        paths.analytics_default_enabled,
     )
 }
 
