@@ -173,6 +173,7 @@ mod tests {
             installed: true,
             enabled: true,
             install_policy: PluginInstallPolicy::Available,
+            install_policy_source: None,
             auth_policy: PluginAuthPolicy::OnInstall,
             availability: PluginAvailability::Available,
             interface: None,
