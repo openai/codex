@@ -198,6 +198,16 @@ pub fn maybe_build_rustls_client_config_with_custom_ca()
     maybe_build_rustls_client_config_with_env(&ProcessEnv)
 }
 
+/// Builds a rustls client config using native roots and any configured Codex custom CA bundle.
+///
+/// Unlike [`maybe_build_rustls_client_config_with_custom_ca`], this always returns a config. Use
+/// this when the caller must perform TLS itself instead of delegating default configuration to a
+/// transport library.
+pub fn build_rustls_client_config_with_custom_ca()
+-> Result<Arc<ClientConfig>, BuildCustomCaTransportError> {
+    build_rustls_client_config_with_env(&ProcessEnv)
+}
+
 /// Builds a reqwest client for spawned subprocess tests that exercise CA behavior.
 ///
 /// This is the test-only client-construction path used by the subprocess coverage in `tests/`.
@@ -219,6 +229,19 @@ fn maybe_build_rustls_client_config_with_env(
         return Ok(None);
     };
 
+    build_rustls_client_config(Some(&bundle)).map(Some)
+}
+
+fn build_rustls_client_config_with_env(
+    env_source: &dyn EnvSource,
+) -> Result<Arc<ClientConfig>, BuildCustomCaTransportError> {
+    let bundle = env_source.configured_ca_bundle();
+    build_rustls_client_config(bundle.as_ref())
+}
+
+fn build_rustls_client_config(
+    bundle: Option<&ConfiguredCaBundle>,
+) -> Result<Arc<ClientConfig>, BuildCustomCaTransportError> {
     ensure_rustls_crypto_provider();
 
     // Start from the platform roots so websocket callers keep the same baseline trust behavior
@@ -235,30 +258,32 @@ fn maybe_build_rustls_client_config_with_env(
     }
     let _ = root_store.add_parsable_certificates(certs);
 
-    let certificates = bundle.load_certificates()?;
-    for (idx, cert) in certificates.into_iter().enumerate() {
-        if let Err(source) = root_store.add(cert) {
-            warn!(
-                source_env = bundle.source_env,
-                ca_path = %bundle.path.display(),
-                certificate_index = idx + 1,
-                error = %source,
-                "failed to register CA certificate in rustls root store"
-            );
-            return Err(BuildCustomCaTransportError::RegisterRustlsCertificate {
-                source_env: bundle.source_env,
-                path: bundle.path.clone(),
-                certificate_index: idx + 1,
-                source,
-            });
+    if let Some(bundle) = bundle {
+        let certificates = bundle.load_certificates()?;
+        for (idx, cert) in certificates.into_iter().enumerate() {
+            if let Err(source) = root_store.add(cert) {
+                warn!(
+                    source_env = bundle.source_env,
+                    ca_path = %bundle.path.display(),
+                    certificate_index = idx + 1,
+                    error = %source,
+                    "failed to register CA certificate in rustls root store"
+                );
+                return Err(BuildCustomCaTransportError::RegisterRustlsCertificate {
+                    source_env: bundle.source_env,
+                    path: bundle.path.clone(),
+                    certificate_index: idx + 1,
+                    source,
+                });
+            }
         }
     }
 
-    Ok(Some(Arc::new(
+    Ok(Arc::new(
         ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth(),
-    )))
+    ))
 }
 
 /// Builds a reqwest client using an injected environment source and reqwest builder.

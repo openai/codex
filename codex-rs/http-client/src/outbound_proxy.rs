@@ -4,6 +4,7 @@
 //! proxies are the fallback, and the final fallback is a direct connection.
 //! When disabled, callers retain the existing reqwest builder behavior.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
@@ -96,6 +97,30 @@ pub enum OutboundProxyPolicy {
     RespectSystemProxy,
 }
 
+/// Resolved proxy route for a concrete outbound destination.
+///
+/// `TransportDefault` delegates environment-proxy handling to the underlying transport. Proxy
+/// URLs are intentionally redacted from `Debug` output because they may contain credentials.
+#[derive(Clone, PartialEq, Eq)]
+pub enum OutboundProxyRoute {
+    /// Preserve the underlying transport's existing proxy behavior.
+    TransportDefault,
+    /// Connect directly and bypass transport-level proxy discovery.
+    Direct,
+    /// Connect through the selected proxy URL.
+    Proxy { url: String },
+}
+
+impl fmt::Debug for OutboundProxyRoute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TransportDefault => f.write_str("TransportDefault"),
+            Self::Direct => f.write_str("Direct"),
+            Self::Proxy { .. } => f.debug_struct("Proxy").field("url", &"<redacted>").finish(),
+        }
+    }
+}
+
 /// Builds route-specific HTTP clients using one resolved outbound proxy policy.
 ///
 /// Construct this once from the effective application configuration and carry it with the
@@ -119,6 +144,20 @@ impl HttpClientFactory {
         self.outbound_proxy_policy
     }
 
+    /// Resolves the proxy route for a concrete destination.
+    ///
+    /// WebSocket schemes are resolved through their HTTP equivalents so platform PAC and system
+    /// proxy APIs apply the same policy to `ws`/`wss` and `http`/`https` destinations. When system
+    /// resolution is unavailable, the transport retains responsibility for environment-proxy
+    /// fallback.
+    pub fn resolve_proxy_route(&self, request_url: &str) -> OutboundProxyRoute {
+        resolve_proxy_route(
+            request_url,
+            self.outbound_proxy_policy,
+            resolve_system_proxy,
+        )
+    }
+
     /// Builds a reqwest client for a concrete outbound route.
     pub fn build_reqwest_client(
         &self,
@@ -132,6 +171,37 @@ impl HttpClientFactory {
             route_class,
             self.outbound_proxy_policy,
         )
+    }
+}
+
+fn resolve_proxy_route(
+    request_url: &str,
+    outbound_proxy_policy: OutboundProxyPolicy,
+    resolve_system_proxy: impl FnOnce(&str, &RequestOrigin) -> SystemProxyDecision,
+) -> OutboundProxyRoute {
+    if matches!(outbound_proxy_policy, OutboundProxyPolicy::ReqwestDefault) {
+        return OutboundProxyRoute::TransportDefault;
+    }
+
+    let request_url = proxy_resolution_url(request_url);
+    let Some(origin) = RequestOrigin::parse(&request_url) else {
+        return OutboundProxyRoute::TransportDefault;
+    };
+
+    match resolve_system_proxy(&request_url, &origin) {
+        SystemProxyDecision::Direct => OutboundProxyRoute::Direct,
+        SystemProxyDecision::Proxy { url } => OutboundProxyRoute::Proxy { url },
+        SystemProxyDecision::Unavailable { .. } => OutboundProxyRoute::TransportDefault,
+    }
+}
+
+fn proxy_resolution_url(request_url: &str) -> Cow<'_, str> {
+    if let Some(suffix) = request_url.strip_prefix("wss://") {
+        Cow::Owned(format!("https://{suffix}"))
+    } else if let Some(suffix) = request_url.strip_prefix("ws://") {
+        Cow::Owned(format!("http://{suffix}"))
+    } else {
+        Cow::Borrowed(request_url)
     }
 }
 
@@ -259,8 +329,8 @@ impl RequestOrigin {
         let scheme = uri.scheme_str()?.to_ascii_lowercase();
         let host = uri.host()?.trim_matches(['[', ']']).to_ascii_lowercase();
         let port = uri.port_u16().or(match scheme.as_str() {
-            "http" => Some(80),
-            "https" => Some(443),
+            "http" | "ws" => Some(80),
+            "https" | "wss" => Some(443),
             _ => None,
         })?;
         Some(Self { scheme, host, port })
