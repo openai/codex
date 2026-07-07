@@ -108,6 +108,26 @@ fn test_apply_patch_cli_rejects_overlapping_end_of_file_chunks() -> anyhow::Resu
 }
 
 #[test]
+fn test_apply_patch_cli_allows_overlapping_eof_chunks_in_legacy_mode() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("overlapping.txt");
+    fs::write(&target_path, "one\n")?;
+
+    let patch = "*** Begin Patch\n*** Update File: overlapping.txt\n@@\n-one\n+first\n@@\n-one\n+second\n*** End of File\n*** End Patch";
+
+    Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
+        .env_remove(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR)
+        .arg(patch)
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout("Success. Updated the following files:\nM overlapping.txt\n");
+
+    assert_eq!(fs::read_to_string(target_path)?, "first\n");
+    Ok(())
+}
+
+#[test]
 fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> {
     let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n@@\n two\n+\n+between\n three\n*** End Patch";
 

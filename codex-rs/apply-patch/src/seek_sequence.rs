@@ -14,6 +14,7 @@ pub(crate) fn seek_sequence(
     pattern: &[String],
     start: usize,
     eof: bool,
+    update_file_mode: crate::ApplyPatchFileUpdateMode,
 ) -> Option<usize> {
     if pattern.is_empty() {
         return Some(start);
@@ -27,7 +28,11 @@ pub(crate) fn seek_sequence(
         return None;
     }
     let search_start = if eof && lines.len() >= pattern.len() {
-        (lines.len() - pattern.len()).max(start)
+        let eof_start = lines.len() - pattern.len();
+        match update_file_mode {
+            crate::ApplyPatchFileUpdateMode::NormalizeToLf => eof_start,
+            crate::ApplyPatchFileUpdateMode::PreserveLineEndings => eof_start.max(start),
+        }
     } else {
         start
     };
@@ -112,6 +117,7 @@ pub(crate) fn seek_sequence(
 #[cfg(test)]
 mod tests {
     use super::seek_sequence;
+    use crate::ApplyPatchFileUpdateMode;
     use std::string::ToString;
 
     fn to_vec(strings: &[&str]) -> Vec<String> {
@@ -123,7 +129,13 @@ mod tests {
         let lines = to_vec(&["foo", "bar", "baz"]);
         let pattern = to_vec(&["bar", "baz"]);
         assert_eq!(
-            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
             Some(1)
         );
     }
@@ -134,7 +146,13 @@ mod tests {
         // Pattern omits trailing whitespace.
         let pattern = to_vec(&["foo", "bar"]);
         assert_eq!(
-            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
             Some(0)
         );
     }
@@ -145,7 +163,13 @@ mod tests {
         // Pattern omits any additional whitespace.
         let pattern = to_vec(&["foo", "bar"]);
         assert_eq!(
-            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
             Some(0)
         );
     }
@@ -156,7 +180,13 @@ mod tests {
         let pattern = to_vec(&["too", "many", "lines"]);
         // Should not panic – must return None when pattern cannot possibly fit.
         assert_eq!(
-            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
             None
         );
     }

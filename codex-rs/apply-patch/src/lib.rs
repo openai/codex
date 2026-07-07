@@ -838,6 +838,7 @@ fn compute_replacements(
                 std::slice::from_ref(ctx_line),
                 line_index,
                 /*eof*/ false,
+                update_file_mode,
             ) {
                 line_index = idx + 1;
             } else {
@@ -871,8 +872,13 @@ fn compute_replacements(
         // touching the end‑of‑file can be located reliably.
 
         let mut pattern: &[String] = &chunk.old_lines;
-        let mut found =
-            seek_sequence::seek_sequence(original_lines, pattern, line_index, chunk.is_end_of_file);
+        let mut found = seek_sequence::seek_sequence(
+            original_lines,
+            pattern,
+            line_index,
+            chunk.is_end_of_file,
+            update_file_mode,
+        );
 
         let mut new_slice: &[String] = &chunk.new_lines;
 
@@ -889,6 +895,7 @@ fn compute_replacements(
                 pattern,
                 line_index,
                 chunk.is_end_of_file,
+                update_file_mode,
             );
         }
 
