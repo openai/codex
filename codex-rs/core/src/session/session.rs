@@ -953,11 +953,15 @@ impl Session {
                 None
             };
             let blocked_request_observer = if managed_network_requirements_configured {
-                config
-                    .permissions
-                    .network
-                    .as_ref()
-                    .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)))
+                config.permissions.network.as_ref().map(|_| {
+                    build_blocked_request_observer(
+                        Arc::clone(&network_approval),
+                        crate::security_events::SandboxViolationAuditContext::from_network_proxy(
+                            state_db_ctx.clone(),
+                            network_proxy_audit_metadata.clone(),
+                        ),
+                    )
+                })
             } else {
                 None
             };

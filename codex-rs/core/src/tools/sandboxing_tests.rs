@@ -244,6 +244,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     let options = || crate::sandboxing::ExecOptions {
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+        sandbox_violation_context: None,
     };
     let request = attempt
         .env_for_exec_server(command(), options(), /*network*/ None, Some("remote"))

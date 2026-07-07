@@ -10,6 +10,7 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
+use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -102,9 +103,13 @@ async fn remote_process(
         }),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started)
-        .await
-        .expect("remote process should start")
+    UnifiedExecProcess::from_exec_server_started(
+        started,
+        SandboxType::None,
+        /*sandbox_violation_context*/ None,
+    )
+    .await
+    .expect("remote process should start")
 }
 
 #[tokio::test]
