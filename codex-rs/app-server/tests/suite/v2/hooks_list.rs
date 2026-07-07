@@ -458,7 +458,7 @@ timeout = 5
                         /*timeout_sec*/ 5,
                         /*status_message*/ None,
                     ),
-                    trust_status: HookTrustStatus::Untrusted,
+                    trust_status: HookTrustStatus::Trusted,
                 }],
                 warnings: Vec::new(),
                 errors: Vec::new(),

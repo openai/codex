@@ -505,8 +505,12 @@ fn append_matcher_groups(
                     let state = source.hook_states.get(&key);
                     let enabled = hook_enabled(source.is_managed, state);
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
-                    let trust_status =
-                        hook_trust_status(source.is_managed, &current_hash, trusted_hash);
+                    let trust_status = hook_trust_status(
+                        source.source,
+                        source.is_managed,
+                        &current_hash,
+                        trusted_hash,
+                    );
                     hook_entries.push(HookListEntry {
                         key,
                         event_name,
@@ -587,12 +591,17 @@ fn command_hook_hash(
 }
 
 fn hook_trust_status(
+    source: HookSource,
     is_managed: bool,
     current_hash: &str,
     trusted_hash: Option<&str>,
 ) -> HookTrustStatus {
     if is_managed {
         HookTrustStatus::Managed
+    } else if source == HookSource::Project {
+        // Project config layers are active only after the project itself has
+        // been trusted, so their hooks inherit that trust.
+        HookTrustStatus::Trusted
     } else {
         match trusted_hash {
             Some(trusted_hash) if trusted_hash == current_hash => HookTrustStatus::Trusted,
@@ -829,6 +838,45 @@ mod tests {
                 env: std::collections::HashMap::new(),
             }]
         );
+    }
+    #[test]
+    fn project_hook_inherits_project_trust() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::from([(
+            format!("{}:pre_tool_use:0:0", source_path.display()),
+            HookStateToml {
+                enabled: None,
+                trusted_hash: Some("stale-hash".to_string()),
+            },
+        )]);
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &super::HookHandlerSource {
+                path: &source_path,
+                key_source: source_path.display().to_string(),
+                source: HookSource::Project,
+                is_managed: false,
+                bypass_hook_trust: false,
+                hook_states: &hook_states,
+                env: std::collections::HashMap::new(),
+                plugin_id: None,
+            },
+            HookEventName::PreToolUse,
+            vec![command_group(Some("Bash"))],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(hook_entries.len(), 1);
+        assert_eq!(hook_entries[0].trust_status, HookTrustStatus::Trusted);
+        assert_eq!(handlers.len(), 1);
     }
 
     #[test]

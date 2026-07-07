@@ -11059,9 +11059,9 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
     );
     assert_eq!(
         hook_list.hooks[0].trust_status,
-        codex_protocol::protocol::HookTrustStatus::Untrusted
+        codex_protocol::protocol::HookTrustStatus::Trusted
     );
-    assert!(preview_session_start_hooks(&config).await?.is_empty());
+    assert_eq!(preview_session_start_hooks(&config).await?.len(), 1);
 
     Ok(())
 }
@@ -11111,11 +11111,15 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
             expected_hooks,
             "unexpected discovered hook count for {name}",
         );
-        assert!(preview_session_start_hooks(&config).await?.is_empty());
+        assert_eq!(
+            preview_session_start_hooks(&config).await?.len(),
+            expected_hooks,
+            "unexpected session start hook count for {name}",
+        );
         if expected_hooks == 1 {
             assert_eq!(
                 hook_list.hooks[0].trust_status,
-                codex_protocol::protocol::HookTrustStatus::Untrusted
+                codex_protocol::protocol::HookTrustStatus::Trusted
             );
         }
     }
