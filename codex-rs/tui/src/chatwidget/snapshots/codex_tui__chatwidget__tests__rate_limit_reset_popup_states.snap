@@ -10,10 +10,11 @@ expression: "states.join(\"\\n---\\n\")"
   Press enter to confirm or esc to go back
 ---
   Usage limit resets
-  You have 2 usage limit resets available.
+  2 usage limit resets available.
 
-  1. Use a reset  Reset your current 5-hour and weekly usage limits.
-› 2. Cancel
+› 1. Cancel
+  2. Full reset (Weekly + 5 hr)  Expires 09:39 on 18 Jun 2026.
+  3. Full reset (Weekly + 5 hr)  Expires 08:59 on 27 Jun 2026.
 
   Press enter to confirm or esc to go back
 ---
@@ -27,7 +28,8 @@ expression: "states.join(\"\\n---\\n\")"
   Usage limit resets
   Couldn't load usage limit resets. Please try again.
 
-› 1. Close
+› 1. Try again
+  2. Close
 
   Press enter to confirm or esc to go back
 ---

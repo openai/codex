@@ -4,27 +4,27 @@ expression: "states.join(\"\\n---\\n\")"
 ---
 Free:
   Usage limit resets
-  You have 1 usage limit reset available.
+  1 usage limit reset available.
 
-  1. Use a reset  Reset your current monthly usage limit.
-› 2. Cancel
+› 1. Cancel
+  2. Full reset (Monthly)  Does not expire.
 
   Press enter to confirm or esc to go back
 ---
 Go:
   Usage limit resets
-  You have 1 usage limit reset available.
+  1 usage limit reset available.
 
-  1. Use a reset  Reset your current monthly usage limit.
-› 2. Cancel
+› 1. Cancel
+  2. Use a reset  Reset your current monthly usage limit.
 
   Press enter to confirm or esc to go back
 ---
 Business with monthly window:
   Usage limit resets
-  You have 1 usage limit reset available.
+  1 usage limit reset available.
 
-  1. Use a reset  Reset your current monthly usage limit.
-› 2. Cancel
+› 1. Cancel
+  2. Full reset (Monthly)  Does not expire.
 
   Press enter to confirm or esc to go back
