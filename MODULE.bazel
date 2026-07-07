@@ -432,18 +432,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.9.207.2")
+bazel_dep(name = "v8", version = "14.9.207.35")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4=",
+    integrity = "sha256-YI1fHXrwPWls/kfz/gDJ4kasc/TR2ng0n70PHUQAgsE=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.9.207.2",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.2.tar.gz"],
+    strip_prefix = "v8-14.9.207.35",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.35.tar.gz"],
 )
 
 http_archive(

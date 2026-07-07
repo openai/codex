@@ -19,7 +19,8 @@ prebuilts.
 Current pinned versions:
 
 - Rust crate: `v8 = =149.2.0`
-- Embedded upstream V8 source for Bazel-produced release builds: `14.9.207.2`
+- Embedded upstream V8 source for Bazel-produced release builds: `14.9.207.35`
+  (the revision used by Chromium `149.0.7827.201`)
 
 ## Updating to a new `v8` release
 
