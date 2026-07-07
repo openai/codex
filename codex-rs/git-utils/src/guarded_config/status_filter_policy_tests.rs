@@ -1,5 +1,7 @@
 use super::status_filter_sentinel_probe_selects_driver;
+#[cfg(unix)]
 use super::status_filter_special_pathspec;
+#[cfg(unix)]
 use pretty_assertions::assert_eq;
 
 #[cfg(unix)]
