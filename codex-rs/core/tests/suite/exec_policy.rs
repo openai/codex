@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -17,6 +18,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -250,6 +252,84 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             .contains("policy forbids commands starting with `echo`"),
         "unexpected output: {}",
         end.aggregated_output
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_custom_rules_preserve_managed_forbidden_prefix() -> Result<()> {
+    skip_if_target_windows!(
+        Ok(()),
+        "managed prefix fixture uses POSIX executable semantics"
+    );
+
+    let mut builder = test_codex()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[rules]
+prefix_rules = [
+    { pattern = [{ token = "echo" }], decision = "forbidden" },
+]
+"#,
+            ),
+        )
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            let policy_path = config.codex_home.join("rules").join("broken.rules");
+            fs::create_dir_all(
+                policy_path
+                    .parent()
+                    .expect("policy directory must have a parent"),
+            )
+            .expect("create policy directory");
+            fs::write(policy_path, "prefix_rule(").expect("write malformed policy file");
+        });
+    let server = start_mock_server().await;
+    let test = builder.build_with_auto_env(&server).await?;
+    let call_id = "managed-shell-forbidden";
+    let args = json!({
+        "cmd": "echo blocked",
+        "yield_time_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-managed-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-managed-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-managed-1", "done"),
+            ev_completed("resp-managed-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "run shell command",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("policy forbids commands starting with `echo`"),
+        "unexpected output: {output}"
     );
 
     Ok(())

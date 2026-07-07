@@ -8,9 +8,9 @@
 use std::error::Error as StdError;
 use std::time::Duration;
 
-use codex_client::build_reqwest_client_with_custom_ca;
-use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_http_client::build_reqwest_client_with_custom_ca;
+use codex_http_client::with_chatgpt_cloudflare_cookie_store;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;

@@ -13430,6 +13430,13 @@
         ],
         "type": "string"
       },
+      "PluginInstallPolicySource": {
+        "enum": [
+          "WORKSPACE_SETTING",
+          "IMPLICIT_CANONICAL_APP"
+        ],
+        "type": "string"
+      },
       "PluginInstallResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14312,6 +14319,16 @@
           },
           "installPolicy": {
             "$ref": "#/definitions/v2/PluginInstallPolicy"
+          },
+          "installPolicySource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginInstallPolicySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "installed": {
             "type": "boolean"
