@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_config::CONFIG_TOML_FILE;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -25,6 +26,60 @@ use wiremock::ResponseTemplate;
 use wiremock::http::Method;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_proxy_policy_uses_http_without_websocket_handshake() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|codex_home| {
+            std::fs::write(
+                codex_home.join(CONFIG_TOML_FILE),
+                "[features]\nrespect_system_proxy = true\n",
+            )
+            .expect("system-proxy feature config should be written");
+        })
+        .with_config({
+            let base_url = format!("{}/v1", server.uri());
+            move |config| {
+                config.model_provider.base_url = Some(base_url);
+                config.model_provider.wire_api = WireApi::Responses;
+                config.model_provider.supports_websockets = true;
+                config.model_provider.request_max_retries = Some(0);
+            }
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    assert!(test.config.respect_system_proxy);
+
+    test.submit_turn("hello").await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let websocket_attempts = requests
+        .iter()
+        .filter(|request| {
+            request.method == Method::GET && request.url.path().ends_with("/responses")
+        })
+        .count();
+    let http_attempts = requests
+        .iter()
+        .filter(|request| {
+            request.method == Method::POST && request.url.path().ends_with("/responses")
+        })
+        .count();
+
+    assert_eq!(websocket_attempts, 0);
+    assert_eq!(http_attempts, 1);
+    assert_eq!(response_mock.requests().len(), 1);
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Result<()> {
