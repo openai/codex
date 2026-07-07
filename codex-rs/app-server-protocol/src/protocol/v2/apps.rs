@@ -24,6 +24,41 @@ pub struct AppsListParams {
     pub force_refetch: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Read the committed installed connector runtime snapshot.
+pub struct AppsInstalledParams {
+    /// Optional loaded thread id used to evaluate effective app configuration.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+    /// When true, refresh workspace policy and, when Apps are permitted, atomically refresh and
+    /// publish the hosted connector runtime snapshot first.
+    pub reload: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Installed connector runtime state.
+pub struct InstalledApp {
+    pub id: String,
+    /// Effective enabled state after applying global, workspace, local, and managed configuration
+    /// at read time.
+    pub enabled: bool,
+    /// Whether the connector is enabled and has a non-synthetic, model-visible tool allowed by
+    /// effective MCP and app/tool policy in the committed runtime snapshot.
+    pub callable: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// The installed connectors in one committed runtime snapshot.
+pub struct AppsInstalledResponse {
+    pub apps: Vec<InstalledApp>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

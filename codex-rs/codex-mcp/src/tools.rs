@@ -113,6 +113,11 @@ impl ToolFilter {
     }
 }
 
+/// Returns whether one raw MCP tool name is allowed by a server's effective tool filter.
+pub fn mcp_server_config_allows_tool(config: &McpServerConfig, tool_name: &str) -> bool {
+    ToolFilter::from_config(config).allows(tool_name)
+}
+
 /// Returns the model-visible view of a tool while preserving the raw metadata used by execution.
 /// Declared file parameters are presented as local file paths; execution later uploads those files
 /// and replaces the paths with the uploaded-file objects expected by the app.

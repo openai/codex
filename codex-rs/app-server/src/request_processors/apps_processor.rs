@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_info::app_info_to_api;
+use codex_core::connectors as core_connectors;
 
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -30,6 +31,154 @@ impl AppsRequestProcessor {
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         }
+    }
+
+    pub(crate) async fn apps_installed(
+        &self,
+        params: AppsInstalledParams,
+    ) -> Result<AppsInstalledResponse, JSONRPCErrorError> {
+        let started_at = Instant::now();
+        let reload = params.reload;
+        let mut retained_previous_snapshot = false;
+        let mut refresh_disposition = if reload {
+            "not_started"
+        } else {
+            "not_requested"
+        };
+        let mut snapshot_age = None;
+        let mut snapshot_tool_count = 0;
+        let result = async {
+            let config = self
+                .load_apps_installed_config(params.thread_id.as_deref())
+                .await?;
+            if !config.features.enabled(Feature::AppsRuntimeStateRefactor) {
+                return Err(method_not_found(
+                    "app/installed is not enabled for this app-server",
+                ));
+            }
+
+            let auth = self.auth_manager.auth().await;
+            let apps_enabled = config
+                .features
+                .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend));
+
+            // A cached read must not turn into a workspace-settings network request. Unknown
+            // workspace policy fails closed while retaining installed identities; an explicit
+            // reload bypasses the policy cache.
+            let workspace_policy = if !apps_enabled {
+                Ok(false)
+            } else if reload {
+                workspace_settings::refresh_codex_plugins_enabled_for_workspace(
+                    &config,
+                    auth.as_ref(),
+                    Some(&self.workspace_settings_cache),
+                )
+                .await
+            } else {
+                Ok(workspace_settings::cached_codex_plugins_enabled_for_workspace(
+                    &config,
+                    auth.as_ref(),
+                    &self.workspace_settings_cache,
+                )
+                .unwrap_or(false))
+            };
+            if let Err(err) = &workspace_policy {
+                warn!(
+                    "failed to refresh workspace Codex plugins setting; disabling Codex plugins for this read: {err:#}"
+                );
+            }
+            let workspace_enabled = workspace_policy.as_ref().copied().unwrap_or(false);
+            let runtime_enabled = apps_enabled && workspace_enabled;
+
+            let mcp_manager = self.thread_manager.mcp_manager();
+            let previous_snapshot = core_connectors::connector_runtime_snapshot(
+                &config,
+                auth.as_ref(),
+                mcp_manager.as_ref(),
+            );
+            let snapshot = if reload && runtime_enabled {
+                match core_connectors::refresh_connector_runtime_snapshot(
+                        &config,
+                        auth.as_ref(),
+                        self.thread_manager.environment_manager(),
+                        mcp_manager.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(snapshot) => {
+                        refresh_disposition = "success";
+                        Some(snapshot)
+                    }
+                    Err(err) => {
+                        refresh_disposition = "error";
+                        retained_previous_snapshot =
+                            core_connectors::peek_connector_runtime_snapshot(
+                                &config,
+                                auth.as_ref(),
+                                mcp_manager.as_ref(),
+                            )
+                            .is_some();
+                        return Err(internal_error(format!(
+                            "failed to refresh installed connector runtime state: {err:#}"
+                        )));
+                    }
+                }
+            } else {
+                if reload {
+                    refresh_disposition = if !apps_enabled {
+                        "skipped_apps_disabled"
+                    } else if workspace_policy.is_err() {
+                        "skipped_workspace_policy_error"
+                    } else {
+                        "skipped_workspace_disabled"
+                    };
+                    retained_previous_snapshot = previous_snapshot.is_some();
+                }
+                previous_snapshot
+            };
+            let Some(snapshot) = snapshot else {
+                return Ok(AppsInstalledResponse { apps: Vec::new() });
+            };
+
+            snapshot_age = Some(snapshot.age());
+            snapshot_tool_count = snapshot.tools().len();
+            let connector_ids = core_connectors::installed_app_ids(snapshot.as_ref());
+            let callable_connector_ids = if runtime_enabled {
+                core_connectors::callable_app_ids(
+                    &config,
+                    auth.as_ref(),
+                    mcp_manager.as_ref(),
+                    snapshot.as_ref(),
+                )
+                .await
+            } else {
+                Default::default()
+            };
+            let apps = connector_ids
+                .into_iter()
+                .map(|id| {
+                    let enabled = runtime_enabled && core_connectors::app_is_enabled(&config, &id);
+                    InstalledApp {
+                        id: id.clone(),
+                        enabled,
+                        callable: runtime_enabled && callable_connector_ids.contains(&id),
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(AppsInstalledResponse { apps })
+        }
+        .await;
+
+        record_apps_installed_metrics(
+            started_at,
+            reload,
+            retained_previous_snapshot,
+            refresh_disposition,
+            snapshot_age,
+            snapshot_tool_count,
+            result.as_ref().ok(),
+        );
+        result
     }
 
     pub(crate) async fn apps_list(
@@ -342,6 +491,21 @@ impl AppsRequestProcessor {
         Ok((thread_id, thread))
     }
 
+    async fn load_apps_installed_config(
+        &self,
+        thread_id: Option<&str>,
+    ) -> Result<Config, JSONRPCErrorError> {
+        let Some(thread_id) = thread_id else {
+            return self.load_latest_config(/*fallback_cwd*/ None).await;
+        };
+        let (_, thread) = self.load_thread(thread_id).await?;
+        let thread_config = thread.config().await;
+        self.config_manager
+            .load_latest_config_for_thread(thread_config.as_ref())
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
+    }
+
     async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
@@ -379,6 +543,77 @@ const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 // `app/list` is the legacy request-path baseline for the future `app/installed` endpoint;
 // `path=legacy` keeps it separate from the new snapshot-backed implementation in dashboards.
 const APPS_INSTALLED_DURATION_METRIC: &str = "codex.apps.installed.duration_ms";
+const APPS_INSTALLED_RESPONSE_BYTES_METRIC: &str = "codex.apps.installed.response_bytes";
+const APPS_INSTALLED_CONNECTOR_COUNT_METRIC: &str = "codex.apps.installed.connector_count";
+const APPS_INSTALLED_TOOL_COUNT_METRIC: &str = "codex.apps.installed.tool_count";
+const APPS_SNAPSHOT_AGE_METRIC: &str = "codex.apps.snapshot.age_ms";
+
+fn record_apps_installed_metrics(
+    started_at: Instant,
+    reload: bool,
+    retained_previous_snapshot: bool,
+    refresh_disposition: &'static str,
+    snapshot_age: Option<Duration>,
+    snapshot_tool_count: usize,
+    response: Option<&AppsInstalledResponse>,
+) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+    let reload = if reload { "true" } else { "false" };
+    let outcome = if response.is_some() {
+        "success"
+    } else {
+        "error"
+    };
+    let retained_previous_snapshot = if retained_previous_snapshot {
+        "true"
+    } else {
+        "false"
+    };
+    let _ = metrics.record_duration(
+        APPS_INSTALLED_DURATION_METRIC,
+        started_at.elapsed(),
+        &[
+            ("path", "new"),
+            ("reload", reload),
+            ("refresh", refresh_disposition),
+            ("outcome", outcome),
+            ("retained_previous_snapshot", retained_previous_snapshot),
+        ],
+    );
+    let Some(response) = response else {
+        return;
+    };
+    if let Ok(bytes) = serde_json::to_vec(response) {
+        let _ = metrics.histogram(
+            APPS_INSTALLED_RESPONSE_BYTES_METRIC,
+            usize_to_i64(bytes.len()),
+            &[("path", "new")],
+        );
+    }
+    let _ = metrics.histogram(
+        APPS_INSTALLED_CONNECTOR_COUNT_METRIC,
+        usize_to_i64(response.apps.len()),
+        &[("path", "new")],
+    );
+    let _ = metrics.histogram(
+        APPS_INSTALLED_TOOL_COUNT_METRIC,
+        usize_to_i64(snapshot_tool_count),
+        &[("path", "new")],
+    );
+    if let Some(snapshot_age) = snapshot_age {
+        let _ = metrics.record_duration(
+            APPS_SNAPSHOT_AGE_METRIC,
+            snapshot_age,
+            &[("path", "new"), ("observation", "installed")],
+        );
+    }
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
 
 fn record_legacy_apps_installed_duration(started_at: Instant, reload: bool) {
     let reload = if reload { "true" } else { "false" };

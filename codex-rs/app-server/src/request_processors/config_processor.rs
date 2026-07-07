@@ -48,6 +48,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
+    "apps_runtime_state_refactor",
     "auth_elicitation",
     "memories",
     "mentions_v2",

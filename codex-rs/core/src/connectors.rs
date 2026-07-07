@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -9,9 +10,11 @@ use async_channel::unbounded;
 pub use codex_connectors::AppBranding;
 pub use codex_connectors::AppInfo;
 pub use codex_connectors::AppMetadata;
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
-use codex_connectors::app_is_enabled;
+use codex_connectors::app_is_enabled as app_is_enabled_from_config;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -25,6 +28,7 @@ use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::McpServerConfig;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -43,6 +47,8 @@ use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::connector_runtime_context_key;
 use codex_mcp::effective_mcp_servers;
+use codex_mcp::mcp_server_config_allows_tool;
+use codex_mcp::tool_is_model_visible;
 use codex_mcp::tool_plugin_provenance;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -359,6 +365,20 @@ pub fn connector_runtime_snapshot(
     )
 }
 
+/// Observes the requested connector runtime only if it remains the active context.
+pub fn peek_connector_runtime_snapshot(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    mcp_manager: &McpManager,
+) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+    mcp_manager
+        .connector_runtime_manager()
+        .peek_current_snapshot(
+            config.codex_home.to_path_buf(),
+            connector_runtime_context_key(auth),
+        )
+}
+
 /// Performs one strict, uncached hosted-connector refresh and returns the exact committed snapshot.
 ///
 /// The temporary connection manager contains only the host-owned Codex Apps server and skips its
@@ -563,17 +583,21 @@ fn collect_accessible_connectors_from_mcp_tools<'a>(
 }
 
 fn accessible_connectors_for_app_list_from_mcp_tools(mcp_tools: &[ToolInfo]) -> Vec<AppInfo> {
-    let non_synthetic_tools = mcp_tools.iter().filter(|tool| {
-        tool.tool
-            .meta
-            .as_deref()
-            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-            .and_then(serde_json::Value::as_object)
-            .and_then(|meta| meta.get("synthetic_link"))
-            .and_then(serde_json::Value::as_bool)
-            != Some(true)
-    });
+    let non_synthetic_tools = mcp_tools
+        .iter()
+        .filter(|tool| !tool_is_synthetic_link(tool));
     collect_accessible_connectors_from_mcp_tools(non_synthetic_tools)
+}
+
+fn tool_is_synthetic_link(tool: &ToolInfo) -> bool {
+    tool.tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|meta| meta.get("synthetic_link"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
@@ -588,7 +612,8 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
             && (apps_config.default.is_some()
                 || apps_config.apps.contains_key(connector.id.as_str()))
         {
-            connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
+            connector.is_enabled =
+                app_is_enabled_from_config(apps_config, Some(connector.id.as_str()));
         }
 
         if requirements_apps_config
@@ -600,6 +625,94 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
     }
 
     connectors
+}
+
+/// Returns the effective local and managed enablement for one connector.
+///
+/// Runtime snapshots intentionally do not persist configuration-derived state. Callers should
+/// evaluate this helper against the config associated with each read instead.
+pub fn app_is_enabled(config: &Config, connector_id: &str) -> bool {
+    let user_enabled = apps_config_from_layer_stack(&config.config_layer_stack)
+        .as_ref()
+        .map(|apps_config| app_is_enabled_from_config(apps_config, Some(connector_id)))
+        .unwrap_or(true);
+    let disabled_by_requirements = config
+        .config_layer_stack
+        .requirements_toml()
+        .apps
+        .as_ref()
+        .and_then(|apps| apps.apps.get(connector_id))
+        .is_some_and(|app| app.enabled == Some(false));
+
+    user_enabled && !disabled_by_requirements
+}
+
+/// Returns the installed connector IDs represented by non-synthetic runtime tools.
+pub fn installed_app_ids(snapshot: &ConnectorRuntimeSnapshot) -> BTreeSet<String> {
+    snapshot
+        .tools()
+        .iter()
+        .filter(|tool| !tool_is_synthetic_link(tool))
+        .filter_map(|tool| tool.connector_id.as_deref())
+        .map(str::trim)
+        .filter(|connector_id| !connector_id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Returns installed connector IDs that currently have a model-callable runtime tool.
+///
+/// The persisted snapshot stays configuration-neutral. This read-time projection resolves the
+/// effective host MCP server and applies its tool filter together with app/tool policy and model
+/// visibility.
+pub async fn callable_app_ids(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    mcp_manager: &McpManager,
+    snapshot: &ConnectorRuntimeSnapshot,
+) -> BTreeSet<String> {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    let effective_servers = effective_mcp_servers(&mcp_config, auth);
+    let Some(server_config) = effective_servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .and_then(|server| server.configured_config())
+    else {
+        return BTreeSet::new();
+    };
+    callable_app_ids_for_tools(config, server_config, snapshot.tools())
+}
+
+fn callable_app_ids_for_tools(
+    config: &Config,
+    server_config: &McpServerConfig,
+    tools: &[ToolInfo],
+) -> BTreeSet<String> {
+    let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
+    tools
+        .iter()
+        .filter(|tool| !tool_is_synthetic_link(tool))
+        .filter(|tool| tool_is_model_visible(tool))
+        .filter(|tool| mcp_server_config_allows_tool(server_config, &tool.tool.name))
+        .filter_map(|tool| {
+            let connector_id = tool.connector_id.as_deref()?.trim();
+            if connector_id.is_empty() || !app_is_enabled(config, connector_id) {
+                return None;
+            }
+            let annotations = tool.tool.annotations.as_ref();
+            app_tool_policy
+                .policy(AppToolPolicyInput {
+                    connector_id: Some(connector_id),
+                    tool_name: &tool.tool.name,
+                    tool_title: tool.tool.title.as_deref(),
+                    destructive_hint: annotations
+                        .and_then(|annotations| annotations.destructive_hint),
+                    open_world_hint: annotations
+                        .and_then(|annotations| annotations.open_world_hint),
+                })
+                .enabled
+                .then(|| connector_id.to_string())
+        })
+        .collect()
 }
 
 pub fn with_app_plugin_sources(

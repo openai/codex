@@ -80,10 +80,70 @@ impl WorkspaceSettingsCache {
     }
 }
 
+/// Returns the cached workspace Apps policy without performing network I/O.
+///
+/// Accounts that do not require workspace policy lookup are always enabled. A workspace cache
+/// miss returns `None`, allowing callers to choose an explicit fail-open or fail-closed policy.
+pub fn cached_codex_plugins_enabled_for_workspace(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    cache: &WorkspaceSettingsCache,
+) -> Option<bool> {
+    let Some(auth) = auth else {
+        return Some(true);
+    };
+    if !auth.is_chatgpt_auth() || !auth.is_workspace_account() {
+        return Some(true);
+    }
+    let Some(account_id) = auth.get_account_id().filter(|id| !id.is_empty()) else {
+        return Some(true);
+    };
+    cache.get_codex_plugins_enabled(&WorkspaceSettingsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id,
+    })
+}
+
 pub async fn codex_plugins_enabled_for_workspace(
     config: &Config,
     auth: Option<&CodexAuth>,
     cache: Option<&WorkspaceSettingsCache>,
+) -> anyhow::Result<bool> {
+    codex_plugins_enabled_for_workspace_inner(
+        config,
+        auth,
+        cache,
+        WorkspaceSettingsReadMode::UseCache,
+    )
+    .await
+}
+
+/// Refreshes workspace Apps policy without accepting an existing cached value.
+pub async fn refresh_codex_plugins_enabled_for_workspace(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    cache: Option<&WorkspaceSettingsCache>,
+) -> anyhow::Result<bool> {
+    codex_plugins_enabled_for_workspace_inner(
+        config,
+        auth,
+        cache,
+        WorkspaceSettingsReadMode::Refresh,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceSettingsReadMode {
+    UseCache,
+    Refresh,
+}
+
+async fn codex_plugins_enabled_for_workspace_inner(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    cache: Option<&WorkspaceSettingsCache>,
+    read_mode: WorkspaceSettingsReadMode,
 ) -> anyhow::Result<bool> {
     let Some(auth) = auth else {
         return Ok(true);
@@ -104,7 +164,8 @@ pub async fn codex_plugins_enabled_for_workspace(
         chatgpt_base_url: config.chatgpt_base_url.clone(),
         account_id: account_id.clone(),
     };
-    if let Some(cache) = cache
+    if read_mode == WorkspaceSettingsReadMode::UseCache
+        && let Some(cache) = cache
         && let Some(enabled) = cache.get_codex_plugins_enabled(&cache_key)
     {
         return Ok(enabled);
