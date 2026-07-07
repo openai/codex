@@ -830,7 +830,11 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
         .is_some_and(|(previous, current)| previous != current)
 }
 
-async fn previous_model_fallback_step_context(
+/// Captures the current model's request-scoped state for retrying previous-model compaction.
+///
+/// Returns `None` when the active authentication does not use the Codex backend, the provider is
+/// not OpenAI, or the previous and current model are the same.
+async fn capture_current_model_fallback_step_context(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     previous_model: &str,
@@ -875,8 +879,12 @@ async fn maybe_run_previous_model_inline_compact(
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context))
             .await;
-        let fallback_step_context =
-            previous_model_fallback_step_context(sess, turn_context, previous_model.as_str()).await;
+        let fallback_step_context = capture_current_model_fallback_step_context(
+            sess,
+            turn_context,
+            previous_model.as_str(),
+        )
+        .await;
         run_auto_compact(
             sess,
             step_context,
@@ -918,8 +926,12 @@ async fn maybe_run_previous_model_inline_compact(
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context))
             .await;
-        let fallback_step_context =
-            previous_model_fallback_step_context(sess, turn_context, previous_model.as_str()).await;
+        let fallback_step_context = capture_current_model_fallback_step_context(
+            sess,
+            turn_context,
+            previous_model.as_str(),
+        )
+        .await;
         run_auto_compact(
             sess,
             step_context,
