@@ -22,6 +22,35 @@ const STORE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
 // Tests listen for this event so they prove a contender reached the real WouldBlock branch.
 const LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OAuthStore {
+    File,
+    Secrets,
+}
+
+impl OAuthStore {
+    fn lock_filename(self) -> &'static str {
+        match self {
+            Self::File => "file-store.lock",
+            Self::Secrets => "secrets-store.lock",
+        }
+    }
+}
+
+impl std::fmt::Display for OAuthStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File => f.write_str("fallback file"),
+            Self::Secrets => f.write_str("encrypted secrets"),
+        }
+    }
+}
+
+/// Serializes one complete operation on an aggregate OAuth credential store.
+pub(super) struct OAuthStoreLock {
+    _file: File,
+}
+
 /// Marks aggregate-store coordination failures in an [`anyhow::Error`] chain.
 ///
 /// Auto may fall back when the configured keyring backend is unavailable, but it must surface a
@@ -65,35 +94,6 @@ pub(super) enum OAuthStoreLockFailure {
         #[source]
         source: io::Error,
     },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) enum OAuthStore {
-    File,
-    Secrets,
-}
-
-impl OAuthStore {
-    fn lock_filename(self) -> &'static str {
-        match self {
-            Self::File => "file-store.lock",
-            Self::Secrets => "secrets-store.lock",
-        }
-    }
-}
-
-impl std::fmt::Display for OAuthStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::File => f.write_str("fallback file"),
-            Self::Secrets => f.write_str("encrypted secrets"),
-        }
-    }
-}
-
-/// Serializes one complete operation on an aggregate OAuth credential store.
-pub(super) struct OAuthStoreLock {
-    _file: File,
 }
 
 impl OAuthStoreLock {
