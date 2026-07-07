@@ -289,6 +289,92 @@ fn git_config_path(path: &Path) -> String {
     format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[test]
+fn isolated_storage_uses_linked_worktree_shared_index_over_common_decoy() {
+    let fixture = tempdir_for_native_git();
+    let main = fixture.path().join("main");
+    let linked = fixture.path().join("linked");
+    std::fs::create_dir_all(&main).expect("create main worktree");
+    run_git(&main, &["init", "-q"]);
+    run_git(&main, &["config", "user.email", "codex@example.com"]);
+    run_git(&main, &["config", "user.name", "Codex"]);
+    std::fs::write(main.join("tracked.txt"), "tracked\n").expect("write tracked file");
+    run_git(&main, &["add", "tracked.txt"]);
+    run_git(&main, &["commit", "-m", "base"]);
+    run_git(
+        &main,
+        &["worktree", "add", "-b", "linked", path_text(&linked)],
+    );
+    run_git(&linked, &["update-index", "--split-index"]);
+
+    let git_dir = PathBuf::from(run_git_stdout(
+        &linked,
+        &["rev-parse", "--absolute-git-dir"],
+    ));
+    let common_dir = PathBuf::from(run_git_stdout(&linked, &["rev-parse", "--git-common-dir"]));
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        linked.join(common_dir)
+    };
+    let common_dir = std::fs::canonicalize(common_dir).expect("canonical common directory");
+    assert_ne!(
+        git_dir, common_dir,
+        "fixture must use distinct Git directories"
+    );
+
+    let shared_name = std::fs::read_dir(&git_dir)
+        .expect("read per-worktree Git directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .find(|name| {
+            let Some(name) = name.to_str() else {
+                return false;
+            };
+            let Some(suffix) = name.strip_prefix("sharedindex.") else {
+                return false;
+            };
+            matches!(suffix.len(), 40 | 64)
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+        .expect("linked worktree split-index base");
+    let active_shared = git_dir.join(&shared_name);
+    let active_bytes = std::fs::read(&active_shared).expect("read active shared index");
+    let common_decoy = common_dir.join(&shared_name);
+    std::fs::write(&common_decoy, b"stale common shared-index decoy")
+        .expect("write stale common decoy");
+
+    let runner = GitRunner::for_cwd(&linked).expect("runner");
+    let storage = runner
+        .create_isolated_git_storage()
+        .expect("copy authoritative split index");
+    assert_eq!(
+        std::fs::read(storage.root.path().join(&shared_name)).expect("read scratch shared index"),
+        active_bytes,
+        "distinct common-directory decoy must not replace the active per-worktree base"
+    );
+
+    let isolated = runner
+        .create_isolated_common_dir()
+        .expect("isolated common directory");
+    let mut command = runner.command_for_cwd(&linked).expect("ls-files command");
+    command.args(["ls-files", "--stage", "--", "tracked.txt"]);
+    let output = runner
+        .output_in_isolated_scratch(command, &isolated, &storage)
+        .expect("read copied split index");
+    assert!(
+        output.status.success(),
+        "copied split index must resolve its active base: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\ttracked.txt"),
+        "copied index did not retain tracked entry"
+    );
+}
+
 struct OverlappingRegisteredRoute {
     main: PathBuf,
     nested: PathBuf,
@@ -1387,6 +1473,238 @@ fn command_for_cwd_executes_from_a_canonical_windows_path() {
             .expect("canonical Git root"),
         canonical_root
     );
+}
+
+#[test]
+fn windows_verbatim_git_path_conversion_is_narrow_and_non_lossy() {
+    fn units(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
+    }
+
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\C:\Users\alice\repo")),
+        WindowsGitPathUnits::Converted(units(r"C:\Users\alice\repo"))
+    );
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\UNC\server\share\repo")),
+        WindowsGitPathUnits::Converted(units(r"\\server\share\repo"))
+    );
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\unc\server\share")),
+        WindowsGitPathUnits::Converted(units(r"\\server\share"))
+    );
+
+    for unchanged in [r"C:\Users\alice\repo", r"\\server\share\repo"] {
+        assert_eq!(
+            classify_windows_git_path_units(&units(unchanged)),
+            WindowsGitPathUnits::Unchanged,
+            "unexpected conversion for {unchanged:?}"
+        );
+    }
+
+    for rejected in [
+        r"\\.\C:\device-path",
+        r"\??\C:\nt-path",
+        r"//?/C:/forward-verbatim",
+        r"//./C:/forward-device",
+        r"\\?\C:relative",
+        r"\\?\C:/forward-tail",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1",
+        r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\repo",
+        r"\\?\UNC\\share",
+        r"\\?\UNC\server\",
+    ] {
+        assert_eq!(
+            classify_windows_git_path_units(&units(rejected)),
+            WindowsGitPathUnits::Rejected,
+            "unexpected acceptance for {rejected:?}"
+        );
+    }
+
+    let mut unpaired_surrogate = units(r"\\?\C:\repo\");
+    unpaired_surrogate.push(0xD800);
+    let mut expected = units(r"C:\repo\");
+    expected.push(0xD800);
+    assert_eq!(
+        classify_windows_git_path_units(&unpaired_surrogate),
+        WindowsGitPathUnits::Converted(expected)
+    );
+
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\C:\repo\😀")),
+        WindowsGitPathUnits::Converted(units(r"C:\repo\😀"))
+    );
+    let mut unpaired_low_surrogate = units(r"\\?\C:\repo\");
+    unpaired_low_surrogate.push(0xDC00);
+    let mut expected = units(r"C:\repo\");
+    expected.push(0xDC00);
+    assert_eq!(
+        classify_windows_git_path_units(&unpaired_low_surrogate),
+        WindowsGitPathUnits::Converted(expected)
+    );
+
+    let mut nul = units(r"\\?\C:\repo\");
+    nul.push(0);
+    assert_eq!(
+        classify_windows_git_path_units(&nul),
+        WindowsGitPathUnits::Rejected
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn git_child_directory_simplifies_canonical_path_without_changing_identity() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let directory = tempfile::tempdir().expect("fixture");
+    let canonical = std::fs::canonicalize(directory.path()).expect("canonical fixture");
+    let child = git_child_directory(&canonical, "test directory").expect("child spelling");
+    assert_eq!(
+        same_file::Handle::from_path(&canonical).expect("canonical identity"),
+        same_file::Handle::from_path(child.as_path()).expect("child identity")
+    );
+    child.revalidate().expect("revalidate child spelling");
+    let child_units = child
+        .as_path()
+        .as_os_str()
+        .encode_wide()
+        .collect::<Vec<_>>();
+    assert!(!child_units.starts_with(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16,]));
+}
+
+#[cfg(windows)]
+#[test]
+fn git_child_directory_pins_git_paths_against_rename_and_replacement() {
+    const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
+
+    let fixture = tempfile::tempdir().expect("fixture");
+    let git_dir_path = fixture.path().join("git-dir");
+    let common_dir_path = fixture.path().join("common-dir");
+    std::fs::create_dir_all(&git_dir_path).expect("create Git directory");
+    std::fs::create_dir_all(&common_dir_path).expect("create common directory");
+
+    let canonical_git_dir = std::fs::canonicalize(&git_dir_path).expect("canonical Git directory");
+    let canonical_common_dir =
+        std::fs::canonicalize(&common_dir_path).expect("canonical common directory");
+    let git_dir =
+        git_child_directory(&canonical_git_dir, "active Git directory").expect("pin Git directory");
+    let common_dir = git_child_directory(&canonical_common_dir, "active Git common directory")
+        .expect("pin common directory");
+    assert_ne!(
+        git_dir.as_path(),
+        canonical_git_dir,
+        "test must exercise the simplified Git-compatible spelling"
+    );
+
+    let moved_git_dir = fixture.path().join("git-dir-moved");
+    let error = std::fs::rename(&canonical_git_dir, &moved_git_dir)
+        .expect_err("canonical Git directory pin must block rename");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    let error = std::fs::remove_dir(&canonical_common_dir)
+        .expect_err("common directory pin must block replacement");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    let moved_child_spelling = fixture.path().join("git-dir-child-spelling-moved");
+    let error = std::fs::rename(git_dir.as_path(), &moved_child_spelling)
+        .expect_err("simplified Git-compatible spelling pin must block rename");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    drop(git_dir);
+    std::fs::rename(&canonical_git_dir, &moved_git_dir)
+        .expect("released Git directory pins must allow rename");
+    drop(common_dir);
+    std::fs::remove_dir(&canonical_common_dir)
+        .expect("released common directory pins must allow removal");
+    std::fs::create_dir(&common_dir_path).expect("replace released common directory");
+}
+
+#[cfg(windows)]
+#[test]
+fn isolated_child_final_validation_rejects_retargeted_spelling_before_spawn() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let repo = fixture.path().join("repo");
+    let original = fixture.path().join("original");
+    let attacker = fixture.path().join("attacker");
+    let child_spelling = fixture.path().join("child-spelling");
+    for directory in [&repo, &original, &attacker] {
+        std::fs::create_dir_all(directory).expect("create directory");
+    }
+    run_git(&repo, &["init", "-q"]);
+    create_junction(&child_spelling, &original);
+
+    let canonical = std::fs::canonicalize(&original).expect("canonical original");
+    let child = GitChildDirectory::new(
+        canonical,
+        child_spelling.clone(),
+        "test Git child directory",
+    )
+    .expect("initial child identity");
+    // Keep identity snapshots that permit deletion, then release the guarded
+    // handles so this test can still exercise the defense-in-depth final
+    // revalidation after a child spelling has actually been retargeted.
+    let canonical_identity =
+        same_file::Handle::from_path(&child.canonical_path).expect("canonical identity snapshot");
+    let child_identity =
+        same_file::Handle::from_path(&child.child_path).expect("child identity snapshot");
+    let GitChildDirectory {
+        child_path,
+        canonical_path,
+        canonical_identity: pinned_canonical_identity,
+        child_identity: pinned_child_identity,
+        description,
+    } = child;
+    drop(pinned_canonical_identity);
+    drop(pinned_child_identity);
+    let child = GitChildDirectory {
+        child_path,
+        canonical_path,
+        canonical_identity,
+        child_identity,
+        description,
+    };
+    let runner = GitRunner::for_cwd(&repo).expect("runner");
+    let isolated = runner
+        .create_isolated_common_dir()
+        .expect("isolated common dir");
+    let marker = fixture.path().join("child-ran.gitconfig");
+    let mut command = runner.command_for_cwd(&repo).expect("marker command");
+    command
+        .args(["config", "--file"])
+        .arg(&marker)
+        .args(["codex.child-ran", "true"]);
+
+    std::fs::remove_dir(&child_spelling).expect("remove original junction");
+    create_junction(&child_spelling, &attacker);
+
+    let error = runner
+        .output_after_isolated_child_validation(
+            &mut command.inner,
+            &isolated,
+            None,
+            [&child, &child, &child, &child],
+        )
+        .expect_err("retargeted child spelling must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("no longer identifies the original"),
+        "{error}"
+    );
+    assert!(!marker.exists(), "child command ran despite stale identity");
 }
 
 #[test]

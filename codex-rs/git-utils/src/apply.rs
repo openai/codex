@@ -13,8 +13,13 @@ use std::path::PathBuf;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::guarded_config::GuardedGitConfig;
-use crate::patch_paths::extract_effective_paths_from_patch_guarded;
-use crate::patch_paths::stage_effective_paths_from_apply;
+use crate::patch_paths::extract_patch_path_inventory_guarded;
+use crate::reverse_staging::ReverseApplyMode;
+use crate::reverse_staging::execute_reverse_staging_plan;
+use crate::reverse_staging::execute_reverse_staging_plan_in_scratch;
+use crate::reverse_staging::prepare_reverse_staging_plan;
+use crate::reverse_staging::seal_reverse_staging_plan;
+use crate::reverse_staging::validate_effective_paths_for_reverse;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
 
@@ -39,6 +44,47 @@ pub struct ApplyGitResult {
     pub cmd_for_log: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApplyStrategy {
+    Direct,
+    ThreeWay,
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_REVERSE_STAGING_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn install_after_reverse_staging_hook(hook: impl FnOnce() + 'static) {
+    AFTER_REVERSE_STAGING_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "reverse staging test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_after_reverse_staging_hook() {
+    AFTER_REVERSE_STAGING_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+impl ApplyStrategy {
+    fn reverse_mode(self) -> ReverseApplyMode {
+        match self {
+            Self::Direct => ReverseApplyMode::Direct,
+            Self::ThreeWay => ReverseApplyMode::ThreeWay,
+        }
+    }
+}
+
 /// Apply a unified diff to the target repository by shelling out to `git apply`.
 ///
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
@@ -54,36 +100,50 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         .and_then(std::fs::canonicalize)?;
     let mut config = GuardedGitConfig::authorize(&git, &expected_root, cfg_parts)?;
     resolve_git_root(&config, &requested_cwd)?;
+    config.freeze_apply_policy()?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, req.revert)?;
-    config.authorize_filter_paths(&patch_paths)?;
+    let patch_path_inventory =
+        extract_patch_path_inventory_guarded(&config, &patch_path, req.revert)?;
+    let patch_paths = &patch_path_inventory.effective_paths;
+    config.authorize_filter_paths(patch_paths)?;
+    let patch_arg = patch_path.to_string_lossy().to_string();
 
-    if req.revert && !req.preflight {
-        // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths_from_apply(&mut config, &patch_paths)?;
+    // Applicability checks conflate content conflicts with fatal whitespace
+    // policy. Parse the requested orientation independently first: numstat
+    // enforces the frozen whitespace policy without consulting or changing
+    // the index/worktree. This ordering makes a mixed conflict + policy error
+    // fail before merge-policy reads or reverse staging.
+    let (policy_rendered, policy_output) = config.run_apply_policy_gate(req.revert, &patch_arg)?;
+    let policy_code = policy_output.status.code().unwrap_or(-1);
+    let policy_stdout = String::from_utf8_lossy(&policy_output.stdout).into_owned();
+    let policy_stderr = String::from_utf8_lossy(&policy_output.stderr).into_owned();
+    if policy_code != 0 {
+        return Ok(structured_apply_result(
+            policy_code,
+            policy_stdout,
+            policy_stderr,
+            policy_rendered,
+        ));
     }
-
-    // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
-    if req.revert {
-        args.push("-R".into());
-    }
-
-    args.push(patch_path.to_string_lossy().to_string());
 
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
-        let mut check_args = vec!["apply".to_string(), "--check".to_string()];
+        let (rendered, output) = config.run_apply_preflight_check(req.revert, &patch_arg)?;
+        let c_code = output.status.code().unwrap_or(-1);
+        let c_out = String::from_utf8_lossy(&output.stdout).into_owned();
+        let c_err = String::from_utf8_lossy(&output.stderr).into_owned();
         if req.revert {
-            check_args.push("-R".to_string());
+            let mode = if c_code == 0 {
+                ReverseApplyMode::Direct
+            } else {
+                ReverseApplyMode::ThreeWay
+            };
+            validate_effective_paths_for_reverse(&config, patch_paths, mode)?;
         }
-        check_args.push(patch_path.to_string_lossy().to_string());
-        let rendered = config.render_command_for_log(&check_args)?;
-        let (c_code, c_out, c_err) = run_guarded_apply(&config, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -103,11 +163,81 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         });
     }
 
-    let cmd_for_log = config.render_command_for_log(&args)?;
-    let (code, stdout, stderr) = run_guarded_apply(&config, &args)?;
+    // Avoid three-way machinery entirely when the patch applies cleanly. A
+    // reverse check must inspect the working tree before staging: requiring
+    // the old index to match would misclassify a clean undo as a three-way
+    // fallback. Forward direct application still requires index agreement.
+    let plain_check = config.run_apply_strategy_check(req.revert, &patch_arg)?;
+    let plain_check_code = plain_check.status.code().unwrap_or(-1);
 
-    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
-        parse_git_apply_output(&stdout, &stderr);
+    let strategy = if plain_check_code != 0 {
+        ApplyStrategy::ThreeWay
+    } else {
+        ApplyStrategy::Direct
+    };
+    let reverse_plan = req
+        .revert
+        .then(|| prepare_reverse_staging_plan(&config, patch_paths, strategy.reverse_mode()))
+        .transpose()?;
+
+    if strategy == ApplyStrategy::ThreeWay {
+        config.install_three_way_merge_policy(&patch_path_inventory.primary_records)?;
+    }
+    let mut reverse_plan = reverse_plan
+        .map(|plan| seal_reverse_staging_plan(&mut config, plan))
+        .transpose()?;
+
+    if strategy == ApplyStrategy::ThreeWay && config.three_way_requires_merge_policy_proof()? {
+        let scratch = config.create_three_way_scratch_storage()?;
+        if let Some(plan) = &mut reverse_plan {
+            execute_reverse_staging_plan_in_scratch(&config, plan, &scratch)?;
+        }
+        config.prove_three_way_merge_policy_safety(&scratch, req.revert, &patch_arg)?;
+    }
+
+    if let Some(plan) = reverse_plan {
+        // The same sealed plan was modeled in scratch before any merge-policy
+        // refusal could mutate the real index.
+        execute_reverse_staging_plan(&config, plan)?;
+        #[cfg(test)]
+        run_after_reverse_staging_hook();
+    }
+
+    let (cmd_for_log, output) = match strategy {
+        ApplyStrategy::Direct => {
+            // The fixed helper requires proof that the successful frozen-
+            // policy gate covered this exact patch and orientation.
+            let rendered = config.render_direct_apply_for_log(req.revert, &patch_arg)?;
+            let output = config.run_direct_apply(req.revert, &patch_arg)?;
+            (
+                rendered,
+                (
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                    String::from_utf8_lossy(&output.stderr).into_owned(),
+                ),
+            )
+        }
+        ApplyStrategy::ThreeWay => {
+            let rendered = config.render_three_way_apply_for_log(req.revert, &patch_arg)?;
+            let output = config.run_three_way_apply(req.revert, &patch_arg)?;
+            (
+                rendered,
+                (
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                    String::from_utf8_lossy(&output.stderr).into_owned(),
+                ),
+            )
+        }
+    };
+    let (code, stdout, stderr) = output;
+
+    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) = if code == 0 {
+        (patch_path_inventory.primary_paths, Vec::new(), Vec::new())
+    } else {
+        parse_git_apply_output(&stdout, &stderr)
+    };
     applied_paths.sort();
     applied_paths.dedup();
     skipped_paths.sort();
@@ -124,6 +254,31 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         stderr,
         cmd_for_log,
     })
+}
+
+fn structured_apply_result(
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    cmd_for_log: String,
+) -> ApplyGitResult {
+    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
+        parse_git_apply_output(&stdout, &stderr);
+    applied_paths.sort();
+    applied_paths.dedup();
+    skipped_paths.sort();
+    skipped_paths.dedup();
+    conflicted_paths.sort();
+    conflicted_paths.dedup();
+    ApplyGitResult {
+        exit_code,
+        applied_paths,
+        skipped_paths,
+        conflicted_paths,
+        stdout,
+        stderr,
+        cmd_for_log,
+    }
 }
 
 fn resolve_git_root(config: &GuardedGitConfig<'_>, requested_cwd: &Path) -> io::Result<PathBuf> {
@@ -155,7 +310,7 @@ fn resolve_git_root(config: &GuardedGitConfig<'_>, requested_cwd: &Path) -> io::
     Ok(root)
 }
 
-fn configured_git_config_parts() -> Vec<String> {
+pub(crate) fn configured_git_config_parts() -> Vec<String> {
     let mut cfg_parts = Vec::new();
     if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
         for pair in cfg.split(',') {
@@ -177,32 +332,6 @@ pub(crate) fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, Pat
     Ok((dir, path))
 }
 
-fn run_guarded_apply(
-    config: &GuardedGitConfig<'_>,
-    args: &[String],
-) -> io::Result<(i32, String, String)> {
-    let Some((subcommand, args)) = args.split_first() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "missing guarded Git subcommand",
-        ));
-    };
-    if subcommand != "apply" {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unexpected guarded Git subcommand",
-        ));
-    }
-    let mut command = config.apply_command()?;
-    command.args(args);
-    let output = command.output()?;
-    Ok((
-        output.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    ))
-}
-
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
@@ -212,10 +341,18 @@ mod transport_tests;
 mod filter_tests;
 
 #[cfg(test)]
+#[path = "reverse_apply_tests.rs"]
+mod reverse_apply_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::guarded_config::config_source_authorization_count;
+    use crate::guarded_config::merge_attribute_read_count;
+    use crate::guarded_config::merge_config_read_count;
+    use crate::guarded_config::merge_overlay_count;
     use crate::guarded_config::reset_config_source_authorization_count;
+    use crate::guarded_config::reset_merge_policy_counts;
     use crate::safe_git::filter_policy_overlay_count;
     use crate::safe_git::filter_policy_read_count;
     use crate::safe_git::reset_filter_policy_counts;
@@ -316,8 +453,32 @@ mod tests {
         let r = apply_git_patch(&req).expect("run apply");
         assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(r.exit_code, 0, "exit code 0");
+        assert_eq!(r.applied_paths, vec!["hello.txt"]);
         // File exists now
         assert!(root.join("hello.txt").exists());
+    }
+
+    #[test]
+    fn preflight_uses_one_authorization_and_skips_merge_policy() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/preflight.txt b/preflight.txt\nnew file mode 100644\n--- /dev/null\n+++ b/preflight.txt\n@@ -0,0 +1 @@\n+preflight\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+
+        reset_config_source_authorization_count();
+        reset_merge_policy_counts();
+        let result = apply_git_patch(&request).expect("preflight");
+
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert_eq!(config_source_authorization_count(), 1);
+        assert_eq!(merge_config_read_count(), 0);
+        assert_eq!(merge_attribute_read_count(), 0);
+        assert!(!root.join("preflight.txt").exists());
     }
 
     #[test]
@@ -428,6 +589,306 @@ mod tests {
             "apply result: {result:?}"
         );
         assert!(!root.join("trailing.txt").exists());
+    }
+
+    #[test]
+    fn fatal_whitespace_policy_precedes_selected_merge_driver_without_mutation() {
+        let _g = env_lock().lock().unwrap();
+        for policy in ["error", "error-all"] {
+            let repo = init_repo();
+            let root = repo.path();
+            std::fs::write(root.join(".gitattributes"), "file.txt merge=selected\n")
+                .expect("write attributes");
+            std::fs::write(root.join("file.txt"), "old\n").expect("write file");
+            assert_eq!(run(root, &["git", "add", "."]).0, 0);
+            assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+            assert_eq!(
+                run(
+                    root,
+                    &[
+                        "git",
+                        "config",
+                        "merge.selected.driver",
+                        "git config --file .git/config codex.mergeran true && false",
+                    ],
+                )
+                .0,
+                0
+            );
+            assert_eq!(
+                run(root, &["git", "config", "apply.whitespace", policy]).0,
+                0
+            );
+            let index_before = std::fs::read(root.join(".git/index")).expect("read index");
+
+            reset_merge_policy_counts();
+            let result = apply_git_patch(&ApplyGitRequest {
+                cwd: root.to_path_buf(),
+                diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new \n".to_string(),
+                revert: false,
+                preflight: false,
+            })
+            .expect("return structured whitespace failure");
+
+            assert_ne!(result.exit_code, 0, "{policy}: {result:?}");
+            assert!(
+                result.stderr.contains("trailing whitespace"),
+                "{policy}: {result:?}"
+            );
+            assert!(result.cmd_for_log.contains("--numstat"), "{result:?}");
+            assert_eq!(merge_config_read_count(), 0, "{policy}");
+            assert_eq!(merge_attribute_read_count(), 0, "{policy}");
+            assert_eq!(merge_overlay_count(), 0, "{policy}");
+            assert_eq!(read_file_normalized(&root.join("file.txt")), "old\n");
+            assert_eq!(
+                std::fs::read(root.join(".git/index")).expect("reread index"),
+                index_before,
+                "{policy}"
+            );
+            assert_ne!(
+                run(root, &["git", "config", "--get", "codex.mergeran"]).0,
+                0,
+                "{policy}: merge driver must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn nonfatal_whitespace_policies_reach_the_final_apply() {
+        let _g = env_lock().lock().unwrap();
+        for (policy, expected) in [("warn", "new \n"), ("fix", "new\n")] {
+            let repo = init_repo();
+            let root = repo.path();
+            std::fs::write(root.join("file.txt"), "old\n").expect("write file");
+            assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+            assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+            assert_eq!(
+                run(root, &["git", "config", "apply.whitespace", policy]).0,
+                0
+            );
+
+            let result = apply_git_patch(&ApplyGitRequest {
+                cwd: root.to_path_buf(),
+                diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new \n".to_string(),
+                revert: false,
+                preflight: false,
+            })
+            .expect("apply with nonfatal whitespace policy");
+
+            assert_eq!(result.exit_code, 0, "{policy}: {result:?}");
+            assert_eq!(read_file_normalized(&root.join("file.txt")), expected);
+        }
+    }
+
+    #[test]
+    fn fatal_whitespace_gate_remains_authoritative_after_reverse_staging() {
+        let _g = env_lock().lock().unwrap();
+        for policy in ["error", "error-all"] {
+            let repo = init_repo();
+            let root = repo.path();
+            std::fs::write(root.join(".gitattributes"), "file.txt -whitespace\n")
+                .expect("write permissive attributes");
+            std::fs::write(root.join("file.txt"), "bad \n").expect("write base file");
+            assert_eq!(
+                run(root, &["git", "add", ".gitattributes", "file.txt"]).0,
+                0
+            );
+            assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+            std::fs::write(root.join("file.txt"), "good\n").expect("write patched file");
+            let patch = run(root, &["git", "diff", "--full-index", "--", "file.txt"]);
+            assert_eq!(patch.0, 0, "create patch: {}", patch.2);
+            assert_eq!(
+                run(root, &["git", "config", "apply.whitespace", policy]).0,
+                0
+            );
+
+            let attributes = root.join(".gitattributes");
+            install_after_reverse_staging_hook(move || {
+                std::fs::write(attributes, "file.txt whitespace\n")
+                    .expect("tighten whitespace attributes after staging");
+            });
+            let result = apply_git_patch(&ApplyGitRequest {
+                cwd: root.to_path_buf(),
+                diff: patch.1,
+                revert: true,
+                preflight: false,
+            })
+            .expect("reverse apply after attribute mutation");
+
+            assert_eq!(result.exit_code, 0, "{policy}: {result:?}");
+            assert!(
+                result.cmd_for_log.contains("--whitespace=nowarn"),
+                "{policy}: {}",
+                result.cmd_for_log
+            );
+            assert_eq!(
+                read_file_normalized(&root.join(".gitattributes")),
+                "file.txt whitespace\n",
+                "{policy}: race hook did not tighten the attribute"
+            );
+            assert_eq!(read_file_normalized(&root.join("file.txt")), "bad \n");
+            let cached = run(
+                root,
+                &["git", "diff", "--cached", "--quiet", "--", "file.txt"],
+            );
+            assert_eq!(cached.0, 0, "{policy}: index retained staged data");
+        }
+    }
+
+    #[test]
+    fn fatal_whitespace_gate_and_projection_cover_reverse_three_way_staging() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join(".gitattributes"), "file.txt -whitespace\n")
+            .expect("write permissive attributes");
+        let base_contents = "01\n02\n03\n04\n05\n06\n07\n08\n09\nbad \n11\n12\n13\n14\n15\n";
+        let patched_contents = "01\n02\n03\n04\n05\n06\n07\n08\n09\ngood\n11\n12\n13\n14\n15\n";
+        let independent_contents =
+            "01\n02\n03\n04\n05\n06\nSEVEN\n08\n09\ngood\n11\n12\n13\n14\n15\n";
+        let expected_contents = "01\n02\n03\n04\n05\n06\nSEVEN\n08\n09\nbad \n11\n12\n13\n14\n15\n";
+        std::fs::write(root.join("file.txt"), base_contents).expect("write base");
+        assert_eq!(
+            run(root, &["git", "add", ".gitattributes", "file.txt"]).0,
+            0
+        );
+        assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+        let base = run(root, &["git", "rev-parse", "HEAD"]).1;
+        std::fs::write(root.join("file.txt"), patched_contents).expect("write patch side");
+        assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+        assert_eq!(run(root, &["git", "commit", "-m", "patched"]).0, 0);
+        let patch = run(
+            root,
+            &[
+                "git",
+                "diff",
+                "--full-index",
+                base.trim(),
+                "HEAD",
+                "--",
+                "file.txt",
+            ],
+        );
+        assert_eq!(patch.0, 0, "create patch: {}", patch.2);
+        std::fs::write(root.join("file.txt"), independent_contents)
+            .expect("write independent worktree edit");
+        assert_eq!(
+            run(root, &["git", "config", "apply.whitespace", "error"]).0,
+            0
+        );
+
+        let attributes = root.join(".gitattributes");
+        install_after_reverse_staging_hook(move || {
+            std::fs::write(attributes, "file.txt whitespace\n")
+                .expect("tighten whitespace attributes after staging");
+        });
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: patch.1,
+            revert: true,
+            preflight: false,
+        })
+        .expect("reverse three-way after attribute mutation");
+
+        assert_eq!(result.exit_code, 0, "{result:?}");
+        assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+        assert!(result.cmd_for_log.contains("--3way"));
+        assert!(result.cmd_for_log.contains("--whitespace=nowarn"));
+        assert_eq!(
+            read_file_normalized(&root.join(".gitattributes")),
+            "file.txt whitespace\n",
+            "race hook did not tighten the attribute"
+        );
+        assert_eq!(
+            read_file_normalized(&root.join("file.txt")),
+            expected_contents
+        );
+        assert_eq!(
+            run(root, &["git", "diff", "--quiet", "--", "file.txt"]).0,
+            0,
+            "final index and worktree differ"
+        );
+    }
+
+    #[test]
+    fn mixed_reverse_conflict_and_whitespace_error_does_not_mutate() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let base = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\nbase \n12\n13\n14\n15\n";
+        let theirs = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\ntheirs\n12\n13\n14\n15\n";
+        let independently_edited =
+            "01\n02\n03\n04\n05\n06\n07\nEIGHT\n09\n10\ntheirs\n12\n13\n14\n15\n";
+        std::fs::write(root.join("file.txt"), base).expect("write base");
+        assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+        assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+        let base_oid = run(root, &["git", "rev-parse", "HEAD"]).1;
+        std::fs::write(root.join("file.txt"), theirs).expect("write theirs");
+        assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+        assert_eq!(run(root, &["git", "commit", "-m", "theirs"]).0, 0);
+        let patch = run(
+            root,
+            &[
+                "git",
+                "diff",
+                "--full-index",
+                base_oid.trim(),
+                "HEAD",
+                "--",
+                "file.txt",
+            ],
+        );
+        assert_eq!(patch.0, 0, "create patch: {}", patch.2);
+        std::fs::write(root.join("file.txt"), independently_edited)
+            .expect("write independent edit");
+        let patch_dir = tempfile::tempdir().expect("patch directory");
+        let patch_path = patch_dir.path().join("mixed.diff");
+        std::fs::write(&patch_path, &patch.1).expect("write patch");
+        let patch_path = patch_path.to_str().expect("UTF-8 patch path");
+        let structural = run(
+            root,
+            &[
+                "git",
+                "apply",
+                "--check",
+                "--whitespace=nowarn",
+                "-R",
+                patch_path,
+            ],
+        );
+        assert_ne!(
+            structural.0, 0,
+            "fixture must retain a structural reverse conflict"
+        );
+        assert_eq!(
+            run(root, &["git", "config", "apply.whitespace", "error"]).0,
+            0
+        );
+        let index_before = std::fs::read(root.join(".git/index")).expect("read index");
+        let worktree_before = std::fs::read(root.join("file.txt")).expect("read worktree");
+
+        reset_merge_policy_counts();
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: patch.1,
+            revert: true,
+            preflight: false,
+        })
+        .expect("return mixed policy failure");
+
+        assert_ne!(result.exit_code, 0, "{result:?}");
+        assert!(result.stderr.contains("trailing whitespace"), "{result:?}");
+        assert_eq!(merge_config_read_count(), 0);
+        assert_eq!(merge_attribute_read_count(), 0);
+        assert_eq!(merge_overlay_count(), 0);
+        assert_eq!(
+            std::fs::read(root.join(".git/index")).expect("reread index"),
+            index_before
+        );
+        assert_eq!(
+            std::fs::read(root.join("file.txt")).expect("reread worktree"),
+            worktree_before
+        );
     }
 
     #[test]
@@ -628,6 +1089,61 @@ mod tests {
         assert_ne!(r.exit_code, 0, "non-zero exit on missing index");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn missing_index_three_way_classification_does_not_run_post_index_change_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let hooks = root.join(".githooks");
+        std::fs::create_dir(&hooks).expect("create hooks directory");
+        let hook = hooks.join("post-index-change");
+        std::fs::write(&hook, "#!/bin/sh\nprintf ran > \"$PWD/hook-ran\"\n")
+            .expect("write post-index-change hook");
+        let mut permissions = std::fs::metadata(&hook)
+            .expect("hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).expect("make hook executable");
+        assert_eq!(
+            run(root, &["git", "config", "core.hooksPath", ".githooks"]).0,
+            0
+        );
+        std::fs::write(root.join("new.txt"), b"local\n").expect("write untracked path");
+        assert!(
+            !root.join(".git/index").exists(),
+            "fixture has a real index"
+        );
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..893adcd31e963b01dfbbcfe3ec58a008f0d81201\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+patched\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("classify missing-index three-way fallback");
+
+        assert_ne!(
+            result.exit_code, 0,
+            "untracked destination must not be replaced"
+        );
+        assert!(result.cmd_for_log.contains("--3way"), "{result:?}");
+        assert!(
+            !root.join("hook-ran").exists(),
+            "post-index-change hook ran"
+        );
+        assert!(
+            !root.join(".git/index").exists(),
+            "scratch initialization created the real index"
+        );
+        assert_eq!(
+            std::fs::read(root.join("new.txt")).expect("read untracked path"),
+            b"local\n"
+        );
+    }
+
     #[test]
     fn apply_then_revert_success() {
         let _g = env_lock().lock().unwrap();
@@ -680,7 +1196,11 @@ mod tests {
         reset_filter_policy_counts();
         let res_revert = apply_git_patch(&revert_req).expect("revert ok");
         assert_eq!(config_source_authorization_count(), 1);
-        assert_eq!(filter_policy_read_count(), 2);
+        assert_eq!(
+            filter_policy_read_count(),
+            1,
+            "reverse staging must skip a fresh Git-add policy when the index already matches"
+        );
         assert_eq!(filter_policy_overlay_count(), 0);
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));

@@ -3134,6 +3134,7 @@ dependencies = [
  "codex-utils-path-uri",
  "futures",
  "gix",
+ "libc",
  "once_cell",
  "pretty_assertions",
  "regex",

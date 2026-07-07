@@ -13,6 +13,245 @@ fn run_git(cwd: &Path, args: &[&str]) {
     );
 }
 
+fn run_isolated_config_test(test_name: &str) {
+    let environment = tempfile::tempdir().expect("isolated Git environment");
+    let global_config = environment.path().join("global.gitconfig");
+    let system_config = environment.path().join("system.gitconfig");
+    std::fs::write(&global_config, "").expect("empty global config");
+    std::fs::write(&system_config, "").expect("empty system config");
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    isolate_git_command_environment(&mut command);
+    let output = command
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD", "1")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_SYSTEM", &system_config)
+        .env("RUST_TEST_THREADS", "1")
+        .output()
+        .expect("run isolated test process");
+    assert!(
+        output.status.success(),
+        "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn frozen_apply_policy_overrides_later_repository_config_changes() {
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "core.autocrlf", "false"]);
+    run_git(root, &["config", "apply.whitespace", "warn"]);
+    run_git(root, &["config", "apply.ignoreWhitespace", "change"]);
+    run_git(root, &["config", "core.whitespace", "-trailing-space"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new \n",
+    )
+    .expect("write patch");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze apply policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    let patch = patch.to_str().expect("UTF-8 patch path");
+    let (rendered, gate) = config
+        .run_apply_policy_gate(/*revert*/ false, patch)
+        .expect("run policy gate");
+    assert!(rendered.contains("apply.whitespace=warn"), "{rendered}");
+    assert!(
+        rendered.contains("apply.ignoreWhitespace=change"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("core.whitespace=-trailing-space"),
+        "{rendered}"
+    );
+    assert!(
+        gate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+
+    run_git(root, &["config", "apply.whitespace", "error"]);
+    run_git(root, &["config", "apply.ignoreWhitespace", "false"]);
+    run_git(root, &["config", "core.whitespace", "trailing-space"]);
+
+    let final_apply = config
+        .run_direct_apply(/*revert*/ false, patch)
+        .expect("run final apply");
+    assert!(
+        final_apply.status.success(),
+        "frozen policy must survive config mutation: {}",
+        String::from_utf8_lossy(&final_apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read result"),
+        "new \n"
+    );
+}
+
+#[test]
+fn frozen_apply_policy_materializes_git_defaults() {
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze apply policy");
+
+    let rendered = config
+        .render_apply_command_for_log(&["apply".to_string(), "--check".to_string()])
+        .expect("render frozen defaults");
+    assert!(rendered.contains("apply.whitespace=warn"), "{rendered}");
+    assert!(
+        rendered.contains("apply.ignoreWhitespace=false"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("core.whitespace=blank-at-eol,blank-at-eof,space-before-tab"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn apply_whitespace_modes_are_typed_and_case_sensitive_at_the_gate() {
+    for (value, expected) in [
+        ("warn", ApplyWhitespaceMode::Warn),
+        ("nowarn", ApplyWhitespaceMode::Nowarn),
+        ("error", ApplyWhitespaceMode::Error),
+        ("error-all", ApplyWhitespaceMode::ErrorAll),
+        ("fix", ApplyWhitespaceMode::Fix),
+        ("strip", ApplyWhitespaceMode::Fix),
+        ("ERROR", ApplyWhitespaceMode::Invalid),
+        ("unknown", ApplyWhitespaceMode::Invalid),
+    ] {
+        assert_eq!(ApplyWhitespaceMode::normalize(value), expected, "{value}");
+    }
+
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "apply.whitespace", "ERROR"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    )
+    .expect("write patch");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze invalid policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    assert!(
+        config
+            .final_apply_whitespace_mode(
+                /*revert*/ false,
+                patch.to_str().expect("UTF-8 patch path"),
+            )
+            .is_err()
+    );
+    let (_, gate) = config
+        .run_apply_policy_gate(
+            /*revert*/ false,
+            patch.to_str().expect("UTF-8 patch path"),
+        )
+        .expect("run invalid policy gate");
+    assert!(!gate.status.success());
+    assert!(
+        String::from_utf8_lossy(&gate.stderr).contains("unrecognized whitespace"),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+    assert!(
+        config
+            .final_apply_whitespace_mode(
+                /*revert*/ false,
+                patch.to_str().expect("UTF-8 patch path"),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn successful_apply_policy_gate_is_one_shot_and_bound_to_patch_orientation() {
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "apply.whitespace", "error"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    )
+    .expect("write patch");
+    let patch = patch.to_str().expect("UTF-8 patch path");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    let (_, gate) = config
+        .run_apply_policy_gate(/*revert*/ false, patch)
+        .expect("run successful policy gate");
+    assert!(gate.status.success());
+    assert_eq!(
+        config
+            .final_apply_whitespace_mode(/*revert*/ false, patch)
+            .expect("matching proof"),
+        ApplyWhitespaceMode::Error
+    );
+    assert!(
+        config
+            .final_apply_whitespace_mode(/*revert*/ true, patch)
+            .is_err()
+    );
+    assert!(
+        config
+            .final_apply_whitespace_mode(/*revert*/ false, "different.patch")
+            .is_err()
+    );
+    assert!(
+        config
+            .run_apply_policy_gate(/*revert*/ false, patch)
+            .is_err()
+    );
+}
+
 #[test]
 fn attached_filter_snapshots_retain_multiple_owned_overrides() {
     let repo = tempfile::tempdir().expect("repo");
@@ -98,7 +337,7 @@ fn attached_filter_snapshots_retain_multiple_owned_overrides() {
 }
 
 #[test]
-fn composed_staging_subset_proof_requires_exactly_one_apply_snapshot() {
+fn reverse_staging_subset_proof_requires_exactly_one_apply_snapshot() {
     let repo = tempfile::tempdir().expect("repo");
     run_git(repo.path(), &["init", "-q"]);
     let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
@@ -128,6 +367,108 @@ fn composed_staging_subset_proof_requires_exactly_one_apply_snapshot() {
         .ensure_apply_filter_path_subset(&[])
         .expect_err("two snapshots must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::zero_driver_merge_policy_still_occupies_the_single_install_slot",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+
+    let error = config
+        .install_three_way_merge_policy(&[])
+        .expect_err("merge policy without apply snapshot must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("apply snapshot");
+    config
+        .install_three_way_merge_policy(&["file.txt".to_string()])
+        .expect("zero-driver merge policy");
+    assert!(config.merge_policy_installed);
+    assert!(config.merge.is_some());
+
+    let error = config
+        .install_three_way_merge_policy(&["file.txt".to_string()])
+        .expect_err("second merge policy must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn isolated_merge_config_is_not_attached_to_preparatory_commands() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::isolated_merge_config_is_not_attached_to_preparatory_commands",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    std::fs::write(repo.path().join("file.txt"), "file\n").expect("write file");
+    run_git(
+        repo.path(),
+        &["config", "filter.demo.clean", "git hash-object --stdin"],
+    );
+    run_git(repo.path(), &["config", "merge.unused.driver", "false"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("apply filter policy");
+    config
+        .install_three_way_merge_policy(&["file.txt".to_string()])
+        .expect("merge policy");
+    config
+        .authorize_git_add_filter_paths(&["file.txt".to_string()])
+        .expect("Git-add filter policy");
+
+    let apply_include = config.filters[0]
+        .neutralizer()
+        .expect("apply filter overlay")
+        .include_arg
+        .clone();
+    let merge_config = config
+        .merge_common_config_path()
+        .expect("isolated merge config");
+    let git_add_include = config.filters[1]
+        .neutralizer()
+        .expect("Git-add filter overlay")
+        .include_arg
+        .clone();
+    let overlay_paths = [&apply_include, &git_add_include]
+        .map(|include| PathBuf::from(include.strip_prefix("include.path=").expect("include path")));
+
+    let rendered = config
+        .render_command_for_log(&["ls-files".to_string()])
+        .expect("render command");
+    let apply_offset = rendered.find(&apply_include).expect("apply include");
+    let git_add_offset = rendered.find(&git_add_include).expect("Git-add include");
+    assert!(apply_offset < git_add_offset);
+    assert!(!rendered.contains(&merge_config.display().to_string()));
+
+    let output = config
+        .ls_files_command()
+        .expect("bound command")
+        .output()
+        .expect("execute bound command");
+    assert!(output.status.success());
+    assert!(overlay_paths.iter().all(|path| path.is_file()));
+    assert!(merge_config.is_file());
+
+    drop(config);
+    assert!(overlay_paths.iter().all(|path| !path.exists()));
+    assert!(!merge_config.exists());
 }
 
 #[test]

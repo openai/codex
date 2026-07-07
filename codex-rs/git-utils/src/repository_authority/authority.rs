@@ -248,11 +248,20 @@ impl RepositoryAuthority {
         })
     }
 
-    #[cfg(all(test, unix))]
     pub(crate) fn active_git_dir(&self) -> Option<&Path> {
         self.active_metadata
             .as_ref()
             .map(|metadata| metadata.git_dir.as_path())
+    }
+
+    pub(crate) fn active_common_dir(&self) -> Option<&Path> {
+        self.active_metadata
+            .as_ref()
+            .map(|metadata| metadata.common_dir.as_path())
+    }
+
+    pub(crate) fn active_worktree_root(&self) -> &Path {
+        &self.active_worktree_root
     }
 
     #[cfg(test)]

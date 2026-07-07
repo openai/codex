@@ -172,10 +172,7 @@ console.log(fib(10));
 
     let apply_result = apply_diff_from_task(task_response, Some(repo_path.to_path_buf())).await;
 
-    assert!(
-        apply_result.is_err(),
-        "Expected apply to fail due to merge conflicts"
-    );
+    let apply_error = apply_result.expect_err("Expected apply to fail due to merge conflicts");
 
     let contents = std::fs::read_to_string(&fibonacci_path).expect("Failed to read fibonacci.js");
 
@@ -183,6 +180,6 @@ console.log(fib(10));
         contents.contains("<<<<<<< HEAD")
             || contents.contains("=======")
             || contents.contains(">>>>>>> "),
-        "fibonacci.js should contain merge conflict markers, got: {contents}",
+        "fibonacci.js should contain merge conflict markers, got: {contents}\napply error: {apply_error:#}",
     );
 }

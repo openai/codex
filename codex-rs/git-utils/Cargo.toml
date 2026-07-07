@@ -33,6 +33,9 @@ ts-rs = { workspace = true, features = [
 ] }
 walkdir = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
 
