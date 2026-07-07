@@ -16,6 +16,10 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::approval_coordinator::ApprovalAction;
+use crate::approval_coordinator::ApprovalCoordinator;
+use crate::approval_coordinator::ApprovalReview;
+use crate::approval_coordinator::ApprovalReviewer;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -975,6 +979,12 @@ fn push_prompt_fragment(
             separate_developer_sections.push(fragment.text().to_string());
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RequestPermissionsReviewOrigin {
+    MainTurn,
+    DelegatedSubagent,
 }
 
 impl Session {
@@ -2228,10 +2238,6 @@ impl Session {
         rx_approve
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -2239,6 +2245,30 @@ impl Session {
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_environment_with_origin(
+            turn_context,
+            call_id,
+            args,
+            environment,
+            cancellation_token,
+            RequestPermissionsReviewOrigin::MainTurn,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    async fn request_permissions_for_environment_with_origin(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        environment: TurnEnvironmentSelection,
+        cancellation_token: CancellationToken,
+        review_origin: RequestPermissionsReviewOrigin,
     ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
@@ -2276,35 +2306,42 @@ impl Session {
             });
         };
 
-        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
-            let originating_turn_state = {
-                let active = self.active_turn.lock().await;
-                active.as_ref().map(|active| Arc::clone(&active.turn_state))
-            };
-            let review_id = crate::guardian::new_guardian_review_id();
-            let session = Arc::clone(self);
-            let turn = Arc::clone(turn_context);
-            let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
-                id: call_id,
-                turn_id: turn_context.sub_id.clone(),
-                reason: args.reason,
-                permissions: requested_permissions.clone(),
-            };
-            let review_rx = crate::guardian::spawn_approval_request_review(
-                session,
-                turn,
-                review_id,
-                request,
+        let originating_turn_state = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().map(|active| Arc::clone(&active.turn_state))
+        };
+        let action = ApprovalAction::RequestPermissions {
+            id: call_id.clone(),
+            turn_id: turn_context.sub_id.clone(),
+            reason: args.reason.clone(),
+            permissions: requested_permissions.clone(),
+        };
+        let review = match review_origin {
+            RequestPermissionsReviewOrigin::MainTurn => ApprovalReview::main_turn_cancellable(
+                action,
                 /*retry_reason*/ None,
-                codex_analytics::GuardianApprovalRequestSource::MainTurn,
                 cancellation_token.clone(),
-            );
-            let decision = tokio::select! {
-                biased;
-                _ = cancellation_token.cancelled() => return None,
-                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
-            };
-            let response = match decision {
+            ),
+            RequestPermissionsReviewOrigin::DelegatedSubagent => ApprovalReview::delegated(
+                action,
+                /*retry_reason*/ None,
+                cancellation_token.clone(),
+            ),
+        };
+        let automatic_review = ApprovalCoordinator::try_resolve_automatic_cancellable(
+            self,
+            turn_context,
+            ApprovalReviewer::for_turn(turn_context),
+            /*hook_request*/ None,
+            review,
+        );
+        let automatic_resolution = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => return None,
+            resolution = automatic_review => resolution,
+        };
+        if let Some(resolution) = automatic_resolution {
+            let response = match resolution.decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
@@ -2424,12 +2461,13 @@ impl Session {
         };
         let mut environment = turn_environment.selection();
         environment.cwd = PathUri::from_abs_path(&cwd);
-        self.request_permissions_for_environment(
+        self.request_permissions_for_environment_with_origin(
             turn_context,
             call_id,
             args,
             environment,
             cancellation_token,
+            RequestPermissionsReviewOrigin::DelegatedSubagent,
         )
         .await
     }

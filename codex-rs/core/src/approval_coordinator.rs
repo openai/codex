@@ -7,6 +7,7 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
+use crate::guardian::spawn_approval_request_review;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -16,12 +17,14 @@ use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::types::ApprovalsReviewer;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) type ApprovalAction = crate::guardian::GuardianApprovalRequest;
 
@@ -29,6 +32,8 @@ pub(crate) type ApprovalAction = crate::guardian::GuardianApprovalRequest;
 pub(crate) struct ApprovalReview {
     pub(crate) action: ApprovalAction,
     pub(crate) retry_reason: Option<String>,
+    request_source: GuardianApprovalRequestSource,
+    cancellation: Option<CancellationToken>,
 }
 
 impl ApprovalReview {
@@ -36,6 +41,34 @@ impl ApprovalReview {
         Self {
             action,
             retry_reason,
+            request_source: GuardianApprovalRequestSource::MainTurn,
+            cancellation: None,
+        }
+    }
+
+    pub(crate) fn main_turn_cancellable(
+        action: ApprovalAction,
+        retry_reason: Option<String>,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            action,
+            retry_reason,
+            request_source: GuardianApprovalRequestSource::MainTurn,
+            cancellation: Some(cancellation),
+        }
+    }
+
+    pub(crate) fn delegated(
+        action: ApprovalAction,
+        retry_reason: Option<String>,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            action,
+            retry_reason,
+            request_source: GuardianApprovalRequestSource::DelegatedSubagent,
+            cancellation: Some(cancellation),
         }
     }
 }
@@ -218,11 +251,11 @@ impl ApprovalCoordinator {
             hook_request,
             review,
             || async {
-            ApprovalUserReview {
-                decision: user_review().await,
-                output: (),
-            }
-        },
+                ApprovalUserReview {
+                    decision: user_review().await,
+                    output: (),
+                }
+            },
         )
         .await
         .resolution
@@ -236,14 +269,96 @@ impl ApprovalCoordinator {
         review: ApprovalReview,
     ) -> ApprovalResolution {
         debug_assert_eq!(reviewer, ApprovalReviewer::Guardian);
-        Self::resolve_event_with_user_output(session, turn, reviewer, hook_request, review, || async {
-            ApprovalUserReview {
+        Self::try_resolve_automatic(session, turn, reviewer, hook_request, review)
+            .await
+            .unwrap_or(ApprovalResolution {
                 decision: ReviewDecision::Denied,
-                output: (),
+                rejection: Some("automatic approval reviewer routed to the user".to_string()),
+                source: ApprovalResolutionSource::User,
+            })
+    }
+
+    pub(crate) async fn try_resolve_automatic(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+    ) -> Option<ApprovalResolution> {
+        if let Some(hook_request) = hook_request
+            && let Some(resolution) =
+                Self::resolve_hook(session, turn, hook_request.run_id, hook_request.payload).await
+        {
+            return Some(resolution);
+        }
+
+        match reviewer {
+            ApprovalReviewer::Guardian => {
+                debug_assert!(review.cancellation.is_none());
+                debug_assert!(matches!(
+                    review.request_source,
+                    GuardianApprovalRequestSource::MainTurn
+                ));
+                let review_id = new_guardian_review_id();
+                let decision = review_approval_request(
+                    session,
+                    turn,
+                    review_id.clone(),
+                    review.action,
+                    review.retry_reason,
+                )
+                .await;
+                Some(Self::normalize_guardian(session, review_id, decision).await)
             }
-        })
-        .await
-        .resolution
+            ApprovalReviewer::User => None,
+        }
+    }
+
+    pub(crate) async fn try_resolve_automatic_cancellable(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+    ) -> Option<ApprovalResolution> {
+        if let Some(hook_request) = hook_request
+            && let Some(resolution) =
+                Self::resolve_hook(session, turn, hook_request.run_id, hook_request.payload).await
+        {
+            return Some(resolution);
+        }
+
+        match reviewer {
+            ApprovalReviewer::Guardian => {
+                let Some(cancellation) = review.cancellation else {
+                    tracing::error!(
+                        "cancellable approval review is missing its cancellation token"
+                    );
+                    return Some(ApprovalResolution {
+                        decision: ReviewDecision::Abort,
+                        rejection: Some(
+                            "automatic approval review is missing its cancellation token"
+                                .to_string(),
+                        ),
+                        source: ApprovalResolutionSource::Guardian,
+                    });
+                };
+                let review_id = new_guardian_review_id();
+                let decision = spawn_approval_request_review(
+                    Arc::clone(session),
+                    Arc::clone(turn),
+                    review_id.clone(),
+                    review.action,
+                    review.retry_reason,
+                    review.request_source,
+                    cancellation,
+                )
+                .await
+                .unwrap_or(ReviewDecision::Denied);
+                Some(Self::normalize_guardian(session, review_id, decision).await)
+            }
+            ApprovalReviewer::User => None,
+        }
     }
 
     pub(crate) async fn resolve_event_with_user_output<T, F, Fut>(
@@ -258,9 +373,8 @@ impl ApprovalCoordinator {
         F: FnOnce() -> Fut,
         Fut: Future<Output = ApprovalUserReview<T>>,
     {
-        if let Some(hook_request) = hook_request
-            && let Some(resolution) =
-                Self::resolve_hook(session, turn, hook_request.run_id, hook_request.payload).await
+        if let Some(resolution) =
+            Self::try_resolve_automatic(session, turn, reviewer, hook_request, review).await
         {
             return ApprovalEventResolution {
                 resolution,
@@ -268,37 +382,14 @@ impl ApprovalCoordinator {
             };
         }
 
-        let (resolution, user_output) = match reviewer {
-            ApprovalReviewer::Guardian => {
-                let review_id = new_guardian_review_id();
-                let decision = review_approval_request(
-                    session,
-                    turn,
-                    review_id.clone(),
-                    review.action.clone(),
-                    review.retry_reason.clone(),
-                )
-                .await;
-                (
-                    Self::normalize_guardian(session, review_id, decision).await,
-                    None,
-                )
-            }
-            ApprovalReviewer::User => {
-                let user_review = user_review().await;
-                (
-                    ApprovalResolution {
-                        decision: user_review.decision,
-                        rejection: None,
-                        source: ApprovalResolutionSource::User,
-                    },
-                    Some(user_review.output),
-                )
-            }
-        };
+        let user_review = user_review().await;
         ApprovalEventResolution {
-            resolution: Self::normalize_user_rejection(resolution),
-            user_output,
+            resolution: Self::normalize_user_rejection(ApprovalResolution {
+                decision: user_review.decision,
+                rejection: None,
+                source: ApprovalResolutionSource::User,
+            }),
+            user_output: Some(user_review.output),
         }
     }
 
