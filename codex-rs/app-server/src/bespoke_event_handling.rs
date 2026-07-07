@@ -852,23 +852,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             );
             outgoing.send_server_notification(notification).await;
         }
-        EventMsg::SubAgentActivity(activity) => {
-            if activity.kind == SubAgentActivityKind::Interrupted
-                && thread_manager
-                    .get_thread(activity.agent_thread_id)
-                    .await
-                    .is_err()
-            {
-                thread_watch_manager
-                    .remove_thread(&activity.agent_thread_id.to_string())
-                    .await;
-            }
-            let notification = item_event_to_server_notification(
-                EventMsg::SubAgentActivity(activity),
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+        EventMsg::SubAgentActivity(_) => {
+            // Deprecated sub-agent activity events are still fanned out for raw-event and
+            // rollout compatibility consumers. App-server v2 receives the canonical
+            // SubAgentActivity item lifecycle instead.
         }
         EventMsg::CollabCloseEnd(end_event) => {
             if thread_manager
@@ -1033,7 +1020,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::ItemCompleted(event) => {
-            apply_canonical_item_completed_side_effects(&thread_state, &event.item).await;
+            apply_canonical_item_completed_side_effects(
+                &thread_manager,
+                &thread_watch_manager,
+                &thread_state,
+                &event.item,
+            )
+            .await;
             let notification = item_event_to_server_notification(
                 EventMsg::ItemCompleted(event),
                 &conversation_id.to_string(),
@@ -1334,16 +1327,43 @@ async fn emit_turn_completed_with_status(
 }
 
 async fn apply_canonical_item_completed_side_effects(
+    thread_manager: &Arc<ThreadManager>,
+    thread_watch_manager: &ThreadWatchManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     item: &CoreTurnItem,
 ) {
-    if let CoreTurnItem::CommandExecution(item) = item {
-        thread_state
-            .lock()
-            .await
-            .turn_summary
-            .command_execution_started
-            .remove(&item.id);
+    match item {
+        CoreTurnItem::CommandExecution(item) => {
+            thread_state
+                .lock()
+                .await
+                .turn_summary
+                .command_execution_started
+                .remove(&item.id);
+        }
+        CoreTurnItem::SubAgentActivity(activity)
+            if activity.kind == SubAgentActivityKind::Interrupted =>
+        {
+            remove_missing_thread_watch(
+                thread_manager,
+                thread_watch_manager,
+                activity.agent_thread_id,
+            )
+            .await;
+        }
+        _ => {}
+    }
+}
+
+async fn remove_missing_thread_watch(
+    thread_manager: &Arc<ThreadManager>,
+    thread_watch_manager: &ThreadWatchManager,
+    thread_id: ThreadId,
+) {
+    if thread_manager.get_thread(thread_id).await.is_err() {
+        thread_watch_manager
+            .remove_thread(&thread_id.to_string())
+            .await;
     }
 }
 
@@ -2175,6 +2195,7 @@ mod tests {
     use codex_protocol::items::DynamicToolCallItem;
     use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
     use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::SubAgentActivityItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
@@ -2192,12 +2213,12 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GuardianAssessmentEvent;
     use codex_protocol::protocol::GuardianAssessmentStatus;
+    use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentActivityEvent;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
@@ -3420,13 +3441,17 @@ mod tests {
         apply_bespoke_event_handling(
             Event {
                 id: "turn-1".to_string(),
-                msg: EventMsg::SubAgentActivity(SubAgentActivityEvent {
-                    event_id: "activity-1".to_string(),
-                    occurred_at_ms: 42,
-                    agent_thread_id: child_thread_id,
-                    agent_path: AgentPath::try_from("/root/worker")
-                        .expect("agent path should parse"),
-                    kind: SubAgentActivityKind::Interrupted,
+                msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: conversation_id,
+                    turn_id: "turn-1".to_string(),
+                    item: CoreTurnItem::SubAgentActivity(SubAgentActivityItem {
+                        id: "activity-1".to_string(),
+                        kind: SubAgentActivityKind::Interrupted,
+                        agent_thread_id: child_thread_id,
+                        agent_path: AgentPath::try_from("/root/worker")
+                            .expect("agent path should parse"),
+                    }),
+                    completed_at_ms: 42,
                 }),
             },
             conversation_id,

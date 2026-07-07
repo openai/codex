@@ -9,7 +9,6 @@ use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
-use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::AgentPath;
 use codex_tools::ToolSpec;
 
@@ -140,19 +139,17 @@ async fn handle_spawn_agent(
         .as_ref()
         .and_then(|snapshot| snapshot.session_source.get_nickname())
         .or(spawned_agent.metadata.agent_nickname);
-    session
-        .send_event(
-            &turn,
-            SubAgentActivityEvent {
-                event_id: call_id,
-                occurred_at_ms: now_unix_timestamp_ms(),
-                agent_thread_id: new_thread_id,
-                agent_path: new_agent_path.clone(),
-                kind: SubAgentActivityKind::Started,
-            }
-            .into(),
-        )
-        .await;
+    emit_sub_agent_activity(
+        &session,
+        &turn,
+        SubAgentActivityItem {
+            id: call_id,
+            agent_thread_id: new_thread_id,
+            agent_path: new_agent_path.clone(),
+            kind: SubAgentActivityKind::Started,
+        },
+    )
+    .await;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
