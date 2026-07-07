@@ -2,44 +2,31 @@
 
 from pathlib import Path
 import sys
-import tempfile
-import textwrap
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from codex_package.v8 import resolved_v8_source_version
-from codex_package.v8 import rusty_v8_release_tag
+from codex_package.targets import TARGET_SPECS
+from codex_package.v8 import archive_name
+from rusty_v8_artifacts import RustyV8ArtifactManifest
 
 
 class RustyV8ReleaseTagTest(unittest.TestCase):
-    def test_release_tag_combines_crate_and_source_versions(self) -> None:
+    def test_release_tag_comes_from_artifact_manifest(self) -> None:
         self.assertEqual(
-            rusty_v8_release_tag(
-                crate_version="149.2.0",
-                source_version="14.9.207.35",
-            ),
-            "rusty-v8-v149.2.0-v8-14.9.207.35",
+            RustyV8ArtifactManifest.load().artifact_identity,
+            "rusty-v8-v149.2.0-v8-14.9.207.35-recipe-1",
         )
 
-    def test_resolved_v8_source_version_reads_archive_override(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            module_bazel = Path(temp_dir) / "MODULE.bazel"
-            module_bazel.write_text(
-                textwrap.dedent(
-                    """\
-                    archive_override(
-                        module_name = "v8",
-                        urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.35.tar.gz"],
-                    )
-                    """
-                )
-            )
-
-            self.assertEqual(
-                resolved_v8_source_version(module_bazel),
-                "14.9.207.35",
-            )
+    def test_archive_name_supports_unix_and_msvc_targets(self) -> None:
+        self.assertEqual(
+            archive_name(TARGET_SPECS["x86_64-unknown-linux-gnu"]),
+            "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+        )
+        self.assertEqual(
+            archive_name(TARGET_SPECS["aarch64-pc-windows-msvc"]),
+            "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        )
 
 
 if __name__ == "__main__":

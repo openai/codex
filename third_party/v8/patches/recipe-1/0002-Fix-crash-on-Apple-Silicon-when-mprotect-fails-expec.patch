@@ -1,0 +1,43 @@
+From ebd9f669737ba57907636ba85bf537f818124d01 Mon Sep 17 00:00:00 2001
+From: Bert Belder <bertbelder@gmail.com>
+Date: Wed, 25 May 2022 20:40:04 +0200
+Subject: [PATCH 2/4] Fix crash on Apple Silicon when mprotect() fails
+ expectedly
+
+---
+ src/base/platform/platform-posix.cc | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index dfb30b62b4..3b8eaef505 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -557,12 +557,6 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
+   int prot = GetProtectionFromMemoryPermission(access);
+   int ret = mprotect(address, size, prot);
+ 
+-  // Setting permissions can fail if the limit of VMAs is exceeded.
+-  // Any failure that's not OOM likely indicates a bug in the caller (e.g.
+-  // using an invalid mapping) so attempt to catch that here to facilitate
+-  // debugging of these failures.
+-  if (ret != 0) CHECK_EQ(ENOMEM, errno);
+-
+   // MacOS 11.2 on Apple Silicon refuses to switch permissions from
+   // rwx to none. Just use madvise instead.
+ #if defined(V8_OS_DARWIN)
+@@ -572,6 +566,12 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
+   }
+ #endif
+ 
++  // Setting permissions can fail if the limit of VMAs is exceeded.
++  // Any failure that's not OOM likely indicates a bug in the caller (e.g.
++  // using an invalid mapping) so attempt to catch that here to facilitate
++  // debugging of these failures.
++  if (ret != 0) CHECK_EQ(ENOMEM, errno);
++
+   if (ret == 0 && access == OS::MemoryPermission::kNoAccess) {
+     // This is advisory; ignore errors and continue execution.
+     USE(DiscardSystemPages(address, size));
+-- 
+2.54.0
+

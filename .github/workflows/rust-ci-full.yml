@@ -380,8 +380,7 @@ jobs:
         shell: bash
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
-      - if: ${{ !contains(matrix.target, 'windows') }}
-        name: Configure rusty_v8 artifact overrides and verify checksums
+      - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}

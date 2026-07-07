@@ -1,0 +1,69 @@
+From 73d19698991616a34a00ca691a6e697dbb69e2ef Mon Sep 17 00:00:00 2001
+From: snek <the@snek.dev>
+Date: Thu, 7 May 2026 09:24:15 +0200
+Subject: [PATCH 4/4] add padding to fix ~ptrcmp builds on windows
+
+---
+ src/objects/js-atomics-synchronization.h  | 10 ++++++----
+ src/objects/js-atomics-synchronization.tq |  3 ++-
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/src/objects/js-atomics-synchronization.h b/src/objects/js-atomics-synchronization.h
+index 1a60658ac7..1fc172661a 100644
+--- a/src/objects/js-atomics-synchronization.h
++++ b/src/objects/js-atomics-synchronization.h
+@@ -116,6 +116,9 @@ V8_OBJECT class JSSynchronizationPrimitive : public AlwaysSharedSpaceJSObject {
+  public:
+   ExternalPointerMember<kWaiterQueueNodeTag> waiter_queue_head_;
+   std::atomic<uint32_t> state_;
++#if TAGGED_SIZE_8_BYTES
++  uint32_t optional_padding_;
++#endif  // TAGGED_SIZE_8_BYTES
+ } V8_OBJECT_END;
+ 
+ inline constexpr int JSSynchronizationPrimitive::kWaiterQueueHeadOffset =
+@@ -296,6 +299,9 @@ V8_OBJECT class JSAtomicsMutex : public JSSynchronizationPrimitive {
+ 
+  public:
+   std::atomic<int32_t> owner_thread_id_;
++#if TAGGED_SIZE_8_BYTES
++  uint32_t optional_padding_2_;
++#endif  // TAGGED_SIZE_8_BYTES
+ 
+   // Defined out-of-line below the class so `offsetof` / `sizeof` on the
+   // still-incomplete type can appear in an initializer.
+@@ -374,10 +380,6 @@ V8_OBJECT class JSAtomicsCondition : public JSSynchronizationPrimitive {
+                                   const DequeueAction& dequeue_action);
+ 
+  public:
+-#if TAGGED_SIZE_8_BYTES
+-  uint32_t optional_padding_;
+-#endif  // TAGGED_SIZE_8_BYTES
+-
+   static const int kHeaderSize;
+ } V8_OBJECT_END;
+ 
+diff --git a/src/objects/js-atomics-synchronization.tq b/src/objects/js-atomics-synchronization.tq
+index c867cd87b8..726f02928f 100644
+--- a/src/objects/js-atomics-synchronization.tq
++++ b/src/objects/js-atomics-synchronization.tq
+@@ -7,14 +7,15 @@
+ extern class JSSynchronizationPrimitive extends AlwaysSharedSpaceJSObject {
+   waiter_queue_head: ExternalPointer;
+   state: uint32;
++  @if(TAGGED_SIZE_8_BYTES) optional_padding: uint32;
+ }
+ 
+ @cppObjectLayoutDefinition
+ extern class JSAtomicsMutex extends JSSynchronizationPrimitive {
+   owner_thread_id: int32;
++  @if(TAGGED_SIZE_8_BYTES) optional_padding_2: uint32;
+ }
+ 
+ @cppObjectLayoutDefinition
+ extern class JSAtomicsCondition extends JSSynchronizationPrimitive {
+-  @if(TAGGED_SIZE_8_BYTES) optional_padding: uint32;
+ }
+-- 
+2.54.0
+

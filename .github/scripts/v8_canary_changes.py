@@ -21,12 +21,15 @@ ROOT = Path(__file__).resolve().parents[2]
 CANARY_PATH_PATTERNS = {
     ".bazelrc",
     ".github/actions/setup-bazel-ci/**",
+    ".github/actions/setup-rusty-v8/**",
+    ".github/scripts/materialize_rusty_v8.py",
     ".github/scripts/run_bazel_with_buildbuddy.py",
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/postmerge-ci.yml",
     ".github/workflows/rusty-v8-release.yml",
+    ".github/workflows/rusty-v8-source-build.yml",
     ".github/workflows/v8-canary.yml",
     "MODULE.bazel",
     "MODULE.bazel.lock",
@@ -35,16 +38,24 @@ CANARY_PATH_PATTERNS = {
     "patches/llvm_*.patch",
     "patches/rules_cc_*.patch",
     "patches/v8_*.patch",
+    "scripts/codex_package/v8.py",
+    "scripts/rusty_v8_artifacts.py",
     "third_party/v8/**",
 }
-# Windows source builds are a narrower, more expensive subset of the canary.
-# A V8 version change also requires them even when no path below changed.
-WINDOWS_SOURCE_BUILD_PATHS = {
+# Materialized source builds are the expensive artifact-production subset.
+SOURCE_BUILD_PATH_PATTERNS = {
+    ".github/actions/setup-rusty-v8/**",
+    ".github/scripts/materialize_rusty_v8.py",
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/rusty-v8-release.yml",
+    ".github/workflows/rusty-v8-source-build.yml",
     ".github/workflows/v8-canary.yml",
+    "scripts/codex_package/v8.py",
+    "scripts/rusty_v8_artifacts.py",
+    "third_party/v8/artifacts.toml",
+    "third_party/v8/patches/**",
 }
 
 
@@ -85,18 +96,27 @@ def resolved_v8_version(cargo_lock: bytes) -> str:
     return versions[0]
 
 
-def windows_source_required(
+def matching_source_build_paths(changed_files: set[str]) -> set[str]:
+    """Return changed paths that require materialized source artifacts."""
+    return {
+        path
+        for path in changed_files
+        if any(fnmatchcase(path, pattern) for pattern in SOURCE_BUILD_PATH_PATTERNS)
+    }
+
+
+def source_build_required(
     changed_files: set[str],
     base_v8_version: str,
     head_v8_version: str,
     *,
     force: bool = False,
 ) -> bool:
-    """Return whether Windows must rebuild rusty_v8 from source."""
+    """Return whether every release target must rebuild from materialized source."""
     return (
         force
         or base_v8_version != head_v8_version
-        or not changed_files.isdisjoint(WINDOWS_SOURCE_BUILD_PATHS)
+        or bool(matching_source_build_paths(changed_files))
     )
 
 
@@ -142,8 +162,8 @@ def main() -> None:
         # manual retry path, so it intentionally runs every variant.
         canary = True
         canary_reason = "manual workflow dispatch"
-        windows_source = True
-        windows_source_reason = "manual workflow dispatch"
+        source_build = True
+        source_build_reason = "manual workflow dispatch"
     elif not args.base or not args.head:
         raise SystemExit("--base and --head are required unless --force is set")
     else:
@@ -153,29 +173,29 @@ def main() -> None:
 
         matched_canary_paths = sorted(matching_canary_paths(files))
         canary = canary_required(files, base_version, head_version)
-        windows_source = windows_source_required(files, base_version, head_version)
+        source_build = source_build_required(files, base_version, head_version)
         if base_version != head_version:
             canary_reason = (
                 f"v8 version changed from {base_version} to {head_version}"
             )
-            windows_source_reason = canary_reason
+            source_build_reason = canary_reason
         else:
             canary_reason = (
                 ", ".join(matched_canary_paths)
                 if matched_canary_paths
                 else "no relevant changes"
             )
-            matched_windows_paths = sorted(files & WINDOWS_SOURCE_BUILD_PATHS)
-            windows_source_reason = (
-                ", ".join(matched_windows_paths)
-                if matched_windows_paths
+            matched_source_paths = sorted(matching_source_build_paths(files))
+            source_build_reason = (
+                ", ".join(matched_source_paths)
+                if matched_source_paths
                 else "no relevant changes"
             )
 
     print(f"canary_required={str(canary).lower()}")
     print(f"canary_reason={canary_reason}")
-    print(f"windows_source_required={str(windows_source).lower()}")
-    print(f"windows_source_reason={windows_source_reason}")
+    print(f"source_build_required={str(source_build).lower()}")
+    print(f"source_build_reason={source_build_reason}")
 
 
 if __name__ == "__main__":

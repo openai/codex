@@ -15,15 +15,21 @@ runs:
       run: |
         set -euo pipefail
 
-        release_tag="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" rusty-v8-release-tag)"
+        helper="${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py"
+        python3 "${helper}" check-artifact-manifest
+        release_tag="$(python3 "${helper}" artifact-identity)"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
-        archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
+        archive_name="librusty_v8_release_${TARGET}.a.gz"
+        if [[ "${TARGET}" == *-pc-windows-msvc ]]; then
+          archive_name="rusty_v8_release_${TARGET}.lib.gz"
+        fi
+        archive_path="${binding_dir}/${archive_name}"
         binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
         checksums_path="${binding_dir}/rusty_v8_release_${TARGET}.sha256"
 
         mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/librusty_v8_release_${TARGET}.a.gz" -o "${archive_path}"
+        curl -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
         curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
         curl -fsSL "${base_url}/rusty_v8_release_${TARGET}.sha256" -o "${checksums_path}"
 

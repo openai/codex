@@ -1,0 +1,55 @@
+From 5e95c2d7d11ed327367959e1cd8825c446f7a425 Mon Sep 17 00:00:00 2001
+From: Divy Srivastava <dj.srivastava23@gmail.com>
+Date: Tue, 5 Dec 2023 09:35:57 +0530
+Subject: [PATCH 1/4] Remove googletest visibility workaround in BUILD.gn
+
+---
+ third_party/googletest/BUILD.gn | 18 ------------------
+ 1 file changed, 18 deletions(-)
+
+diff --git a/third_party/googletest/BUILD.gn b/third_party/googletest/BUILD.gn
+index 1cf84b3d8f..0918a49606 100644
+--- a/third_party/googletest/BUILD.gn
++++ b/third_party/googletest/BUILD.gn
+@@ -2,8 +2,6 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-import("../../gni/v8.gni")
+-
+ config("gtest_config") {
+   visibility = [ ":*" ]  # gmock also shares this config.
+ 
+@@ -91,14 +89,6 @@ source_set("gtest") {
+   configs -= [ "//build/config/compiler:chromium_code" ]
+   configs += [ "//build/config/compiler:no_chromium_code" ]
+ 
+-  # V8-only workaround for http://crbug.com/chromium/1191946. Ensures that
+-  # googletest is compiled with the same visibility such as the rest of V8, see
+-  # https://source.chromium.org/chromium/chromium/src/+/master:v8/gni/v8.gni
+-  if ((is_posix || is_fuchsia) && (v8_enable_backtrace || v8_monolithic)) {
+-    configs -= [ "//build/config/gcc:symbol_visibility_hidden" ]
+-    configs += [ "//build/config/gcc:symbol_visibility_default" ]
+-  }
+-
+   deps = []
+ 
+   if (is_fuchsia) {
+@@ -143,14 +133,6 @@ source_set("gmock") {
+     "src/googlemock/src/gmock.cc",
+   ]
+ 
+-  # V8-only workaround for http://crbug.com/chromium/1191946. Ensures that
+-  # googletest is compiled with the same visibility such as the rest of V8, see
+-  # https://source.chromium.org/chromium/chromium/src/+/master:v8/gni/v8.gni
+-  if ((is_posix || is_fuchsia) && (v8_enable_backtrace || v8_monolithic)) {
+-    configs -= [ "//build/config/gcc:symbol_visibility_hidden" ]
+-    configs += [ "//build/config/gcc:symbol_visibility_default" ]
+-  }
+-
+   public_configs = [
+     ":gmock_config",
+     ":gtest_config",
+-- 
+2.54.0
+

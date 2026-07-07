@@ -54,14 +54,14 @@ class RustyV8BazelTest(unittest.TestCase):
                 build_bazel,
             )
 
-    def test_release_tag_combines_crate_and_source_versions(self) -> None:
+    def test_release_tag_uses_manifest_artifact_identity(self) -> None:
         self.assertEqual(
-            "rusty-v8-v149.2.0-v8-14.9.207.35",
-            rusty_v8_bazel.rusty_v8_release_tag(
-                crate_version="149.2.0",
-                source_version="14.9.207.35",
-            ),
+            "rusty-v8-v149.2.0-v8-14.9.207.35-recipe-1",
+            rusty_v8_bazel.rusty_v8_release_tag(),
         )
+
+    def test_artifact_manifest_matches_cargo_and_bazel_pins(self) -> None:
+        rusty_v8_bazel.check_artifact_manifest()
 
     def test_resolved_v8_source_version_reads_archive_override(self) -> None:
         with TemporaryDirectory() as temp_dir:

@@ -1,0 +1,331 @@
+name: rusty-v8-source-build
+
+on:
+  workflow_call:
+    inputs:
+      artifact_identity:
+        description: Complete manifest artifact identity.
+        required: true
+        type: string
+      artifact_prefix:
+        description: Prefix for uploaded workflow artifacts.
+        required: true
+        type: string
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }} ${{ matrix.target }} from materialized source
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            sandbox: false
+            native: true
+            variant: release
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            sandbox: false
+            native: true
+            variant: release
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: macos-15-large
+            target: x86_64-apple-darwin
+            sandbox: false
+            native: true
+            variant: release
+          - runner: macos-15-large
+            target: x86_64-apple-darwin
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            sandbox: false
+            native: true
+            variant: release
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            sandbox: false
+            native: true
+            variant: release
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            sandbox: false
+            native: true
+            variant: release
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            sandbox: false
+            native: true
+            variant: release
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            sandbox: true
+            native: true
+            variant: ptrcomp-sandbox
+          - runner: windows-2022
+            target: aarch64-pc-windows-msvc
+            sandbox: false
+            native: false
+            variant: release
+          - runner: windows-2022
+            target: aarch64-pc-windows-msvc
+            sandbox: true
+            native: false
+            variant: ptrcomp-sandbox
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure git for source checkout
+        shell: bash
+        run: git config --global core.symlinks true
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Materialize pinned rusty_v8 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/materialize_rusty_v8.py --output upstream-rusty-v8
+
+      - name: Set up Codex Rust toolchain for artifact tests
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+          targets: ${{ matrix.target }}
+
+      - name: Install libclang 19 on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "${RUNNER_TEMP}/llvm-snapshot.gpg.key"
+          gpg --dearmor --output "${RUNNER_TEMP}/llvm-snapshot.gpg" "${RUNNER_TEMP}/llvm-snapshot.gpg.key"
+          sudo install -m 0644 "${RUNNER_TEMP}/llvm-snapshot.gpg" /usr/share/keyrings/llvm-snapshot.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-19 main" | sudo tee /etc/apt/sources.list.d/llvm-19.list
+          sudo apt-get update
+          sudo apt-get install -y clang-19 libclang-19-dev
+          echo "LIBCLANG_PATH=/usr/lib/llvm-19/lib" >> "${GITHUB_ENV}"
+
+      - name: Select Xcode libclang on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "${GITHUB_ENV}"
+
+      - name: Install libclang 19 on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm --version 19.1.7 --allow-downgrade --yes --no-progress
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install rusty_v8 Rust toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.91.0 --profile minimal --no-self-update
+          rustup target add --toolchain 1.91.0 "${TARGET}"
+
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Write materialized submodule status
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: git submodule status --recursive > git_submodule_status.txt
+
+      - name: Restore source-build cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: upstream-rusty-v8/target/${{ matrix.target }}/release/gn_out
+          key: rusty-v8-source-${{ inputs.artifact_identity }}-${{ matrix.target }}-${{ matrix.variant }}-${{ hashFiles('third_party/v8/artifacts.toml', 'third_party/v8/patches/**', 'upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+
+      - name: Install Chromium clang for ARM64 MSVC cross build
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: python3 tools/clang/scripts/update.py
+
+      - name: Build materialized rusty_v8 release pair
+        env:
+          EXTRA_GN_ARGS: ${{ contains(matrix.target, 'linux') && 'use_glib=false' || '' }}
+          SANDBOX: ${{ matrix.sandbox }}
+          TARGET: ${{ matrix.target }}
+          V8_FROM_SOURCE: "1"
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: |
+          set -euo pipefail
+          cargo_args=(build --locked --release --target "${TARGET}")
+          if [[ "${SANDBOX}" == "true" ]]; then
+            cargo_args+=(--features v8_enable_sandbox)
+          fi
+          cargo +1.91.0 "${cargo_args[@]}"
+
+      - name: Stage materialized release pair
+        env:
+          SANDBOX: ${{ matrix.sandbox }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage_args=(
+            --source-root upstream-rusty-v8
+            --target "${TARGET}"
+            --output-dir "dist/${TARGET}"
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            stage_args+=(--sandbox)
+          fi
+          python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair "${stage_args[@]}"
+
+      - name: Test staged artifact against crates.io wrapper
+        env:
+          NATIVE: ${{ matrix.native }}
+          SANDBOX: ${{ matrix.sandbox }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name '*rusty_v8_*.gz' -print -quit)"
+          binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
+          if [[ -z "${archive}" || -z "${binding}" ]]; then
+            echo "Missing staged archive or binding for ${TARGET}." >&2
+            exit 1
+          fi
+
+          cargo_args=(
+            test
+            -p codex-v8-poc
+            -p codex-code-mode-host
+            --target "${TARGET}"
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            cargo_args+=(--features sandbox)
+          fi
+          if [[ "${NATIVE}" != "true" ]]; then
+            cargo_args+=(--no-run)
+          fi
+
+          (
+            cd codex-rs
+            CARGO_TARGET_DIR="${RUNNER_TEMP}/rusty-v8-cargo-smoke-${TARGET}-${SANDBOX}" \
+            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
+            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
+            cargo +1.95.0 "${cargo_args[@]}"
+          )
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ inputs.artifact_prefix }}-${{ inputs.artifact_identity }}-${{ matrix.variant }}-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+  test-windows-arm64:
+    name: Test ${{ matrix.variant }} aarch64-pc-windows-msvc
+    needs:
+      - build
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sandbox: false
+            variant: release
+          - sandbox: true
+            variant: ptrcomp-sandbox
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+          targets: aarch64-pc-windows-msvc
+
+      - name: Download staged artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact_prefix }}-${{ inputs.artifact_identity }}-${{ matrix.variant }}-aarch64-pc-windows-msvc
+          path: dist
+
+      - name: Run V8 and code-mode tests
+        env:
+          SANDBOX: ${{ matrix.sandbox }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find dist -type f -name 'rusty_v8_*.lib.gz' -print -quit)"
+          binding="$(find dist -type f -name 'src_binding_*.rs' -print -quit)"
+          cargo_args=(
+            test
+            -p codex-v8-poc
+            -p codex-code-mode-host
+            --target aarch64-pc-windows-msvc
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            cargo_args+=(--features sandbox)
+          fi
+          (
+            cd codex-rs
+            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
+            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
+            cargo +1.95.0 "${cargo_args[@]}"
+          )

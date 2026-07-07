@@ -1,126 +1,109 @@
 # `rusty_v8` Consumer Artifacts
 
-This directory wires the `v8` crate to exact-version Bazel inputs.
-Bazel consumer builds use:
+Codex publishes its own `rusty_v8` archive/binding pairs for Cargo release,
+package, and CI builds. The exact producer input is
+`third_party/v8/artifacts.toml`. It pins:
 
-- upstream `denoland/rusty_v8` release archives on Windows MSVC
-- source-built V8 archives on Darwin, GNU Linux, musl Linux, and Windows GNU
+- the crates.io `v8` wrapper version;
+- the V8 version native to that wrapper;
+- the selected V8 engine version and denoland/v8 commit;
+- an ordered, versioned Codex patch recipe;
+- the complete release artifact identity.
 
-Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
-Selected Cargo CI, release, and package builds override
-`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
-sets those variables independently in `MODULE.bazel` to select source-built
-local archives and bindings for its consumer builds.
+The current identity is
+`rusty-v8-v149.2.0-v8-14.9.207.35-recipe-1`. The selected engine revision is
+the one used by Chromium `149.0.7827.201`.
 
-The Bazel `v8` crate feature selection enables V8's in-process sandbox for
-Darwin, Linux, and Windows GNU. Windows MSVC remains on upstream non-sandboxed
-prebuilts.
+`.github/scripts/materialize_rusty_v8.py` creates every published artifact
+source tree. It checks out the wrapper tag, replaces its V8 submodule with the
+manifest commit, applies every recipe patch using `git apply --check --index`,
+updates Chromium dependencies, and verifies their exact revisions. Patch
+application does not permit fuzz.
 
-Current pinned versions:
+Local Cargo builds still use upstream `rusty_v8` prebuilts by default.
+`.github/actions/setup-rusty-v8` and the package scripts use the manifest's
+artifact identity to download Codex assets and set
+`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`.
 
-- Rust crate: `v8 = =149.2.0`
-- Embedded upstream V8 source for Bazel-produced release builds: `14.9.207.35`
-  (the revision used by Chromium `149.0.7827.201`)
-- Codex artifact release tag:
-  `rusty-v8-v149.2.0-v8-14.9.207.35`
+## Updating the artifact manifest
 
-## Updating to a new `v8` release
+Independent engine updates are initially limited to the wrapper's V8 patch
+line: major, minor, and build must match `wrapper_v8_version`. For example,
+`14.9.207.2` may move to `14.9.207.35`, but not `14.9.208.1`. Bump the
+wrapper when generated bindings or runtime tests do not pass.
 
-Use this as the maintainer flow for a version bump:
+For an engine patch update:
 
-1. Update the `v8` crate and `codex-rs/Cargo.lock` when the Rust binding
-   changes. Update the embedded V8 source in `MODULE.bazel` independently.
-2. Refresh the matching checksum manifest and generated checksums when the
-   remaining prebuilt inputs change, as described below.
-3. Publish a release-candidate PR and validate that `v8-canary` passes.
-4. If the canary is green, publish the release tag returned by
-   `python3 .github/scripts/rusty_v8_bazel.py rusty-v8-release-tag`.
-5. Once the release build completes, rerun the build on the candidate branch
-   and verify that the final artifact builds and tests pass.
+1. update `v8_version` and `v8_source_commit`;
+2. create a new recipe directory and increment `patch_recipe` whenever the
+   ordered patch contents change;
+3. update `artifact_identity` to
+   `rusty-v8-v<wrapper>-v8-<engine>-recipe-<recipe>`;
+4. keep the V8 archive pin in `MODULE.bazel` aligned;
+5. run the helper, materializer, V8, and code-mode tests;
+6. publish a candidate branch and require `v8-canary` to pass.
 
-When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
-checked-in checksum manifest and `MODULE.bazel` in sync:
+For a wrapper update, also update `codex-rs/Cargo.lock`,
+`wrapper_version`, and `wrapper_v8_version`. A wrapper bump is required if
+the patch-level engine update does not compile, link, or pass runtime tests.
+
+Validate the checked-in pins with:
 
 ```bash
-python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
+python3 .github/scripts/rusty_v8_bazel.py check-artifact-manifest
 python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
 ```
 
-The commands default to the single `rusty_v8_*` `http_file` version still
-present in `MODULE.bazel` and validate every matching entry. CI runs the check
-command to block checksum drift.
+After the candidate is green, create the tag printed by:
+
+```bash
+python3 .github/scripts/rusty_v8_bazel.py artifact-identity
+```
+
+Creating or pushing a topic branch does not create this tag.
+
+## Published artifacts
+
+`.github/workflows/rusty-v8-release.yml` builds both release and
+pointer-compression/sandbox profiles from the materialized tree for:
+
+- x86_64 and aarch64 Darwin;
+- x86_64 and aarch64 GNU Linux;
+- x86_64 and aarch64 musl Linux;
+- x86_64 and aarch64 Windows MSVC.
+
+Release assets use:
+
+- `librusty_v8_release_<target>.a.gz` on Darwin and Linux;
+- `rusty_v8_release_<target>.lib.gz` on Windows MSVC;
+- `src_binding_release_<target>.rs`;
+- `rusty_v8_release_<target>.sha256`.
+
+Sandbox assets replace `release` with `ptrcomp_sandbox_release`. Each
+checksum file covers exactly its archive and generated binding.
+
+Every architecture smoke-links the staged pair against the unmodified crates.io
+wrapper used by the Codex workspace. Native jobs run both `codex-v8-poc` and
+`codex-code-mode-host` tests. Windows ARM64 is cross-built on Windows x64 and
+then tested on a native Windows ARM64 runner.
+
+We use explicit archive and binding URLs instead of `RUSTY_V8_MIRROR` because
+the upstream wrapper assumes a `v<crate_version>` tag layout. Codex identities
+also include the engine and recipe versions.
+
+## Bazel consumers
+
+Bazel consumer builds remain a separate validation and consumption path.
+Darwin, GNU Linux, musl Linux, and Windows GNU use the source pin in
+`MODULE.bazel`; Windows MSVC Bazel selectors still use upstream prebuilts
+until the Bazel graph has an MSVC C++ toolchain.
 
 The consumer-facing selectors are:
 
 - `//third_party/v8:rusty_v8_archive_for_target`
 - `//third_party/v8:rusty_v8_binding_for_target`
 
-Published release assets are expected at the tag:
-
-- `rusty-v8-v<crate_version>-v8-<source_version>`
-
-with these raw asset names:
-
-- `librusty_v8_release_<target>.a.gz`
-- `src_binding_release_<target>.rs`
-
-During the sandbox rollout, sandbox-enabled assets are published alongside those
-current assets on the same tag, with the Rust crate's sandbox feature suffix in
-their raw names:
-
-- `librusty_v8_ptrcomp_sandbox_release_<target>.a.gz`
-- `rusty_v8_ptrcomp_sandbox_release_<target>.lib.gz` on Windows MSVC
-- `src_binding_ptrcomp_sandbox_release_<target>.rs`
-
-The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-Tagged runs build release artifacts from the Bazel graph itself:
-
-- `//third_party/v8:rusty_v8_release_pair_x86_64_apple_darwin`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_apple_darwin`
-- `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_gnu`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_gnu`
-- `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
-
-The same run also builds the matching sandbox pair targets:
-
-- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_apple_darwin`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_apple_darwin`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_gnu`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
-
-The workflow also builds sandbox-enabled
-`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` archive/binding pairs
-from the upstream `rusty_v8` crate source. These outputs use that crate's own V8
-checkout, which may differ from the V8 source version in the Codex artifact tag.
-This is a known temporary exception: those ABI-specific outputs cannot be
-produced by Codex's Bazel Windows GNU toolchain.
-
-The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
-used by `rusty_v8 v149.2.0`, compiles published artifact targets with
-`--config=rusty-v8-upstream-libcxx`, and folds the matching runtime objects into
-the final static archive so consumers can link it with the `v8` crate's default
-`use_custom_libcxx` feature. The config keeps the object files and the bundled
-runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those objects
-with the toolchain libc++ default namespace. Bazel consumers use these
-source-built targets directly; Cargo release and package builds use the
-published copies.
-
-MSVC is not part of the Bazel-produced matrix yet. The repository's current
-hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
-it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
-add a real MSVC-targeting C++ toolchain to the Bazel graph.
-
-Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
-downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release
-assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
-hardcodes a `v<crate_version>` tag layout, while our artifacts are published
-under `rusty-v8-v<crate_version>-v8-<source_version>`.
-
-For Codex-built artifacts, do not mix artifacts across crate or source versions.
-The archive and binding must match both the exact resolved `v8` crate version in
-`codex-rs/Cargo.lock` and the embedded V8 source version in `MODULE.bazel`. The
-Windows MSVC exception above matches the crate version but does not yet
-guarantee the tagged Codex source version.
+The Bazel graph pins the libc++, libc++abi, and llvm-libc revisions used by the
+wrapper and builds with `--config=rusty-v8-upstream-libcxx`. `v8-canary`
+keeps this Bazel matrix alongside the materialized-source artifact matrix so
+the two consumers cannot drift silently.

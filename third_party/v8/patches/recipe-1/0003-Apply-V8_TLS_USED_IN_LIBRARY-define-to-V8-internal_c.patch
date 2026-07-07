@@ -1,0 +1,51 @@
+From ca24e81ad26d6b5ba3ccab42a11cc6950254689f Mon Sep 17 00:00:00 2001
+From: Leo Kettmeir <crowlkats@toaxl.com>
+Date: Thu, 23 Apr 2026 17:31:21 +0200
+Subject: [PATCH 3/4] Apply V8_TLS_USED_IN_LIBRARY define to V8 internal_config
+
+V8 already declares the `v8_monolithic_for_shared_library` GN arg, but
+the only place it adds the `V8_TLS_USED_IN_LIBRARY` define is the
+`:features` config -- which is consumed only by external embedders, not
+by the `internal_config` that V8's own `.cc` files use. As a result, V8
+internal sources (where the `thread_local Isolate*` etc. live) keep
+their `local-exec` TLS model and emit `R_X86_64_TPOFF32` relocations
+that fail to link into a downstream cdylib/.so on Linux.
+
+Add the same define to `internal_config` under the same arg, and drop
+the redundant `v8_monolithic &&` part of the existing `:features`
+condition (the arg already implies its scope).
+---
+ BUILD.gn | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index dd22a8954e..ee52726f19 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -918,6 +918,14 @@ config("internal_config") {
+     defines += [ "BUILDING_V8_SHARED" ]
+   }
+ 
++  # When the resulting V8 archive will be linked into a shared library
++  # downstream (e.g. a cdylib), thread-locals defined in V8 internal sources
++  # must use a TLS model compatible with -fPIC (not "local-exec"). This
++  # define switches them via src/common/thread-local-storage.h.
++  if (v8_monolithic_for_shared_library) {
++    defines += [ "V8_TLS_USED_IN_LIBRARY" ]
++  }
++
+   if (v8_current_cpu == "riscv64" || v8_current_cpu == "riscv32") {
+     if (!is_clang) {
+       libs = [ "atomic" ]
+@@ -1252,7 +1260,7 @@ config("features") {
+     defines += [ "CPPGC_ALLOW_ALLOCATIONS_IN_PREFINALIZERS" ]
+   }
+ 
+-  if (v8_monolithic && v8_monolithic_for_shared_library) {
++  if (v8_monolithic_for_shared_library) {
+     defines += [ "V8_TLS_USED_IN_LIBRARY" ]
+   }
+ 
+-- 
+2.54.0
+

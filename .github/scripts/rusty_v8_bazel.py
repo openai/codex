@@ -12,7 +12,15 @@ import sys
 import tomllib
 from pathlib import Path
 
+
+SCRIPT_ROOT = Path(__file__).resolve().parent
+ROOT = SCRIPT_ROOT.parents[1]
+sys.path.insert(0, str(SCRIPT_ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+
 from run_bazel_with_buildbuddy import bazel_command
+from rusty_v8_artifacts import DEFAULT_MANIFEST_PATH
+from rusty_v8_artifacts import RustyV8ArtifactManifest
 from rusty_v8_module_bazel import (
     RustyV8ChecksumError,
     check_module_bazel,
@@ -21,7 +29,6 @@ from rusty_v8_module_bazel import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
 MODULE_BAZEL = ROOT / "MODULE.bazel"
 RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 RELEASE_ARTIFACT_PROFILE = "release"
@@ -185,13 +192,32 @@ def resolved_v8_source_version(module_bazel: Path | None = None) -> str:
     return matches[0]
 
 
-def rusty_v8_release_tag(
-    crate_version: str | None = None,
-    source_version: str | None = None,
-) -> str:
-    crate_version = crate_version or resolved_v8_crate_version()
-    source_version = source_version or resolved_v8_source_version()
-    return f"rusty-v8-v{crate_version}-v8-{source_version}"
+def artifact_manifest(
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+) -> RustyV8ArtifactManifest:
+    return RustyV8ArtifactManifest.load(manifest_path, repo_root=ROOT)
+
+
+def check_artifact_manifest(
+    manifest: RustyV8ArtifactManifest | None = None,
+) -> None:
+    manifest = manifest or artifact_manifest()
+    crate_version = resolved_v8_crate_version()
+    if manifest.wrapper_version != crate_version:
+        raise SystemExit(
+            f"artifact wrapper {manifest.wrapper_version} does not match "
+            f"resolved v8 crate {crate_version}"
+        )
+    source_version = resolved_v8_source_version()
+    if manifest.v8_version != source_version:
+        raise SystemExit(
+            f"artifact V8 {manifest.v8_version} does not match "
+            f"MODULE.bazel V8 {source_version}"
+        )
+
+
+def rusty_v8_release_tag() -> str:
+    return artifact_manifest().artifact_identity
 
 
 def rusty_v8_checksum_manifest_path(version: str) -> Path:
@@ -362,6 +388,8 @@ def parse_args() -> argparse.Namespace:
 
     subparsers.add_parser("resolved-v8-crate-version")
     subparsers.add_parser("resolved-v8-source-version")
+    subparsers.add_parser("artifact-identity")
+    subparsers.add_parser("check-artifact-manifest")
     subparsers.add_parser("rusty-v8-release-tag")
 
     check_module_bazel_parser = subparsers.add_parser("check-module-bazel")
@@ -410,6 +438,12 @@ def main() -> int:
         return 0
     if args.command == "resolved-v8-source-version":
         print(resolved_v8_source_version())
+        return 0
+    if args.command == "artifact-identity":
+        print(artifact_manifest().artifact_identity)
+        return 0
+    if args.command == "check-artifact-manifest":
+        check_artifact_manifest()
         return 0
     if args.command == "rusty-v8-release-tag":
         print(rusty_v8_release_tag())

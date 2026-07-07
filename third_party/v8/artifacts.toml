@@ -1,0 +1,13 @@
+schema_version = 1
+wrapper_version = "149.2.0"
+wrapper_v8_version = "14.9.207.2"
+v8_version = "14.9.207.35"
+v8_source_commit = "933ce636c562cd54d68e7f7c93ab5cdffd685fca"
+patch_recipe = 1
+artifact_identity = "rusty-v8-v149.2.0-v8-14.9.207.35-recipe-1"
+patches = [
+  "third_party/v8/patches/recipe-1/0001-Remove-googletest-visibility-workaround-in-BUILD.gn.patch",
+  "third_party/v8/patches/recipe-1/0002-Fix-crash-on-Apple-Silicon-when-mprotect-fails-expec.patch",
+  "third_party/v8/patches/recipe-1/0003-Apply-V8_TLS_USED_IN_LIBRARY-define-to-V8-internal_c.patch",
+  "third_party/v8/patches/recipe-1/0004-add-padding-to-fix-ptrcmp-builds-on-windows.patch",
+]
