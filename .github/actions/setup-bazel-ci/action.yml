@@ -1,13 +1,9 @@
 name: setup-bazel-ci
-description: Prepare a Bazel CI runner with shared caches and optional test prerequisites.
+description: Prepare a Bazel CI runner with shared caches.
 inputs:
   target:
     description: Target triple used for cache namespacing.
     required: true
-  install-test-prereqs:
-    description: Install DotSlash for Bazel-backed test jobs.
-    required: false
-    default: "false"
 outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
@@ -16,21 +12,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # Some integration tests rely on DotSlash being installed.
-    # See https://github.com/openai/codex/pull/7617.
-    - name: Install DotSlash
-      if: inputs.install-test-prereqs == 'true'
-      uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-
-    - name: Make DotSlash available in PATH (Unix)
-      if: inputs.install-test-prereqs == 'true' && runner.os != 'Windows'
-      shell: bash
-      run: cp "$(which dotslash)" /usr/local/bin
-
-    - name: Make DotSlash available in PATH (Windows)
-      if: inputs.install-test-prereqs == 'true' && runner.os == 'Windows'
-      shell: pwsh
-      run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
+    - uses: ./.github/actions/setup-ci
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
@@ -124,8 +106,3 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: ./.github/scripts/compute-bazel-windows-path.ps1
-
-    - name: Enable Git long paths (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: git config --global core.longpaths true

@@ -16,7 +16,6 @@ runs:
     - uses: ./.github/actions/setup-bazel-ci
       with:
         target: ${{ inputs.target }}
-        install-test-prereqs: true
 
     - name: Install Linux sandbox build dependencies
       if: ${{ runner.os == 'Linux' }}
