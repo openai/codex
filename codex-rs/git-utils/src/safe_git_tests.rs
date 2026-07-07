@@ -824,6 +824,31 @@ async fn get_has_changes_pins_normal_untracked_files_over_repository_config() {
 }
 
 #[tokio::test]
+async fn get_has_changes_accepts_implicit_boolean_status_config() {
+    use std::io::Write;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo_path.join(".git/config"))
+        .expect("open repository config");
+    writeln!(config, "[core]\n\tfilemode").expect("append implicit core.filemode");
+    drop(config);
+
+    let stock = run_git(&repo_path, &["status", "--porcelain"]);
+    assert!(
+        stock.status.success(),
+        "stock Git rejected implicit Boolean"
+    );
+    assert!(stock.stdout.is_empty(), "fixture must remain clean");
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Ok(false)
+    );
+}
+
+#[tokio::test]
 async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_names() {
     for (driver, sentinel_attribute) in
         [("set", "filter"), ("unset", "-filter"), ("unspecified", "")]

@@ -11,7 +11,26 @@ use super::command_failure;
 use crate::git_command::IsolatedGitReadContext;
 use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 use crate::git_config::parse_git_boolean;
+use crate::git_config::read_effective_config_with_implicit_booleans_async;
 const STATUS_SAFE_CONFIG_PATTERN: &str = r"^(attr\.tree|core\.(filemode|symlinks|ignorecase|precomposeunicode|protecthfs|protectntfs|trustctime|checkstat|longpaths|fscache|splitindex|sparsecheckout|sparsecheckoutcone|autocrlf|eol|safecrlf|checkroundtripencoding|bigfilethreshold|quotepath|abbrev)|index\.(sparse|version))$";
+const STATUS_IMPLICIT_BOOLEAN_KEYS: &[&str] = &[
+    "core.filemode",
+    "core.symlinks",
+    "core.ignorecase",
+    "core.precomposeunicode",
+    "core.protecthfs",
+    "core.protectntfs",
+    "core.trustctime",
+    "core.longpaths",
+    "core.fscache",
+    "core.splitindex",
+    "core.sparsecheckout",
+    "core.sparsecheckoutcone",
+    "core.autocrlf",
+    "core.safecrlf",
+    "core.quotepath",
+    "index.sparse",
+];
 const REPOSITORY_FORMAT_CONFIG_PATTERN: &str =
     r"^(core\.repositoryformatversion|extensions\.(objectformat|compatobjectformat))$";
 const MAX_STATUS_ATTRIBUTE_SOURCE_BYTES: usize = 16 * 1024 * 1024;
@@ -108,10 +127,15 @@ impl GuardedGitConfig<'_> {
         core_attributes_file: Option<&OsStr>,
         configured_core_symlinks: Option<bool>,
     ) -> io::Result<()> {
-        let entries = self
-            .sources
-            .read_effective_async(STATUS_SAFE_CONFIG_PATTERN, "status allowlist")
-            .await?;
+        let entries = read_effective_config_with_implicit_booleans_async(
+            self.sources.git,
+            &self.sources.canonical_root,
+            &self.sources.base_config_args,
+            STATUS_SAFE_CONFIG_PATTERN,
+            "status allowlist",
+            STATUS_IMPLICIT_BOOLEAN_KEYS,
+        )
+        .await?;
         let repository_format = self
             .sources
             .read_direct_common_config_async(REPOSITORY_FORMAT_CONFIG_PATTERN, "repository format")
@@ -351,3 +375,7 @@ fn parse_status_config_path(output: &[u8]) -> io::Result<OsString> {
     }
     crate::safe_git::git_path_argument(value)
 }
+
+#[cfg(test)]
+#[path = "status_context_tests.rs"]
+mod tests;

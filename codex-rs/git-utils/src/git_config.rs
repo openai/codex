@@ -154,6 +154,21 @@ impl TryFrom<GitConfigValueEntry> for GitConfigEntry {
     }
 }
 
+fn normalize_implicit_boolean_entry(
+    mut entry: GitConfigValueEntry,
+    implicit_boolean_keys: &[&str],
+) -> io::Result<GitConfigEntry> {
+    if entry.value == GitConfigValue::Implicit
+        && implicit_boolean_keys.contains(&entry.key.as_str())
+    {
+        // Git's config grammar defines a key without `=` as Boolean true.
+        // Normalize only keys whose consumer accepts Boolean values; all
+        // other implicit values retain the ordinary strict rejection.
+        entry.value = GitConfigValue::Explicit("true".to_string());
+    }
+    GitConfigEntry::try_from(entry)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GitConfigOrigin {
     CommandLine,
@@ -475,6 +490,30 @@ async fn read_config_entries_with_fallback_async(
     follow_includes: bool,
     config_file: Option<&Path>,
 ) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_value_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        follow_includes,
+        config_file,
+    )
+    .await?
+    .into_iter()
+    .map(GitConfigEntry::try_from)
+    .collect()
+}
+
+async fn read_config_value_entries_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigValueEntry>> {
     let scoped = run_effective_config_query_async(
         git,
         cwd,
@@ -490,7 +529,7 @@ async fn read_config_entries_with_fallback_async(
         .code()
         .is_some_and(|code| code == 0 || code == 1)
     {
-        return parse_config_entries(&scoped.stdout);
+        return parse_config_value_entries(&scoped.stdout);
     }
 
     let legacy = run_effective_config_query_async(
@@ -514,7 +553,7 @@ async fn read_config_entries_with_fallback_async(
             String::from_utf8_lossy(&legacy.stderr).trim()
         )));
     }
-    parse_config_entries_with_origins(&legacy.stdout)
+    parse_config_value_entries_with_origins(&legacy.stdout)
 }
 
 pub(crate) fn read_effective_config_with_fallback(
@@ -552,6 +591,35 @@ pub(crate) async fn read_effective_config_with_fallback_async(
     .into_iter()
     .map(|entry| (entry.key.clone(), entry))
     .collect())
+}
+
+/// Read effective config while accepting implicit values only for the named
+/// Boolean keys. Git defines an implicit Boolean as true; path-, enum-, and
+/// integer-valued consumers remain strict.
+pub(crate) async fn read_effective_config_with_implicit_booleans_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    implicit_boolean_keys: &[&str],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    read_config_value_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )
+    .await?
+    .into_iter()
+    .map(|entry| {
+        let entry = normalize_implicit_boolean_entry(entry, implicit_boolean_keys)?;
+        Ok((entry.key.clone(), entry))
+    })
+    .collect()
 }
 
 fn run_effective_config_query(
