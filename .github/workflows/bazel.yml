@@ -225,11 +225,16 @@ jobs:
             --skip_incompatible_explicit_targets
             --test_tag_filters=-argument-comment-lint
             --test_verbose_timeout_warnings
+            # The Windows-cross config serializes each Rust test harness.
+            # Measure whether allowing two harness threads uses the otherwise
+            # idle host without overcommitting Bazel's four local test slots.
+            --test_env=RUST_TEST_THREADS=2
             # Make every uploaded experiment revision execute its selected
             # tests instead of reusing the prior revision's test action cache.
             --test_env=CODEX_BAZEL_TEST_CACHE_BUST=${GITHUB_SHA}
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
+            --build_metadata=TAG_windows_rust_test_threads=2
             --profile=${RUNNER_TEMP}/windows-bazel-profile-shard-${BAZEL_TEST_SHARD}.gz
             --noslim_profile
           )
