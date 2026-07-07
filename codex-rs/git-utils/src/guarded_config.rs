@@ -2,14 +2,12 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io;
-use std::io::Seek;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
 use crate::FsmonitorOverride;
-use crate::git_command::GitAsyncCommand;
 use crate::git_command::GitCommand;
 use crate::git_command::GitRunner;
 use crate::git_command::IsolatedGitStorage;
@@ -28,25 +26,11 @@ use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::git_config_sources::ensure_no_worktree_config_sources_async;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ExecutableFilterDrivers;
-use crate::safe_git::FilterAttributeValue;
 use crate::safe_git::FilterExecution;
 use crate::safe_git::FilterPolicyRole;
 use crate::safe_git::FilterPolicySnapshot;
-use crate::safe_git::MAX_EXECUTABLE_FILTER_DRIVERS;
-use crate::safe_git::SelectedFilterPolicy;
-use crate::safe_git::SentinelFilterProbeBudget;
 use crate::safe_git::build_filter_policy_snapshot;
-use crate::safe_git::classify_selected_filter;
-use crate::safe_git::git_path_argument;
-use crate::safe_git::parse_filter_attributes;
-use crate::safe_git::parse_nul_paths;
-use crate::safe_git::status_policy_filter_drivers;
-use crate::safe_git::validate_executable_driver_count;
-use crate::safe_git::write_nul_paths;
 
-const MAX_STATUS_TRACKED_PATHS: usize = 250_000;
-const MAX_STATUS_SENTINEL_PATHSPEC_BYTES: usize = 16 * 1024;
-const MAX_STATUS_SENTINEL_STAGE_RECORDS: usize = 3;
 const FILTER_NEUTRALIZATION_PLAN: [(&str, &str); 4] = [
     ("clean", ""),
     ("smudge", ""),
@@ -65,10 +49,21 @@ pub(crate) use merge_overlay::merge_overlay_count;
 #[cfg(test)]
 pub(crate) use merge_overlay::reset_merge_policy_counts;
 mod reverse_probe;
+mod status_command;
+pub(crate) use status_command::StatusPolicyCommandFailure;
+use status_command::command_failure;
 mod status_context;
-use status_context::SealedStatusReadContext;
+mod status_filter_policy;
+pub(crate) use status_filter_policy::SelectedStatusFilterRefusal;
+pub(crate) use status_filter_policy::StatusFilterProbeLimitExceeded;
+#[cfg(test)]
+pub(crate) use status_filter_policy::status_filter_policy_read_count;
 mod status_index;
-use status_index::status_core_symlinks_for_filter_screening;
+mod status_policy;
+use status_policy::MAX_STATUS_TRACKED_PATHS;
+pub(crate) use status_policy::NoActiveStatusWorktree;
+use status_policy::StatusPolicySnapshot;
+pub(crate) use status_policy::StatusRootMismatch;
 
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
@@ -389,74 +384,6 @@ pub(crate) struct GuardedGitConfig<'git> {
     status_replacements_disabled: bool,
 }
 
-struct StatusPolicySnapshot {
-    context: SealedStatusReadContext,
-    fsmonitor: Option<FsmonitorOverride>,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("executable filter {driver:?} is selected for {path:?}")]
-pub(crate) struct SelectedStatusFilterRefusal {
-    driver: String,
-    path: Vec<u8>,
-}
-
-impl SelectedStatusFilterRefusal {
-    pub(crate) fn driver(&self) -> &str {
-        &self.driver
-    }
-
-    pub(crate) fn path(&self) -> &[u8] {
-        &self.path
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Git resolved {reported:?} instead of expected root {expected:?}")]
-pub(crate) struct StatusRootMismatch {
-    expected: PathBuf,
-    reported: PathBuf,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("selected Git authority has no active worktree root")]
-pub(crate) struct NoActiveStatusWorktree;
-
-#[derive(Debug, thiserror::Error)]
-#[error("Git filter attribute selection exceeded its {max_probes}-probe limit")]
-pub(crate) struct StatusFilterProbeLimitExceeded {
-    max_probes: usize,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("{description} failed with exit code {exit_code:?}")]
-pub(crate) struct StatusPolicyCommandFailure {
-    description: String,
-    exit_code: Option<i32>,
-}
-
-impl StatusPolicyCommandFailure {
-    pub(crate) fn exit_code(&self) -> Option<i32> {
-        self.exit_code
-    }
-}
-
-impl StatusFilterProbeLimitExceeded {
-    pub(crate) fn max_probes(&self) -> usize {
-        self.max_probes
-    }
-}
-
-impl StatusRootMismatch {
-    pub(crate) fn expected(&self) -> &Path {
-        &self.expected
-    }
-
-    pub(crate) fn reported(&self) -> &Path {
-        &self.reported
-    }
-}
-
 struct CapabilityIdentity;
 
 /// Opaque operation identity for sealed plans implemented in sibling modules.
@@ -605,66 +532,6 @@ impl BoundSubcommand {
     }
 }
 
-/// Async counterpart to [`GuardedGitCommand`]. The raw Tokio command never
-/// leaves this module, so status callers cannot change its cwd, config
-/// invocation, overlay order, or final metadata revalidation.
-struct GuardedAsyncGitCommand<'operation, 'git> {
-    operation: &'operation GuardedGitConfig<'git>,
-    inner: GitAsyncCommand,
-}
-
-impl GuardedAsyncGitCommand<'_, '_> {
-    fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
-        self.inner.arg(arg);
-        self
-    }
-
-    fn args<I, S>(&mut self, args: I) -> &mut Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.inner.args(args);
-        self
-    }
-
-    fn disable_optional_locks(&mut self) -> &mut Self {
-        self.inner.env("GIT_OPTIONAL_LOCKS", "0");
-        self
-    }
-
-    fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
-        self.inner.stdin(config);
-        self
-    }
-
-    async fn output(self) -> io::Result<std::process::Output> {
-        self.operation
-            .sources
-            .git
-            .output_async_bounded(self.inner, MAX_INTERNAL_GIT_OUTPUT_BYTES)
-            .await
-    }
-
-    async fn output_in_status_context(
-        self,
-        context: &SealedStatusReadContext,
-    ) -> io::Result<std::process::Output> {
-        let isolated = context.context(&self.operation.identity)?;
-        let operation_identity = self.operation.operation_identity();
-        self.operation
-            .sources
-            .git
-            .output_async_in_isolated_read_context(
-                self.inner,
-                isolated,
-                &operation_identity,
-                MAX_INTERNAL_GIT_OUTPUT_BYTES,
-            )
-            .await
-    }
-}
-
 /// A sealed filter-only include owned for the complete capability lifetime.
 /// Its fields and include argument are intentionally inaccessible outside this
 /// module; callers can neither forge one nor append it to another command.
@@ -769,24 +636,6 @@ impl<'git> GuardedGitConfig<'git> {
     ) -> io::Result<Self> {
         Ok(Self {
             sources: ValidatedConfigSources::authorize(git, canonical_root, base_config_args)?,
-            identity: Arc::new(CapabilityIdentity),
-            apply_policy: None,
-            apply_policy_gate: ApplyPolicyGateState::NotRun,
-            filters: Vec::new(),
-            merge: None,
-            merge_policy_installed: false,
-            status: None,
-            status_replacements_disabled: false,
-        })
-    }
-
-    pub(crate) async fn authorize_status_async(git: &'git GitRunner) -> io::Result<Self> {
-        let root = git
-            .active_worktree_root()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, NoActiveStatusWorktree))?;
-        git.ensure_repository_root_route(root)?;
-        Ok(Self {
-            sources: ValidatedConfigSources::authorize_async(git, root, Vec::new()).await?,
             identity: Arc::new(CapabilityIdentity),
             apply_policy: None,
             apply_policy_gate: ApplyPolicyGateState::NotRun,
@@ -1066,40 +915,6 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(args)
     }
 
-    fn status_config_args(
-        &self,
-        fsmonitor: FsmonitorOverride,
-        neutralizer: Option<&SealedFilterConfigOverride>,
-    ) -> io::Result<Vec<String>> {
-        self.ensure_status_exclusive_state()?;
-        let mut args = self.sources.base_config_args.to_vec();
-        args.extend([
-            "-c".to_string(),
-            format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-            "-c".to_string(),
-            fsmonitor.git_config_arg().to_string(),
-        ]);
-        if let Some(neutralizer) = neutralizer {
-            neutralizer.append_rendered_args(&self.identity, &mut args)?;
-        }
-        Ok(args)
-    }
-
-    fn ensure_status_exclusive_state(&self) -> io::Result<()> {
-        if self.apply_policy.is_some()
-            || !matches!(self.apply_policy_gate, ApplyPolicyGateState::NotRun)
-            || !self.filters.is_empty()
-            || self.merge.is_some()
-            || self.merge_policy_installed
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "status policy cannot coexist with apply, mutation filter, or merge policy",
-            ));
-        }
-        Ok(())
-    }
-
     fn ordered_filter_snapshots(
         &self,
     ) -> io::Result<(Option<&FilterPolicySnapshot>, Option<&FilterPolicySnapshot>)> {
@@ -1163,432 +978,6 @@ impl<'git> GuardedGitConfig<'git> {
         self.sources.read_bool(key)
     }
 
-    /// Confirm selected Git agrees with the retained authority about the
-    /// repository root before any status worktree read.
-    pub(crate) async fn verify_status_root_async(&self, requested_cwd: &Path) -> io::Result<()> {
-        let requested_cwd = std::fs::canonicalize(requested_cwd)?;
-        let mut command = self.sources.git.async_command_for_cwd(&requested_cwd)?;
-        command
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(self.status_config_args(FsmonitorOverride::Disabled, /*neutralizer*/ None)?)
-            .args(["rev-parse", "--show-toplevel"]);
-        let output = self
-            .sources
-            .git
-            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
-            .await?;
-        if !output.status.success() {
-            return Err(command_failure("status repository-root probe", &output));
-        }
-        let reported = git_path_from_line_output(&output.stdout)?;
-        let reported = std::fs::canonicalize(reported).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Git repository-root output did not resolve to an existing path",
-            )
-        })?;
-        if reported != self.sources.canonical_root {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                StatusRootMismatch {
-                    expected: self.sources.canonical_root.clone(),
-                    reported,
-                },
-            ));
-        }
-        Ok(())
-    }
-
-    /// Install the mutually exclusive Status filter policy and publish one
-    /// operation-owned config, attribute, HEAD, and untracked-presence view.
-    pub(crate) async fn install_status_policy_async(&mut self) -> io::Result<()> {
-        self.ensure_status_exclusive_state()?;
-        if self.status.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "status filter policy is already installed",
-            ));
-        }
-        #[cfg(test)]
-        FILTER_POLICY_READ_COUNT_FOR_STATUS.with(|count| count.set(count.get() + 1));
-        let entries = self
-            .sources
-            .read_effective_async(crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN, "filter")
-            .await?;
-        let executable_drivers = status_policy_filter_drivers(&entries)?;
-        validate_executable_driver_count(&executable_drivers)?;
-        let configured_core_symlinks = self.sources.read_bool_async("core.symlinks").await?;
-        let core_symlinks = status_core_symlinks_for_filter_screening(configured_core_symlinks);
-        let paths = self.read_status_tracked_paths_async(core_symlinks).await?;
-        let neutralizer = if executable_drivers.is_empty() {
-            None
-        } else {
-            Some(
-                self.build_filter_override_async(&executable_drivers)
-                    .await?,
-            )
-        };
-        self.ensure_no_effective_replacement_refs_async(neutralizer.as_ref())
-            .await?;
-        if let Some(neutralizer) = &neutralizer {
-            let attributes = self
-                .read_status_filter_attributes_async(&paths, &executable_drivers, neutralizer)
-                .await?;
-            let mut required_cache = BTreeMap::new();
-            for (path, driver) in attributes {
-                if !executable_drivers.contains(&driver) {
-                    continue;
-                }
-                let required = required_cache.get(&driver).copied();
-                let mut policy = classify_selected_filter(&entries, &driver, required);
-                if policy == SelectedFilterPolicy::NeedsRequiredValue {
-                    let required = self
-                        .sources
-                        .read_bool_async(&format!("filter.{driver}.required"))
-                        .await
-                        .map_err(|error| {
-                            io::Error::new(
-                                io::ErrorKind::Unsupported,
-                                format!(
-                                    "refusing selected Git filter {driver:?} with malformed required value: {error}"
-                                ),
-                            )
-                        })?
-                        .unwrap_or(false);
-                    required_cache.insert(driver.clone(), required);
-                    policy = classify_selected_filter(&entries, &driver, Some(required));
-                }
-                if policy == SelectedFilterPolicy::Refused {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        SelectedStatusFilterRefusal { driver, path },
-                    ));
-                }
-            }
-        }
-        let has_untracked = self
-            .read_status_untracked_presence_async(neutralizer.as_ref())
-            .await?;
-        let head_oid = self
-            .read_status_head_oid_async(neutralizer.as_ref())
-            .await?;
-        let context = self
-            .build_status_read_context_async(
-                head_oid.as_deref(),
-                has_untracked,
-                configured_core_symlinks,
-            )
-            .await?;
-        self.status = Some(StatusPolicySnapshot {
-            context,
-            fsmonitor: None,
-        });
-        Ok(())
-    }
-
-    async fn read_status_untracked_presence_async(
-        &self,
-        neutralizer: Option<&SealedFilterConfigOverride>,
-    ) -> io::Result<bool> {
-        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        command.disable_optional_locks().args([
-            "ls-files",
-            "-z",
-            "--others",
-            "--exclude-standard",
-            "--directory",
-            "--no-empty-directory",
-            "--",
-        ]);
-        let output = command.output().await?;
-        if !output.status.success() {
-            return Err(command_failure(
-                "status untracked-presence inventory",
-                &output,
-            ));
-        }
-        let paths = parse_nul_paths(&output.stdout)?;
-        if paths.len() > MAX_STATUS_TRACKED_PATHS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "status untracked-presence inventory exceeds its path limit",
-            ));
-        }
-        Ok(!paths.is_empty())
-    }
-
-    async fn read_status_head_oid_async(
-        &self,
-        neutralizer: Option<&SealedFilterConfigOverride>,
-    ) -> io::Result<Option<String>> {
-        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        command.disable_optional_locks().args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "HEAD^{commit}",
-        ]);
-        let output = command.output().await?;
-        if output.status.success() {
-            return parse_status_head_oid(&output.stdout).map(Some);
-        }
-        if output.status.code() != Some(1) || !output.stdout.is_empty() || !output.stderr.is_empty()
-        {
-            return Err(command_failure("status HEAD snapshot", &output));
-        }
-
-        let mut symbolic = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        symbolic
-            .disable_optional_locks()
-            .args(["symbolic-ref", "--quiet", "HEAD"]);
-        let symbolic = symbolic.output().await?;
-        if !symbolic.status.success() {
-            return Err(command_failure("status symbolic HEAD snapshot", &symbolic));
-        }
-        let target = parse_status_symbolic_ref(&symbolic.stdout)?;
-
-        let mut verify = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        verify
-            .disable_optional_locks()
-            .args(["show-ref", "--verify", "--quiet", "--"])
-            .arg(&target);
-        let verify = verify.output().await?;
-        if verify.status.code() == Some(1) && verify.stdout.is_empty() && verify.stderr.is_empty() {
-            return Ok(None);
-        }
-        if verify.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Status HEAD target exists but does not resolve to a commit",
-            ));
-        }
-        Err(command_failure("status unborn HEAD verification", &verify))
-    }
-
-    async fn ensure_no_effective_replacement_refs_async(
-        &mut self,
-        neutralizer: Option<&SealedFilterConfigOverride>,
-    ) -> io::Result<()> {
-        if self.sources.git.replacement_refs_are_disabled() {
-            self.status_replacements_disabled = true;
-            return Ok(());
-        }
-        if self.sources.git.replacement_ref_base_is_custom() {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "frozen Status is unavailable with a custom Git replacement-ref namespace",
-            ));
-        }
-        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        command.disable_optional_locks().args([
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/replace/",
-        ]);
-        let output = command.output().await?;
-        if !output.status.success() {
-            return Err(command_failure("status replacement-ref inventory", &output));
-        }
-        if output.stdout.is_empty() {
-            self.status_replacements_disabled = true;
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "frozen Status is unavailable with active Git replacement refs",
-            ))
-        }
-    }
-
-    pub(crate) async fn detect_status_fsmonitor_async(&mut self) -> FsmonitorOverride {
-        if self.status.is_none() || self.ensure_status_exclusive_state().is_err() {
-            return FsmonitorOverride::Disabled;
-        }
-        if let Some(fsmonitor) = self.status.as_ref().and_then(|status| status.fsmonitor) {
-            return fsmonitor;
-        }
-        if let Some(status) = &mut self.status {
-            // The synthetic owned Git directory has no stable fsmonitor daemon
-            // identity or socket lifecycle. Disabling it is a performance-only
-            // downgrade and avoids launching a daemon tied to temporary state.
-            status.fsmonitor = Some(FsmonitorOverride::Disabled);
-        }
-        FsmonitorOverride::Disabled
-    }
-
-    pub(crate) async fn status_output_async(&self) -> io::Result<std::process::Output> {
-        let status = self.status.as_ref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "status output requires an installed status filter policy",
-            )
-        })?;
-        let fsmonitor = status.fsmonitor.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "status output requires a retained fsmonitor decision",
-            )
-        })?;
-        let mut command = self.pending_frozen_status_command(fsmonitor)?;
-        command.disable_optional_locks().args([
-            "status",
-            "--porcelain",
-            "--ignore-submodules=dirty",
-            "--untracked-files=no",
-        ]);
-        command.output_in_status_context(&status.context).await
-    }
-
-    pub(crate) fn status_has_untracked_snapshot(&self) -> io::Result<bool> {
-        let status = self.status.as_ref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "untracked status requires an installed status filter policy",
-            )
-        })?;
-        status.context.has_untracked(&self.identity)
-    }
-
-    fn pending_frozen_status_command<'operation>(
-        &'operation self,
-        fsmonitor: FsmonitorOverride,
-    ) -> io::Result<GuardedAsyncGitCommand<'operation, 'git>> {
-        self.ensure_status_exclusive_state()?;
-        if self.status.is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "frozen Status command requires an installed context",
-            ));
-        }
-        let mut command = self
-            .sources
-            .git
-            .async_command_for_cwd(&self.sources.canonical_root)?;
-        command.args([
-            "-c",
-            &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-            "-c",
-            fsmonitor.git_config_arg(),
-        ]);
-        Ok(GuardedAsyncGitCommand {
-            operation: self,
-            inner: command,
-        })
-    }
-
-    fn pending_status_command<'operation>(
-        &'operation self,
-        fsmonitor: FsmonitorOverride,
-        neutralizer: Option<&'operation SealedFilterConfigOverride>,
-    ) -> io::Result<GuardedAsyncGitCommand<'operation, 'git>> {
-        let mut command = self
-            .sources
-            .git
-            .async_command_for_cwd(&self.sources.canonical_root)?;
-        command.args(self.status_config_args(fsmonitor, neutralizer)?);
-        if self.status_replacements_disabled {
-            command.env("GIT_NO_REPLACE_OBJECTS", "1");
-        }
-        Ok(GuardedAsyncGitCommand {
-            operation: self,
-            inner: command,
-        })
-    }
-
-    async fn read_status_filter_attributes_async(
-        &self,
-        paths: &[Vec<u8>],
-        executable_drivers: &ExecutableFilterDrivers,
-        neutralizer: &SealedFilterConfigOverride,
-    ) -> io::Result<BTreeMap<Vec<u8>, String>> {
-        if paths.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let mut input = tempfile::tempfile()?;
-        write_nul_paths(&mut input, paths)?;
-        input.rewind()?;
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, Some(neutralizer))?;
-        command
-            .disable_optional_locks()
-            .args(["check-attr", "--stdin", "-z", "filter"])
-            .stdin(Stdio::from(input));
-        let output = command.output().await?;
-        if !output.status.success() {
-            return Err(command_failure("status filter attribute probe", &output));
-        }
-        let attributes = parse_filter_attributes(&output.stdout, paths)?;
-        self.resolve_status_filter_sentinels_async(attributes, executable_drivers, neutralizer)
-            .await
-    }
-
-    async fn resolve_status_filter_sentinels_async(
-        &self,
-        attributes: BTreeMap<Vec<u8>, FilterAttributeValue>,
-        executable_drivers: &ExecutableFilterDrivers,
-        neutralizer: &SealedFilterConfigOverride,
-    ) -> io::Result<BTreeMap<Vec<u8>, String>> {
-        let mut resolved = BTreeMap::new();
-        let mut probe_budget = SentinelFilterProbeBudget::default();
-        for (path, attribute) in attributes {
-            match attribute {
-                FilterAttributeValue::Driver(driver) => {
-                    resolved.insert(path, driver);
-                }
-                FilterAttributeValue::AmbiguousSentinel(driver) => {
-                    if executable_drivers.contains(&driver)
-                        && self
-                            .status_sentinel_selects_driver_async(
-                                &path,
-                                &driver,
-                                neutralizer,
-                                &mut probe_budget,
-                            )
-                            .await?
-                    {
-                        resolved.insert(path, driver);
-                    }
-                }
-            }
-        }
-        Ok(resolved)
-    }
-
-    async fn status_sentinel_selects_driver_async(
-        &self,
-        path: &[u8],
-        driver: &str,
-        neutralizer: &SealedFilterConfigOverride,
-        probe_budget: &mut SentinelFilterProbeBudget,
-    ) -> io::Result<bool> {
-        if !matches!(driver, "set" | "unset" | "unspecified") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Git filter sentinel probe requested for a non-sentinel driver",
-            ));
-        }
-        probe_budget.ensure_probe_available().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                StatusFilterProbeLimitExceeded {
-                    max_probes: SentinelFilterProbeBudget::max_probes(),
-                },
-            )
-        })?;
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, Some(neutralizer))?;
-        command
-            .disable_optional_locks()
-            .args(["ls-files", "--cached", "--full-name", "-z", "--"])
-            .arg(status_filter_special_pathspec(path, driver)?);
-        let output = command.output().await?;
-        probe_budget.record_completed_probe();
-        if !output.status.success() {
-            return Err(command_failure("status filter sentinel probe", &output));
-        }
-        status_filter_sentinel_probe_selects_driver(&output.stdout, path)
-    }
-
     fn ensure_owned_config_path(&self, path: &Path, description: &str) -> io::Result<()> {
         self.sources
             .git
@@ -1606,36 +995,6 @@ impl<'git> GuardedGitConfig<'git> {
         for driver in executable_drivers.iter() {
             for (name, value) in FILTER_NEUTRALIZATION_PLAN {
                 self.write_filter_override_value(&config_path, driver, name, value)?;
-            }
-        }
-        let config_path = config_path.to_str().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 filter guard path")
-        })?;
-        Ok(SealedFilterConfigOverride {
-            owner: Arc::clone(&self.identity),
-            include_arg: format!("include.path={config_path}"),
-            _config_dir: config_dir,
-        })
-    }
-
-    async fn build_filter_override_async(
-        &self,
-        executable_drivers: &ExecutableFilterDrivers,
-    ) -> io::Result<SealedFilterConfigOverride> {
-        if executable_drivers.len() > MAX_EXECUTABLE_FILTER_DRIVERS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "too many executable filter drivers for status neutralization",
-            ));
-        }
-        let config_dir = tempfile::tempdir()?;
-        let config_path = config_dir.path().join("filter-neutralization.gitconfig");
-        self.ensure_owned_config_path(&config_path, "owned Git filter neutralization")?;
-        std::fs::write(&config_path, [])?;
-        for driver in executable_drivers.iter() {
-            for (name, value) in FILTER_NEUTRALIZATION_PLAN {
-                self.write_filter_override_value_async(&config_path, driver, name, value)
-                    .await?;
             }
         }
         let config_path = config_path.to_str().ok_or_else(|| {
@@ -1673,37 +1032,6 @@ impl<'git> GuardedGitConfig<'git> {
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
-        }
-        Ok(())
-    }
-
-    async fn write_filter_override_value_async(
-        &self,
-        config_path: &Path,
-        driver: &str,
-        name: &str,
-        value: &str,
-    ) -> io::Result<()> {
-        debug_assert!(matches!(name, "clean" | "smudge" | "process" | "required"));
-        let mut command = self
-            .sources
-            .git
-            .async_command_for_cwd(&self.sources.canonical_root)?;
-        command
-            .args(&self.sources.base_config_args)
-            .args(["config", "--file"])
-            .arg(config_path)
-            .args(["--add", &format!("filter.{driver}.{name}"), value]);
-        let output = self
-            .sources
-            .git
-            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
-            .await?;
-        if !output.status.success() {
-            return Err(command_failure(
-                "status filter neutralization write",
-                &output,
-            ));
         }
         Ok(())
     }
@@ -1990,43 +1318,6 @@ impl<'git> GuardedGitConfig<'git> {
     }
 }
 
-fn command_failure(description: &str, output: &std::process::Output) -> io::Error {
-    io::Error::other(StatusPolicyCommandFailure {
-        description: description.to_string(),
-        exit_code: output.status.code(),
-    })
-}
-
-fn git_path_from_line_output(output: &[u8]) -> io::Result<PathBuf> {
-    let output = output.strip_suffix(b"\n").unwrap_or(output);
-    #[cfg(windows)]
-    let output = output.strip_suffix(b"\r").unwrap_or(output);
-    if output.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "empty Git repository-root output",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
-
-        Ok(PathBuf::from(OsString::from_vec(output.to_vec())))
-    }
-    #[cfg(not(unix))]
-    {
-        String::from_utf8(output.to_vec())
-            .map(PathBuf::from)
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "non-UTF-8 Git repository-root output",
-                )
-            })
-    }
-}
-
 fn safe_scalar_override_args() -> [String; 4] {
     [
         "-c".to_string(),
@@ -2034,100 +1325,6 @@ fn safe_scalar_override_args() -> [String; 4] {
         "-c".to_string(),
         FsmonitorOverride::Disabled.git_config_arg().to_string(),
     ]
-}
-
-fn parse_status_head_oid(output: &[u8]) -> io::Result<String> {
-    let line = output.strip_suffix(b"\n").ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unterminated Status HEAD output",
-        )
-    })?;
-    let line = line.strip_suffix(b"\r").unwrap_or(line);
-    if !matches!(line.len(), 40 | 64) || !line.iter().all(u8::is_ascii_hexdigit) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Status HEAD did not resolve to one full object ID",
-        ));
-    }
-    String::from_utf8(line.to_ascii_lowercase()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Status HEAD output was not a valid hexadecimal object ID",
-        )
-    })
-}
-
-fn status_filter_special_pathspec(path: &[u8], driver: &str) -> io::Result<std::ffi::OsString> {
-    if path.is_empty() || path.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid Status filter sentinel path",
-        ));
-    }
-    let requirement = match driver {
-        "set" => "filter",
-        "unset" => "-filter",
-        "unspecified" => "!filter",
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Git filter sentinel probe requested for a non-sentinel driver",
-            ));
-        }
-    };
-    let mut pathspec = format!(":(top,literal,attr:{requirement})").into_bytes();
-    pathspec.extend_from_slice(path);
-    if pathspec.len() > MAX_STATUS_SENTINEL_PATHSPEC_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Git filter sentinel pathspec exceeds the Status byte limit",
-        ));
-    }
-    git_path_argument(&pathspec)
-}
-
-fn status_filter_sentinel_probe_selects_driver(output: &[u8], path: &[u8]) -> io::Result<bool> {
-    let matches = parse_nul_paths(output)?;
-    if matches.is_empty() {
-        // The public check-attr spelling was ambiguous at T0. If the one
-        // authoritative T1 pathspec does not prove the corresponding special
-        // state, conservatively retain the spelling as a literal driver
-        // selection. This preserves the structured selected-filter refusal
-        // and also fails closed for any intervening source drift.
-        return Ok(true);
-    }
-    if matches.len() > MAX_STATUS_SENTINEL_STAGE_RECORDS
-        || matches.iter().any(|matched| matched != path)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "status filter sentinel probe returned non-exact index paths",
-        ));
-    }
-    Ok(false)
-}
-
-fn parse_status_symbolic_ref(output: &[u8]) -> io::Result<std::ffi::OsString> {
-    let line = output.strip_suffix(b"\n").ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unterminated Status symbolic HEAD output",
-        )
-    })?;
-    let line = line.strip_suffix(b"\r").unwrap_or(line);
-    if !line.starts_with(b"refs/heads/")
-        || line.contains(&0)
-        || line
-            .iter()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Status HEAD did not resolve to a safe symbolic ref",
-        ));
-    }
-    git_path_argument(line)
 }
 
 fn append_safe_scalar_overrides(command: &mut GitCommand) {
@@ -2148,23 +1345,17 @@ fn quote_shell(value: &str) -> String {
 #[cfg(test)]
 thread_local! {
     static CONFIG_SOURCE_AUTHORIZATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static FILTER_POLICY_READ_COUNT_FOR_STATUS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn reset_config_source_authorization_count() {
     CONFIG_SOURCE_AUTHORIZATION_COUNT.with(|count| count.set(0));
-    FILTER_POLICY_READ_COUNT_FOR_STATUS.with(|count| count.set(0));
+    status_filter_policy::reset_status_filter_policy_read_count();
 }
 
 #[cfg(test)]
 pub(crate) fn config_source_authorization_count() -> usize {
     CONFIG_SOURCE_AUTHORIZATION_COUNT.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn status_filter_policy_read_count() -> usize {
-    FILTER_POLICY_READ_COUNT_FOR_STATUS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

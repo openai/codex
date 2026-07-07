@@ -15,16 +15,34 @@ fn candidates_require_canonical_regular_stage_zero_entries() {
     let oid_sha1 = vec![b'1'; 40];
     let oid_sha256 = vec![b'a'; 64];
     let mut output = Vec::new();
-    push_record(&mut output, b"100644", &oid_sha1, b'0', b"file.txt");
+    push_record(
+        &mut output,
+        b"100644",
+        &oid_sha1,
+        /*stage*/ b'0',
+        b"file.txt",
+    );
     push_record(
         &mut output,
         b"100755",
         &oid_sha256,
-        b'0',
+        /*stage*/ b'0',
         b"bin/tab\topaque-\xff",
     );
-    push_record(&mut output, b"120000", &oid_sha1, b'0', b"link");
-    push_record(&mut output, b"160000", &oid_sha1, b'0', b"nested");
+    push_record(
+        &mut output,
+        b"120000",
+        &oid_sha1,
+        /*stage*/ b'0',
+        b"link",
+    );
+    push_record(
+        &mut output,
+        b"160000",
+        &oid_sha1,
+        /*stage*/ b'0',
+        b"nested",
+    );
     for stage in [b'1', b'2', b'3'] {
         push_record(&mut output, b"100644", &oid_sha1, stage, b"conflict");
     }
@@ -81,9 +99,9 @@ fn core_symlinks_screening_preserves_explicit_values_and_platform_defaults() {
         ));
     }
     assert!(status_core_symlinks_for_filter_screening_on(
-        None, /*windows*/ false
+        /*configured*/ None, /*windows*/ false
     ));
     assert!(!status_core_symlinks_for_filter_screening_on(
-        None, /*windows*/ true
+        /*configured*/ None, /*windows*/ true
     ));
 }
