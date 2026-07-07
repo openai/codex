@@ -15,7 +15,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
-use tokio::time::Duration;
 
 struct MockExecProcess {
     process_id: ProcessId,
@@ -172,40 +171,4 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
         .expect("terminate should succeed");
 
     assert!(process.has_exited());
-}
-
-#[tokio::test]
-async fn remote_process_waits_for_early_exit_event() {
-    let (wake_tx, _wake_rx) = watch::channel(0);
-    let started = StartedExecProcess {
-        process: Arc::new(MockExecProcess {
-            process_id: "test-process".to_string().into(),
-            write_response: WriteResponse {
-                status: WriteStatus::Accepted,
-            },
-            read_responses: Mutex::new(VecDeque::from([ReadResponse {
-                chunks: Vec::new(),
-                next_seq: 2,
-                exited: true,
-                exit_code: Some(17),
-                closed: true,
-                failure: None,
-                sandbox_denied: false,
-            }])),
-            terminate_error: None,
-            wake_tx: wake_tx.clone(),
-        }),
-    };
-
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let _ = wake_tx.send(1);
-    });
-
-    let process = UnifiedExecProcess::from_exec_server_started(started)
-        .await
-        .expect("remote process should observe early exit");
-
-    assert!(process.has_exited());
-    assert_eq!(process.exit_code(), Some(17));
 }

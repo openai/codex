@@ -25,6 +25,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginShareDiscoverability;
@@ -144,6 +145,7 @@ apps = true
   "name": "example-plugin",
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
+  "installation_policy_source": "IMPLICIT_CANONICAL_APP",
   "authentication_policy": "ON_USE",
   "release": {
     "version": "1.2.1",
@@ -267,6 +269,10 @@ apps = true
     assert_eq!(response.plugin.summary.name, "example-plugin");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response.plugin.summary.install_policy_source,
+        Some(PluginInstallPolicySource::ImplicitCanonicalApp)
+    );
     assert_eq!(
         response
             .plugin
@@ -2132,7 +2138,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )

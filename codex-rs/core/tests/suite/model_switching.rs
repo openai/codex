@@ -124,6 +124,7 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -383,6 +384,46 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
     let body = request.body_json();
     assert_eq!(body.get("service_tier"), None);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_configured_service_tier_warns_at_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let model_slug = "test-no-tier-model";
+    let model = test_model_info(
+        model_slug,
+        model_slug,
+        "no service tiers",
+        default_input_modalities(),
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.service_tier = Some(ServiceTier::Flex.request_value().to_string());
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(warning)
+                if warning.message.contains("will be omitted from requests")
+        )
+    })
+    .await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("wait_for_event matched a warning")
+    };
+    assert_eq!(
+        warning.message,
+        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests."
+    );
     Ok(())
 }
 
@@ -948,6 +989,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,

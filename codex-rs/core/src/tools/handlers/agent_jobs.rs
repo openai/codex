@@ -203,7 +203,7 @@ async fn run_agent_job_loop(
                     .agent_control
                     .spawn_agent_with_metadata(
                         options.spawn_config.clone(),
-                        items.into(),
+                        items,
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),

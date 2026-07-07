@@ -1,3 +1,4 @@
+use crate::context::ApprovalPromptContext;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
@@ -30,6 +31,7 @@ fn build_permissions_update_item(
     let prev = previous?;
     if prev.permission_profile() == next.permission_profile()
         && prev.approval_policy == next.approval_policy.value()
+        && prev.model == next.model_info.slug
     {
         return None;
     }
@@ -38,7 +40,13 @@ fn build_permissions_update_item(
         PermissionsInstructions::from_permission_profile(
             &next.permission_profile,
             next.approval_policy.value(),
-            next.config.approvals_reviewer,
+            ApprovalPromptContext::new(
+                next.config.approvals_reviewer,
+                next.model_info
+                    .model_messages
+                    .as_ref()
+                    .and_then(|messages| messages.approvals.as_ref()),
+            ),
             exec_policy,
             #[allow(deprecated)]
             &next.cwd,
@@ -85,9 +93,6 @@ fn build_multi_agent_mode_update_item(
     }
 
     match effective_multi_agent_mode {
-        Some(MultiAgentMode::None) => {
-            Some(MultiAgentModeInstructions::new(MultiAgentMode::None).render())
-        }
         Some(multi_agent_mode) => Some(MultiAgentModeInstructions::new(multi_agent_mode).render()),
         None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
             Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())

@@ -78,6 +78,7 @@ jobs:
             30. automations - Issues involving scheduled automation tasks or heartbeats.
             31. pets - Issues involving pets avatars and animations.
             32. agent - Fallback only for core agent loop or agent-related issues that do not fit app-server, connectivity, subagent, session, config, plan, computer-use, browser, memory, imagen, remote, performance, automations, or pets.
+            33. aws-bedrock - Issues involving the Amazon Bedrock model provider or Bedrock Mantle. Do not use for unrelated AWS services or generic AWS mentions.
 
             Issue number: ${{ github.event.issue.number }}
 

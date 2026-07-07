@@ -665,6 +665,51 @@ async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
 }
 
 #[tokio::test]
+async fn plugin_detail_popup_snapshot_shows_npm_source() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        /*installed*/ false,
+        /*enabled*/ true,
+        PluginInstallPolicy::Available,
+    );
+    summary.source = PluginSource::Npm {
+        package: "@acme/figma-plugin".to_string(),
+        version: Some("^1.2.0".to_string()),
+        registry: Some("https://npm.example.com".to_string()),
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+            (codex_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["Figma", "Slack"],
+        &["figma-mcp", "docs-mcp"],
+    );
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_npm_source",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
 async fn plugin_detail_popup_distinguishes_admin_installed_from_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -1155,9 +1200,10 @@ async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
 }
 
 #[tokio::test]
-async fn plugins_popup_remote_section_fallback_states_snapshot() {
+async fn plugins_popup_remote_section_fallback_states_when_remote_plugin_disabled_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ false);
 
     let select_tab_containing = |chat: &mut ChatWidget, visible_text: &str| -> String {
         for _ in 0..8 {
@@ -1221,7 +1267,6 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 
     let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    remote_chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ true);
     remote_chat.add_plugins_output();
     let remote_cwd = remote_chat.config.cwd.clone();
     remote_chat.on_plugins_loaded(
@@ -3146,7 +3191,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     preset.supported_reasoning_efforts.insert(
         2,
         ReasoningEffortPreset {
-            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            effort: ReasoningEffortConfig::Max,
             description: "Maximum available reasoning".to_string(),
         },
     );
@@ -3159,7 +3204,7 @@ async fn model_reasoning_selection_popup_snapshot() {
 #[tokio::test]
 async fn model_reasoning_selection_popup_applies_custom_effort() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    let custom_effort = ReasoningEffortConfig::Custom("future".to_string());
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let mut preset = get_available_model(&chat, "gpt-5.4");

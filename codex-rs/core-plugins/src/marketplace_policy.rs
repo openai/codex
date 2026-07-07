@@ -18,9 +18,13 @@ use codex_config::MarketplaceAllowedSourceToml;
 use codex_config::RequirementSource;
 use codex_config::types::MarketplaceConfig;
 use codex_config::types::MarketplaceSourceType;
+use codex_config::types::PluginConfig;
+use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::paths_match_after_normalization;
 use regex::Regex;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
@@ -70,7 +74,7 @@ impl MarketplacePolicy {
         }
     }
 
-    fn is_restricted(&self) -> bool {
+    pub(crate) fn is_restricted(&self) -> bool {
         self.restricted.is_some()
     }
 
@@ -194,6 +198,104 @@ impl AllowedMarketplaceSource {
             }
             (Self::GitUrl { .. } | Self::GitHostPattern(_), MarketplaceSource::Local { .. })
             | (Self::Local(_), MarketplaceSource::Git { .. }) => false,
+        }
+    }
+}
+
+pub(crate) fn project_effective_user_config(
+    config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
+) -> Option<toml::Value> {
+    let mut user_config = config_layer_stack.effective_user_config()?;
+    let policy = MarketplacePolicy::from_requirements(config_layer_stack.requirements());
+    if !policy.is_restricted() {
+        return Some(user_config);
+    }
+    let allowed_marketplace_names =
+        allowed_configured_marketplace_names_with_policy(&user_config, &policy, codex_home);
+    let configured_marketplace_names = user_config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+        .map(|marketplaces| marketplaces.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+
+    if let Some(marketplaces) = user_config
+        .get_mut("marketplaces")
+        .and_then(toml::Value::as_table_mut)
+    {
+        marketplaces
+            .retain(|marketplace_name, _| allowed_marketplace_names.contains(marketplace_name));
+    }
+    if let Some(plugins) = user_config
+        .get_mut("plugins")
+        .and_then(toml::Value::as_table_mut)
+    {
+        plugins.retain(|plugin_key, _| {
+            let Ok(plugin_id) = PluginId::parse(plugin_key) else {
+                return false;
+            };
+            (is_openai_curated_marketplace_name(&plugin_id.marketplace_name)
+                && !configured_marketplace_names.contains(&plugin_id.marketplace_name))
+                || allowed_marketplace_names.contains(&plugin_id.marketplace_name)
+        });
+    }
+    Some(user_config)
+}
+
+pub fn allowed_configured_marketplace_names(
+    config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
+) -> HashSet<String> {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
+        return HashSet::new();
+    };
+    let policy = MarketplacePolicy::from_requirements(config_layer_stack.requirements());
+    allowed_configured_marketplace_names_with_policy(&user_config, &policy, codex_home)
+}
+
+fn allowed_configured_marketplace_names_with_policy(
+    user_config: &toml::Value,
+    policy: &MarketplacePolicy,
+    codex_home: &Path,
+) -> HashSet<String> {
+    let Some(marketplaces) = user_config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+    else {
+        return HashSet::new();
+    };
+    if !policy.is_restricted() {
+        return marketplaces.keys().cloned().collect();
+    }
+    marketplaces
+        .iter()
+        .filter_map(|(marketplace_name, marketplace)| {
+            let allowed = match managed_marketplace_config_name(codex_home, marketplace) {
+                Some(expected_name) => expected_name == marketplace_name,
+                None => policy
+                    .validate_configured_marketplace(marketplace_name, marketplace)
+                    .is_ok(),
+            };
+            allowed.then(|| marketplace_name.clone())
+        })
+        .collect()
+}
+
+pub(crate) fn configured_plugins_from_stack(
+    config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
+) -> HashMap<String, PluginConfig> {
+    let Some(user_config) = project_effective_user_config(config_layer_stack, codex_home) else {
+        return HashMap::new();
+    };
+    let Some(plugins_value) = user_config.get("plugins") else {
+        return HashMap::new();
+    };
+    match plugins_value.clone().try_into() {
+        Ok(plugins) => plugins,
+        Err(err) => {
+            tracing::warn!("invalid plugins config: {err}");
+            HashMap::new()
         }
     }
 }
@@ -356,6 +458,21 @@ fn managed_marketplace_name(
         return Some(OPENAI_CURATED_MARKETPLACE_NAME);
     }
     managed_local_marketplace_name(codex_home, root.as_path())
+}
+
+fn managed_marketplace_config_name(
+    codex_home: &Path,
+    marketplace: &toml::Value,
+) -> Option<&'static str> {
+    if marketplace.get("source_type").and_then(toml::Value::as_str) != Some("local") {
+        return None;
+    }
+    let path = marketplace
+        .get("source")
+        .and_then(toml::Value::as_str)
+        .map(Path::new)
+        .filter(|path| path.is_absolute())?;
+    managed_local_marketplace_name(codex_home, path)
 }
 
 fn managed_local_marketplace_name(codex_home: &Path, root: &Path) -> Option<&'static str> {

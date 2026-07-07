@@ -8,8 +8,10 @@ use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::find_marketplace_plugin;
-use crate::marketplace::list_marketplaces;
+use crate::marketplace::list_marketplaces_with_home;
 use crate::marketplace::load_marketplace;
+use crate::marketplace_policy::configured_plugins_from_stack;
+use crate::npm_source::materialize_npm_plugin_source;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
@@ -83,6 +85,18 @@ enum NonCuratedCacheRefreshMode {
     ForceReinstall,
 }
 
+#[derive(Debug)]
+pub(crate) struct NonCuratedCacheRefreshOutcome {
+    pub(crate) cache_refreshed: bool,
+    pub(crate) errors: Vec<NonCuratedCacheRefreshError>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NonCuratedCacheRefreshError {
+    pub(crate) marketplace_name: String,
+    pub(crate) message: String,
+}
+
 pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) {
     for plugin in plugins.iter().filter(|plugin| plugin.error.is_some()) {
         if let Some(error) = plugin.error.as_deref() {
@@ -128,7 +142,7 @@ async fn load_plugins_from_layer_stack_with_scope(
     scope: PluginLoadScope<'_>,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
-        configured_plugins_from_stack(config_layer_stack),
+        configured_plugins_from_stack(config_layer_stack, store.codex_home().as_path()),
         extra_plugins,
         store,
         remote_global_catalog_active,
@@ -409,24 +423,54 @@ pub fn curated_plugin_cache_version(plugin_version: &str) -> String {
     }
 }
 
-pub fn refresh_non_curated_plugin_cache(
+#[cfg(test)]
+pub(crate) fn refresh_non_curated_plugin_cache(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
+    configured_plugin_keys: &[String],
 ) -> Result<bool, String> {
+    collapse_non_curated_cache_refresh(refresh_non_curated_plugin_cache_detailed(
+        codex_home,
+        additional_roots,
+        configured_plugin_keys,
+    ))
+}
+
+pub(crate) fn refresh_non_curated_plugin_cache_detailed(
+    codex_home: &Path,
+    additional_roots: &[AbsolutePathBuf],
+    configured_plugin_keys: &[String],
+) -> Result<NonCuratedCacheRefreshOutcome, String> {
     refresh_non_curated_plugin_cache_with_mode(
         codex_home,
         additional_roots,
+        configured_plugin_keys,
         NonCuratedCacheRefreshMode::IfVersionChanged,
     )
 }
 
-pub fn refresh_non_curated_plugin_cache_force_reinstall(
+#[cfg(test)]
+pub(crate) fn refresh_non_curated_plugin_cache_force_reinstall(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
+    configured_plugin_keys: &[String],
 ) -> Result<bool, String> {
+    collapse_non_curated_cache_refresh(refresh_non_curated_plugin_cache_force_reinstall_detailed(
+        codex_home,
+        additional_roots,
+        configured_plugin_keys,
+    ))
+}
+
+pub(crate) fn refresh_non_curated_plugin_cache_force_reinstall_detailed(
+    codex_home: &Path,
+    additional_roots: &[AbsolutePathBuf],
+    configured_plugin_keys: &[String],
+) -> Result<NonCuratedCacheRefreshOutcome, String> {
     refresh_non_curated_plugin_cache_with_mode(
         codex_home,
         additional_roots,
+        configured_plugin_keys,
         NonCuratedCacheRefreshMode::ForceReinstall,
     )
 }
@@ -434,16 +478,32 @@ pub fn refresh_non_curated_plugin_cache_force_reinstall(
 fn refresh_non_curated_plugin_cache_with_mode(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
+    configured_plugin_keys: &[String],
     mode: NonCuratedCacheRefreshMode,
-) -> Result<bool, String> {
-    let configured_non_curated_plugin_ids =
-        non_curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
-            codex_home,
-            "failed to read user config while refreshing non-curated plugin cache",
-            "failed to parse user config while refreshing non-curated plugin cache",
-        ));
+) -> Result<NonCuratedCacheRefreshOutcome, String> {
+    let mut configured_non_curated_plugin_ids = configured_plugin_keys
+        .iter()
+        .filter_map(|plugin_key| match PluginId::parse(plugin_key) {
+            Ok(plugin_id) if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) => {
+                Some(plugin_id)
+            }
+            Ok(_) => None,
+            Err(err) => {
+                warn!(
+                    plugin_key,
+                    error = %err,
+                    "ignoring invalid plugin key during non-curated cache refresh setup"
+                );
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    configured_non_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
     if configured_non_curated_plugin_ids.is_empty() {
-        return Ok(false);
+        return Ok(NonCuratedCacheRefreshOutcome {
+            cache_refreshed: false,
+            errors: Vec::new(),
+        });
     }
     let configured_non_curated_plugin_keys = configured_non_curated_plugin_ids
         .iter()
@@ -451,7 +511,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
         .collect::<HashSet<_>>();
 
     let store = PluginStore::try_new(codex_home.to_path_buf()).map_err(|err| err.to_string())?;
-    let marketplace_outcome = list_marketplaces(additional_roots)
+    let marketplace_outcome = list_marketplaces_with_home(additional_roots, /*home_dir*/ None)
         .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
     let mut plugin_sources = HashMap::<String, (MarketplacePluginSource, Option<String>)>::new();
 
@@ -461,14 +521,18 @@ fn refresh_non_curated_plugin_cache_with_mode(
         }
 
         for plugin in marketplace.plugins {
-            let plugin_id =
-                PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(|err| {
-                    match err {
-                        PluginIdError::Invalid(message) => {
-                            format!("failed to prepare non-curated plugin cache refresh: {message}")
-                        }
-                    }
-                })?;
+            let plugin_id = match PluginId::new(plugin.name.clone(), marketplace.name.clone()) {
+                Ok(plugin_id) => plugin_id,
+                Err(PluginIdError::Invalid(message)) => {
+                    warn!(
+                        plugin = plugin.name,
+                        marketplace = marketplace.name,
+                        error = %message,
+                        "ignoring invalid plugin entry during cache refresh"
+                    );
+                    continue;
+                }
+            };
             let plugin_key = plugin_id.as_key();
             if !configured_non_curated_plugin_keys.contains(&plugin_key) {
                 continue;
@@ -503,6 +567,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
     }
 
     let mut cache_refreshed = false;
+    let mut refresh_errors = Vec::new();
     for plugin_id in configured_non_curated_plugin_ids {
         let plugin_key = plugin_id.as_key();
         let Some((source, manifest_fallback_contents)) = plugin_sources.get(&plugin_key).cloned()
@@ -514,49 +579,70 @@ fn refresh_non_curated_plugin_cache_with_mode(
             );
             continue;
         };
-        let materialized =
-            materialize_marketplace_plugin_source(codex_home, &source).map_err(|err| {
-                format!("failed to materialize plugin source for {plugin_key}: {err}")
-            })?;
-        let source_path = materialized.path.clone();
-        let plugin_version = match manifest_fallback_contents.as_deref() {
-            Some(manifest_contents) => plugin_version_for_source_with_fallback_manifest(
-                source_path.as_path(),
-                manifest_contents,
-            ),
-            None => plugin_version_for_source(source_path.as_path()),
-        }
-        .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
+        let refresh_result = (|| -> Result<bool, String> {
+            let materialized =
+                materialize_marketplace_plugin_source(codex_home, &source).map_err(|err| {
+                    format!("failed to materialize plugin source for {plugin_key}: {err}")
+                })?;
+            let source_path = materialized.path;
+            let plugin_version = match manifest_fallback_contents.as_deref() {
+                Some(manifest_contents) => plugin_version_for_source_with_fallback_manifest(
+                    source_path.as_path(),
+                    manifest_contents,
+                ),
+                None => plugin_version_for_source(source_path.as_path()),
+            }
+            .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
 
-        if mode == NonCuratedCacheRefreshMode::IfVersionChanged
-            && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
-        {
-            continue;
-        }
+            if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                && store.active_plugin_version(&plugin_id).as_deref()
+                    == Some(plugin_version.as_str())
+            {
+                return Ok(false);
+            }
 
-        match manifest_fallback_contents.as_deref() {
-            Some(manifest_contents) => store.install_with_version_and_fallback_manifest(
-                source_path,
-                plugin_id.clone(),
-                plugin_version,
-                manifest_contents,
-            ),
-            None => store.install_with_version(source_path, plugin_id.clone(), plugin_version),
+            match manifest_fallback_contents.as_deref() {
+                Some(manifest_contents) => store.install_with_version_and_fallback_manifest(
+                    source_path,
+                    plugin_id.clone(),
+                    plugin_version,
+                    manifest_contents,
+                ),
+                None => store.install_with_version(source_path, plugin_id.clone(), plugin_version),
+            }
+            .map_err(|err| format!("failed to refresh plugin cache for {plugin_key}: {err}"))?;
+            Ok(true)
+        })();
+        match refresh_result {
+            Ok(refreshed) => cache_refreshed |= refreshed,
+            Err(message) => refresh_errors.push(NonCuratedCacheRefreshError {
+                marketplace_name: plugin_id.marketplace_name,
+                message,
+            }),
         }
-        .map_err(|err| format!("failed to refresh plugin cache for {plugin_key}: {err}"))?;
-        cache_refreshed = true;
     }
 
-    Ok(cache_refreshed)
+    Ok(NonCuratedCacheRefreshOutcome {
+        cache_refreshed,
+        errors: refresh_errors,
+    })
 }
 
-fn configured_plugins_from_stack(
-    config_layer_stack: &ConfigLayerStack,
-) -> HashMap<String, PluginConfig> {
-    let Some(user_config) = config_layer_stack.effective_user_config() else {
-        return HashMap::new();
-    };
-    configured_plugins_from_user_config_value(&user_config)
+#[cfg(test)]
+fn collapse_non_curated_cache_refresh(
+    outcome: Result<NonCuratedCacheRefreshOutcome, String>,
+) -> Result<bool, String> {
+    let outcome = outcome?;
+    if outcome.errors.is_empty() {
+        Ok(outcome.cache_refreshed)
+    } else {
+        Err(outcome
+            .errors
+            .into_iter()
+            .map(|error| error.message)
+            .collect::<Vec<_>>()
+            .join("; "))
+    }
 }
 
 fn is_full_git_sha(value: &str) -> bool {
@@ -644,20 +730,6 @@ fn curated_plugin_ids_from_config_keys(
     .collect::<Vec<_>>();
     configured_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
     configured_curated_plugin_ids
-}
-
-fn non_curated_plugin_ids_from_config_keys(
-    configured_plugins: HashMap<String, PluginConfig>,
-) -> Vec<PluginId> {
-    let mut configured_non_curated_plugin_ids = configured_plugin_ids(
-        configured_plugins,
-        "ignoring invalid plugin key during non-curated cache refresh setup",
-    )
-    .into_iter()
-    .filter(|plugin_id| !is_openai_curated_marketplace_name(&plugin_id.marketplace_name))
-    .collect::<Vec<_>>();
-    configured_non_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
-    configured_non_curated_plugin_ids
 }
 
 pub fn configured_curated_plugin_ids_from_codex_home(codex_home: &Path) -> Vec<PluginId> {
@@ -1353,6 +1425,22 @@ pub fn materialize_marketplace_plugin_source(
                     format!("failed to resolve materialized plugin source path: {err}")
                 })?
             };
+            Ok(MaterializedMarketplacePluginSource {
+                path,
+                _tempdir: Some(tempdir),
+            })
+        }
+        MarketplacePluginSource::Npm {
+            package,
+            version,
+            registry,
+        } => {
+            let (path, tempdir) = materialize_npm_plugin_source(
+                codex_home,
+                package,
+                version.as_deref(),
+                registry.as_deref(),
+            )?;
             Ok(MaterializedMarketplacePluginSource {
                 path,
                 _tempdir: Some(tempdir),

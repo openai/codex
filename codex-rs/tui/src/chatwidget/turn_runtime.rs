@@ -5,8 +5,15 @@
 
 use super::*;
 
-const SAFETY_ACCESS_BLOCK_PREFIX: &str =
+const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
+const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
+    "This content was flagged for possible biological risk.";
+
+fn is_safety_access_block_message(message: &str) -> bool {
+    message.starts_with(LEGACY_SAFETY_ACCESS_BLOCK_PREFIX)
+        || message.starts_with(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
+}
 
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -170,6 +177,7 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start = false;
         self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
+        self.clear_safety_buffering();
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -429,11 +437,12 @@ impl ChatWidget {
             .is_some_and(is_app_server_cyber_policy_error)
         {
             self.on_cyber_policy_error();
-        } else if message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX)
+        } else if is_safety_access_block_message(&message)
             || serde_json::from_str::<serde_json::Value>(&message).is_ok_and(|response| {
-                response["error"]["message"]
-                    .as_str()
-                    .is_some_and(|message| message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX))
+                response["error"]["code"].as_str() == Some("bio_policy")
+                    || response["error"]["message"]
+                        .as_str()
+                        .is_some_and(is_safety_access_block_message)
             })
         {
             self.input_queue.submit_pending_steers_after_interrupt = false;

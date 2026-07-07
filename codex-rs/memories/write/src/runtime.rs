@@ -261,7 +261,9 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
             config.features.enabled(Feature::ItemIds),
+            /*concurrent_reasoning_summaries_enabled*/ false,
             /*attestation_provider*/ None,
+            config.http_client_factory(),
         );
 
         let mut client_session = model_client.new_session();

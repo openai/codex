@@ -100,6 +100,19 @@ fn config_layer_stack_with_requirements(
     .expect("build config layer stack")
 }
 
+fn plugins_config_input_with_requirements(
+    codex_home: &Path,
+    user_config: &str,
+    requirements: &str,
+) -> PluginsConfigInput {
+    PluginsConfigInput::new(
+        config_layer_stack_with_requirements(codex_home, user_config, requirements),
+        /*plugins_enabled*/ true,
+        /*remote_plugin_enabled*/ false,
+        String::new(),
+    )
+}
+
 #[test]
 fn plugins_manager_tracks_auth_mode() {
     let tmp = TempDir::new().unwrap();
@@ -120,6 +133,184 @@ fn plugins_manager_tracks_auth_mode() {
         Some(AuthMode::Chatgpt),
     );
     assert_eq!(manager_with_auth.auth_mode(), Some(AuthMode::Chatgpt));
+}
+
+#[tokio::test]
+async fn marketplace_policy_projection_disables_installed_plugin_and_invalidates_cache() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    write_plugin(
+        &codex_home.path().join("plugins/cache/company"),
+        "sample/local",
+        "sample",
+    );
+    let user_config = r#"
+[marketplaces.company]
+source_type = "git"
+source = "https://github.com/example/company.git"
+
+[plugins."sample@company"]
+enabled = true
+"#;
+    let allowed = plugins_config_input_with_requirements(
+        codex_home.path(),
+        user_config,
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.company]
+source = "git"
+url = "https://github.com/example/company.git"
+"#,
+    );
+    let blocked = plugins_config_input_with_requirements(
+        codex_home.path(),
+        user_config,
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.other]
+source = "git"
+url = "https://github.com/example/other.git"
+"#,
+    );
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let allowed_outcome = manager.plugins_for_config(&allowed).await;
+    assert_eq!(allowed_outcome.plugins().len(), 1);
+    assert_eq!(allowed_outcome.plugins()[0].config_name, "sample@company");
+
+    let blocked_outcome = manager.plugins_for_config(&blocked).await;
+    assert_eq!(blocked_outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn plugin_read_rejects_marketplace_blocked_by_requirements() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    let marketplace_root = codex_home.path().join("marketplace");
+    write_plugin(&marketplace_root, "sample", "sample");
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "company",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {"source": "local", "path": "./sample"}
+    }
+  ]
+}"#,
+    );
+    let config = plugins_config_input_with_requirements(
+        codex_home.path(),
+        "",
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+"#,
+    );
+    let marketplace_path =
+        AbsolutePathBuf::try_from(marketplace_root.join(".agents/plugins/marketplace.json"))
+            .expect("absolute marketplace path");
+
+    let err = PluginsManager::new(codex_home.path().to_path_buf())
+        .read_plugin_for_config(
+            &config,
+            &PluginReadRequest {
+                plugin_name: "sample".to_string(),
+                marketplace_path,
+            },
+        )
+        .await
+        .expect_err("blocked marketplace should not be readable");
+    assert!(matches!(
+        err,
+        MarketplaceError::InvalidMarketplaceFile { .. }
+    ));
+}
+
+#[test]
+fn marketplace_policy_filters_discovered_marketplaces_by_configured_name() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    let repo_root = codex_home.path().join("repo");
+    let subdirectory = repo_root.join("worktree/subdirectory");
+    fs::create_dir_all(&subdirectory).expect("create input subdirectory");
+    write_plugin(&repo_root, "sample", "sample");
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "company",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {"source": "local", "path": "./sample"}
+    }
+  ]
+}"#,
+    );
+    init_git_repo(&repo_root);
+    let repo_root = AbsolutePathBuf::try_from(repo_root).expect("absolute repository root");
+    let subdirectory =
+        AbsolutePathBuf::try_from(subdirectory).expect("absolute input subdirectory");
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let user_config = format!(
+        r#"
+[marketplaces.company]
+source_type = "local"
+source = {:?}
+"#,
+        repo_root.as_path()
+    );
+    let allowed = plugins_config_input_with_requirements(
+        codex_home.path(),
+        &user_config,
+        &format!(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.company]
+source = "local"
+path = {:?}
+"#,
+            repo_root.as_path()
+        ),
+    );
+    let blocked = plugins_config_input_with_requirements(
+        codex_home.path(),
+        &user_config,
+        &format!(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.subdirectory]
+source = "local"
+path = {:?}
+"#,
+            subdirectory.as_path()
+        ),
+    );
+
+    let allowed_outcome = manager
+        .list_marketplaces_for_config(
+            &allowed,
+            std::slice::from_ref(&subdirectory),
+            /*include_openai_curated*/ false,
+        )
+        .expect("list allowed marketplace");
+    assert_eq!(allowed_outcome.marketplaces.len(), 1);
+    assert_eq!(allowed_outcome.marketplaces[0].name, "company");
+
+    let blocked_outcome = manager
+        .list_marketplaces_for_config(
+            &blocked,
+            std::slice::from_ref(&subdirectory),
+            /*include_openai_curated*/ false,
+        )
+        .expect("list blocked marketplace");
+    assert_eq!(blocked_outcome.marketplaces, Vec::new());
 }
 
 fn write_auth_projection_plugin(codex_home: &Path, name: &str, include_app: bool) {
@@ -586,9 +777,11 @@ fn remote_installed_plugin_in_marketplace(
     RemoteInstalledPlugin {
         marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
+        version: None,
         name: name.to_string(),
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        install_policy_source: None,
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: None,
@@ -871,7 +1064,6 @@ async fn remote_installed_cache_ignores_plugins_missing_local_cache() {
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -1105,7 +1297,6 @@ async fn remote_global_catalog_ignores_local_curated_plugins() {
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 
 [plugins."linear@openai-curated"]
 enabled = true
@@ -1156,7 +1347,6 @@ async fn remote_plugin_feature_keeps_local_curated_without_codex_backend() {
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 
 [plugins."linear@openai-curated"]
 enabled = true
@@ -3348,7 +3538,11 @@ plugins = true
         .unwrap()
         .marketplaces
         .into_iter()
-        .find(|marketplace| marketplace.name == "debug")
+        .find(|marketplace| {
+            marketplace.path
+                == AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"))
+                    .unwrap()
+        })
         .unwrap()
         .plugins
         .into_iter()
@@ -3785,7 +3979,7 @@ enabled = true
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
         .list_marketplaces_for_config(
             &config,
-            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &[AbsolutePathBuf::try_from(repo_root.clone()).unwrap()],
             /*include_openai_curated*/ true,
         )
         .unwrap()
@@ -3793,7 +3987,11 @@ enabled = true
 
     let marketplace = marketplaces
         .into_iter()
-        .find(|marketplace| marketplace.name == "debug")
+        .find(|marketplace| {
+            marketplace.path
+                == AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"))
+                    .unwrap()
+        })
         .expect("debug marketplace should be listed");
 
     let mut plugins = marketplace.plugins;
@@ -4679,7 +4877,6 @@ async fn remote_plugin_caches_refresh_warms_recommended_plugins_cache() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -4740,7 +4937,6 @@ async fn recommended_plugins_mode_deduplicates_concurrent_cache_misses() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -4818,7 +5014,6 @@ async fn recommended_plugin_candidates_filter_installed_and_disabled_plugins() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
     let server = MockServer::start().await;
@@ -4891,7 +5086,6 @@ async fn recommended_plugins_mode_caches_explicit_false() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -4931,7 +5125,6 @@ async fn recommended_plugins_mode_retries_after_fetch_failure() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -5256,6 +5449,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should succeed")
     );
@@ -5308,6 +5502,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should reinstall missing configured plugin")
     );
@@ -5367,6 +5562,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should materialize configured Git plugin")
     );
@@ -5420,6 +5616,7 @@ enabled = true
         !refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should be a no-op when configured plugins are current")
     );
@@ -5473,6 +5670,7 @@ enabled = true
         refresh_non_curated_plugin_cache_force_reinstall(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should reinstall unchanged local version")
     );
@@ -5531,6 +5729,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            &["sample-plugin@debug".to_string()],
         )
         .expect("cache refresh should ignore unrelated invalid plugin manifests")
     );
@@ -5540,6 +5739,47 @@ enabled = true
             .join("plugins/cache/debug/sample-plugin/1.2.3")
             .is_dir()
     );
+}
+
+#[test]
+fn refresh_non_curated_plugin_cache_continues_after_plugin_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin_with_version(&repo_root, "z-good", "z-good", Some("1.2.3"));
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "a-broken",
+      "source": {
+        "source": "local",
+        "path": "./missing"
+      }
+    },
+    {
+      "name": "z-good",
+      "source": {
+        "source": "local",
+        "path": "./z-good"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let err = refresh_non_curated_plugin_cache(
+        tmp.path(),
+        &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        &["a-broken@debug".to_string(), "z-good@debug".to_string()],
+    )
+    .expect_err("broken plugin should be reported after refreshing the remaining plugins");
+
+    assert!(err.contains("a-broken@debug"));
+    assert!(tmp.path().join("plugins/cache/debug/z-good/1.2.3").is_dir());
 }
 
 #[tokio::test]
