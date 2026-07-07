@@ -389,8 +389,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
     let harness = websocket_harness_with_provider_options(
-        provider,
-        /*runtime_metrics_enabled*/ true,
+        provider, /*runtime_metrics_enabled*/ true,
         /*concurrent_reasoning_summaries_enabled*/ true,
     )
     .await;
