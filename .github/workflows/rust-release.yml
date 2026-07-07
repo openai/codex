@@ -573,11 +573,11 @@ jobs:
             zstd -d --stdout "$unsigned_path" >"$signed_path"
             chmod 0755 "$signed_path"
 
-            entitlements="$(
-              .github/scripts/macos-signing/select_codex_entitlements.sh \
-                "$TARGET" \
-                "$binary"
-            )"
+            entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$entitlements" ]]; then
+              echo "Entitlements file $entitlements not found"
+              exit 1
+            fi
 
             .github/scripts/macos-signing/sign_macos_code.sh \
               --target "$signed_path" \
@@ -998,11 +998,11 @@ jobs:
             lipo "$path" -verify_arch "$expected_arch"
             codesign --verify --strict --verbose=2 "$path"
 
-            expected_entitlements="$(
-              "${GITHUB_WORKSPACE}/.github/scripts/macos-signing/select_codex_entitlements.sh" \
-                "$target" \
-                "$binary"
-            )"
+            expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$expected_entitlements" ]]; then
+              echo "Expected entitlements file $expected_entitlements not found"
+              exit 1
+            fi
             actual_entitlements="$(mktemp)"
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
