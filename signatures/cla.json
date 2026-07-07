@@ -8487,6 +8487,14 @@
       "created_at": "2026-07-07T19:53:23Z",
       "repoId": 965415649,
       "pullRequestNo": 31456
+    },
+    {
+      "name": "raquel-openai",
+      "id": 190536808,
+      "comment_id": 4909415676,
+      "created_at": "2026-07-07T21:57:47Z",
+      "repoId": 965415649,
+      "pullRequestNo": 31481
     }
   ]
 }
