@@ -39,6 +39,7 @@ use crate::oauth::compute_store_key;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::save_oauth_tokens_to_file;
+use crate::startup_error::is_authentication_required_error;
 
 const REFRESH_LOCK_CONTENTION_EVENT_TARGET: &str =
     "codex_rmcp_client::oauth::refresh_lock::contention";
@@ -198,6 +199,35 @@ async fn missing_authoritative_credentials_require_reauthorization() -> Result<(
         source.downcast_ref::<AuthError>(),
         Some(AuthError::AuthorizationRequired)
     )));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_refresh_token_requires_reauthorization() -> Result<()> {
+    let (_env, server, initial) = test_context().await?;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains("refresh_token=refresh-token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "refresh token expired or revoked",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    save_oauth_tokens_to_file(&initial)?;
+    let persistor = persistor_for(&initial).await?;
+
+    let error = persistor
+        .refresh_if_needed()
+        .await
+        .expect_err("a provider-rejected refresh token should require reauthorization");
+    assert!(is_authentication_required_error(&error));
+    let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
+        .expect("rejected refresh must preserve the durable credentials");
+    assert_tokens_match_without_expiry(&stored, &initial);
+    server.verify().await;
     Ok(())
 }
 
