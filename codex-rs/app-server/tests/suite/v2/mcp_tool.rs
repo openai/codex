@@ -124,7 +124,7 @@ async fn mcp_server_tool_call_forwards_mcp_app_ui_capability_from_initialize() -
     send_request(
         &mut text_only_client,
         "initialize",
-        1,
+        /*id*/ 1,
         Some(serde_json::to_value(InitializeParams {
             client_info: ClientInfo {
                 name: "text-only-client".to_string(),
@@ -138,26 +138,26 @@ async fn mcp_server_tool_call_forwards_mcp_app_ui_capability_from_initialize() -
         })?),
     )
     .await?;
-    let _ = read_response_for_id(&mut text_only_client, 1).await?;
+    let _ = read_response_for_id(&mut text_only_client, /*id*/ 1).await?;
 
     send_request(
         &mut text_only_client,
         "thread/start",
-        2,
+        /*id*/ 2,
         Some(serde_json::to_value(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })?),
     )
     .await?;
-    let thread_start_response = read_response_for_id(&mut text_only_client, 2).await?;
+    let thread_start_response = read_response_for_id(&mut text_only_client, /*id*/ 2).await?;
     let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
 
     let mut widget_capable_client = connect_websocket(bind_addr).await?;
     send_request(
         &mut widget_capable_client,
         "initialize",
-        3,
+        /*id*/ 3,
         Some(serde_json::to_value(InitializeParams {
             client_info: ClientInfo {
                 name: "widget-capable-client".to_string(),
@@ -177,12 +177,12 @@ async fn mcp_server_tool_call_forwards_mcp_app_ui_capability_from_initialize() -
         })?),
     )
     .await?;
-    let _ = read_response_for_id(&mut widget_capable_client, 3).await?;
+    let _ = read_response_for_id(&mut widget_capable_client, /*id*/ 3).await?;
 
     send_request(
         &mut widget_capable_client,
         "mcpServer/tool/call",
-        4,
+        /*id*/ 4,
         Some(serde_json::to_value(McpServerToolCallParams {
             thread_id: thread.id,
             server: "codex_apps".to_string(),
@@ -194,7 +194,7 @@ async fn mcp_server_tool_call_forwards_mcp_app_ui_capability_from_initialize() -
         })?),
     )
     .await?;
-    let tool_call_response = read_response_for_id(&mut widget_capable_client, 4).await?;
+    let tool_call_response = read_response_for_id(&mut widget_capable_client, /*id*/ 4).await?;
     let response: McpServerToolCallResponse = to_response(tool_call_response)?;
 
     assert_eq!(
