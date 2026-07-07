@@ -184,8 +184,8 @@ impl OAuthPersistor {
                 // variant. Match RMCP's own request path for now so rejected refresh tokens
                 // prompt reauthorization instead of surfacing as generic MCP startup failures.
                 // This can also prompt reauthorization after a transient failure.
-                // TODO: Once modelcontextprotocol/rust-sdk#963 is available in the RMCP version
-                // used by Codex, map only its typed refresh-token rejection error here.
+                // TODO: When RMCP exposes a typed distinction for refresh-token rejection,
+                // map only that definitive rejection to `AuthorizationRequired` here.
                 warn!(
                     error = %error,
                     "MCP OAuth refresh failed; reauthorization required by RMCP compatibility policy"
