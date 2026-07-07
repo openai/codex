@@ -204,9 +204,10 @@ async fn run_remote_compact_task_inner_impl(
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
+    let compaction_id = context_compaction_item.id.clone();
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
         turn_context.sub_id.as_str(),
-        context_compaction_item.id.as_str(),
+        compaction_id.as_str(),
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
@@ -232,11 +233,19 @@ async fn run_remote_compact_task_inner_impl(
             if !matches!(&error, CodexErr::InvalidRequest(_)) {
                 return Err(error);
             }
+            let fallback_turn_context = &fallback_step_context.turn;
+            let fallback_compaction_trace =
+                sess.services.rollout_thread_trace.compaction_trace_context(
+                    fallback_turn_context.sub_id.as_str(),
+                    compaction_id.as_str(),
+                    fallback_turn_context.model_info.slug.as_str(),
+                    fallback_turn_context.provider.info().name.as_str(),
+                );
             let fallback_result = run_remote_compact_v2_attempt(
                 sess,
                 fallback_step_context,
                 client_session,
-                &compaction_trace,
+                &fallback_compaction_trace,
                 compaction_metadata,
                 analytics_details,
             )
@@ -244,13 +253,13 @@ async fn run_remote_compact_task_inner_impl(
             record_model_fallback(
                 &sess.services.session_telemetry,
                 turn_context.model_info.slug.as_str(),
-                fallback_step_context.turn.model_info.slug.as_str(),
+                fallback_turn_context.model_info.slug.as_str(),
                 compaction_metadata.reason(),
                 compaction_metadata.implementation(),
                 fallback_result.as_ref().err(),
             );
             match fallback_result {
-                Ok(attempt) => (attempt, &fallback_step_context.turn),
+                Ok(attempt) => (attempt, fallback_turn_context),
                 Err(_) => return Err(error),
             }
         }
