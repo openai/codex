@@ -703,8 +703,11 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         second_request
             .message_input_texts("developer")
             .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
+            .any(|text| {
+                text.contains("Generated images are saved to")
+                    && text.contains("do not repeat it or an unchanged copy")
+            }),
+        "second request should include the saved-path and render-once note in model-visible history"
     );
     let _ = std::fs::remove_file(&saved_path);
 
@@ -827,8 +830,11 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
         second_request
             .message_input_texts("developer")
             .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
+            .any(|text| {
+                text.contains("Generated images are saved to")
+                    && text.contains("do not repeat it or an unchanged copy")
+            }),
+        "second request should include the saved-path and render-once note in model-visible history"
     );
     let _ = std::fs::remove_file(&saved_path);
 

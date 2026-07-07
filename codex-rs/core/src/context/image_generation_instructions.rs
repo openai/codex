@@ -18,7 +18,7 @@ fn image_generation_hint(
     image_output_path: impl Display,
 ) -> String {
     format!(
-        "Generated images are saved to {image_output_dir} as {image_output_path} by default.\nThe generated image is already displayed to the user. Do not embed or link it, or an unchanged copy of it, in Markdown.\nIf you need to use the generated image at another path for further work, copy it and leave the original in place unless the user explicitly asks you to delete it."
+        "Generated images are saved to {image_output_dir} as {image_output_path} by default.\nAlready displayed; do not repeat it or an unchanged copy in final Markdown unless asked.\nFor another path, copy it and keep the original unless asked to delete it."
     )
 }
 
