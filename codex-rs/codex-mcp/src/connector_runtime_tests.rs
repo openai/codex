@@ -612,7 +612,7 @@ fn accepted_generations_finish_persistence_in_order() {
         .expect("older generation should enter persistence");
 
     let (newer_persisting_tx, newer_persisting_rx) = std::sync::mpsc::channel();
-    let newer_context = context.clone();
+    let newer_context = context;
     let newer_publish = std::thread::spawn(move || {
         newer_context.publish_runtime_if_newest_accepted_with(
             newer_ticket,
