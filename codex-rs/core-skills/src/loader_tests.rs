@@ -388,6 +388,41 @@ fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
     write_skill_metadata_at(skill_dir, contents)
 }
 
+fn write_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
+    fs::create_dir_all(manifest_path.parent().expect("manifest parent")).unwrap();
+    fs::write(manifest_path, contents).unwrap();
+}
+
+async fn load_user_skills_root(root: &Path) -> SkillLoadOutcome {
+    load_skills_from_roots(
+        [SkillRoot {
+            path: root.abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
+    .await
+}
+
+fn expected_user_skill(path: &Path, name: &str, description: &str) -> SkillMetadata {
+    SkillMetadata {
+        name: name.to_string(),
+        description: description.to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: normalized(path),
+        scope: SkillScope::User,
+        plugin_id: None,
+    }
+}
+
 #[tokio::test]
 async fn loads_skill_dependencies_metadata_from_yaml() {
     let codex_home = tempfile::tempdir().expect("tempdir");
@@ -1323,6 +1358,246 @@ async fn namespaces_plugin_skills_using_provided_namespace() {
             scope: SkillScope::User,
             plugin_id: Some("sample@test".to_string()),
         }]
+    );
+}
+
+#[tokio::test]
+async fn namespaces_nested_plugin_skills_without_namespacing_plain_siblings() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let skills_root = root.path().join("skills");
+    let plain_skill_path =
+        write_skill_at(&skills_root, "plain", "plain-skill", "plain description");
+    let plugin_root = skills_root.join("nested-plugin");
+    write_plugin_manifest(&plugin_root, r#"{"name":"nested"}"#);
+    let plugin_skill_path = write_skill_at(
+        &plugin_root.join("skills"),
+        "search",
+        "plugin-skill",
+        "plugin description",
+    );
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![
+            expected_user_skill(
+                &plugin_skill_path,
+                "nested:plugin-skill",
+                "plugin description"
+            ),
+            expected_user_skill(&plain_skill_path, "plain-skill", "plain description"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn inherits_plugin_namespace_from_above_scanned_skills_root() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("plugin");
+    write_plugin_manifest(&plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = plugin_root.join("skills");
+    let skill_path = write_skill_at(&skills_root, "search", "search-skill", "search description");
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "outer:search-skill",
+            "search description",
+        )]
+    );
+}
+
+#[tokio::test]
+async fn nearest_valid_nested_plugin_namespace_overrides_outer_namespace() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let outer_plugin_root = root.path().join("outer-plugin");
+    write_plugin_manifest(&outer_plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = outer_plugin_root.join("skills");
+    let nested_plugin_root = skills_root.join("nested-plugin");
+    write_plugin_manifest(&nested_plugin_root, r#"{"name":"nested"}"#);
+    let skill_path = write_skill_at(
+        &nested_plugin_root.join("skills"),
+        "search",
+        "search-skill",
+        "search description",
+    );
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "nested:search-skill",
+            "search description",
+        )]
+    );
+}
+
+#[tokio::test]
+async fn invalid_nested_plugin_manifest_falls_back_to_outer_namespace() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let outer_plugin_root = root.path().join("outer-plugin");
+    write_plugin_manifest(&outer_plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = outer_plugin_root.join("skills");
+    let nested_plugin_root = skills_root.join("nested-plugin");
+    write_plugin_manifest(&nested_plugin_root, "not json");
+    let skill_path = write_skill_at(
+        &nested_plugin_root.join("skills"),
+        "search",
+        "search-skill",
+        "search description",
+    );
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "outer:search-skill",
+            "search description",
+        )]
+    );
+}
+
+// Directory symlinks on Windows can require Developer Mode or administrator privileges.
+#[cfg(unix)]
+#[tokio::test]
+async fn namespaces_skills_in_symlinked_plugin_skills_dir() {
+    // skills/
+    // └── linked-plugin -> shared-plugin/skills/
+    // shared-plugin/
+    // ├── .codex-plugin/plugin.json
+    // └── skills/search/SKILL.md
+    let root = tempfile::tempdir().expect("tempdir");
+    let shared_plugin_root = tempfile::tempdir().expect("tempdir");
+    write_plugin_manifest(shared_plugin_root.path(), r#"{"name":"linked"}"#);
+    let skill_path = write_skill_at(
+        &shared_plugin_root.path().join("skills"),
+        "search",
+        "search-skill",
+        "search description",
+    );
+    let skills_root = root.path().join("skills");
+    fs::create_dir_all(&skills_root).unwrap();
+    symlink_dir(
+        &shared_plugin_root.path().join("skills"),
+        &skills_root.join("linked-plugin"),
+    );
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "linked:search-skill",
+            "search description",
+        )]
+    );
+}
+
+// Directory symlinks on Windows can require Developer Mode or administrator privileges.
+#[cfg(unix)]
+#[tokio::test]
+async fn does_not_inherit_namespace_for_skills_in_symlinked_plain_dir() {
+    // outer-plugin/
+    // ├── .codex-plugin/plugin.json
+    // └── skills/linked-plain -> plain-root/
+    // plain-root/
+    // └── search/SKILL.md
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("outer-plugin");
+    write_plugin_manifest(&plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = plugin_root.join("skills");
+    let plain_root = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_skill_at(
+        plain_root.path(),
+        "search",
+        "plain-skill",
+        "plain description",
+    );
+    fs::create_dir_all(&skills_root).unwrap();
+    symlink_dir(plain_root.path(), &skills_root.join("linked-plain"));
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "plain-skill",
+            "plain description",
+        )]
+    );
+}
+
+// Directory symlinks on Windows can require Developer Mode or administrator privileges.
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_inherited_namespace_when_symlink_target_is_scan_root_ancestor() {
+    // temp-root/
+    // └── a/b/c/d/e/f/outer-plugin/
+    //     ├── .codex-plugin/plugin.json
+    //     └── skills/
+    //         ├── root/SKILL.md
+    //         └── link -> temp-root/
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("a/b/c/d/e/f/outer-plugin");
+    write_plugin_manifest(&plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = plugin_root.join("skills");
+    let skill_path = write_skill_at(&skills_root, "root", "root-skill", "root description");
+    symlink_dir(root.path(), &skills_root.join("link"));
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "outer:root-skill",
+            "root description",
+        )]
     );
 }
 
