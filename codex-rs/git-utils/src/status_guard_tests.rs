@@ -439,12 +439,15 @@ async fn frozen_status_preserves_info_global_core_and_system_attribute_selection
         "isolated global/info source parity diverged: {}",
         String::from_utf8_lossy(&global_info_output.stdout)
     );
-    assert!(!global_info_guard.status_has_untracked_snapshot().expect("untracked snapshot"));
+    assert!(
+        !global_info_guard
+            .status_has_untracked_snapshot()
+            .expect("untracked snapshot")
+    );
 
     let home = std::env::var("HOME").expect("isolated HOME");
     let xdg = std::env::var("XDG_CONFIG_HOME").expect("isolated XDG config home");
-    let log_contents =
-        std::fs::read_to_string(&log).expect("read attribute environment log");
+    let log_contents = std::fs::read_to_string(&log).expect("read attribute environment log");
     let final_status = log_contents
         .lines()
         .find(|line| line.contains(" status --porcelain"))
@@ -454,7 +457,11 @@ async fn frozen_status_preserves_info_global_core_and_system_attribute_selection
         "captured system/global attribute selectors were not restored: {final_status}"
     );
 
-    run_git(&repo, &["config", "core.attributesFile", "../core.attributes"]).await;
+    run_git(
+        &repo,
+        &["config", "core.attributesFile", "../core.attributes"],
+    )
+    .await;
     std::fs::remove_file(repo.join("global.txt")).expect("remove global attribute fixture");
     run_git(&repo, &["checkout", "--", "global.txt"]).await;
     std::fs::remove_file(repo.join("core.txt")).expect("remove core attribute fixture");
@@ -485,7 +492,11 @@ async fn frozen_status_preserves_info_global_core_and_system_attribute_selection
         "isolated core.attributesFile source parity diverged: {}",
         String::from_utf8_lossy(&core_output.stdout)
     );
-    assert!(!core_guard.status_has_untracked_snapshot().expect("untracked snapshot"));
+    assert!(
+        !core_guard
+            .status_has_untracked_snapshot()
+            .expect("untracked snapshot")
+    );
 
     std::fs::write(
         repo.join(".git/info/attributes"),
@@ -526,7 +537,7 @@ async fn frozen_status_refuses_git_attr_source_and_attr_tree() {
         "status_guard::tests::frozen_status_refuses_git_attr_source_and_attr_tree",
         MARKER,
         &[("GIT_ATTR_SOURCE", "HEAD")],
-        None,
+        /*global_attributes*/ None,
     );
 
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -543,8 +554,7 @@ async fn frozen_status_refuses_git_attr_source_and_attr_tree() {
 async fn frozen_untracked_presence_honors_all_standard_ignore_sources() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
-    std::fs::write(repo.join(".gitignore"), "root-ignored.txt\n")
-        .expect("write root ignore");
+    std::fs::write(repo.join(".gitignore"), "root-ignored.txt\n").expect("write root ignore");
     run_git(&repo, &["add", ".gitignore"]).await;
     run_git(&repo, &["commit", "-m", "ignore rules"]).await;
     std::fs::write(repo.join(".git/info/exclude"), "info-ignored.txt\n")
@@ -560,11 +570,7 @@ async fn frozen_untracked_presence_honors_all_standard_ignore_sources() {
         ],
     )
     .await;
-    for name in [
-        "root-ignored.txt",
-        "info-ignored.txt",
-        "global-ignored.txt",
-    ] {
+    for name in ["root-ignored.txt", "info-ignored.txt", "global-ignored.txt"] {
         std::fs::write(repo.join(name), "ignored\n").expect("write ignored file");
     }
 
@@ -588,6 +594,10 @@ async fn frozen_untracked_presence_honors_all_standard_ignore_sources() {
 async fn frozen_status_reports_an_ordinary_unmerged_index_as_dirty() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    std::fs::write(repo.join(".gitattributes"), "* filter\n")
+        .expect("write special filter attribute");
+    run_git(&repo, &["add", ".gitattributes"]).await;
+    run_git(&repo, &["commit", "-m", "special filter attribute"]).await;
     let base_branch = String::from_utf8(
         run_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
             .await
@@ -614,9 +624,64 @@ async fn frozen_status_reports_an_ordinary_unmerged_index_as_dirty() {
         stages.stdout.split(|byte| *byte == b'\n').count() >= 3,
         "fixture must retain multiple index stages"
     );
+    run_git(
+        &repo,
+        &[
+            "config",
+            "filter.set.clean",
+            "git config codex.unmerged-filter-ran true && git hash-object --stdin",
+        ],
+    )
+    .await;
 
     let git = GitRunner::for_cwd(&repo).expect("trusted Git");
     assert_eq!(guarded_status(&repo, &git).await, Ok(true));
+    assert!(!filter_marker_is_set(&repo, "codex.unmerged-filter-ran").await);
+}
+
+#[tokio::test]
+async fn sentinel_pathspec_handles_opaque_tracked_path_bytes_without_helpers() {
+    use std::ffi::OsString;
+    #[cfg(not(target_os = "macos"))]
+    use std::os::unix::ffi::OsStringExt;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    #[cfg(target_os = "macos")]
+    let paths = vec![
+        OsString::from("-leading.txt"),
+        OsString::from("line\nbreak.txt"),
+    ];
+    // macOS filesystem APIs reject non-UTF-8 names before Git can observe
+    // them. Other Unix targets exercise the raw-byte path end to end; the
+    // constructor unit test covers byte preservation on every Unix target.
+    #[cfg(not(target_os = "macos"))]
+    let paths = vec![
+        OsString::from("-leading.txt"),
+        OsString::from("line\nbreak.txt"),
+        OsString::from_vec(b"non-utf8-\xff.txt".to_vec()),
+    ];
+    for path in paths {
+        std::fs::write(repo.join(&path), "opaque path\n")
+            .unwrap_or_else(|error| panic!("write opaque tracked path {path:?}: {error}"));
+    }
+    std::fs::write(repo.join(".gitattributes"), "* filter\n")
+        .expect("write special filter attribute");
+    run_git(&repo, &["add", "."]).await;
+    run_git(&repo, &["commit", "-m", "opaque tracked paths"]).await;
+    run_git(
+        &repo,
+        &[
+            "config",
+            "filter.set.clean",
+            "git config codex.opaque-filter-ran true && git hash-object --stdin",
+        ],
+    )
+    .await;
+
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    assert_eq!(guarded_status(&repo, &git).await, Ok(false));
+    assert!(!filter_marker_is_set(&repo, "codex.opaque-filter-ran").await);
 }
 
 #[tokio::test]
@@ -639,17 +704,20 @@ async fn status_head_snapshot_distinguishes_valid_detached_unborn_and_corrupt_st
     run_git(&repo, &["checkout", "-B", "restored", &commit]).await;
 
     let ref_path = repo.join(".git/refs/heads/restored");
-    std::fs::write(&ref_path, format!("{}\n", "a".repeat(40)))
-        .expect("write missing-object ref");
+    std::fs::write(&ref_path, format!("{}\n", "a".repeat(40))).expect("write missing-object ref");
     assert!(
         prepare_status_config(&git, &repo).await.is_err(),
         "missing-object symbolic HEAD must not become unborn"
     );
 
-    let blob = String::from_utf8(run_git(&repo, &["hash-object", "-w", "test.txt"]).await.stdout)
-        .expect("blob UTF-8")
-        .trim()
-        .to_string();
+    let blob = String::from_utf8(
+        run_git(&repo, &["hash-object", "-w", "test.txt"])
+            .await
+            .stdout,
+    )
+    .expect("blob UTF-8")
+    .trim()
+    .to_string();
     std::fs::write(&ref_path, format!("{blob}\n")).expect("write blob ref");
     assert_eq!(
         prepare_status_config(&git, &repo).await.map(|_| ()),
@@ -686,8 +754,8 @@ async fn frozen_status_refuses_active_or_custom_replacements_and_ignores_late_re
     run_isolated_environment_test(
         "status_guard::tests::frozen_status_refuses_active_or_custom_replacements_and_ignores_late_replacements",
         MARKER,
-        &[("GIT_REPLACE_REF_BASE", "refs/codex-replacements")],
-        None,
+        &[("GIT_REPLACE_REF_BASE", "refs/codex-replacements/")],
+        /*global_attributes*/ None,
     );
 
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -754,26 +822,21 @@ async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
 async fn selected_required_only_filter_is_typed_and_refused_when_truthy() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
-    std::fs::write(repo.join(".gitattributes"), "test.txt filter=required-only\n")
-        .expect("select required-only filter");
+    std::fs::write(
+        repo.join(".gitattributes"),
+        "test.txt filter=required-only\n",
+    )
+    .expect("select required-only filter");
     run_git(&repo, &["add", ".gitattributes"]).await;
     run_git(&repo, &["commit", "-m", "required-only attribute"]).await;
 
-    run_git(
-        &repo,
-        &["config", "filter.required-only.required", "false"],
-    )
-    .await;
+    run_git(&repo, &["config", "filter.required-only.required", "false"]).await;
     let git = GitRunner::for_cwd(&repo).expect("trusted Git");
     prepare_status_config(&git, &repo)
         .await
         .expect("selected required=false filter is inert");
 
-    run_git(
-        &repo,
-        &["config", "filter.required-only.required", "true"],
-    )
-    .await;
+    run_git(&repo, &["config", "filter.required-only.required", "true"]).await;
     assert_eq!(
         prepare_status_config(&git, &repo).await.map(|_| ()),
         Err(GitReadError::SelectedExecutableFilter {
@@ -792,13 +855,12 @@ async fn selected_required_only_filter_is_typed_and_refused_when_truthy() {
         "selected malformed required value must fail closed"
     );
 
-    std::fs::write(repo.join(".gitattributes"), "other.txt filter=required-only\n")
-        .expect("move required-only filter off tracked paths");
-    run_git(
-        &repo,
-        &["config", "filter.required-only.required", "true"],
+    std::fs::write(
+        repo.join(".gitattributes"),
+        "other.txt filter=required-only\n",
     )
-    .await;
+    .expect("move required-only filter off tracked paths");
+    run_git(&repo, &["config", "filter.required-only.required", "true"]).await;
     prepare_status_config(&git, &repo)
         .await
         .expect("unselected required-only namespace remains available");
@@ -850,24 +912,22 @@ async fn optional_smudge_required_value_is_queried_once_per_driver() {
 }
 
 #[tokio::test]
-async fn sentinel_probe_neutralizes_a_race_selected_known_driver() {
+async fn sentinel_pathspec_refuses_a_raced_new_filter_namespace_without_helper() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     std::fs::write(repo.join(".gitattributes"), "test.txt filter\n")
         .expect("write sentinel attribute");
     run_git(&repo, &["add", ".gitattributes"]).await;
     run_git(&repo, &["commit", "-m", "sentinel attribute"]).await;
-    for driver in ["set", "race"] {
-        run_git(
-            &repo,
-            &[
-                "config",
-                &format!("filter.{driver}.clean"),
-                "git config codex.probe-filter-ran true && git hash-object --stdin",
-            ],
-        )
-        .await;
-    }
+    run_git(
+        &repo,
+        &[
+            "config",
+            "filter.set.clean",
+            "git config codex.probe-filter-ran true && git hash-object --stdin",
+        ],
+    )
+    .await;
 
     let wrapper = temp_dir.path().join("git-wrapper");
     let real_git = shell_quote(&real_git());
@@ -875,14 +935,18 @@ async fn sentinel_probe_neutralizes_a_race_selected_known_driver() {
     write_wrapper(
         &wrapper,
         &format!(
-            "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = check-attr ]; then\n    {real_git} \"$@\" >\"$0.output\"\n    status=$?\n    printf 'test.txt filter=race\\n' >{attributes}\n    /bin/cat \"$0.output\"\n    /bin/rm -f \"$0.output\"\n    exit $status\n  fi\ndone\nexec {real_git} \"$@\"\n"
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = check-attr ]; then\n    {real_git} \"$@\" >\"$0.output\"\n    status=$?\n    {real_git} config filter.evil.clean 'git config codex.probe-filter-ran true && git hash-object --stdin'\n    printf 'test.txt filter=evil\\n' >{attributes}\n    /bin/cat \"$0.output\"\n    /bin/rm -f \"$0.output\"\n    exit $status\n  fi\ndone\nexec {real_git} \"$@\"\n"
         ),
     );
     let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
 
-    prepare_status_config(&git, &repo)
-        .await
-        .expect("probe remains non-executing across attribute race");
+    assert_eq!(
+        prepare_status_config(&git, &repo).await.map(|_| ()),
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "set".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
     assert!(!filter_marker_is_set(&repo, "codex.probe-filter-ran").await);
 }
 
@@ -926,7 +990,9 @@ async fn sentinel_probe_budget_fails_closed_at_the_exact_process_limit() {
     let probe_count = std::fs::read_to_string(log)
         .expect("read wrapper log")
         .lines()
-        .filter(|line| line.contains(" hash-object --stdin --path "))
+        .filter(|line| {
+            line.contains(" ls-files --cached --full-name -z -- :(top,literal,attr:!filter)")
+        })
         .count();
     assert_eq!(probe_count, max_probes);
     assert!(!filter_marker_is_set(&repo, "codex.budget-filter-ran").await);
@@ -1042,7 +1108,11 @@ async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_ord
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    assert_eq!(lines.len(), 1, "synthetic context must not probe or start fsmonitor");
+    assert_eq!(
+        lines.len(),
+        1,
+        "synthetic context must not probe or start fsmonitor"
+    );
     let hooks = format!("core.hooksPath={}", crate::safe_git::DISABLED_HOOKS_PATH);
     let hooks_offset = lines[0].find(&hooks).expect("hooks override");
     let fsmonitor_offset = lines[0]
@@ -1050,9 +1120,9 @@ async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_ord
         .expect("disabled fsmonitor override");
     let status_offset = lines[0].find("status --porcelain").expect("status command");
     assert!(hooks_offset < fsmonitor_offset && fsmonitor_offset < status_offset);
-    assert!(lines[0].ends_with(
-        "status --porcelain --ignore-submodules=dirty --untracked-files=no"
-    ));
+    assert!(
+        lines[0].ends_with("status --porcelain --ignore-submodules=dirty --untracked-files=no")
+    );
 }
 
 #[tokio::test]

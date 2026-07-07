@@ -52,7 +52,7 @@ async fn bounded_async_output_rejects_the_first_byte_over_limit() {
 async fn common_info_attributes_treat_a_missing_info_directory_as_empty_and_bound_bytes() {
     let fixture = tempfile::tempdir().expect("fixture");
     assert_eq!(
-        read_common_info_attributes_bounded_async(fixture.path(), 4)
+        read_common_info_attributes_bounded_async(fixture.path(), /*max_bytes*/ 4)
             .await
             .expect("missing info directory is an empty source"),
         Vec::<u8>::new()
@@ -62,7 +62,7 @@ async fn common_info_attributes_treat_a_missing_info_directory_as_empty_and_boun
     std::fs::write(fixture.path().join("info/attributes"), b"1234")
         .expect("write exact-limit attributes");
     assert_eq!(
-        read_common_info_attributes_bounded_async(fixture.path(), 4)
+        read_common_info_attributes_bounded_async(fixture.path(), /*max_bytes*/ 4)
             .await
             .expect("exact-limit attributes"),
         b"1234"
@@ -70,7 +70,7 @@ async fn common_info_attributes_treat_a_missing_info_directory_as_empty_and_boun
     std::fs::write(fixture.path().join("info/attributes"), b"12345")
         .expect("write over-limit attributes");
     assert_eq!(
-        read_common_info_attributes_bounded_async(fixture.path(), 4)
+        read_common_info_attributes_bounded_async(fixture.path(), /*max_bytes*/ 4)
             .await
             .expect_err("over-limit attributes must fail")
             .kind(),

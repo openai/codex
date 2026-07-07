@@ -14,7 +14,6 @@ use tokio::io::AsyncReadExt;
 
 use crate::errors::GitReadError;
 use crate::git_config_environment::GitConfigEnvironmentSnapshot;
-use crate::guarded_config::GuardedOperationIdentity;
 #[cfg(test)]
 use crate::git_executable::git_executable_name;
 use crate::git_executable::harden_git_launch_environment;
@@ -25,6 +24,7 @@ use crate::git_executable::search_directory_is_untrusted;
 use crate::git_executable::select_git_executable;
 #[cfg(all(test, windows))]
 use crate::git_executable::windows_path_requires_fail_closed;
+use crate::guarded_config::GuardedOperationIdentity;
 use crate::repository_authority::RepositoryAuthority;
 #[cfg(test)]
 use crate::repository_authority::parse_marker_path as parse_git_marker_path;
@@ -146,8 +146,7 @@ impl IsolatedGitReadContext {
 
     pub(crate) fn seal_projected_files(mut self) -> io::Result<Self> {
         self.config_contents = Some(std::fs::read(self.config_path())?.into_boxed_slice());
-        self.attributes_contents =
-            Some(std::fs::read(self.attributes_path())?.into_boxed_slice());
+        self.attributes_contents = Some(std::fs::read(self.attributes_path())?.into_boxed_slice());
         self.validate()?;
         Ok(self)
     }
@@ -379,10 +378,7 @@ impl GitRunner {
         Ok(command)
     }
 
-    pub(crate) fn async_config_file_write_command(
-        &self,
-        config_path: &Path,
-    ) -> GitAsyncCommand {
+    pub(crate) fn async_config_file_write_command(&self, config_path: &Path) -> GitAsyncCommand {
         let mut command = self.async_command();
         scrub_repository_and_config_environment(command.inner.as_std_mut());
         command
@@ -1075,42 +1071,42 @@ async fn output_async_bounded_inner(
     mut command: GitAsyncCommand,
     max_bytes_per_stream: usize,
 ) -> io::Result<std::process::Output> {
-        command.inner.kill_on_drop(true);
-        if !command.stdin_configured {
-            command.inner.stdin(Stdio::null());
+    command.inner.kill_on_drop(true);
+    if !command.stdin_configured {
+        command.inner.stdin(Stdio::null());
+    }
+    command.inner.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.inner.spawn()?;
+    // No caller can obtain the pipe writer through this opaque command.
+    // Close it immediately so a child configured with `Stdio::piped()`
+    // observes EOF instead of waiting forever for unreachable input.
+    drop(child.stdin.take());
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing bounded Git stdout pipe"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing bounded Git stderr pipe"))?;
+    let output = tokio::try_join!(
+        read_bounded_output(stdout, max_bytes_per_stream),
+        read_bounded_output(stderr, max_bytes_per_stream)
+    );
+    let (stdout, stderr) = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
         }
-        command.inner.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.inner.spawn()?;
-        // No caller can obtain the pipe writer through this opaque command.
-        // Close it immediately so a child configured with `Stdio::piped()`
-        // observes EOF instead of waiting forever for unreachable input.
-        drop(child.stdin.take());
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("missing bounded Git stdout pipe"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| io::Error::other("missing bounded Git stderr pipe"))?;
-        let output = tokio::try_join!(
-            read_bounded_output(stdout, max_bytes_per_stream),
-            read_bounded_output(stderr, max_bytes_per_stream)
-        );
-        let (stdout, stderr) = match output {
-            Ok(output) => output,
-            Err(error) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return Err(error);
-            }
-        };
-        let status = child.wait().await?;
-        Ok(std::process::Output {
-            status,
-            stdout,
-            stderr,
-        })
+    };
+    let status = child.wait().await?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 async fn read_bounded_output(
@@ -1145,7 +1141,12 @@ async fn read_common_info_attributes_bounded_async(
     use std::os::unix::fs::OpenOptionsExt;
 
     fn openat(directory: &std::fs::File, name: &str, flags: i32) -> io::Result<std::fs::File> {
-        let name = CString::new(name).expect("fixed path component");
+        let name = CString::new(name).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git attribute path component contains NUL",
+            )
+        })?;
         // SAFETY: the directory descriptor is live and the fixed component is
         // NUL-free. The returned descriptor is immediately owned by File.
         let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
@@ -1164,11 +1165,7 @@ async fn read_common_info_attributes_bounded_async(
     let info = match openat(
         &root,
         "info",
-        libc::O_RDONLY
-            | libc::O_DIRECTORY
-            | libc::O_NOFOLLOW
-            | libc::O_NONBLOCK
-            | libc::O_CLOEXEC,
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
     ) {
         Ok(info) => info,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),

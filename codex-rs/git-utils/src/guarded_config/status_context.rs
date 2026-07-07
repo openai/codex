@@ -44,7 +44,10 @@ impl SealedStatusReadContext {
     }
 
     #[cfg(test)]
-    pub(super) fn config_path(&self, owner: &Arc<CapabilityIdentity>) -> io::Result<std::path::PathBuf> {
+    pub(super) fn config_path(
+        &self,
+        owner: &Arc<CapabilityIdentity>,
+    ) -> io::Result<std::path::PathBuf> {
         Ok(self.context(owner)?.config_path())
     }
 
@@ -105,10 +108,7 @@ impl GuardedGitConfig<'_> {
             .await?;
         let repository_format = self
             .sources
-            .read_direct_common_config_async(
-                REPOSITORY_FORMAT_CONFIG_PATTERN,
-                "repository format",
-            )
+            .read_direct_common_config_async(REPOSITORY_FORMAT_CONFIG_PATTERN, "repository format")
             .await?;
         if entries.len().saturating_add(repository_format.len())
             > MAX_STATUS_PROJECTED_CONFIG_ENTRIES
@@ -119,10 +119,9 @@ impl GuardedGitConfig<'_> {
             ));
         }
         refuse_sparse_status(&entries)?;
-        let projected_bytes = entries
-            .iter()
-            .chain(repository_format.iter())
-            .try_fold(0_usize, |total, (key, entry)| {
+        let projected_bytes = entries.iter().chain(repository_format.iter()).try_fold(
+            0_usize,
+            |total, (key, entry)| {
                 total
                     .checked_add(key.len())
                     .and_then(|total| total.checked_add(entry.value.len()))
@@ -133,7 +132,8 @@ impl GuardedGitConfig<'_> {
                             "status config projection size overflow",
                         )
                     })
-            })?;
+            },
+        )?;
         if projected_bytes > MAX_STATUS_PROJECTED_CONFIG_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -141,20 +141,12 @@ impl GuardedGitConfig<'_> {
             ));
         }
         for entry in entries.values() {
-            self.write_status_config_value_async(
-                &context.config_path(),
-                &entry.key,
-                &entry.value,
-            )
-            .await?;
+            self.write_status_config_value_async(&context.config_path(), &entry.key, &entry.value)
+                .await?;
         }
         for entry in repository_format.values() {
-            self.write_status_config_value_async(
-                &context.config_path(),
-                &entry.key,
-                &entry.value,
-            )
-            .await?;
+            self.write_status_config_value_async(&context.config_path(), &entry.key, &entry.value)
+                .await?;
         }
         self.write_status_config_value_async(&context.config_path(), "core.bare", "false")
             .await?;
@@ -217,10 +209,7 @@ impl GuardedGitConfig<'_> {
             "core.attributesFile",
         ]);
         let output = command.output().await?;
-        if output.status.code() == Some(1)
-            && output.stdout.is_empty()
-            && output.stderr.is_empty()
-        {
+        if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
             return Ok(None);
         }
         if !output.status.success() {

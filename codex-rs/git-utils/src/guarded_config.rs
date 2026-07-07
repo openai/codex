@@ -35,18 +35,18 @@ use crate::safe_git::FilterPolicySnapshot;
 use crate::safe_git::MAX_EXECUTABLE_FILTER_DRIVERS;
 use crate::safe_git::SelectedFilterPolicy;
 use crate::safe_git::SentinelFilterProbeBudget;
-use crate::safe_git::SentinelFilterProbeResolution;
 use crate::safe_git::build_filter_policy_snapshot;
 use crate::safe_git::classify_selected_filter;
-use crate::safe_git::classify_sentinel_filter_probes;
-use crate::safe_git::status_policy_filter_drivers;
 use crate::safe_git::git_path_argument;
 use crate::safe_git::parse_filter_attributes;
 use crate::safe_git::parse_nul_paths;
+use crate::safe_git::status_policy_filter_drivers;
 use crate::safe_git::validate_executable_driver_count;
 use crate::safe_git::write_nul_paths;
 
 const MAX_STATUS_TRACKED_PATHS: usize = 250_000;
+const MAX_STATUS_SENTINEL_PATHSPEC_BYTES: usize = 16 * 1024;
+const MAX_STATUS_SENTINEL_STAGE_RECORDS: usize = 3;
 const FILTER_NEUTRALIZATION_PLAN: [(&str, &str); 4] = [
     ("clean", ""),
     ("smudge", ""),
@@ -224,8 +224,7 @@ impl<'git> ValidatedConfigSources<'git> {
             let (legacy, legacy_path) = self
                 .git
                 .read_active_common_config_without_includes_async(
-                    pattern,
-                    /*show_scope*/ false,
+                    pattern, /*show_scope*/ false,
                 )
                 .await?;
             if legacy_path != scoped_path {
@@ -1302,10 +1301,7 @@ impl<'git> GuardedGitConfig<'git> {
             .read_status_head_oid_async(neutralizer.as_ref())
             .await?;
         let context = self
-            .build_status_read_context_async(
-                head_oid.as_deref(),
-                has_untracked,
-            )
+            .build_status_read_context_async(head_oid.as_deref(), has_untracked)
             .await?;
         self.status = Some(StatusPolicySnapshot {
             context,
@@ -1318,8 +1314,7 @@ impl<'git> GuardedGitConfig<'git> {
         &self,
         neutralizer: Option<&SealedFilterConfigOverride>,
     ) -> io::Result<bool> {
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
         command.disable_optional_locks().args([
             "ls-files",
             "-z",
@@ -1331,7 +1326,10 @@ impl<'git> GuardedGitConfig<'git> {
         ]);
         let output = command.output().await?;
         if !output.status.success() {
-            return Err(command_failure("status untracked-presence inventory", &output));
+            return Err(command_failure(
+                "status untracked-presence inventory",
+                &output,
+            ));
         }
         let paths = parse_nul_paths(&output.stdout)?;
         if paths.len() > MAX_STATUS_TRACKED_PATHS {
@@ -1347,24 +1345,23 @@ impl<'git> GuardedGitConfig<'git> {
         &self,
         neutralizer: Option<&SealedFilterConfigOverride>,
     ) -> io::Result<Option<String>> {
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
-        command
-            .disable_optional_locks()
-            .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        command.disable_optional_locks().args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "HEAD^{commit}",
+        ]);
         let output = command.output().await?;
         if output.status.success() {
             return parse_status_head_oid(&output.stdout).map(Some);
         }
-        if output.status.code() != Some(1)
-            || !output.stdout.is_empty()
-            || !output.stderr.is_empty()
+        if output.status.code() != Some(1) || !output.stdout.is_empty() || !output.stderr.is_empty()
         {
             return Err(command_failure("status HEAD snapshot", &output));
         }
 
-        let mut symbolic =
-            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        let mut symbolic = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
         symbolic
             .disable_optional_locks()
             .args(["symbolic-ref", "--quiet", "HEAD"]);
@@ -1380,10 +1377,7 @@ impl<'git> GuardedGitConfig<'git> {
             .args(["show-ref", "--verify", "--quiet", "--"])
             .arg(&target);
         let verify = verify.output().await?;
-        if verify.status.code() == Some(1)
-            && verify.stdout.is_empty()
-            && verify.stderr.is_empty()
-        {
+        if verify.status.code() == Some(1) && verify.stdout.is_empty() && verify.stderr.is_empty() {
             return Ok(None);
         }
         if verify.status.success() {
@@ -1409,8 +1403,7 @@ impl<'git> GuardedGitConfig<'git> {
                 "frozen Status is unavailable with a custom Git replacement-ref namespace",
             ));
         }
-        let mut command =
-            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
         command.disable_optional_locks().args([
             "for-each-ref",
             "--format=%(refname)",
@@ -1592,49 +1585,6 @@ impl<'git> GuardedGitConfig<'git> {
         neutralizer: &SealedFilterConfigOverride,
         probe_budget: &mut SentinelFilterProbeBudget,
     ) -> io::Result<bool> {
-        let required = self
-            .run_status_sentinel_probe_async(
-                path,
-                driver,
-                /*required*/ true,
-                neutralizer,
-                probe_budget,
-            )
-            .await?;
-        if classify_sentinel_filter_probes(
-            required.status.success(),
-            /*optional_succeeded*/ None,
-        ) == SentinelFilterProbeResolution::SpecialAttributeState
-        {
-            return Ok(false);
-        }
-        let optional = self
-            .run_status_sentinel_probe_async(
-                path,
-                driver,
-                /*required*/ false,
-                neutralizer,
-                probe_budget,
-            )
-            .await?;
-        if classify_sentinel_filter_probes(
-            required.status.success(),
-            Some(optional.status.success()),
-        ) == SentinelFilterProbeResolution::LiteralDriver
-        {
-            return Ok(true);
-        }
-        Err(command_failure("status filter sentinel probe", &optional))
-    }
-
-    async fn run_status_sentinel_probe_async(
-        &self,
-        path: &[u8],
-        driver: &str,
-        required: bool,
-        neutralizer: &SealedFilterConfigOverride,
-        probe_budget: &mut SentinelFilterProbeBudget,
-    ) -> io::Result<std::process::Output> {
         if !matches!(driver, "set" | "unset" | "unspecified") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1653,14 +1603,14 @@ impl<'git> GuardedGitConfig<'git> {
             self.pending_status_command(FsmonitorOverride::Disabled, Some(neutralizer))?;
         command
             .disable_optional_locks()
-            .args(["-c", &format!("filter.{driver}.required={required}")])
-            .args(["hash-object", "--stdin"])
-            .arg("--path")
-            .arg(git_path_argument(path)?)
-            .stdin(Stdio::null());
+            .args(["ls-files", "--cached", "--full-name", "-z", "--"])
+            .arg(status_filter_special_pathspec(path, driver)?);
         let output = command.output().await?;
         probe_budget.record_completed_probe();
-        Ok(output)
+        if !output.status.success() {
+            return Err(command_failure("status filter sentinel probe", &output));
+        }
+        status_filter_sentinel_probe_selects_driver(&output.stdout, path)
     }
 
     fn ensure_owned_config_path(&self, path: &Path, description: &str) -> io::Result<()> {
@@ -2112,7 +2062,10 @@ fn safe_scalar_override_args() -> [String; 4] {
 
 fn parse_status_head_oid(output: &[u8]) -> io::Result<String> {
     let line = output.strip_suffix(b"\n").ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "unterminated Status HEAD output")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unterminated Status HEAD output",
+        )
     })?;
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     if !matches!(line.len(), 40 | 64) || !line.iter().all(u8::is_ascii_hexdigit) {
@@ -2121,7 +2074,62 @@ fn parse_status_head_oid(output: &[u8]) -> io::Result<String> {
             "Status HEAD did not resolve to one full object ID",
         ));
     }
-    Ok(String::from_utf8(line.to_ascii_lowercase()).expect("ASCII object ID"))
+    String::from_utf8(line.to_ascii_lowercase()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Status HEAD output was not a valid hexadecimal object ID",
+        )
+    })
+}
+
+fn status_filter_special_pathspec(path: &[u8], driver: &str) -> io::Result<std::ffi::OsString> {
+    if path.is_empty() || path.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid Status filter sentinel path",
+        ));
+    }
+    let requirement = match driver {
+        "set" => "filter",
+        "unset" => "-filter",
+        "unspecified" => "!filter",
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git filter sentinel probe requested for a non-sentinel driver",
+            ));
+        }
+    };
+    let mut pathspec = format!(":(top,literal,attr:{requirement})").into_bytes();
+    pathspec.extend_from_slice(path);
+    if pathspec.len() > MAX_STATUS_SENTINEL_PATHSPEC_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Git filter sentinel pathspec exceeds the Status byte limit",
+        ));
+    }
+    git_path_argument(&pathspec)
+}
+
+fn status_filter_sentinel_probe_selects_driver(output: &[u8], path: &[u8]) -> io::Result<bool> {
+    let matches = parse_nul_paths(output)?;
+    if matches.is_empty() {
+        // The public check-attr spelling was ambiguous at T0. If the one
+        // authoritative T1 pathspec does not prove the corresponding special
+        // state, conservatively retain the spelling as a literal driver
+        // selection. This preserves the structured selected-filter refusal
+        // and also fails closed for any intervening source drift.
+        return Ok(true);
+    }
+    if matches.len() > MAX_STATUS_SENTINEL_STAGE_RECORDS
+        || matches.iter().any(|matched| matched != path)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "status filter sentinel probe returned non-exact index paths",
+        ));
+    }
+    Ok(false)
 }
 
 fn parse_status_symbolic_ref(output: &[u8]) -> io::Result<std::ffi::OsString> {
