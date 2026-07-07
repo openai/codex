@@ -1253,10 +1253,14 @@ mod tests {
     #[test]
     fn missing_expected_connector_ids_retries_cold_start_and_ignores_synthetic_links() {
         let expected_connector_ids = vec!["connector_docs".to_string()];
-        let synthetic_tool = connector_tool_info("connector_docs", true);
+        let synthetic_tool = connector_tool_info("connector_docs", /*synthetic_link*/ true);
 
         assert_eq!(
-            missing_expected_connector_ids(&expected_connector_ids, None, &[synthetic_tool]),
+            missing_expected_connector_ids(
+                &expected_connector_ids,
+                /*baseline_tools*/ None,
+                &[synthetic_tool],
+            ),
             expected_connector_ids
         );
     }
@@ -1265,7 +1269,10 @@ mod tests {
     fn missing_expected_connector_ids_checks_only_baseline_connectors() {
         let expected_connector_ids =
             vec!["connector_docs".to_string(), "connector_mail".to_string()];
-        let baseline_tools = vec![connector_tool_info("connector_docs", false)];
+        let baseline_tools = vec![connector_tool_info(
+            "connector_docs",
+            /*synthetic_link*/ false,
+        )];
 
         assert_eq!(
             missing_expected_connector_ids(&expected_connector_ids, Some(&baseline_tools), &[]),
