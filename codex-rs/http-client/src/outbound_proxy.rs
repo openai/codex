@@ -84,14 +84,54 @@ impl fmt::Display for RouteFailureClass {
     }
 }
 
-/// Marker enabling fixed system/PAC/WPAD, environment, then direct routing.
-/// Resolved endpoints and platform details remain internal to the client builder.
+/// Resolved outbound proxy behavior for HTTP clients.
+///
+/// Callers must choose a policy explicitly so omitting feature resolution cannot silently select
+/// legacy behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutboundProxyConfig;
+pub enum OutboundProxyPolicy {
+    /// Preserve reqwest's built-in proxy behavior.
+    ReqwestDefault,
+    /// Resolve system/PAC/WPAD settings, then environment settings, then direct routing.
+    RespectSystemProxy,
+}
 
-impl OutboundProxyConfig {
-    pub const fn respect_system_proxy() -> Self {
-        Self
+/// Builds route-specific HTTP clients using one resolved outbound proxy policy.
+///
+/// Construct this once from the effective application configuration and carry it with the
+/// session or component that owns outbound requests. Individual request paths should supply only
+/// their destination and route class rather than resolving feature state themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpClientFactory {
+    outbound_proxy_policy: OutboundProxyPolicy,
+}
+
+impl HttpClientFactory {
+    /// Creates a factory from the outbound proxy policy resolved by the application.
+    pub const fn new(outbound_proxy_policy: OutboundProxyPolicy) -> Self {
+        Self {
+            outbound_proxy_policy,
+        }
+    }
+
+    /// Returns the outbound proxy policy used for clients built by this factory.
+    pub const fn outbound_proxy_policy(&self) -> OutboundProxyPolicy {
+        self.outbound_proxy_policy
+    }
+
+    /// Builds a reqwest client for a concrete outbound route.
+    pub fn build_reqwest_client(
+        &self,
+        builder: reqwest::ClientBuilder,
+        request_url: &str,
+        route_class: ClientRouteClass,
+    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+        build_reqwest_client_for_route(
+            builder,
+            request_url,
+            route_class,
+            self.outbound_proxy_policy,
+        )
     }
 }
 
@@ -120,18 +160,18 @@ impl From<BuildRouteAwareHttpClientError> for io::Error {
 /// a route is selected are returned without trying another route. Ordered PAC candidates are
 /// currently collapsed to one route on both Windows and macOS; later proxy or `DIRECT` candidates
 /// are not retried after a connection failure.
-pub fn build_reqwest_client_for_route(
+fn build_reqwest_client_for_route(
     builder: reqwest::ClientBuilder,
     request_url: &str,
     route_class: ClientRouteClass,
-    config: Option<&OutboundProxyConfig>,
+    outbound_proxy_policy: OutboundProxyPolicy,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
     let builder = configure_proxy_for_route(
         &ProcessEnv,
         builder,
         request_url,
         route_class,
-        config,
+        outbound_proxy_policy,
         resolve_system_proxy,
     )?;
     build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
@@ -142,10 +182,10 @@ fn configure_proxy_for_route(
     builder: reqwest::ClientBuilder,
     request_url: &str,
     route_class: ClientRouteClass,
-    config: Option<&OutboundProxyConfig>,
+    outbound_proxy_policy: OutboundProxyPolicy,
     resolve_system_proxy: impl FnOnce(&str, &RequestOrigin) -> SystemProxyDecision,
 ) -> Result<reqwest::ClientBuilder, BuildRouteAwareHttpClientError> {
-    if config.is_none() {
+    if matches!(outbound_proxy_policy, OutboundProxyPolicy::ReqwestDefault) {
         return Ok(builder);
     }
     let origin = RequestOrigin::parse(request_url);

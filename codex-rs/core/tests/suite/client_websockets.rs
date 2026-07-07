@@ -2284,6 +2284,7 @@ async fn websocket_harness_with_provider_options(
             .features
             .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
 
     WebsocketTestHarness {

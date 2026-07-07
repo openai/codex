@@ -79,13 +79,12 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
         values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
     };
     let request_url = "http://enabled-proxy.test/proxy-check";
-    let config = OutboundProxyConfig::respect_system_proxy();
     let builder = configure_proxy_for_route(
         &env,
         reqwest::Client::builder().timeout(Duration::from_secs(2)),
         request_url,
         ClientRouteClass::Auth,
-        Some(&config),
+        OutboundProxyPolicy::RespectSystemProxy,
         |_, _| SystemProxyDecision::Unavailable {
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         },

@@ -70,6 +70,8 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
@@ -1479,6 +1481,16 @@ impl Config {
     pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
         self.respect_system_proxy
             .then(AuthRouteConfig::respect_system_proxy)
+    }
+
+    /// Creates the HTTP client factory resolved from the effective feature configuration.
+    pub fn http_client_factory(&self) -> HttpClientFactory {
+        let outbound_proxy_policy = if self.respect_system_proxy {
+            OutboundProxyPolicy::RespectSystemProxy
+        } else {
+            OutboundProxyPolicy::ReqwestDefault
+        };
+        HttpClientFactory::new(outbound_proxy_policy)
     }
 
     /// Build the plugin-manager input from the effective config.

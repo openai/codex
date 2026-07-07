@@ -1339,6 +1339,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             .features
             .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -3007,6 +3008,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*item_ids_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
