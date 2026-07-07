@@ -1593,9 +1593,9 @@ impl Session {
     }
 
     pub(crate) async fn refresh_runtime_config(&self, next_config: Config) {
-        // Refresh only the user layer from the incoming snapshot. Preserve thread-local
-        // layers such as request/session overrides that were present when this session
-        // was created.
+        // Refresh the user and project layers from the incoming snapshot. Project trust
+        // changes can enable or disable project layers, while thread-local layers such as
+        // request/session overrides must remain as they were when this session was created.
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (previous_config, new_config, config) = {
             let mut state = self.state.lock().await;
@@ -1604,7 +1604,7 @@ impl Session {
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.config_layer_stack = config
                 .config_layer_stack
-                .with_user_layer_from(&next_config.config_layer_stack);
+                .with_user_and_project_layers_from(&next_config.config_layer_stack);
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             let config = Arc::new(config);

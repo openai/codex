@@ -434,28 +434,38 @@ impl ConfigLayerStack {
         }
     }
 
-    /// Returns a new stack with the user layer copied from `other`, preserving
-    /// every non-user layer already present in this stack.
-    pub fn with_user_layer_from(&self, other: &Self) -> Self {
-        let user_layers = other
+    /// Returns a new stack with the user and project layers copied from `other`,
+    /// preserving every other layer already present in this stack.
+    pub fn with_user_and_project_layers_from(&self, other: &Self) -> Self {
+        let replacement_layers = other
             .layers
             .iter()
-            .filter(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
+            .filter(|layer| {
+                matches!(
+                    layer.name,
+                    ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         let mut layers = self
             .layers
             .iter()
-            .filter(|layer| !matches!(layer.name, ConfigLayerSource::User { .. }))
+            .filter(|layer| {
+                !matches!(
+                    layer.name,
+                    ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
-        for user_layer in user_layers {
+        for replacement_layer in replacement_layers {
             match layers
                 .iter()
-                .position(|layer| layer.name.precedence() > user_layer.name.precedence())
+                .position(|layer| layer.name.precedence() > replacement_layer.name.precedence())
             {
-                Some(index) => layers.insert(index, user_layer),
-                None => layers.push(user_layer),
+                Some(index) => layers.insert(index, replacement_layer),
+                None => layers.push(replacement_layer),
             }
         }
         let user_layer_index = layers.iter().enumerate().rev().find_map(|(index, layer)| {

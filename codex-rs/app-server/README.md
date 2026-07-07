@@ -1722,7 +1722,9 @@ For linked Git worktrees, project hook declarations come from the matching `.cod
 
 Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
 
-For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Project hooks inherit the trust of their project: hooks from active project config layers report `trustStatus: "trusted"` and do not require a matching `hooks.state` entry. If project trust is removed, the project layers and their hooks are removed from running threads when config is reloaded.
+
+For other unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {

@@ -3,13 +3,17 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::LoaderOverrides;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
+use codex_core::config::set_project_trust_level;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -763,6 +767,65 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
+async fn project_session_start_hook_ran(
+    server: &wiremock::MockServer,
+    trust_level: TrustLevel,
+) -> Result<bool> {
+    let home = Arc::new(TempDir::new()?);
+    let project = TempDir::new()?;
+    let dot_codex = project.path().join(".codex");
+    let script_path = dot_codex.join("session_start_hook.py");
+    let log_path = project.path().join("project_session_start_hook.log");
+    fs::create_dir_all(project.path().join(".git"))?;
+    fs::create_dir_all(&dot_codex)?;
+    fs::write(
+        &script_path,
+        format!(
+            r#"from pathlib import Path
+
+Path(r"{log_path}").write_text("ran\n", encoding="utf-8")
+"#,
+            log_path = log_path.display(),
+        ),
+    )?;
+    fs::write(
+        dot_codex.join("config.toml"),
+        format!(
+            r#"[hooks]
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'python3 {script_path}'
+"#,
+            script_path = script_path.display(),
+        ),
+    )?;
+    set_project_trust_level(home.path(), project.path(), trust_level)?;
+
+    let resolved_config = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(project.path().to_path_buf()))
+        .build()
+        .await?;
+    let project_cwd = resolved_config.cwd;
+    let project_layers = resolved_config.config_layer_stack;
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.cwd = project_cwd;
+        config.config_layer_stack = project_layers;
+        config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable Codex hooks");
+    });
+    let test = builder.build(server).await?;
+    test.submit_turn("hello").await?;
+
+    Ok(log_path.exists())
+}
+
 fn write_session_start_hook_with_context(home: &Path, additional_context: &str) -> Result<()> {
     let script_path = home.join("session_start_hook.py");
     let additional_context_json = serde_json::to_string(additional_context)
@@ -1168,6 +1231,40 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     assert!(
         hook_prompt_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the second continuation prompt",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_session_start_hooks_follow_project_trust() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-trusted"),
+                ev_assistant_message("msg-trusted", "trusted project"),
+                ev_completed("resp-trusted"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-untrusted"),
+                ev_assistant_message("msg-untrusted", "untrusted project"),
+                ev_completed("resp-untrusted"),
+            ]),
+        ],
+    )
+    .await;
+
+    assert!(
+        project_session_start_hook_ran(&server, TrustLevel::Trusted).await?,
+        "trusted project hook should run"
+    );
+    assert!(
+        !project_session_start_hook_ran(&server, TrustLevel::Untrusted).await?,
+        "untrusted project hook should not run"
     );
 
     Ok(())

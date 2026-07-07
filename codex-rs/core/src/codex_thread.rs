@@ -618,9 +618,9 @@ impl CodexThread {
         self.codex.session.multi_agent_version()
     }
 
-    /// Refresh the thread's layer-backed user config state from a caller-supplied
-    /// config snapshot. Thread-scoped layers and session-static settings remain
-    /// unchanged.
+    /// Refresh the thread's layer-backed user and project config state from a
+    /// caller-supplied config snapshot. Thread-scoped layers and session-static
+    /// settings remain unchanged.
     pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
         self.codex.session.refresh_runtime_config(next_config).await;
     }

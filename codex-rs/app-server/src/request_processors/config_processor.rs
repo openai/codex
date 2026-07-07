@@ -274,22 +274,34 @@ impl ConfigRequestProcessor {
     }
 
     async fn reload_user_config(&self) {
-        let next_config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to rebuild user config for runtime refresh: {}",
-                    err.message
-                );
-                return;
-            }
-        };
+        let mut threads_by_cwd = std::collections::HashMap::new();
         let thread_ids = self.thread_manager.list_thread_ids().await;
         for thread_id in thread_ids {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 continue;
             };
-            thread.refresh_runtime_config(next_config.clone()).await;
+            let cwd = thread.config().await.cwd.clone();
+            threads_by_cwd
+                .entry(cwd)
+                .or_insert_with(Vec::new)
+                .push(thread);
+        }
+
+        for (cwd, threads) in threads_by_cwd {
+            let next_config = match self.load_latest_config(Some(cwd.to_path_buf())).await {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::warn!(
+                        cwd = %cwd.display(),
+                        "failed to rebuild runtime config for threads: {}",
+                        err.message
+                    );
+                    continue;
+                }
+            };
+            for thread in threads {
+                thread.refresh_runtime_config(next_config.clone()).await;
+            }
         }
     }
 

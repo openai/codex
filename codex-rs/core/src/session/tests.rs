@@ -1530,6 +1530,70 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn refresh_runtime_config_revokes_hooks_when_project_becomes_untrusted() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("home");
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let dot_codex = project_root.join(".codex");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&dot_codex)?;
+    write_project_trust_config(
+        &codex_home,
+        &[(project_root.as_path(), TrustLevel::Trusted)],
+    )
+    .await?;
+
+    let trusted_config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(nested.clone()))
+        .build()
+        .await?;
+    let trusted_cwd = trusted_config.cwd.clone();
+    let trusted_layer_stack = trusted_config.config_layer_stack.clone();
+    let session_codex_home = trusted_config.codex_home.clone();
+    let session = make_session_with_config(move |config| {
+        config.codex_home = session_codex_home;
+        config.cwd = trusted_cwd;
+        config.config_layer_stack = trusted_layer_stack;
+        config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable Codex hooks");
+    })
+    .await?;
+    let request = codex_hooks::SessionStartRequest {
+        session_id: session.thread_id,
+        cwd: session.get_config().await.cwd.clone(),
+        transcript_path: None,
+        model: "gpt-5.2".to_string(),
+        permission_mode: "default".to_string(),
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
+    };
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+
+    write_project_trust_config(
+        &codex_home,
+        &[(project_root.as_path(), TrustLevel::Untrusted)],
+    )
+    .await?;
+    let next_config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+    session.refresh_runtime_config(next_config).await;
+
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_updates_effective_tool_suggest_config() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
