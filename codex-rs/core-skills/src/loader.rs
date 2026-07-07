@@ -683,8 +683,8 @@ async fn load_skills_under_root(
     let SkillFileDiscovery {
         skill_files,
         plugin_roots,
+        namespace_roots,
         warnings,
-        ..
     } = discover_skills_under_root(fs, &PathUri::from_abs_path(root), symlink_policy).await;
     for warning in warnings {
         error!("{warning}");
@@ -694,6 +694,7 @@ async fn load_skills_under_root(
         &PathUri::from_abs_path(root),
         plugin_namespace,
         plugin_roots,
+        namespace_roots,
     )
     .await;
     for path_uri in skill_files {

@@ -31,6 +31,7 @@ impl SkillNamespaceResolver {
         root: &PathUri,
         provided_namespace: Option<&str>,
         plugin_roots: HashSet<PathUri>,
+        namespace_roots: HashSet<PathUri>,
     ) -> Self {
         if let Some(namespace) = provided_namespace {
             return Self {
@@ -43,22 +44,37 @@ impl SkillNamespaceResolver {
             .await
             .map(ResolvedSkillNamespace::Plugin)
             .unwrap_or(ResolvedSkillNamespace::Plain);
+        let namespace_roots = namespace_roots
+            .into_iter()
+            .filter(|namespace_root| namespace_root != root)
+            .collect::<Vec<_>>();
+        let namespace_root_set = namespace_roots.iter().cloned().collect::<HashSet<_>>();
         // Keep independent root probes concurrent: remote executors pay RPC latency for each
         // filesystem request, so awaiting these serially would scale startup with plugin count.
-        let nested_namespaces = join_all(
+        let namespace_lookups = join_all(namespace_roots.into_iter().map(|namespace_root| async {
+            let namespace = plugin_namespace_for_skill_uri(fs, &namespace_root)
+                .await
+                .map(ResolvedSkillNamespace::Plugin)
+                .unwrap_or(ResolvedSkillNamespace::Plain);
+            (namespace_root, namespace)
+        }));
+        let plugin_lookups = join_all(
             plugin_roots
                 .into_iter()
-                .filter(|plugin_root| plugin_root != root)
+                .filter(|plugin_root| {
+                    plugin_root != root && !namespace_root_set.contains(plugin_root)
+                })
                 .map(|plugin_root| async move {
                     plugin_namespace_for_root_uri(fs, &plugin_root)
                         .await
                         .map(|namespace| (plugin_root, ResolvedSkillNamespace::Plugin(namespace)))
                 }),
-        )
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+        );
+        let (namespace_lookups, plugin_lookups) = tokio::join!(namespace_lookups, plugin_lookups);
+        let nested_namespaces = namespace_lookups
+            .into_iter()
+            .chain(plugin_lookups.into_iter().flatten())
+            .collect();
 
         Self {
             inherited_namespace,

@@ -1488,7 +1488,7 @@ async fn invalid_nested_plugin_manifest_falls_back_to_outer_namespace() {
 // Directory symlinks on Windows can require Developer Mode or administrator privileges.
 #[cfg(unix)]
 #[tokio::test]
-async fn namespaces_skills_in_symlinked_plugin_subtree() {
+async fn namespaces_skills_in_symlinked_plugin_skills_dir() {
     let root = tempfile::tempdir().expect("tempdir");
     let shared_plugin_root = tempfile::tempdir().expect("tempdir");
     write_plugin_manifest(shared_plugin_root.path(), r#"{"name":"linked"}"#);
@@ -1501,7 +1501,7 @@ async fn namespaces_skills_in_symlinked_plugin_subtree() {
     let skills_root = root.path().join("skills");
     fs::create_dir_all(&skills_root).unwrap();
     symlink_dir(
-        shared_plugin_root.path(),
+        &shared_plugin_root.path().join("skills"),
         &skills_root.join("linked-plugin"),
     );
 
