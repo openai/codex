@@ -1730,15 +1730,16 @@ impl<'git> GuardedGitConfig<'git> {
         value: &str,
     ) -> io::Result<()> {
         debug_assert!(matches!(name, "clean" | "smudge" | "process" | "required"));
-        let mut command = self
-            .sources
-            .git
-            .command_for_cwd(&self.sources.canonical_root)?;
-        command
-            .args(&self.sources.base_config_args)
-            .args(["config", "--file"])
-            .arg(config_path)
-            .args(["--add", &format!("filter.{driver}.{name}"), value]);
+        // The destination is operation-owned and absolute. Avoid repository
+        // setup while serializing the already inventoried driver names: a
+        // malformed repository setting must not preempt the typed policy
+        // error that the guarded operation reports later.
+        let mut command = self.sources.git.command();
+        command.args(["config", "--file"]).arg(config_path).args([
+            "--add",
+            &format!("filter.{driver}.{name}"),
+            value,
+        ]);
         let output = self.sources.git.output(command)?;
         if !output.status.success() {
             return Err(io::Error::other(format!(

@@ -213,7 +213,8 @@ pub(crate) fn execute_reverse_staging_plan(
     plan: SealedReverseStagingPlan,
 ) -> io::Result<()> {
     config.ensure_operation_identity(&plan.owner)?;
-    let result = execute_prepared_reverse_index_update(config, &plan.update, None)?;
+    let result =
+        execute_prepared_reverse_index_update(config, &plan.update, /*scratch*/ None)?;
     reverse_staging_result(result)
 }
 

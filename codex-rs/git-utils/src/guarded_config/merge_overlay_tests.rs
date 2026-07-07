@@ -181,10 +181,17 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
     }
 
     let custom = BTreeSet::from(["custom.txt".to_string()]);
-    let clean_before = BTreeMap::from([("peer.txt".to_string(), BTreeMap::from([(0, entry(1))]))]);
+    let clean_before = BTreeMap::from([(
+        "peer.txt".to_string(),
+        BTreeMap::from([(0, entry(/*byte*/ 1))]),
+    )]);
     let newly_conflicted = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     assert!(newly_unmerged_noncustom_path(
         &clean_before,
@@ -194,11 +201,19 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
 
     let already_unmerged = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     let changed_unmerged = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(4)), (2, entry(5)), (3, entry(6))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 4)),
+            (2, entry(/*byte*/ 5)),
+            (3, entry(/*byte*/ 6)),
+        ]),
     )]);
     assert!(!newly_unmerged_noncustom_path(
         &already_unmerged,
@@ -208,7 +223,11 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
 
     let custom_conflict = BTreeMap::from([(
         "custom.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     assert!(!newly_unmerged_noncustom_path(
         &IndexStageSnapshot::new(),
@@ -243,6 +262,7 @@ fn sealed_merge_override_rejects_another_operation_identity() {
             "file.txt".to_string(),
             ParsedPathApplyAttributes {
                 merge: "unspecified".to_string(),
+                merge_sentinel: None,
                 safe: unspecified_safe_attributes(),
             },
         )]),
@@ -256,6 +276,7 @@ fn sealed_merge_override_rejects_another_operation_identity() {
             vec!["file.txt".to_string()],
             BTreeMap::new(),
             BTreeSet::new(),
+            BTreeMap::new(),
         )
         .expect("build isolated merge config");
     let error = second
@@ -496,13 +517,16 @@ fn projected_whitespace_states_mask_lower_sources() {
             .values()
             .map(|attributes| attributes.safe.whitespace.clone())
             .collect::<Vec<_>>(),
-        whitespace
+        vec![
+            ProjectedAttribute::Ambiguous(AttributeSentinel::Set),
+            ProjectedAttribute::Ambiguous(AttributeSentinel::Unset),
+            ProjectedAttribute::Ambiguous(AttributeSentinel::Unspecified),
+            whitespace[3].clone(),
+        ]
     );
-    assert!(
-        actual
-            .values()
-            .all(|attributes| attributes.safe._filter == ProjectedAttribute::Unspecified)
-    );
+    assert!(actual.values().all(|attributes| {
+        attributes.safe._filter == ProjectedAttribute::Ambiguous(AttributeSentinel::Unspecified)
+    }));
 }
 
 #[test]
@@ -638,7 +662,7 @@ fn projected_attribute_lines_split_below_git_limit_or_fail_closed() {
 }
 
 #[test]
-fn native_check_attr_conflates_sentinels_for_every_projected_name() {
+fn native_check_attr_marks_conflated_sentinels_unresolved_for_every_projected_name() {
     let repo = tempfile::tempdir().expect("repo");
     let root = repo.path();
     run_git(root, &["init", "-q"]);
@@ -734,16 +758,21 @@ fn native_check_attr_conflates_sentinels_for_every_projected_name() {
     let expected_paths = paths.map(str::to_string).to_vec();
     let parsed = parse_three_way_attributes(&output.stdout, &expected_paths)
         .expect("parse conventional sentinel rendering");
-    // The bounded implementation accepts this documented residual: literal
-    // sentinel values are projected as their same-spelled special states.
-    assert_eq!(parsed["literal-set"].safe.text, ProjectedAttribute::Set);
+    assert_eq!(
+        parsed["literal-set"].safe.text,
+        ProjectedAttribute::Ambiguous(AttributeSentinel::Set)
+    );
     assert_eq!(
         parsed["literal-unset"].safe.ident,
-        ProjectedAttribute::Unset
+        ProjectedAttribute::Ambiguous(AttributeSentinel::Unset)
     );
     assert_eq!(
         parsed["literal-unspecified"].safe._filter,
-        ProjectedAttribute::Unspecified
+        ProjectedAttribute::Ambiguous(AttributeSentinel::Unspecified)
+    );
+    assert_eq!(
+        parsed["literal-set"].merge_sentinel,
+        Some(AttributeSentinel::Set)
     );
 }
 

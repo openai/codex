@@ -804,6 +804,6 @@ fn reverse_three_way_with_staging_candidate_uses_one_authorization() {
     assert_eq!(config_source_authorization_count(), 1);
     assert_eq!(filter_policy_read_count(), 2);
     assert_eq!(merge_config_read_count(), 1);
-    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 2);
     assert_eq!(read_file_normalized(&root.join("file.txt")), expected);
 }

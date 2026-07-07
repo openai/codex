@@ -71,7 +71,7 @@ fn frozen_apply_policy_overrides_later_repository_config_changes() {
         .expect("authorize filter path");
     let patch = patch.to_str().expect("UTF-8 patch path");
     let (rendered, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("run policy gate");
     assert!(rendered.contains("apply.whitespace=warn"), "{rendered}");
     assert!(
@@ -93,7 +93,7 @@ fn frozen_apply_policy_overrides_later_repository_config_changes() {
     run_git(root, &["config", "core.whitespace", "trailing-space"]);
 
     let final_apply = config
-        .run_direct_apply(false, patch)
+        .run_direct_apply(/*revert*/ false, patch)
         .expect("run final apply");
     assert!(
         final_apply.status.success(),
@@ -170,11 +170,17 @@ fn apply_whitespace_modes_are_typed_and_case_sensitive_at_the_gate() {
         .expect("authorize filter path");
     assert!(
         config
-            .final_apply_whitespace_mode(false, patch.to_str().expect("UTF-8 patch path"))
+            .final_apply_whitespace_mode(
+                /*revert*/ false,
+                patch.to_str().expect("UTF-8 patch path"),
+            )
             .is_err()
     );
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch.to_str().expect("UTF-8 patch path"))
+        .run_apply_policy_gate(
+            /*revert*/ false,
+            patch.to_str().expect("UTF-8 patch path"),
+        )
         .expect("run invalid policy gate");
     assert!(!gate.status.success());
     assert!(
@@ -184,7 +190,10 @@ fn apply_whitespace_modes_are_typed_and_case_sensitive_at_the_gate() {
     );
     assert!(
         config
-            .final_apply_whitespace_mode(false, patch.to_str().expect("UTF-8 patch path"))
+            .final_apply_whitespace_mode(
+                /*revert*/ false,
+                patch.to_str().expect("UTF-8 patch path"),
+            )
             .is_err()
     );
 }
@@ -217,22 +226,30 @@ fn successful_apply_policy_gate_is_one_shot_and_bound_to_patch_orientation() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("authorize filter path");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("run successful policy gate");
     assert!(gate.status.success());
     assert_eq!(
         config
-            .final_apply_whitespace_mode(false, patch)
+            .final_apply_whitespace_mode(/*revert*/ false, patch)
             .expect("matching proof"),
         ApplyWhitespaceMode::Error
     );
-    assert!(config.final_apply_whitespace_mode(true, patch).is_err());
     assert!(
         config
-            .final_apply_whitespace_mode(false, "different.patch")
+            .final_apply_whitespace_mode(/*revert*/ true, patch)
             .is_err()
     );
-    assert!(config.run_apply_policy_gate(false, patch).is_err());
+    assert!(
+        config
+            .final_apply_whitespace_mode(/*revert*/ false, "different.patch")
+            .is_err()
+    );
+    assert!(
+        config
+            .run_apply_policy_gate(/*revert*/ false, patch)
+            .is_err()
+    );
 }
 
 #[test]

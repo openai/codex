@@ -20,6 +20,23 @@ const REPOSITORY_FORMAT_CONFIG_PATTERN: &str =
 const SANITIZED_CONFIG_PATTERN: &str = r"^(core\.(filemode|symlinks|ignorecase|precomposeunicode|protecthfs|protectntfs|trustctime|checkstat|longpaths|fscache|splitindex|sparsecheckout|sparsecheckoutcone|autocrlf|eol|safecrlf|checkroundtripencoding|bigfilethreshold)|index\.(sparse|version)|merge\.conflictstyle)$";
 // Git ignores an attribute line whose content length is at least this value.
 const GIT_ATTRIBUTE_LINE_LENGTH_LIMIT: usize = 2048;
+const THREE_WAY_ATTRIBUTE_NAMES: [&str; 9] = [
+    "merge",
+    "whitespace",
+    "conflict-marker-size",
+    "text",
+    "crlf",
+    "eol",
+    "ident",
+    "filter",
+    "working-tree-encoding",
+];
+// `ls-files` has no pathspec-from-file mode on the oldest supported Git. Keep
+// each discriminator command comfortably below the Windows command-line
+// limit after accounting for the fixed Git and config arguments.
+const SENTINEL_PATHSPEC_BYTES_LIMIT: usize = 16 * 1024;
+const SENTINEL_PROBE_OUTPUT_BYTES_LIMIT: usize = 4 * 1024 * 1024;
+const SENTINEL_PROBE_PATHS_LIMIT: usize = 4_096;
 
 /// A complete, fresh merge-config read bound to one authorized operation.
 ///
@@ -75,12 +92,8 @@ impl BuiltinMergeDriver {
     }
 }
 
-/// Per-path apply semantics frozen at the strict `check-attr` probe.
-///
-/// Git's public `check-attr` format conflates special states with the literal
-/// values `set`, `unset`, and `unspecified`. This snapshot intentionally uses
-/// Git's conventional rendering for those uncommon literal spellings. Every
-/// other safely representable value is retained byte-for-byte.
+/// Per-path apply semantics frozen at the strict `check-attr` probe and its
+/// attribute-pathspec discriminator.
 struct MergeAttributeSnapshot {
     owner: Arc<CapabilityIdentity>,
     paths: BTreeMap<String, FrozenPathApplyAttributes>,
@@ -95,6 +108,7 @@ struct FrozenPathApplyAttributes {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ParsedPathApplyAttributes {
     merge: String,
+    merge_sentinel: Option<AttributeSentinel>,
     safe: SafeApplyAttributes,
 }
 
@@ -106,23 +120,62 @@ enum ProjectedAttribute {
     Unset,
     Unspecified,
     Value(Vec<u8>),
+    Ambiguous(AttributeSentinel),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum AttributeSentinel {
+    Set,
+    Unset,
+    Unspecified,
+}
+
+impl AttributeSentinel {
+    fn from_check_attr(value: &[u8]) -> Option<Self> {
+        match value {
+            b"set" => Some(Self::Set),
+            b"unset" => Some(Self::Unset),
+            b"unspecified" => Some(Self::Unspecified),
+            _ => None,
+        }
+    }
+
+    fn spelling(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Unset => "unset",
+            Self::Unspecified => "unspecified",
+        }
+    }
+
+    fn special_requirement(self, name: &str) -> String {
+        match self {
+            Self::Set => name.to_string(),
+            Self::Unset => format!("-{name}"),
+            Self::Unspecified => format!("!{name}"),
+        }
+    }
+
+    fn projected(self) -> ProjectedAttribute {
+        match self {
+            Self::Set => ProjectedAttribute::Set,
+            Self::Unset => ProjectedAttribute::Unset,
+            Self::Unspecified => ProjectedAttribute::Unspecified,
+        }
+    }
 }
 
 impl ProjectedAttribute {
     fn from_check_attr(value: &[u8]) -> io::Result<Self> {
         // `git check-attr` deliberately renders both special states and the
         // literal values `=set`, `=unset`, and `=unspecified` with the same
-        // sentinel text. Match Git's documented convention for this bounded
-        // PR while retaining all other raw values.
-        match value {
-            b"set" => Ok(Self::Set),
-            b"unset" => Ok(Self::Unset),
-            b"unspecified" => Ok(Self::Unspecified),
-            value => {
-                validate_projected_attribute_value(value)?;
-                Ok(Self::Value(value.to_vec()))
-            }
+        // bytes. Keep them unresolved until an attribute-aware pathspec has
+        // proved which meaning Git selected.
+        if let Some(sentinel) = AttributeSentinel::from_check_attr(value) {
+            return Ok(Self::Ambiguous(sentinel));
         }
+        validate_projected_attribute_value(value)?;
+        Ok(Self::Value(value.to_vec()))
     }
 
     fn projected_token(&self, name: &str) -> Vec<u8> {
@@ -137,6 +190,7 @@ impl ProjectedAttribute {
                 token.extend_from_slice(value);
                 token
             }
+            Self::Ambiguous(_) => Vec::new(),
         }
     }
 }
@@ -154,6 +208,77 @@ struct SafeApplyAttributes {
     ident: ProjectedAttribute,
     working_tree_encoding: ProjectedAttribute,
     _filter: ProjectedAttribute,
+}
+
+impl ParsedPathApplyAttributes {
+    fn ambiguous_sentinel(&self, name: &str) -> io::Result<Option<AttributeSentinel>> {
+        if name == "merge" {
+            return Ok(self.merge_sentinel);
+        }
+        let attribute = self.safe.attribute(name)?;
+        Ok(match attribute {
+            ProjectedAttribute::Ambiguous(sentinel) => Some(*sentinel),
+            _ => None,
+        })
+    }
+
+    fn resolve_special_sentinel(
+        &mut self,
+        name: &str,
+        sentinel: AttributeSentinel,
+    ) -> io::Result<()> {
+        if name == "merge" {
+            if self.merge_sentinel != Some(sentinel) || self.merge != sentinel.spelling() {
+                return Err(invalid_attribute_output(
+                    "Git merge sentinel changed during disambiguation",
+                ));
+            }
+            self.merge_sentinel = None;
+            return Ok(());
+        }
+        let attribute = self.safe.attribute_mut(name)?;
+        if *attribute != ProjectedAttribute::Ambiguous(sentinel) {
+            return Err(invalid_attribute_output(
+                "Git apply sentinel changed during disambiguation",
+            ));
+        }
+        *attribute = sentinel.projected();
+        Ok(())
+    }
+}
+
+impl SafeApplyAttributes {
+    fn attribute(&self, name: &str) -> io::Result<&ProjectedAttribute> {
+        match name {
+            "whitespace" => Ok(&self.whitespace),
+            "conflict-marker-size" => Ok(&self.conflict_marker_size),
+            "text" => Ok(&self.text),
+            "crlf" => Ok(&self.crlf),
+            "eol" => Ok(&self.eol),
+            "ident" => Ok(&self.ident),
+            "filter" => Ok(&self._filter),
+            "working-tree-encoding" => Ok(&self.working_tree_encoding),
+            _ => Err(invalid_attribute_output(
+                "unexpected Git attribute discriminator name",
+            )),
+        }
+    }
+
+    fn attribute_mut(&mut self, name: &str) -> io::Result<&mut ProjectedAttribute> {
+        match name {
+            "whitespace" => Ok(&mut self.whitespace),
+            "conflict-marker-size" => Ok(&mut self.conflict_marker_size),
+            "text" => Ok(&mut self.text),
+            "crlf" => Ok(&mut self.crlf),
+            "eol" => Ok(&mut self.eol),
+            "ident" => Ok(&mut self.ident),
+            "filter" => Ok(&mut self._filter),
+            "working-tree-encoding" => Ok(&mut self.working_tree_encoding),
+            _ => Err(invalid_attribute_output(
+                "unexpected Git attribute discriminator name",
+            )),
+        }
+    }
 }
 
 impl MergeAttributeSnapshot {
@@ -358,6 +483,10 @@ impl<'git> GuardedGitConfig<'git> {
     ) -> io::Result<()> {
         let paths = self.apply_filter_paths()?;
         let snapshot = self.read_merge_config_snapshot()?;
+        let repository_format = self
+            .sources
+            .read_direct_common_config(REPOSITORY_FORMAT_CONFIG_PATTERN, "repository format")?;
+        let object_format = index_object_format(&repository_format)?;
         let input = merge_attribute_input(&paths)?;
         let output = self.query_merge_attributes(&snapshot, input)?;
         if !output.status.success() {
@@ -368,6 +497,13 @@ impl<'git> GuardedGitConfig<'git> {
             )));
         }
         let parsed_attributes = parse_three_way_attributes(&output.stdout, &paths)?;
+        let parsed_attributes = self.disambiguate_attribute_sentinels(
+            &snapshot,
+            &paths,
+            parsed_attributes,
+            &output,
+            object_format,
+        )?;
         let merge_attributes = parsed_attributes
             .iter()
             .map(|(path, attributes)| (path.clone(), attributes.merge.clone()))
@@ -400,6 +536,7 @@ impl<'git> GuardedGitConfig<'git> {
             paths,
             selected_custom,
             custom_destinations,
+            repository_format,
         )?;
         self.attach_merge_override(isolated)
     }
@@ -459,6 +596,215 @@ impl<'git> GuardedGitConfig<'git> {
         self.sources.git.output(command)
     }
 
+    fn disambiguate_attribute_sentinels(
+        &self,
+        snapshot: &MergeConfigSnapshot,
+        paths: &[String],
+        mut attributes: BTreeMap<String, ParsedPathApplyAttributes>,
+        initial: &std::process::Output,
+        object_format: IndexObjectFormat,
+    ) -> io::Result<BTreeMap<String, ParsedPathApplyAttributes>> {
+        snapshot.ensure_owner(&self.identity)?;
+        if paths.len() > SENTINEL_PROBE_PATHS_LIMIT {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "too many paths for bounded Git attribute sentinel classification",
+            ));
+        }
+
+        let mut unresolved = BTreeMap::<&'static str, Vec<(String, AttributeSentinel)>>::new();
+        for name in THREE_WAY_ATTRIBUTE_NAMES {
+            let mut entries = Vec::new();
+            for path in paths {
+                let parsed = attributes
+                    .get(path)
+                    .ok_or_else(|| invalid_attribute_output("missing parsed Git attribute path"))?;
+                if let Some(sentinel) = parsed.ambiguous_sentinel(name)? {
+                    entries.push((path.clone(), sentinel));
+                }
+            }
+            if !entries.is_empty() {
+                unresolved.insert(name, entries);
+            }
+        }
+        if unresolved.is_empty() {
+            return Ok(attributes);
+        }
+
+        let storage = self.sources.git.create_isolated_git_storage()?;
+        self.populate_attribute_probe_phantoms(&storage, paths, object_format)?;
+        for (name, entries) in unresolved {
+            let literal = self.run_attribute_sentinel_probe(
+                &storage,
+                name,
+                &entries,
+                SentinelProbeKind::Literal,
+            )?;
+            let special = self.run_attribute_sentinel_probe(
+                &storage,
+                name,
+                &entries,
+                SentinelProbeKind::Special,
+            )?;
+            for (path, sentinel) in entries {
+                match (literal.contains(&path), special.contains(&path)) {
+                    (true, false) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            format!(
+                                "refusing a three-way apply because {name}={:?} is a literal Git attribute value for {path:?}",
+                                sentinel.spelling()
+                            ),
+                        ));
+                    }
+                    (false, true) => attributes
+                        .get_mut(&path)
+                        .ok_or_else(|| {
+                            invalid_attribute_output("missing parsed Git attribute path")
+                        })?
+                        .resolve_special_sentinel(name, sentinel)?,
+                    (false, false) | (true, true) => {
+                        return Err(invalid_attribute_output(
+                            "inconclusive Git attribute sentinel classification",
+                        ));
+                    }
+                }
+            }
+        }
+
+        // A second exact nine-attribute snapshot brackets all attribute-aware
+        // pathspec reads. If any effective source changed to a different
+        // public state, the operation fails before scratch or real mutation.
+        let recheck = self.query_merge_attributes(snapshot, merge_attribute_input(paths)?)?;
+        if recheck.status != initial.status
+            || recheck.stdout != initial.stdout
+            || recheck.stderr != initial.stderr
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Git attributes changed during sentinel classification",
+            ));
+        }
+        Ok(attributes)
+    }
+
+    fn populate_attribute_probe_phantoms(
+        &self,
+        storage: &IsolatedGitStorage,
+        paths: &[String],
+        object_format: IndexObjectFormat,
+    ) -> io::Result<()> {
+        let mut command = self.command_with_attached_overlays()?;
+        command.env("GIT_OPTIONAL_LOCKS", "0");
+        command.args([
+            "--literal-pathspecs",
+            "ls-files",
+            "--cached",
+            "--full-name",
+            "-z",
+            "--",
+        ]);
+        command.args(paths);
+        let output = self
+            .sources
+            .git
+            .output_with_isolated_index(command, storage)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to inspect copied Git index for attribute probes (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let expected = paths.iter().cloned().collect::<BTreeSet<_>>();
+        let present = parse_sentinel_probe_paths(&output.stdout, &expected)?;
+        let missing = paths
+            .iter()
+            .filter(|path| !present.contains(*path))
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        use std::io::Seek;
+        let mut input = tempfile::tempfile()?;
+        let object_id = match object_format {
+            IndexObjectFormat::Sha1 => "1".repeat(40),
+            IndexObjectFormat::Sha256 => "1".repeat(64),
+        };
+        for path in missing {
+            input.write_all(b"100644 ")?;
+            input.write_all(object_id.as_bytes())?;
+            input.write_all(b"\t")?;
+            input.write_all(path.as_bytes())?;
+            input.write_all(&[0])?;
+        }
+        input.rewind()?;
+        let mut command = self.command_with_attached_overlays()?;
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(["update-index", "--add", "--info-only", "-z", "--index-info"])
+            .stdin(Stdio::from(input));
+        let output = self
+            .sources
+            .git
+            .output_with_isolated_index(command, storage)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to populate copied Git index for attribute probes (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    fn run_attribute_sentinel_probe(
+        &self,
+        storage: &IsolatedGitStorage,
+        name: &str,
+        entries: &[(String, AttributeSentinel)],
+        kind: SentinelProbeKind,
+    ) -> io::Result<BTreeSet<String>> {
+        let mut pathspecs = Vec::with_capacity(entries.len());
+        let mut pathspec_bytes = 0_usize;
+        let mut expected = BTreeSet::new();
+        for (path, sentinel) in entries {
+            let requirement = match kind {
+                SentinelProbeKind::Literal => format!("{name}={}", sentinel.spelling()),
+                SentinelProbeKind::Special => sentinel.special_requirement(name),
+            };
+            let pathspec = format!(":(top,literal,attr:{requirement}){path}");
+            pathspec_bytes = pathspec_bytes
+                .checked_add(pathspec.len() + 1)
+                .ok_or_else(|| invalid_attribute_output("Git attribute pathspec size overflow"))?;
+            if pathspec_bytes > SENTINEL_PATHSPEC_BYTES_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Git attribute sentinel pathspec budget exceeded",
+                ));
+            }
+            expected.insert(path.clone());
+            pathspecs.push(pathspec);
+        }
+        let mut command = self.command_with_attached_overlays()?;
+        command.env("GIT_OPTIONAL_LOCKS", "0");
+        command.args(["ls-files", "--cached", "--full-name", "-z", "--"]);
+        command.args(pathspecs);
+        let output = self
+            .sources
+            .git
+            .output_with_isolated_index(command, storage)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "Git attribute sentinel probe failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        parse_sentinel_probe_paths(&output.stdout, &expected)
+    }
+
     fn build_merge_override(
         &self,
         snapshot: &MergeConfigSnapshot,
@@ -466,6 +812,7 @@ impl<'git> GuardedGitConfig<'git> {
         effective_paths: Vec<String>,
         selected_custom: BTreeMap<String, String>,
         custom_destinations: BTreeSet<String>,
+        repository_format: BTreeMap<String, GitConfigEntry>,
     ) -> io::Result<SealedMergeConfigOverride> {
         snapshot.ensure_owner(&self.identity)?;
         attributes.ensure_owner(&self.identity)?;
@@ -485,9 +832,6 @@ impl<'git> GuardedGitConfig<'git> {
             .as_ref()
             .map(normalize_shared_repository)
             .transpose()?;
-        let repository_format = self
-            .sources
-            .read_direct_common_config(REPOSITORY_FORMAT_CONFIG_PATTERN, "repository format")?;
         let object_format = index_object_format(&repository_format)?;
         let common_dir = self.sources.git.create_isolated_common_dir()?;
         let config_path = common_dir.config_path();
@@ -759,7 +1103,8 @@ impl<'git> GuardedGitConfig<'git> {
                 "merge-policy scratch proof does not match the final apply",
             ));
         }
-        let current_index = self.capture_merge_index_stage_snapshot(&effective_paths, None)?;
+        let current_index =
+            self.capture_merge_index_stage_snapshot(&effective_paths, /*storage*/ None)?;
         if current_index != proof.prospective_index {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1237,6 +1582,7 @@ fn append_projected_attribute_lines(
 #[derive(Default)]
 struct PendingPathApplyAttributes {
     merge: Option<String>,
+    merge_sentinel: Option<AttributeSentinel>,
     whitespace: Option<ProjectedAttribute>,
     conflict_marker_size: Option<ProjectedAttribute>,
     text: Option<ProjectedAttribute>,
@@ -1250,6 +1596,7 @@ struct PendingPathApplyAttributes {
 impl PendingPathApplyAttributes {
     fn insert(&mut self, attribute: &[u8], value: &[u8]) -> io::Result<()> {
         if attribute == b"merge" {
+            let sentinel = AttributeSentinel::from_check_attr(value);
             let value = std::str::from_utf8(value)
                 .map_err(|_| invalid_attribute_output("non-UTF-8 Git merge attribute value"))?;
             if self.merge.replace(value.to_string()).is_some() {
@@ -1257,6 +1604,7 @@ impl PendingPathApplyAttributes {
                     "duplicate Git merge attribute record",
                 ));
             }
+            self.merge_sentinel = sentinel;
             return Ok(());
         }
 
@@ -1287,6 +1635,7 @@ impl PendingPathApplyAttributes {
     fn finish(self) -> io::Result<ParsedPathApplyAttributes> {
         Ok(ParsedPathApplyAttributes {
             merge: required_attribute(self.merge, "merge")?,
+            merge_sentinel: self.merge_sentinel,
             safe: SafeApplyAttributes {
                 whitespace: required_attribute(self.whitespace, "whitespace")?,
                 conflict_marker_size: required_attribute(
@@ -1309,6 +1658,50 @@ impl PendingPathApplyAttributes {
 
 fn required_attribute<T>(value: Option<T>, name: &str) -> io::Result<T> {
     value.ok_or_else(|| invalid_attribute_output(&format!("missing Git {name} attribute record")))
+}
+
+#[derive(Clone, Copy)]
+enum SentinelProbeKind {
+    Literal,
+    Special,
+}
+
+fn parse_sentinel_probe_paths(
+    output: &[u8],
+    expected: &BTreeSet<String>,
+) -> io::Result<BTreeSet<String>> {
+    if output.len() > SENTINEL_PROBE_OUTPUT_BYTES_LIMIT {
+        return Err(invalid_attribute_output(
+            "Git attribute sentinel probe output exceeded its byte budget",
+        ));
+    }
+    if output.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let body = output.strip_suffix(&[0]).ok_or_else(|| {
+        invalid_attribute_output("unterminated Git attribute sentinel probe output")
+    })?;
+    if body.is_empty() {
+        return Err(invalid_attribute_output(
+            "empty Git attribute sentinel probe record",
+        ));
+    }
+    let mut found = BTreeSet::new();
+    for path in body.split(|byte| *byte == 0) {
+        let path = std::str::from_utf8(path)
+            .map_err(|_| invalid_attribute_output("non-UTF-8 Git attribute sentinel probe path"))?;
+        if !expected.contains(path) {
+            return Err(invalid_attribute_output(
+                "unexpected Git attribute sentinel probe path",
+            ));
+        }
+        // Do not rely on `ls-files --deduplicate`: older supported Git
+        // versions lack it, and an unmerged index legitimately emits one
+        // record per stage. Every repeated record is still exact, expected,
+        // NUL framed, and covered by the aggregate byte bound.
+        found.insert(path.to_string());
+    }
+    Ok(found)
 }
 
 /// Parse the strict NUL-framed output of the one fixed nine-attribute query.

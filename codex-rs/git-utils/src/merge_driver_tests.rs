@@ -16,6 +16,114 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 #[test]
+fn three_way_refuses_literal_text_set_before_mutating_index_or_worktree() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "f.txt text=set\n")
+        .expect("write literal attribute");
+    std::fs::write(root.join("f.txt"), b"x\n").expect("write base");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+
+    std::fs::write(root.join("f.txt"), b"y\n").expect("write patch side");
+    let (diff_code, diff, diff_err) = run(root, &["git", "diff", "--full-index", "--", "f.txt"]);
+    assert_eq!(diff_code, 0, "create patch: {diff_err}");
+    assert_eq!(run(root, &["git", "checkout", "--", "f.txt"]).0, 0);
+    std::fs::write(root.join("f.txt"), b"x\r\n").expect("write CRLF worktree state");
+
+    let before_index = run(root, &["git", "rev-parse", ":f.txt"]).1;
+    let before_worktree = std::fs::read(root.join("f.txt")).expect("read before worktree");
+    let error = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect_err("literal text=set must fail closed");
+
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("text=\"set\""), "{error}");
+    assert_eq!(run(root, &["git", "rev-parse", ":f.txt"]).1, before_index);
+    assert_eq!(
+        std::fs::read(root.join("f.txt")).expect("read after worktree"),
+        before_worktree
+    );
+}
+
+#[test]
+fn sentinel_probe_populates_an_absent_path_in_its_copied_index() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "new.txt text\n").expect("write attributes");
+    assert_eq!(run(root, &["git", "add", ".gitattributes"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "attributes"]).0, 0);
+    assert_eq!(run(root, &["git", "update-index", "--split-index"]).0, 0);
+
+    install_merge_policy(root, &["new.txt".to_string()])
+        .expect("classify special attributes for an absent patch destination");
+    assert_eq!(run(root, &["git", "ls-files", "--", "new.txt"]).1, "");
+}
+
+#[test]
+fn three_way_sentinel_classifier_distinguishes_special_and_literal_states() {
+    for (attribute, spelling, special_token) in [
+        ("merge", "set", "merge"),
+        ("text", "unset", "-text"),
+        ("whitespace", "unspecified", "!whitespace"),
+    ] {
+        for (label, token, literal) in [
+            ("special", special_token.to_string(), false),
+            ("literal", format!("{attribute}={spelling}"), true),
+        ] {
+            let repo = init_repo();
+            let root = repo.path();
+            std::fs::write(root.join(".gitattributes"), format!("f.txt {token}\n"))
+                .expect("write sentinel attributes");
+            std::fs::write(root.join("f.txt"), "content\n").expect("write tracked path");
+            assert_eq!(run(root, &["git", "add", "."]).0, 0);
+            assert_eq!(run(root, &["git", "commit", "-m", "fixture"]).0, 0);
+
+            let result = install_merge_policy(root, &["f.txt".to_string()]);
+            if literal {
+                let error = result.expect_err("literal sentinel must fail closed");
+                assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("{attribute}=\"{spelling}\"")),
+                    "{attribute} {label}: {error}"
+                );
+            } else {
+                result.unwrap_or_else(|error| {
+                    panic!("{attribute} {label} sentinel must be preserved: {error}")
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn sentinel_probe_populates_an_absent_path_in_a_sha256_copied_index() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let root = repo.path();
+    let init = run(root, &["git", "init", "--object-format=sha256"]);
+    assert_eq!(init.0, 0, "initialize SHA-256 repository: {}", init.2);
+    assert_eq!(
+        run(root, &["git", "config", "user.email", "codex@example.com"]).0,
+        0
+    );
+    assert_eq!(run(root, &["git", "config", "user.name", "Codex"]).0, 0);
+    assert_eq!(run(root, &["git", "config", "core.autocrlf", "false"]).0, 0);
+    std::fs::write(root.join(".gitattributes"), "new.txt text\n").expect("write attributes");
+    assert_eq!(run(root, &["git", "add", ".gitattributes"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "attributes"]).0, 0);
+
+    install_merge_policy(root, &["new.txt".to_string()])
+        .expect("classify special attributes with a SHA-256 phantom entry");
+    assert_eq!(run(root, &["git", "ls-files", "--", "new.txt"]).1, "");
+}
+
+#[test]
 fn apply_allows_unused_global_merge_driver() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_ENV_CHILD").is_none() {
         let config_dir = tempfile::tempdir().expect("config tempdir");
@@ -134,7 +242,7 @@ fn apply_rejects_global_merge_driver_before_three_way() {
     .expect_err("reject global merge driver");
     assert_eq!(config_source_authorization_count(), 1);
     assert_eq!(merge_config_read_count(), 1);
-    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 2);
     assert_eq!(merge_overlay_count(), 1);
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
@@ -572,7 +680,7 @@ fn custom_merge_driver_proof_is_consumed_before_final_spawn() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -580,15 +688,15 @@ fn custom_merge_driver_proof_is_consumed_before_final_spawn() {
         .expect("merge policy");
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("proof");
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect("first final apply");
     assert!(first.status.success());
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("proof must not be reusable");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -621,7 +729,7 @@ fn custom_merge_driver_proof_is_consumed_before_failed_index_revalidation() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -629,20 +737,20 @@ fn custom_merge_driver_proof_is_consumed_before_failed_index_revalidation() {
         .expect("merge policy");
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("proof");
 
     std::fs::write(root.join("file.txt"), "index-raced\n").expect("write raced index entry");
     assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("changed live index must invalidate proof");
     assert_eq!(first.kind(), io::ErrorKind::PermissionDenied);
     assert!(first.to_string().contains("index changed"), "{first}");
 
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("failed revalidation must still consume proof");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
     assert!(
@@ -674,7 +782,7 @@ fn conditional_merge_config_proof_is_consumed_before_failed_index_revalidation()
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -688,19 +796,19 @@ fn conditional_merge_config_proof_is_consumed_before_failed_index_revalidation()
     );
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("conditional merge-config proof");
 
     std::fs::write(root.join("file.txt"), "index-raced\n").expect("write raced index entry");
     assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("changed live index must invalidate proof");
     assert_eq!(first.kind(), io::ErrorKind::PermissionDenied);
     assert!(first.to_string().contains("index changed"), "{first}");
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("failed revalidation must still consume proof");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
     assert!(
@@ -818,7 +926,7 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
     .expect("allow unrelated local merge driver during three-way fallback");
     assert_eq!(config_source_authorization_count(), 1);
     assert_eq!(merge_config_read_count(), 1);
-    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 2);
     assert_eq!(merge_overlay_count(), 1);
     assert_eq!(result.exit_code, 0, "three-way apply: {}", result.stderr);
     assert!(result.cmd_for_log.contains("--3way"));
@@ -1242,6 +1350,12 @@ fn malformed_shared_repository_refuses_before_reverse_index_staging() {
     let diff = build_three_way_fixture(root);
     let index_path = root.join(".git/index");
     let before_index = std::fs::read(&index_path).expect("read index before refusal");
+    let unused_filter = run(root, &["git", "config", "filter.lfs.clean", "cat"]);
+    assert_eq!(
+        unused_filter.0, 0,
+        "configure unused filter: {}",
+        unused_filter.2
+    );
     let configured = run(
         root,
         &["git", "config", "core.sharedRepository", "not-a-permission"],
@@ -2297,5 +2411,6 @@ fn init_repo() -> tempfile::TempDir {
     let _ = run(root, &["git", "init"]);
     let _ = run(root, &["git", "config", "user.email", "codex@example.com"]);
     let _ = run(root, &["git", "config", "user.name", "Codex"]);
+    let _ = run(root, &["git", "config", "core.autocrlf", "false"]);
     repo
 }
