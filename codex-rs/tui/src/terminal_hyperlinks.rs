@@ -110,7 +110,13 @@ impl From<String> for HyperlinkLine {
 }
 
 pub(crate) fn visible_lines(lines: Vec<HyperlinkLine>) -> Vec<Line<'static>> {
-    lines.into_iter().map(|line| line.line).collect()
+    lines
+        .into_iter()
+        .map(|mut line| {
+            line.sanitize();
+            line.line
+        })
+        .collect()
 }
 
 pub(crate) fn plain_hyperlink_lines(lines: Vec<Line<'static>>) -> Vec<HyperlinkLine> {
@@ -173,12 +179,13 @@ pub(crate) fn annotate_web_urls(lines: Vec<Line<'static>>) -> Vec<HyperlinkLine>
 }
 
 pub(crate) fn annotate_web_urls_in_line(line: Line<'static>) -> HyperlinkLine {
-    let text = line
+    let mut out = HyperlinkLine::new(line);
+    let text = out
+        .line
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    let mut out = HyperlinkLine::new(line);
     out.hyperlinks = web_links_in_text(&text);
     out
 }
@@ -564,6 +571,32 @@ mod tests {
                 columns: 5..26,
                 destination: "https://example.com/a".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn discovers_web_url_columns_after_sanitizing_text() {
+        let destination = "https://example.com";
+        assert_eq!(
+            annotate_web_urls_in_line(Line::from(format!("\x1b[13;2:3u{destination}"))),
+            HyperlinkLine {
+                line: Line::from(destination),
+                hyperlinks: vec![TerminalHyperlink {
+                    columns: 0..destination.width(),
+                    destination: destination.to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn visible_lines_sanitize_spans_appended_directly() {
+        let mut line = HyperlinkLine::new(Line::from("before"));
+        line.line.push_span("\x1b[13;2:3uafter");
+
+        assert_eq!(
+            visible_lines(vec![line]),
+            vec![Line::from(vec![Span::from("before"), Span::from("after")])]
         );
     }
 
