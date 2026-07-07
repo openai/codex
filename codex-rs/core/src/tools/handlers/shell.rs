@@ -26,8 +26,8 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
-use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ApprovalReviewMode;
+use crate::tools::sandboxing::ToolCtx;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
@@ -129,11 +129,15 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     )
     .map_err(FunctionCallError::RespondToModel)?;
 
+    let dependency_project_root = turn_environment
+        .cwd()
+        .to_abs_path()
+        .unwrap_or_else(|_| exec_params.cwd.clone());
     if session.features().enabled(Feature::DependencyCheck)
         && dependency_permissions_overlap_project(
             effective_additional_permissions.sandbox_permissions,
             normalized_additional_permissions.as_ref(),
-            &exec_params.cwd,
+            &dependency_project_root,
         )
     {
         return Err(FunctionCallError::RespondToModel(

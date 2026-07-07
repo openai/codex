@@ -435,11 +435,7 @@ impl DependencyCommandRunner {
                 .additional_permissions_preapproved,
             justification: Some(justification.to_string()),
             exec_approval_requirement,
-            approval_review_mode: match working_directory_access {
-                WorkingDirectoryAccess::ProjectDependencyFiles => ApprovalReviewMode::User,
-                WorkingDirectoryAccess::Default
-                | WorkingDirectoryAccess::PreapprovedScratch => ApprovalReviewMode::Configured,
-            },
+            approval_review_mode: approval_review_mode(working_directory_access),
         };
         let tool_ctx = ToolCtx {
             session: self.session.clone(),
@@ -448,8 +444,7 @@ impl DependencyCommandRunner {
             tool_name: self.tool_name.clone(),
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime =
-            ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
+        let mut runtime = ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
         orchestrator
             .run(
                 &mut runtime,
@@ -465,6 +460,15 @@ impl DependencyCommandRunner {
                     "dependency_check command execution failed: {err:?}"
                 ))
             })
+    }
+}
+
+fn approval_review_mode(working_directory_access: WorkingDirectoryAccess) -> ApprovalReviewMode {
+    match working_directory_access {
+        WorkingDirectoryAccess::ProjectDependencyFiles => ApprovalReviewMode::User,
+        WorkingDirectoryAccess::Default | WorkingDirectoryAccess::PreapprovedScratch => {
+            ApprovalReviewMode::Configured
+        }
     }
 }
 
@@ -580,6 +584,22 @@ async fn copy_resolution_inputs(
 mod tests {
     use super::*;
 
+    fn write_permissions(paths: Vec<AbsolutePathBuf>) -> AdditionalPermissionProfile {
+        AdditionalPermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: paths
+                    .into_iter()
+                    .map(|path| FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path },
+                        access: FileSystemAccessMode::Write,
+                    })
+                    .collect(),
+                glob_scan_max_depth: None,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn raw_install_redirect_names_package_manager() {
         let message = dependency_install_redirect(&[
@@ -607,16 +627,9 @@ mod tests {
         assert!(permissions.additional_permissions_preapproved);
         assert_eq!(
             permissions.additional_permissions,
-            Some(PermissionProfile {
-                file_system: Some(FileSystemPermissions {
-                    read: None,
-                    write: Some(vec![
-                        AbsolutePathBuf::from_absolute_path(scratch.path())
-                            .expect("absolute scratch path")
-                    ]),
-                }),
-                ..Default::default()
-            })
+            Some(write_permissions(vec![
+                AbsolutePathBuf::from_absolute_path(scratch.path()).expect("absolute scratch path")
+            ]))
         );
     }
 
@@ -637,20 +650,16 @@ mod tests {
         assert!(!permissions.additional_permissions_preapproved);
         assert_eq!(
             permissions.additional_permissions,
-            Some(PermissionProfile {
-                file_system: Some(FileSystemPermissions {
-                    read: None,
-                    write: Some(vec![
-                        AbsolutePathBuf::from_absolute_path(project.path().join("package.json"))
-                            .expect("absolute package.json path"),
-                        AbsolutePathBuf::from_absolute_path(
-                            project.path().join("package-lock.json")
-                        )
-                        .expect("absolute package-lock.json path"),
-                    ]),
-                }),
-                ..Default::default()
-            })
+            Some(write_permissions(vec![
+                AbsolutePathBuf::from_absolute_path(project.path().join("package.json"))
+                    .expect("absolute package.json path"),
+                AbsolutePathBuf::from_absolute_path(project.path().join("package-lock.json"))
+                    .expect("absolute package-lock.json path"),
+            ]))
+        );
+        assert_eq!(
+            approval_review_mode(WorkingDirectoryAccess::ProjectDependencyFiles),
+            ApprovalReviewMode::User
         );
     }
 }

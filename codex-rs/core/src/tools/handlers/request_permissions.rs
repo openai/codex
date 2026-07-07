@@ -6,11 +6,11 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::dependency_guard::dependency_permission_request_message;
+use crate::tools::handlers::dependency_guard::dependency_permissions_overlap_project;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
-use crate::tools::handlers::dependency_guard::dependency_permission_request_message;
-use crate::tools::handlers::dependency_guard::dependency_permissions_overlap_project;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::registry::CoreToolRuntime;
@@ -93,7 +93,10 @@ impl RequestPermissionsHandler {
                 "request_permissions requires at least one permission".to_string(),
             ));
         }
-        if session.features().enabled(codex_features::Feature::DependencyCheck) {
+        if session
+            .features()
+            .enabled(codex_features::Feature::DependencyCheck)
+        {
             let permissions: codex_protocol::models::AdditionalPermissionProfile =
                 args.permissions.clone().into();
             if dependency_permissions_overlap_project(

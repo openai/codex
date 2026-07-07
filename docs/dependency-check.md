@@ -50,12 +50,17 @@ not a general assertion that a package is trustworthy.
 When the feature is enabled, Codex rejects recognizable direct dependency-add
 commands such as `npm install package@version`, `pnpm add`, `yarn add`, and
 `bun add`, directing the model to `dependency_check`. It also rejects direct
-`apply_patch` changes to JavaScript package manifests and lockfiles.
+`apply_patch` changes to JavaScript package manifests and lockfiles. Generic
+shell tools cannot request full sandbox bypass or additional write permissions
+that overlap the active project, and `request_permissions` cannot grant write
+access to dependency manifests.
 
 The real project mutation still uses the existing shell sandbox and approval
-orchestrator. A permission profile can therefore keep the root manifest and
-lockfile read-only inside the sandbox so the checked update produces a user
-approval prompt:
+orchestrator. Its request is limited to `package.json` and `package-lock.json`
+and is always routed to the user, even when the session normally uses automatic
+approval review. A permission profile should keep the root manifest and
+lockfile read-only inside the ambient sandbox so only the structured tool can
+request that exact write access:
 
 ```toml
 default_permissions = "dependency-check"
@@ -93,7 +98,8 @@ filesystem enforcement. The tool grants its own temporary resolution
 directory as a preapproved, per-command write path; that does not widen access
 to the project. The checked project update separately requests per-command
 write access to `package.json` and `package-lock.json`; with `on-request`
-approval, that request produces the user prompt.
+approval, that request produces the human prompt. Denial stops before the
+project command runs.
 
 ## Current limitations
 

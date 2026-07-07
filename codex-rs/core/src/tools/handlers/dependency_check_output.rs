@@ -1,4 +1,3 @@
-use codex_protocol::exec_output::ExecToolCallOutput;
 use crate::tools::context::FunctionToolOutput;
 use codex_dependency_check::DependencyCheckRequest;
 use codex_dependency_check::DependencyPolicyAction;
@@ -7,6 +6,7 @@ use codex_dependency_check::DependencyRisk;
 use codex_dependency_check::DependencyRiskKind;
 use codex_dependency_check::NpmGraphMismatch;
 use codex_dependency_check::NpmInstalledGraphMismatch;
+use codex_protocol::exec_output::ExecToolCallOutput;
 
 pub(super) fn blocked_output(message: String) -> FunctionToolOutput {
     FunctionToolOutput::from_text(message, Some(false))

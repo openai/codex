@@ -191,6 +191,18 @@ struct Vulnerability {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    fn graph() -> NpmGraph {
+        NpmGraph::from_query_json(
+            r#"[{"name":"example","version":"1.0.0","location":"node_modules/example","resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz","integrity":"sha512-example"}]"#,
+        )
+        .expect("parse graph")
+    }
 
     #[test]
     fn maps_malware_to_block_and_cves_to_warn() {
@@ -241,5 +253,48 @@ mod tests {
         )
         .expect_err("partial response should fail");
         assert!(matches!(err, OsvError::ResultCountMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn mocked_malware_response_blocks_dependency_graph() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{
+                    "vulns": [{"id": "MAL-2026-1", "summary": "malware"}]
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let endpoint =
+            Url::parse(&format!("{}/v1/querybatch", server.uri())).expect("mock endpoint");
+        let report = OsvClient::with_endpoint(endpoint)
+            .expect("client")
+            .evaluate(&graph())
+            .await
+            .expect("policy report");
+
+        assert_eq!(report.action, DependencyPolicyAction::Block);
+        assert_eq!(report.risks[0].kind, DependencyRiskKind::Malware);
+    }
+
+    #[tokio::test]
+    async fn mocked_provider_failure_fails_closed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let endpoint =
+            Url::parse(&format!("{}/v1/querybatch", server.uri())).expect("mock endpoint");
+        let err = OsvClient::with_endpoint(endpoint)
+            .expect("client")
+            .evaluate(&graph())
+            .await
+            .expect_err("provider failure should fail closed");
+
+        assert!(matches!(err, OsvError::Request(_)));
     }
 }

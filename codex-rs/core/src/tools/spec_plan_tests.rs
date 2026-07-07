@@ -750,6 +750,20 @@ async fn sleep_tool_follows_current_time_config() {
 }
 
 #[tokio::test]
+async fn dependency_check_tool_requires_feature_flag() {
+    let disabled = probe(|_| {}).await;
+    disabled.assert_visible_lacks(&["dependency_check"]);
+    disabled.assert_registered_lacks(&["dependency_check"]);
+
+    let enabled = probe(|turn| {
+        set_feature(turn, Feature::DependencyCheck, /*enabled*/ true);
+    })
+    .await;
+    enabled.assert_visible_contains(&["dependency_check"]);
+    enabled.assert_registered_contains(&["dependency_check"]);
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},

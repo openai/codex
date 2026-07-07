@@ -157,8 +157,11 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let force_user_review = tool.approval_review_mode(req) == ApprovalReviewMode::User;
-        let use_guardian =
-            !force_user_review && (routes_approval_to_guardian(turn_ctx) || strict_auto_review);
+        let use_guardian = use_guardian_for_review_mode(
+            routes_approval_to_guardian(turn_ctx),
+            strict_auto_review,
+            tool.approval_review_mode(req),
+        );
 
         // 1) Approval
         let mut already_approved = false;
@@ -221,7 +224,8 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review || force_user_review,
+                    /*evaluate_permission_request_hooks*/
+                    !strict_auto_review || force_user_review,
                     &otel,
                 )
                 .await?;
@@ -637,6 +641,14 @@ impl ToolOrchestrator {
     }
 }
 
+fn use_guardian_for_review_mode(
+    configured_for_guardian: bool,
+    strict_auto_review: bool,
+    review_mode: ApprovalReviewMode,
+) -> bool {
+    review_mode == ApprovalReviewMode::Configured && (configured_for_guardian || strict_auto_review)
+}
+
 fn sandbox_outcome_from_tool_error(err: &ToolError) -> Option<&'static str> {
     match err {
         ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { .. })) => Some("denied"),
@@ -650,4 +662,23 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_review_mode_bypasses_guardian_and_strict_auto_review() {
+        assert!(!use_guardian_for_review_mode(
+            /*configured_for_guardian*/ true,
+            /*strict_auto_review*/ true,
+            ApprovalReviewMode::User,
+        ));
+        assert!(use_guardian_for_review_mode(
+            /*configured_for_guardian*/ true,
+            /*strict_auto_review*/ false,
+            ApprovalReviewMode::Configured,
+        ));
+    }
 }

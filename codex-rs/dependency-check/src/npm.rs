@@ -429,6 +429,25 @@ mod tests {
     }
 
     #[test]
+    fn reports_lock_and_installed_graph_mismatches() {
+        let checked = NpmGraph::from_query_json(
+            r#"[{"name":"zod","version":"3.23.8","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz","integrity":"sha512-checked"}]"#,
+        )
+        .expect("checked graph");
+        let changed = NpmGraph::from_query_json(
+            r#"[{"name":"zod","version":"3.24.0","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.24.0.tgz","integrity":"sha512-changed"}]"#,
+        )
+        .expect("changed graph");
+        let installed = NpmInstalledGraph::from_query_json(
+            r#"[{"name":"zod","version":"3.24.0","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.24.0.tgz"}]"#,
+        )
+        .expect("installed graph");
+
+        assert!(checked.compare(&changed).is_err());
+        assert!(checked.compare_installed(&installed).is_err());
+    }
+
+    #[test]
     fn rejects_unverifiable_sources() {
         let err = NpmGraph::from_query_json(
             r#"[{"name":"local","version":"1.0.0","location":"node_modules/local","resolved":"file:../local"}]"#,

@@ -87,7 +87,7 @@ mod tests {
 
         assert!(dependency_permissions_overlap_project(
             SandboxPermissions::RequireEscalated,
-            None,
+            /*additional_permissions*/ None,
             &root,
         ));
         assert!(dependency_permissions_overlap_project(
@@ -101,8 +101,8 @@ mod tests {
     fn permits_unrelated_write_permissions() {
         let root = AbsolutePathBuf::from_absolute_path("/workspace/project")
             .expect("absolute project root");
-        let cache = AbsolutePathBuf::from_absolute_path("/var/cache/example")
-            .expect("absolute cache path");
+        let cache =
+            AbsolutePathBuf::from_absolute_path("/var/cache/example").expect("absolute cache path");
         let profile = write_profile(FileSystemPath::Path { path: cache });
 
         assert_eq!(

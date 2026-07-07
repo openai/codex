@@ -332,11 +332,15 @@ impl ExecCommandHandler {
             }
         };
 
+        let dependency_project_root = turn_environment
+            .cwd()
+            .to_abs_path()
+            .unwrap_or_else(|_| turn.config.cwd.clone());
         if session.features().enabled(Feature::DependencyCheck)
             && dependency_permissions_overlap_project(
                 effective_additional_permissions.sandbox_permissions,
                 normalized_additional_permissions.as_ref(),
-                permission_cwd,
+                &dependency_project_root,
             )
         {
             manager.release_process_id(process_id).await;
