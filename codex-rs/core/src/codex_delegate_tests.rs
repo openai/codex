@@ -420,6 +420,109 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 }
 
 #[tokio::test]
+async fn handle_patch_approval_routes_to_guardian_and_cancels_review() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    parent_ctx.config = Arc::new(config);
+    parent_ctx
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let changed_path = std::path::PathBuf::from("changed.txt");
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let cancel_token = cancel_token.clone();
+        let changed_path = changed_path.clone();
+        async move {
+            handle_patch_approval(
+                codex.as_ref(),
+                "child-turn-1".to_string(),
+                &parent_session,
+                &parent_ctx,
+                ApplyPatchApprovalRequestEvent {
+                    call_id: "patch-item-1".to_string(),
+                    turn_id: "child-turn-1".to_string(),
+                    started_at_ms: 0,
+                    changes: HashMap::from([(
+                        changed_path,
+                        codex_protocol::protocol::FileChange::Add {
+                            content: "new contents".to_string(),
+                        },
+                    )]),
+                    reason: Some("review delegated patch".to_string()),
+                    grant_root: None,
+                },
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let assessment_event = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = rx_events.recv().await.expect("guardian assessment event");
+            if let EventMsg::GuardianAssessment(assessment) = event.msg {
+                return assessment;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for guardian assessment");
+    #[allow(deprecated)]
+    let expected_action = GuardianAssessmentAction::ApplyPatch {
+        cwd: parent_ctx.cwd.clone(),
+        files: vec![parent_ctx.cwd.join(&changed_path)],
+    };
+    assert_eq!(
+        assessment_event.target_item_id.as_deref(),
+        Some("patch-item-1")
+    );
+    assert_eq!(assessment_event.turn_id, parent_ctx.sub_id);
+    assert_eq!(
+        assessment_event.status,
+        GuardianAssessmentStatus::InProgress
+    );
+    assert_eq!(assessment_event.action, expected_action);
+
+    cancel_token.cancel();
+
+    timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("handle_patch_approval hung")
+        .expect("handle_patch_approval join error");
+    let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        .await
+        .expect("patch approval response timed out")
+        .expect("patch approval response missing");
+    assert_eq!(
+        submission.op,
+        Op::PatchApproval {
+            id: "patch-item-1".to_string(),
+            decision: ReviewDecision::Abort,
+        }
+    );
+}
+
+#[tokio::test]
 async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;

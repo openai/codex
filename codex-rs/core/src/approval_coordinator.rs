@@ -261,6 +261,32 @@ impl ApprovalCoordinator {
         .resolution
     }
 
+    pub(crate) async fn resolve_event_cancellable<F, Fut>(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+        user_review: F,
+    ) -> ApprovalResolution
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ReviewDecision>,
+    {
+        if let Some(resolution) =
+            Self::try_resolve_automatic_cancellable(session, turn, reviewer, hook_request, review)
+                .await
+        {
+            return resolution;
+        }
+
+        Self::normalize_user_rejection(ApprovalResolution {
+            decision: user_review().await,
+            rejection: None,
+            source: ApprovalResolutionSource::User,
+        })
+    }
+
     pub(crate) async fn resolve_automatic_event(
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
