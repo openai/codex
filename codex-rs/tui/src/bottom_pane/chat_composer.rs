@@ -7561,9 +7561,11 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        let sanitized = "_count_rows\tindent\ntwo";
-        let needs_redraw =
-            composer.handle_paste("_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}".to_string());
+        let sanitized = "_count_rows\tindent\ntworeadylabeldone";
+        let needs_redraw = composer.handle_paste(
+            "_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}\x1b[200~ready\x1b]8;;https://example.com\x1b\\label\x1b]8;;\x1b\\done"
+                .to_string(),
+        );
         assert!(needs_redraw);
         assert_eq!(composer.draft.textarea.text(), sanitized);
         assert!(composer.draft.pending_pastes.is_empty());

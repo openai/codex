@@ -16,20 +16,25 @@ pub(crate) fn sanitize_untrusted_text(text: &str) -> Cow<'_, str> {
     }
 
     let mut sanitized = String::with_capacity(text.len());
-    for (index, line) in text.split('\n').enumerate() {
-        if index > 0 {
-            sanitized.push('\n');
-        }
-        for span in codex_ansi_escape::ansi_escape(line)
-            .lines
-            .into_iter()
-            .flat_map(|line| line.spans)
-        {
-            sanitized.extend(
-                span.content
-                    .chars()
-                    .filter(|ch| *ch == '\t' || !ch.is_control()),
-            );
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' if chars.next_if_eq(&'[').is_some() => {
+                let _ = chars.find(|ch| ('@'..='~').contains(ch));
+            }
+            '\x1b' if chars.next_if_eq(&']').is_some() => {
+                while let Some(ch) = chars.next() {
+                    if matches!(ch, '\x07' | '\u{9c}')
+                        || ch == '\x1b' && chars.next_if_eq(&'\\').is_some()
+                    {
+                        break;
+                    }
+                }
+            }
+            '\x1b' => {}
+            '\n' | '\t' => sanitized.push(ch),
+            _ if !ch.is_control() => sanitized.push(ch),
+            _ => {}
         }
     }
     Cow::Owned(sanitized)
