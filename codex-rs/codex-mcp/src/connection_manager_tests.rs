@@ -81,6 +81,7 @@ fn create_codex_apps_tools_cache_context(
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     )
 }
 

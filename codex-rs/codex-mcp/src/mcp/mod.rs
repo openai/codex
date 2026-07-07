@@ -161,6 +161,12 @@ pub struct ToolPluginProvenance {
 }
 
 impl ToolPluginProvenance {
+    pub(crate) fn connector_ids(&self) -> impl Iterator<Item = &str> {
+        self.plugin_display_names_by_connector_id
+            .keys()
+            .map(String::as_str)
+    }
+
     pub fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
         self.plugin_display_names_by_connector_id
             .get(connector_id)

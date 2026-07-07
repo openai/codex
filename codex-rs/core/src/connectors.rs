@@ -267,7 +267,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,
-        ToolPluginProvenance::default(),
+        tool_plugin_provenance.clone(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
@@ -275,21 +275,21 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     )
     .await;
 
-    let refreshed_tools = if force_refetch {
+    let (refreshed_tools, force_refetch_failed) = if force_refetch {
         match mcp_connection_manager
             .hard_refresh_codex_apps_tools_cache()
             .await
         {
-            Ok(tools) => Some(tools),
+            Ok(tools) => (Some(tools), false),
             Err(err) => {
                 warn!(
                     "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
                 );
-                None
+                (None, true)
             }
         }
     } else {
-        None
+        (None, false)
     };
     let refreshed_tools_succeeded = refreshed_tools.is_some();
 
@@ -299,7 +299,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         mcp_connection_manager.list_all_tools().await
     };
     let mut should_reload_tools = false;
-    let codex_apps_ready = if refreshed_tools_succeeded {
+    let codex_apps_ready = if force_refetch_failed {
+        false
+    } else if refreshed_tools_succeeded {
         true
     } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let immediate_ready = mcp_connection_manager
@@ -331,7 +333,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     }
 
     let accessible_connectors = accessible_connectors_for_app_list_from_mcp_tools(&tools);
-    if codex_apps_ready || !accessible_connectors.is_empty() {
+    if !force_refetch_failed && codex_apps_ready {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
     let accessible_connectors =

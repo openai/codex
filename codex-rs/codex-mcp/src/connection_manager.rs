@@ -24,11 +24,12 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
+use crate::rmcp_client::CodexAppsToolsCacheRetryContext;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
-use crate::rmcp_client::list_tools_for_client_uncached;
+use crate::rmcp_client::list_tools_for_client_uncached_with_cache_retry;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -197,8 +198,11 @@ impl McpConnectionManager {
             let shares_codex_apps_tools_cache =
                 should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                codex_apps_tools_cache
-                    .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
+                codex_apps_tools_cache.context(
+                    codex_home.clone(),
+                    codex_apps_tools_cache_key.clone(),
+                    tool_plugin_provenance.connector_ids().map(str::to_owned),
+                )
             });
             // If Codex Apps has an env bearer token, that is its auth path. Do
             // not also attach the ambient CodexAuth provider.
@@ -544,19 +548,22 @@ impl McpConnectionManager {
             .codex_apps_tools_cache_context
             .as_ref()
             .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh));
-        let tools = list_tools_for_client_uncached(
+        let tools = list_tools_for_client_uncached_with_cache_retry(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
-            /*codex_apps_refresh_trigger*/ "explicit",
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
+            CodexAppsToolsCacheRetryContext {
+                cache_context: managed_client.codex_apps_tools_cache_context.as_ref(),
+                source: CodexAppsToolsFetchSource::HardRefresh,
+                refresh_trigger: "explicit",
+            },
         )
         .await
         .with_context(|| {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
-
         let tools =
             match (
                 managed_client.codex_apps_tools_cache_context.as_ref(),

@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::auth_elicitation::MCP_TOOL_CODEX_APPS_META_KEY;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
@@ -612,6 +614,138 @@ pub(crate) async fn list_tools_for_client_uncached(
     Ok(tools)
 }
 
+/// Context needed to validate a Codex Apps tools/list response.
+pub(crate) struct CodexAppsToolsCacheRetryContext<'a> {
+    pub(crate) cache_context: Option<&'a CodexAppsToolsCacheContext>,
+    pub(crate) source: CodexAppsToolsFetchSource,
+    pub(crate) refresh_trigger: &'static str,
+}
+
+/// Fetches Codex Apps tools and retries one ambiguous connector-group omission
+/// before allowing it to become authoritative.
+///
+/// Plugin provenance identifies declared connector IDs, but one tools/list
+/// response cannot distinguish a transient omission from a real disconnect.
+/// A first omission is retried before callers publish anything to the shared
+/// cache. Connector groups that remain absent in the second response are
+/// treated as confirmed removals.
+pub(crate) async fn list_tools_for_client_uncached_with_cache_retry(
+    server_name: &str,
+    is_codex_apps_mcp_server: bool,
+    client: &Arc<RmcpClient>,
+    timeout: Option<Duration>,
+    server_instructions: Option<&str>,
+    cache_retry: CodexAppsToolsCacheRetryContext<'_>,
+) -> Result<Vec<ToolInfo>> {
+    let CodexAppsToolsCacheRetryContext {
+        cache_context,
+        source,
+        refresh_trigger,
+    } = cache_retry;
+    let Some(cache_context) = cache_context else {
+        return list_tools_for_client_uncached(
+            server_name,
+            is_codex_apps_mcp_server,
+            refresh_trigger,
+            client,
+            timeout,
+            server_instructions,
+        )
+        .await;
+    };
+    let baseline_tools = cache_context.current_tools();
+    let mut first_missing_connector_ids = None;
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    loop {
+        let attempt_timeout =
+            deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        if attempt_timeout.is_some_and(|timeout| timeout.is_zero()) {
+            return Err(anyhow!(
+                "Codex Apps tools snapshot retry exceeded the tools/list timeout"
+            ));
+        }
+        let tools = list_tools_for_client_uncached(
+            server_name,
+            is_codex_apps_mcp_server,
+            refresh_trigger,
+            client,
+            attempt_timeout,
+            server_instructions,
+        )
+        .await?;
+        let missing_connector_ids = missing_expected_connector_ids(
+            cache_context.expected_connector_ids(),
+            baseline_tools.as_deref(),
+            &tools,
+        );
+        if missing_connector_ids.is_empty() {
+            return Ok(tools);
+        }
+        let Some(first_missing_connector_ids) = first_missing_connector_ids.as_ref() else {
+            tracing::warn!(
+                source = source.as_str(),
+                ?missing_connector_ids,
+                "retrying Codex Apps tools snapshot with connector group drop"
+            );
+            first_missing_connector_ids = Some(missing_connector_ids);
+            continue;
+        };
+        if retry_confirms_connector_drop(first_missing_connector_ids, &missing_connector_ids) {
+            return Ok(tools);
+        }
+        return Err(anyhow!(
+            "Codex Apps tools snapshot changed connector omissions after retry"
+        ));
+    }
+}
+
+fn missing_expected_connector_ids(
+    expected_connector_ids: &[String],
+    baseline_tools: Option<&[ToolInfo]>,
+    tools: &[ToolInfo],
+) -> Vec<String> {
+    let present_connector_ids = connector_ids_with_non_synthetic_tools(tools);
+    let baseline_connector_ids = baseline_tools.map(connector_ids_with_non_synthetic_tools);
+    expected_connector_ids
+        .iter()
+        .filter(|connector_id| {
+            baseline_connector_ids
+                .as_ref()
+                .is_none_or(|baseline| baseline.contains(connector_id.as_str()))
+                && !present_connector_ids.contains(connector_id.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
+fn retry_confirms_connector_drop(
+    first_missing_connector_ids: &[String],
+    retry_missing_connector_ids: &[String],
+) -> bool {
+    retry_missing_connector_ids
+        .iter()
+        .all(|connector_id| first_missing_connector_ids.contains(connector_id))
+}
+
+fn connector_ids_with_non_synthetic_tools(tools: &[ToolInfo]) -> HashSet<&str> {
+    tools
+        .iter()
+        .filter(|tool| !is_synthetic_link_tool(tool))
+        .filter_map(|tool| tool.connector_id.as_deref())
+        .collect()
+}
+
+fn is_synthetic_link_tool(tool: &ToolInfo) -> bool {
+    tool.tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|meta| meta.get("synthetic_link"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
 /// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
 /// names to each tool. Plugin membership is resolved by connector ID, falling back to the MCP
 /// server when absent.
@@ -849,13 +983,17 @@ async fn start_server_task(
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
-    let tools = list_tools_for_client_uncached(
+    let tools = list_tools_for_client_uncached_with_cache_retry(
         &server_name,
         is_codex_apps_mcp_server,
-        /*codex_apps_refresh_trigger*/ "initial",
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
+        CodexAppsToolsCacheRetryContext {
+            cache_context: codex_apps_tools_cache_context.as_ref(),
+            source: CodexAppsToolsFetchSource::Startup,
+            refresh_trigger: "initial",
+        },
     )
     .await
     .map_err(StartupOutcomeError::from)?;
@@ -1086,6 +1224,67 @@ mod tests {
             .expect("object")
             .clone(),
         ))
+    }
+
+    fn connector_tool_info(connector_id: &str, synthetic_link: bool) -> ToolInfo {
+        let mut tool = RmcpTool::new("search", "test tool", Arc::new(JsonObject::default()));
+        if synthetic_link {
+            let mut meta = Meta::new();
+            meta.0.insert(
+                MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+                serde_json::json!({ "synthetic_link": true }),
+            );
+            tool.meta = Some(meta);
+        }
+        ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
+            callable_name: "search".to_string(),
+            callable_namespace: "codex_apps__test".to_string(),
+            namespace_description: None,
+            tool,
+            connector_id: Some(connector_id.to_string()),
+            connector_name: Some("Test".to_string()),
+            plugin_display_names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn missing_expected_connector_ids_retries_cold_start_and_ignores_synthetic_links() {
+        let expected_connector_ids = vec!["connector_docs".to_string()];
+        let synthetic_tool = connector_tool_info("connector_docs", true);
+
+        assert_eq!(
+            missing_expected_connector_ids(&expected_connector_ids, None, &[synthetic_tool]),
+            expected_connector_ids
+        );
+    }
+
+    #[test]
+    fn missing_expected_connector_ids_checks_only_baseline_connectors() {
+        let expected_connector_ids =
+            vec!["connector_docs".to_string(), "connector_mail".to_string()];
+        let baseline_tools = vec![connector_tool_info("connector_docs", false)];
+
+        assert_eq!(
+            missing_expected_connector_ids(&expected_connector_ids, Some(&baseline_tools), &[]),
+            vec!["connector_docs".to_string()]
+        );
+    }
+
+    #[test]
+    fn retry_confirms_only_existing_connector_drops() {
+        let first_missing = vec!["connector_docs".to_string(), "connector_mail".to_string()];
+
+        assert!(retry_confirms_connector_drop(
+            &first_missing,
+            &["connector_docs".to_string()]
+        ));
+        assert!(!retry_confirms_connector_drop(
+            &["connector_docs".to_string()],
+            &first_missing
+        ));
     }
 
     #[test]

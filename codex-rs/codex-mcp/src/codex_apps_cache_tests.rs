@@ -56,6 +56,7 @@ fn create_codex_apps_tools_cache_context(
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     )
 }
 
@@ -362,6 +363,7 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     );
     let cache_context_2 = cache.context(
         codex_home.path().to_path_buf(),
@@ -370,6 +372,7 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     );
     let older_ticket = cache_context_1.begin_fetch(CodexAppsToolsFetchSource::Startup);
     let newer_ticket = cache_context_2.begin_fetch(CodexAppsToolsFetchSource::HardRefresh);
@@ -414,6 +417,7 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
     let published_tools = cache_context.publish_if_newest_accepted(
@@ -443,6 +447,7 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     );
     let user_two_context = cache.context(
         codex_home,
@@ -451,6 +456,7 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
             chatgpt_user_id: Some("user-two".to_string()),
             is_workspace_account: false,
         },
+        std::iter::empty(),
     );
     let cache_paths = [
         user_one_context.tools_cache_path(),

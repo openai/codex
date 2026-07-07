@@ -65,6 +65,7 @@ pub struct CodexAppsToolsCache {
 #[derive(Clone)]
 pub(crate) struct CodexAppsToolsCacheContext {
     entry: Arc<CodexAppsToolsCacheEntry>,
+    expected_connector_ids: Arc<Vec<String>>,
 }
 
 impl CodexAppsToolsCacheContext {
@@ -135,6 +136,10 @@ impl CodexAppsToolsCacheContext {
         tools
     }
 
+    pub(crate) fn expected_connector_ids(&self) -> &[String] {
+        self.expected_connector_ids.as_slice()
+    }
+
     #[cfg(test)]
     pub(crate) fn store_current_tools_for_test(&self, tools: Vec<ToolInfo>) {
         self.entry.current_tools.store(Some(Arc::new(tools)));
@@ -146,7 +151,12 @@ impl CodexAppsToolsCache {
         &self,
         codex_home: PathBuf,
         auth_key: CodexAppsToolsCacheKey,
+        expected_connector_ids: impl IntoIterator<Item = String>,
     ) -> CodexAppsToolsCacheContext {
+        let mut expected_connector_ids = expected_connector_ids.into_iter().collect::<Vec<_>>();
+        expected_connector_ids.sort_unstable();
+        expected_connector_ids.dedup();
+        let expected_connector_ids = Arc::new(expected_connector_ids);
         let identity = CodexAppsToolsCacheIdentity {
             codex_home,
             auth_key,
@@ -156,7 +166,10 @@ impl CodexAppsToolsCache {
             .entry(identity.clone())
             .or_insert_with(|| Arc::new(CodexAppsToolsCacheEntry::new(identity)))
             .clone();
-        CodexAppsToolsCacheContext { entry }
+        CodexAppsToolsCacheContext {
+            entry,
+            expected_connector_ids,
+        }
     }
 }
 
@@ -167,7 +180,7 @@ pub(crate) enum CodexAppsToolsFetchSource {
 }
 
 impl CodexAppsToolsFetchSource {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Startup => "startup",
             Self::HardRefresh => "hard_refresh",
@@ -355,7 +368,7 @@ struct CodexAppsServerInfoDiskCache {
 }
 
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
-const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 4;
+const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 5;
 
 const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
 const CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION: u8 = 1;
