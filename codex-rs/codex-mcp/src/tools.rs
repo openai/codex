@@ -49,6 +49,11 @@ pub struct ToolInfo {
     pub namespace_description: Option<String>,
     /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
+    /// Optional provided-file fields accepted by each declared `openai/fileParams`
+    /// argument. This is derived from the raw MCP schema before file arguments are
+    /// masked as local paths for the model.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub openai_file_input_optional_fields: HashMap<String, Vec<String>>,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]
@@ -261,6 +266,48 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+const OPTIONAL_OPENAI_FILE_FIELDS: [&str; 2] = ["mime_type", "file_name"];
+
+pub(crate) fn declared_openai_file_input_optional_fields(
+    tool: &Tool,
+) -> HashMap<String, Vec<String>> {
+    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
+    let properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(JsonValue::as_object);
+
+    file_params
+        .into_iter()
+        .map(|field_name| {
+            let optional_fields = properties
+                .and_then(|properties| properties.get(&field_name))
+                .and_then(file_payload_schema)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(JsonValue::as_object)
+                .map(|properties| {
+                    OPTIONAL_OPENAI_FILE_FIELDS
+                        .into_iter()
+                        .filter(|field| properties.contains_key(*field))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            (field_name, optional_fields)
+        })
+        .collect()
+}
+
+fn file_payload_schema(schema: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
+    let schema = schema.as_object()?;
+    if schema.get("type").and_then(JsonValue::as_str) == Some("array")
+        || schema.contains_key("items")
+    {
+        schema.get("items")?.as_object()
+    } else {
+        Some(schema)
+    }
+}
 
 fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
     let Some(properties) = input_schema

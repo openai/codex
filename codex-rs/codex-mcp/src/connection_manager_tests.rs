@@ -17,6 +17,7 @@ use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
+use crate::tools::declared_openai_file_input_optional_fields;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
@@ -43,6 +44,7 @@ use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::sync::Arc;
@@ -63,6 +65,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
             format!("Test tool: {tool_name}"),
             Arc::new(JsonObject::default()),
         ),
+        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -273,6 +276,65 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
         .as_object()
         .expect("object")
         .clone()
+    );
+}
+
+#[test]
+fn declared_openai_file_input_optional_fields_follows_payload_schema() {
+    let mut tool = Tool::new(
+        "upload".to_string(),
+        "Upload a file".to_string(),
+        Arc::new(
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"},
+                            "mime_type": {"type": "string"},
+                            "file_name": {"type": "string"},
+                            "uri": {"type": "string"},
+                            "file_size_bytes": {"type": "integer"}
+                        }
+                    },
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "download_url": {"type": "string"},
+                                "file_id": {"type": "string"},
+                                "mime_type": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        ),
+    );
+    tool.meta = Some(Meta(
+        serde_json::json!({
+            "openai/fileParams": ["file", "files"]
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    assert_eq!(
+        declared_openai_file_input_optional_fields(&tool),
+        HashMap::from([
+            (
+                "file".to_string(),
+                vec!["mime_type".to_string(), "file_name".to_string()]
+            ),
+            ("files".to_string(), vec!["mime_type".to_string()]),
+        ])
     );
 }
 
