@@ -10,8 +10,10 @@ mod panel;
 mod profile_approval;
 mod tools;
 
+pub(crate) use input::BrowserMouseRoute;
 pub(crate) use input::browser_key_input;
 pub(crate) use input::browser_mouse_input;
+pub(crate) use input::browser_mouse_route;
 pub(crate) use network::TerminalBrowserNetworkAvailability;
 #[cfg(test)]
 pub(crate) use panel::BrowserPanelAreas;

@@ -154,13 +154,13 @@ fn render_footer(view: &BrowserView, area: Rect, buf: &mut Buffer) {
             Line::from(" Ctrl+] ".cyan())
         };
         line.render_ref(area, buf);
-    } else {
+    } else if matches!(&view.status, BrowserStatus::Running) {
         let line = if area.width >= 63 {
             Line::from(vec![
                 " Esc ".cyan(),
                 "hide".dim(),
                 "   ".into(),
-                "/browser control".cyan(),
+                " click page ".cyan(),
                 " take control".dim(),
                 "   ".into(),
                 "/browser close".cyan(),
@@ -171,13 +171,23 @@ fn render_footer(view: &BrowserView, area: Rect, buf: &mut Buffer) {
                 " Esc ".cyan(),
                 "hide".dim(),
                 "   ".into(),
-                "/browser control".cyan(),
+                " click page ".cyan(),
                 " take control".dim(),
             ])
+        } else if area.width >= 26 {
+            Line::from(vec![
+                " Esc ".cyan(),
+                "hide".dim(),
+                "   ".into(),
+                " click ".cyan(),
+                "control".dim(),
+            ])
         } else {
-            Line::from(vec![" Esc ".cyan(), "hide".dim()])
+            Line::from(vec![" click ".cyan(), "control".dim()])
         };
         line.render_ref(area, buf);
+    } else {
+        Line::from(vec![" Esc ".cyan(), "hide".dim()]).render_ref(area, buf);
     }
 }
 

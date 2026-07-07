@@ -13,8 +13,8 @@ use crate::diagnostics::inspect_installation;
 use crate::diagnostics::installation_report;
 use crate::diagnostics::unavailable_report;
 use crate::human_control::HumanControlStateTransition;
+use crate::human_control::HumanInputReceivers;
 use crate::human_control::HumanInputSender;
-use crate::human_control::QueuedHumanInput;
 use crate::network::BrowserNetworkPolicy;
 use crate::process::BrowserSession;
 use crate::profile::BrowserProfileName;
@@ -58,7 +58,7 @@ pub(crate) struct Inner {
     pub(crate) human_control_generation: AtomicU64,
     pub(crate) human_handle_invalidation_pending: AtomicBool,
     pub(crate) human_input_tx: HumanInputSender,
-    pub(crate) human_input_rx: Mutex<Option<tokio::sync::mpsc::Receiver<QueuedHumanInput>>>,
+    pub(crate) human_input_rx: Mutex<Option<HumanInputReceivers>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

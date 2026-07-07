@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
@@ -5,6 +6,7 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use anyhow::anyhow;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 use crate::actions;
 use crate::actions::HumanMouseDispatchState;
@@ -15,9 +17,18 @@ use crate::session::Inner;
 use crate::session::TerminalBrowser;
 
 const HUMAN_INPUT_CAPACITY: usize = 128;
+const HUMAN_CONTROL_INPUT_CAPACITY: usize = 1;
 const MAX_HUMAN_TEXT_BYTES: usize = 64 * 1024;
 
-pub(crate) struct HumanInputSender(mpsc::Sender<QueuedHumanInput>);
+pub(crate) struct HumanInputSender {
+    input: mpsc::Sender<QueuedHumanInput>,
+    control: mpsc::Sender<QueuedHumanInput>,
+}
+
+pub(crate) struct HumanInputReceivers {
+    input: mpsc::Receiver<QueuedHumanInput>,
+    control: mpsc::Receiver<QueuedHumanInput>,
+}
 
 /// Captures the browser-control epoch at the time a UI transition is requested.
 ///
@@ -38,9 +49,27 @@ enum HumanInput {
     Key(BrowserKeyInput),
     Text(String),
     Mouse(BrowserMouseInput),
+    ReleaseMouseButtons {
+        completion_tx: oneshot::Sender<std::result::Result<(), String>>,
+        after_release: HumanControlAfterRelease,
+    },
 }
 
-pub(crate) struct QueuedHumanInput {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HumanControlAfterRelease {
+    Continue,
+    End,
+}
+
+impl HumanInput {
+    fn complete_release(self, result: std::result::Result<(), String>) {
+        if let Self::ReleaseMouseButtons { completion_tx, .. } = self {
+            let _ = completion_tx.send(result);
+        }
+    }
+}
+
+struct QueuedHumanInput {
     generation: u64,
     input: HumanInput,
 }
@@ -89,9 +118,19 @@ impl Inner {
 }
 
 impl TerminalBrowser {
-    pub(crate) fn human_input_channel() -> (HumanInputSender, mpsc::Receiver<QueuedHumanInput>) {
-        let (sender, receiver) = mpsc::channel(HUMAN_INPUT_CAPACITY);
-        (HumanInputSender(sender), receiver)
+    pub(crate) fn human_input_channel() -> (HumanInputSender, HumanInputReceivers) {
+        let (input_tx, input_rx) = mpsc::channel(HUMAN_INPUT_CAPACITY);
+        let (control_tx, control_rx) = mpsc::channel(HUMAN_CONTROL_INPUT_CAPACITY);
+        (
+            HumanInputSender {
+                input: input_tx,
+                control: control_tx,
+            },
+            HumanInputReceivers {
+                input: input_rx,
+                control: control_rx,
+            },
+        )
     }
 
     pub fn is_human_control_active(&self) -> bool {
@@ -207,12 +246,14 @@ impl TerminalBrowser {
     )]
     pub async fn end_human_control(&self, token: HumanControlToken) -> Result<HumanControlToken> {
         anyhow::ensure!(
-            self.inner
-                .transition_human_control(HumanControlStateTransition::Deactivate {
-                    generation: token.generation,
-                }),
+            self.human_control_is_active_for(token.generation),
             "browser control transition was canceled"
         );
+        self.release_human_mouse_buttons_for_generation(
+            token.generation,
+            HumanControlAfterRelease::End,
+        )
+        .await?;
         let _operation = self.inner.operation.lock().await;
         self.flush_human_handle_invalidation().await;
         Ok(HumanControlToken {
@@ -259,13 +300,52 @@ impl TerminalBrowser {
         self.queue_human_input(HumanInput::Mouse(input))
     }
 
+    /// Releases every mouse button currently held by the browser input worker.
+    pub async fn release_human_mouse_buttons(&self) -> Result<()> {
+        let generation = self.inner.human_control_generation.load(Ordering::SeqCst);
+        self.release_human_mouse_buttons_for_generation(
+            generation,
+            HumanControlAfterRelease::Continue,
+        )
+        .await
+    }
+
+    async fn release_human_mouse_buttons_for_generation(
+        &self,
+        generation: u64,
+        after_release: HumanControlAfterRelease,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.human_control_is_active_for(generation),
+            "browser control transition was canceled"
+        );
+        let (completion_tx, completion_rx) = oneshot::channel();
+        self.inner
+            .human_input_tx
+            .control
+            .send(QueuedHumanInput {
+                generation,
+                input: HumanInput::ReleaseMouseButtons {
+                    completion_tx,
+                    after_release,
+                },
+            })
+            .await
+            .map_err(|_| anyhow!("terminal browser input worker stopped"))?;
+        match completion_rx.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(anyhow!(error)),
+            Err(_) => Err(anyhow!("terminal browser input worker stopped")),
+        }
+    }
+
     fn queue_human_input(&self, input: HumanInput) -> Result<()> {
         anyhow::ensure!(
             self.is_human_control_active(),
             "human control is not active"
         );
         let is_motion = matches!(
-            input,
+            &input,
             HumanInput::Mouse(BrowserMouseInput {
                 kind: BrowserMouseKind::Move,
                 ..
@@ -275,7 +355,7 @@ impl TerminalBrowser {
             generation: self.inner.human_control_generation.load(Ordering::SeqCst),
             input,
         };
-        match self.inner.human_input_tx.0.try_send(queued) {
+        match self.inner.human_input_tx.input.try_send(queued) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) if is_motion => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -285,6 +365,11 @@ impl TerminalBrowser {
                 anyhow::bail!("terminal browser input worker stopped")
             }
         }
+    }
+
+    fn human_control_is_active_for(&self, generation: u64) -> bool {
+        self.is_human_control_active()
+            && self.inner.human_control_generation.load(Ordering::SeqCst) == generation
     }
 }
 
@@ -302,50 +387,135 @@ impl Drop for HumanControlTransition<'_> {
     clippy::await_holding_invalid_type,
     reason = "human input must remain serialized with model actions until its CDP call completes"
 )]
-async fn run_human_input_worker(
-    inner: Weak<Inner>,
-    mut receiver: mpsc::Receiver<QueuedHumanInput>,
-) {
+async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputReceivers) {
     let mut mouse_state = HumanMouseDispatchState::default();
     let mut mouse_generation = None;
-    while let Some(queued) = receiver.recv().await {
+    let mut deferred = VecDeque::new();
+    while let Some(queued) = next_human_input(&mut receivers, &mut deferred).await {
         let Some(inner) = inner.upgrade() else {
             return;
         };
+        let QueuedHumanInput { generation, input } = queued;
         if !inner.human_control.load(Ordering::SeqCst)
-            || inner.human_control_generation.load(Ordering::SeqCst) != queued.generation
+            || inner.human_control_generation.load(Ordering::SeqCst) != generation
         {
+            input.complete_release(Err("browser control transition was canceled".to_string()));
             continue;
         }
-        if mouse_generation != Some(queued.generation) {
-            mouse_state = HumanMouseDispatchState::default();
-            mouse_generation = Some(queued.generation);
+        if matches!(&input, HumanInput::ReleaseMouseButtons { .. }) {
+            drain_human_inputs_for_generation(&mut receivers, generation, &mut deferred);
         }
-        let result = {
+        if mouse_generation != Some(generation) {
+            mouse_state = HumanMouseDispatchState::default();
+            mouse_generation = Some(generation);
+        }
+        let (result, completion_tx, crash_on_error) = {
             let _operation = inner.operation.lock().await;
             if !inner.human_control.load(Ordering::SeqCst)
-                || inner.human_control_generation.load(Ordering::SeqCst) != queued.generation
+                || inner.human_control_generation.load(Ordering::SeqCst) != generation
             {
+                input.complete_release(Err("browser control transition was canceled".to_string()));
                 continue;
             }
             let cdp = {
                 let session = inner.session.lock().await;
                 let Some(session) = session.as_ref() else {
+                    input.complete_release(Err("terminal browser is not open".to_string()));
                     continue;
                 };
                 session.cdp.clone()
             };
-            match queued.input {
-                HumanInput::Key(input) => actions::dispatch_human_key(&cdp, &input).await,
-                HumanInput::Text(text) => actions::insert_human_text(&cdp, &text).await,
-                HumanInput::Mouse(input) => {
-                    actions::dispatch_human_mouse(&cdp, input, &mut mouse_state).await
+            match input {
+                HumanInput::Key(input) => {
+                    (actions::dispatch_human_key(&cdp, &input).await, None, true)
+                }
+                HumanInput::Text(text) => {
+                    (actions::insert_human_text(&cdp, &text).await, None, true)
+                }
+                HumanInput::Mouse(input) => (
+                    actions::dispatch_human_mouse(&cdp, input, &mut mouse_state).await,
+                    None,
+                    true,
+                ),
+                HumanInput::ReleaseMouseButtons {
+                    completion_tx,
+                    after_release,
+                } => {
+                    let result = actions::release_human_mouse_buttons(&cdp, &mut mouse_state).await;
+                    let crash_on_error = result.is_err();
+                    let result = result.and_then(|()| {
+                        finish_human_control_after_release(&inner, generation, after_release)
+                    });
+                    (result, Some(completion_tx), crash_on_error)
                 }
             }
         };
-        if let Err(error) = result {
-            tracing::warn!(%error, "terminal-browser human input failed");
-            inner.set_crashed("Terminal browser input connection failed".to_string());
+        let completion_result = match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let error = error.to_string();
+                tracing::warn!(%error, "terminal-browser human input failed");
+                if crash_on_error {
+                    inner.set_crashed("Terminal browser input connection failed".to_string());
+                }
+                Err(error)
+            }
+        };
+        if let Some(completion_tx) = completion_tx {
+            let _ = completion_tx.send(completion_result);
         }
     }
 }
+
+async fn next_human_input(
+    receivers: &mut HumanInputReceivers,
+    deferred: &mut VecDeque<QueuedHumanInput>,
+) -> Option<QueuedHumanInput> {
+    if let Ok(queued) = receivers.control.try_recv() {
+        return Some(queued);
+    }
+    if let Some(queued) = deferred.pop_front() {
+        return Some(queued);
+    }
+    tokio::select! {
+        biased;
+        queued = receivers.control.recv() => queued,
+        queued = receivers.input.recv() => queued,
+    }
+}
+
+fn drain_human_inputs_for_generation(
+    receivers: &mut HumanInputReceivers,
+    generation: u64,
+    deferred: &mut VecDeque<QueuedHumanInput>,
+) {
+    deferred.retain(|queued| queued.generation != generation);
+    while let Ok(queued) = receivers.input.try_recv() {
+        if queued.generation != generation {
+            deferred.push_back(queued);
+        }
+    }
+}
+
+fn finish_human_control_after_release(
+    inner: &Inner,
+    generation: u64,
+    after_release: HumanControlAfterRelease,
+) -> Result<()> {
+    match after_release {
+        HumanControlAfterRelease::Continue => Ok(()),
+        HumanControlAfterRelease::End => {
+            anyhow::ensure!(
+                inner.transition_human_control(HumanControlStateTransition::Deactivate {
+                    generation,
+                }),
+                "browser control transition was canceled"
+            );
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "human_control_tests.rs"]
+mod tests;

@@ -1,4 +1,7 @@
 use codex_terminal_browser::BrowserCell;
+use codex_terminal_browser::BrowserMouseButton;
+use codex_terminal_browser::BrowserMouseInput;
+use codex_terminal_browser::BrowserMouseKind;
 use codex_terminal_browser::BrowserScreen;
 use codex_terminal_browser::BrowserStatus;
 use codex_terminal_browser::BrowserView;
@@ -381,6 +384,91 @@ async fn owned_screen_browser_preserves_narrow_overlay_chrome() {
         "owned_screen_browser_preserves_narrow_overlay_chrome",
         terminal.backend()
     );
+}
+
+#[tokio::test]
+async fn terminal_browser_completed_click_preserves_input_and_rejects_non_clicks() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let browser_view = browser_view(/*human_control*/ false, Some((1, 2)));
+    let _terminal = render_frame_app_with_browser(
+        &mut app,
+        /*width*/ 144,
+        /*height*/ 12,
+        Some(&browser_view),
+    );
+    let body = app
+        .owned_screen_frame
+        .panel_body(OwnedScreenPanel::Summary)
+        .expect("browser panel body");
+    let viewport = browser_viewport(body);
+    let press = primary_event(
+        MousePrimaryEventKind::Press,
+        viewport.x.saturating_add(/*rhs*/ 2),
+        viewport.y.saturating_add(/*rhs*/ 1),
+    );
+    let release = primary_event(
+        MousePrimaryEventKind::Release,
+        viewport.x.saturating_add(/*rhs*/ 3),
+        viewport.y.saturating_add(/*rhs*/ 2),
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, press));
+    let inputs = app
+        .terminal_browser_control_inputs(release, &browser_view)
+        .expect("completed browser viewport click should request control");
+    let expected_press = BrowserMouseInput {
+        kind: BrowserMouseKind::Down,
+        button: BrowserMouseButton::Left,
+        column: 2,
+        row: 1,
+        viewport_cols: viewport.width,
+        viewport_rows: viewport.height,
+        modifiers: Default::default(),
+    };
+
+    assert_eq!(
+        inputs,
+        [
+            expected_press,
+            BrowserMouseInput {
+                kind: BrowserMouseKind::Up,
+                column: 3,
+                row: 2,
+                ..expected_press
+            },
+        ]
+    );
+    let idle_view = BrowserView {
+        status: BrowserStatus::Idle,
+        ..browser_view.clone()
+    };
+    assert!(
+        app.terminal_browser_control_inputs(release, &idle_view)
+            .is_none(),
+        "an idle browser should ignore click-to-control"
+    );
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, release));
+    assert!(!app.owned_screen_frame.is_interacting());
+
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, press));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        MousePrimaryEvent {
+            kind: MousePrimaryEventKind::Drag,
+            ..release
+        },
+    ));
+    assert!(
+        app.terminal_browser_control_inputs(release, &browser_view)
+            .is_none(),
+        "dragging within the browser should not request control"
+    );
+    assert!(app.handle_owned_screen_mouse_primary(&mut tui, release));
+    assert!(!app.owned_screen_frame.is_interacting());
+    Ok(())
 }
 
 #[tokio::test]

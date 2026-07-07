@@ -35,6 +35,8 @@ use crate::app_event::TerminalBrowserProfileCommand;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ListSelectionView;
 use crate::render::renderable::Renderable;
+use crate::terminal_browser::BrowserMouseRoute;
+use crate::terminal_browser::browser_mouse_route;
 
 use super::BrowserPanelAreas;
 use super::browser_key_input;
@@ -368,6 +370,34 @@ fn mouse_events_outside_the_browser_viewport_are_ignored() {
             ),
         ),
         None
+    );
+}
+
+#[test]
+fn active_mouse_capture_routes_outside_release_to_cleanup() {
+    let viewport = Rect::new(
+        /*x*/ 10, /*y*/ 5, /*width*/ 40, /*height*/ 20,
+    );
+    let outside_release = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 9,
+        row: 30,
+        modifiers: KeyModifiers::SHIFT,
+    };
+
+    assert_eq!(
+        browser_mouse_route(outside_release, viewport),
+        BrowserMouseRoute::ReleaseButtons
+    );
+    assert_eq!(
+        browser_mouse_route(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                ..outside_release
+            },
+            viewport,
+        ),
+        BrowserMouseRoute::Ignore
     );
 }
 

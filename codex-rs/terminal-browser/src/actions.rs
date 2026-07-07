@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::cdp::CdpClient;
 use crate::input::BrowserKeyInput;
+use crate::input::BrowserMouseButton;
 use crate::input::BrowserMouseInput;
 use crate::input::BrowserMouseKind;
 use crate::scripts;
@@ -18,6 +19,7 @@ const MAX_SNAPSHOT_TEXT_CHARS: usize = 6_000;
 #[derive(Default)]
 pub(crate) struct HumanMouseDispatchState {
     viewport: Option<(u16, u16, f64, f64)>,
+    last_position: Option<(f64, f64)>,
     buttons: u8,
 }
 
@@ -136,6 +138,44 @@ pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInp
     Ok(())
 }
 
+pub(crate) async fn release_human_mouse_buttons(
+    client: &CdpClient,
+    state: &mut HumanMouseDispatchState,
+) -> Result<()> {
+    let Some((x, y)) = state.last_position else {
+        state.buttons = 0;
+        return Ok(());
+    };
+    for button in [
+        BrowserMouseButton::Left,
+        BrowserMouseButton::Middle,
+        BrowserMouseButton::Right,
+    ] {
+        let button_mask = button.cdp_buttons_mask();
+        if state.buttons & button_mask == 0 {
+            continue;
+        }
+        state.buttons &= !button_mask;
+        client
+            .call(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": button.as_cdp(),
+                    "buttons": state.buttons,
+                    "modifiers": 0,
+                    "clickCount": 0,
+                    "deltaX": 0.0,
+                    "deltaY": 0.0,
+                }),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn insert_human_text(client: &CdpClient, text: &str) -> Result<()> {
     client
         .call("Input.insertText", json!({ "text": text }))
@@ -202,6 +242,7 @@ pub(crate) async fn dispatch_human_mouse(
             }),
         )
         .await?;
+    state.last_position = Some((x, y));
     Ok(())
 }
 

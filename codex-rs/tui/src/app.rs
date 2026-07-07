@@ -1313,6 +1313,17 @@ See the Codex keymap documentation for supported actions and examples."
             self.handle_draw_pre_render(tui)?;
         }
 
+        if let TuiEvent::MousePrimary(mouse_event) = &event
+            && let Some(click) = self.terminal_browser_control_click(*mouse_event)
+        {
+            self.handle_owned_screen_mouse_primary(tui, *mouse_event);
+            self.begin_terminal_browser_control_from_click(click).await;
+            let raw_mouse_events = self.sync_terminal_browser_panel();
+            tui.set_raw_mouse_events(raw_mouse_events);
+            tui.frame_requester().schedule_frame();
+            return Ok(AppRunControl::Continue);
+        }
+
         if self.terminal_browser_human_control_active() {
             let browser_viewport = self
                 .owned_screen_frame
@@ -1343,18 +1354,25 @@ See the Codex keymap documentation for supported actions and examples."
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::MouseScroll(mouse_event) => {
-                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport);
+                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport)
+                        .await;
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::MousePrimary(mouse_event) => {
-                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport);
+                    self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport)
+                        .await;
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::MouseOther(mouse_event) => {
-                    self.forward_terminal_browser_mouse(mouse_event, browser_viewport);
+                    self.forward_terminal_browser_mouse(mouse_event, browser_viewport)
+                        .await;
                     return Ok(AppRunControl::Continue);
                 }
-                TuiEvent::FocusLost | TuiEvent::Draw | TuiEvent::Resize => {}
+                TuiEvent::FocusLost => {
+                    self.release_terminal_browser_mouse_buttons().await;
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::Draw | TuiEvent::Resize => {}
             }
         }
 

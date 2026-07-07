@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::BrowserToolOutput;
 use super::HumanMouseDispatchState;
 use super::dispatch_human_mouse;
+use super::release_human_mouse_buttons;
 use crate::accessibility::click;
 use crate::accessibility::snapshot;
 use crate::cdp::CdpClient;
@@ -186,7 +187,7 @@ async fn native_click_uses_the_accessibility_handle_box_center() {
 }
 
 #[tokio::test]
-async fn human_mouse_caches_metrics_and_preserves_drag_buttons() {
+async fn human_mouse_preserves_drag_buttons_and_cleans_up_held_buttons() {
     let (url, server) = test_server(|mut socket| {
         tokio::spawn(async move {
             initialize(&mut socket).await;
@@ -205,6 +206,22 @@ async fn human_mouse_caches_metrics_and_preserves_drag_buttons() {
                 assert_eq!(input["method"], "Input.dispatchMouseEvent");
                 assert_eq!(input["params"]["type"], expected_type);
                 assert_eq!(input["params"]["buttons"], expected_buttons);
+                respond(&mut socket, &input, json!({})).await;
+            }
+            for expected_buttons in [1, 3] {
+                let input = request(&mut socket).await;
+                assert_eq!(input["params"]["type"], "mousePressed");
+                assert_eq!(input["params"]["buttons"], expected_buttons);
+                respond(&mut socket, &input, json!({})).await;
+            }
+            for (expected_button, expected_buttons) in [("left", 2), ("right", 0)] {
+                let input = request(&mut socket).await;
+                assert_eq!(input["params"]["type"], "mouseReleased");
+                assert_eq!(input["params"]["button"], expected_button);
+                assert_eq!(input["params"]["buttons"], expected_buttons);
+                assert_eq!(input["params"]["x"], 200.0);
+                assert_eq!(input["params"]["y"], 150.0);
+                assert_eq!(input["params"]["clickCount"], 0);
                 respond(&mut socket, &input, json!({})).await;
             }
         })
@@ -233,6 +250,30 @@ async fn human_mouse_caches_metrics_and_preserves_drag_buttons() {
         .await
         .expect("dispatch mouse input");
     }
+    for button in [BrowserMouseButton::Left, BrowserMouseButton::Right] {
+        dispatch_human_mouse(
+            &client,
+            BrowserMouseInput {
+                kind: BrowserMouseKind::Down,
+                button,
+                column: 20,
+                row: 6,
+                viewport_cols: 80,
+                viewport_rows: 24,
+                modifiers: BrowserInputModifiers::default(),
+            },
+            &mut state,
+        )
+        .await
+        .expect("dispatch mouse press");
+    }
+
+    release_human_mouse_buttons(&client, &mut state)
+        .await
+        .expect("release held mouse buttons");
+    release_human_mouse_buttons(&client, &mut state)
+        .await
+        .expect("repeated cleanup is empty");
     server.await.expect("server task");
 }
 

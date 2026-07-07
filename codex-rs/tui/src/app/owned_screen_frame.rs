@@ -139,7 +139,11 @@ enum FrameInteraction {
         origin_column: u16,
         has_resized: bool,
     },
-    PanelPointer(OwnedScreenPanel),
+    PanelPointer {
+        panel: OwnedScreenPanel,
+        press: MousePrimaryEvent,
+        dragged: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -243,6 +247,25 @@ impl OwnedScreenFrameState {
         self.interaction != FrameInteraction::Idle
     }
 
+    pub(super) fn completed_panel_click(
+        &self,
+        event: MousePrimaryEvent,
+    ) -> Option<(OwnedScreenPanel, MousePrimaryEvent)> {
+        if event.kind != MousePrimaryEventKind::Release {
+            return None;
+        }
+        match self.interaction {
+            FrameInteraction::PanelPointer {
+                panel,
+                press,
+                dragged: false,
+            } => Some((panel, press)),
+            FrameInteraction::Idle
+            | FrameInteraction::Resize { .. }
+            | FrameInteraction::PanelPointer { dragged: true, .. } => None,
+        }
+    }
+
     pub(super) fn traps_background_input(&self) -> bool {
         self.layout.and_then(active_overlay).is_some()
     }
@@ -267,7 +290,11 @@ impl OwnedScreenFrameState {
                     };
                     if overlay.area.contains(position) {
                         self.focus = panel.into();
-                        self.interaction = FrameInteraction::PanelPointer(panel);
+                        self.interaction = FrameInteraction::PanelPointer {
+                            panel,
+                            press: event,
+                            dragged: false,
+                        };
                     } else {
                         self.set_preference(panel, OwnedScreenPanelPreference::Hidden);
                     }
@@ -290,7 +317,11 @@ impl OwnedScreenFrameState {
                         .is_some_and(|panel_layout| panel_layout.area.contains(position))
                     {
                         self.focus = panel.into();
-                        self.interaction = FrameInteraction::PanelPointer(panel);
+                        self.interaction = FrameInteraction::PanelPointer {
+                            panel,
+                            press: event,
+                            dragged: false,
+                        };
                         return true;
                     }
                 }
@@ -315,7 +346,14 @@ impl OwnedScreenFrameState {
                     };
                     true
                 }
-                FrameInteraction::PanelPointer(_) => true,
+                FrameInteraction::PanelPointer { panel, press, .. } => {
+                    self.interaction = FrameInteraction::PanelPointer {
+                        panel,
+                        press,
+                        dragged: true,
+                    };
+                    true
+                }
                 FrameInteraction::Idle => false,
             },
             MousePrimaryEventKind::Release => {

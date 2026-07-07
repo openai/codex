@@ -12,6 +12,13 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use ratatui::layout::Rect;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BrowserMouseRoute {
+    Input(BrowserMouseInput),
+    ReleaseButtons,
+    Ignore,
+}
+
 /// Converts a crossterm key event into Carbonyl input.
 ///
 /// Release events and keys without a Chromium keyboard equivalent are ignored.
@@ -148,6 +155,21 @@ pub(crate) fn browser_mouse_input(event: MouseEvent, viewport: Rect) -> Option<B
         viewport_rows: viewport.height,
         modifiers: browser_modifiers(event.modifiers),
     })
+}
+
+/// Classifies mouse input while the user has exclusive browser control.
+///
+/// An outside release must clear the browser worker's actual pressed-button state instead of being
+/// dropped or mapped to surrounding panel chrome.
+pub(crate) fn browser_mouse_route(event: MouseEvent, viewport: Rect) -> BrowserMouseRoute {
+    if matches!(event.kind, MouseEventKind::Up(_))
+        && (viewport.is_empty() || !viewport.contains((event.column, event.row).into()))
+    {
+        BrowserMouseRoute::ReleaseButtons
+    } else {
+        browser_mouse_input(event, viewport)
+            .map_or(BrowserMouseRoute::Ignore, BrowserMouseRoute::Input)
+    }
 }
 
 fn browser_mouse_button(button: MouseButton) -> BrowserMouseButton {

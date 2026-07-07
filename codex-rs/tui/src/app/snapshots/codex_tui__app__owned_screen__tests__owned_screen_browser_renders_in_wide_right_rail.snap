@@ -13,4 +13,4 @@ expression: terminal.backend()
 "                            │                                                                                ┃                                  "
 "                            │› draft sentinel                                                                ┃                                  "
 "                            │                                                                                ┃                                  "
-"                            │  gpt-5.5 default · /tmp/project                                                ┃ Esc hide                         "
+"                            │  gpt-5.5 default · /tmp/project                                                ┃ Esc hide    click control        "

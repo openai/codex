@@ -8,8 +8,10 @@ use std::sync::Arc;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_terminal_browser::BrowserLaunchContext;
+use codex_terminal_browser::BrowserMouseInput;
 use codex_terminal_browser::BrowserNetworkPolicy;
 use codex_terminal_browser::BrowserStatus;
+use codex_terminal_browser::BrowserView;
 use codex_terminal_browser::TerminalBrowser;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyEvent;
@@ -20,17 +22,27 @@ use tokio::sync::oneshot;
 use super::App;
 use super::owned_screen_frame::OwnedScreenRightRailContent;
 use crate::app_event::AppEvent;
+use crate::app_event::OwnedScreenPanel;
 use crate::app_event::TerminalBrowserControlTarget;
 use crate::app_event::TerminalBrowserProfileApproval;
 use crate::app_event::TerminalBrowserProfileCommand;
+use crate::terminal_browser::BrowserMouseRoute;
 use crate::terminal_browser::TerminalBrowserNetworkAvailability;
 use crate::terminal_browser::browser_key_input;
 use crate::terminal_browser::browser_mouse_input;
+use crate::terminal_browser::browser_mouse_route;
 use crate::terminal_browser::profile_approval_view_params;
+use crate::tui::MousePrimaryEvent;
 
 pub(super) struct ReopenableTerminalBrowser {
     browser: Arc<TerminalBrowser>,
     closed: oneshot::Receiver<()>,
+}
+
+pub(super) struct TerminalBrowserControlClick {
+    browser: Arc<TerminalBrowser>,
+    target: TerminalBrowserControlTarget,
+    inputs: [BrowserMouseInput; 2],
 }
 
 impl ReopenableTerminalBrowser {
@@ -272,7 +284,7 @@ impl App {
         }
     }
 
-    pub(super) fn forward_terminal_browser_mouse(
+    pub(super) async fn forward_terminal_browser_mouse(
         &mut self,
         mouse_event: MouseEvent,
         viewport: Option<Rect>,
@@ -280,8 +292,13 @@ impl App {
         let Some(viewport) = viewport else {
             return;
         };
-        let Some(input) = browser_mouse_input(mouse_event, viewport) else {
-            return;
+        let input = match browser_mouse_route(mouse_event, viewport) {
+            BrowserMouseRoute::Input(input) => input,
+            BrowserMouseRoute::ReleaseButtons => {
+                self.release_terminal_browser_mouse_buttons().await;
+                return;
+            }
+            BrowserMouseRoute::Ignore => return,
         };
         let Some(browser) = self.terminal_browser_for_current_thread() else {
             return;
@@ -290,6 +307,95 @@ impl App {
             self.chat_widget
                 .add_error_message(format!("Failed to send browser mouse event: {error}"));
         }
+    }
+
+    pub(super) async fn release_terminal_browser_mouse_buttons(&mut self) {
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        if let Err(error) = browser.release_human_mouse_buttons().await {
+            self.chat_widget
+                .add_error_message(format!("Failed to release browser mouse buttons: {error}"));
+        }
+    }
+
+    pub(super) fn terminal_browser_control_inputs(
+        &self,
+        event: MousePrimaryEvent,
+        view: &BrowserView,
+    ) -> Option<[BrowserMouseInput; 2]> {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.owned_screen_frame.right_rail_content() != OwnedScreenRightRailContent::Browser
+            || !view.visible
+            || view.human_control
+            || !matches!(&view.status, BrowserStatus::Running)
+        {
+            return None;
+        }
+        let (panel, press) = self.owned_screen_frame.completed_panel_click(event)?;
+        if panel != OwnedScreenPanel::Summary {
+            return None;
+        }
+        let viewport = self
+            .owned_screen_frame
+            .panel_body(OwnedScreenPanel::Summary)
+            .map(crate::terminal_browser::browser_viewport)?;
+        Some([
+            browser_mouse_input(press.into(), viewport)?,
+            browser_mouse_input(event.into(), viewport)?,
+        ])
+    }
+
+    pub(super) fn terminal_browser_control_click(
+        &self,
+        event: MousePrimaryEvent,
+    ) -> Option<TerminalBrowserControlClick> {
+        let browser = self.terminal_browser_for_current_thread()?;
+        let inputs = self.terminal_browser_control_inputs(event, &browser.view())?;
+        if browser.is_human_control_active() {
+            return None;
+        }
+        let target = self.terminal_browser_control_target()?;
+        Some(TerminalBrowserControlClick {
+            browser,
+            target,
+            inputs,
+        })
+    }
+
+    pub(super) async fn begin_terminal_browser_control_from_click(
+        &mut self,
+        click: TerminalBrowserControlClick,
+    ) {
+        let TerminalBrowserControlClick {
+            browser,
+            target,
+            inputs,
+        } = click;
+        let result = browser.toggle_human_control(target.token).await;
+        let mut completion_target = target;
+        let error = match result {
+            Ok(token) => {
+                completion_target.token = token;
+                for input in inputs {
+                    if let Err(error) = browser.send_human_mouse(input) {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to send browser mouse event: {error}"
+                        ));
+                        break;
+                    }
+                }
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        self.app_event_tx
+            .unscoped()
+            .send(AppEvent::TerminalBrowserControlCompleted {
+                target: completion_target,
+                error,
+            });
     }
 
     pub(super) async fn terminal_browser_for_active_request(
