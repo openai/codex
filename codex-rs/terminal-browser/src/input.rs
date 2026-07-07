@@ -43,26 +43,6 @@ pub enum BrowserMouseButton {
     Right,
 }
 
-impl BrowserMouseButton {
-    pub(crate) fn as_cdp(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Left => "left",
-            Self::Middle => "middle",
-            Self::Right => "right",
-        }
-    }
-
-    pub(crate) fn cdp_buttons_mask(self) -> u8 {
-        match self {
-            Self::None => 0,
-            Self::Left => 1,
-            Self::Right => 2,
-            Self::Middle => 4,
-        }
-    }
-}
-
 /// Kind of mouse event forwarded during exclusive human control.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BrowserMouseKind {
@@ -76,7 +56,7 @@ pub enum BrowserMouseKind {
     Wheel { delta_x: f64, delta_y: f64 },
 }
 
-/// Terminal-relative mouse event that Carbonyl maps into its current CSS viewport.
+/// Terminal-relative mouse event forwarded to Carbonyl's native input parser.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BrowserMouseInput {
     /// Mouse operation to perform.

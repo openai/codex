@@ -19,6 +19,7 @@ mod sandbox;
 mod screen;
 mod scripts;
 mod session;
+mod terminal_input;
 mod tool_dispatch;
 mod url_policy;
 

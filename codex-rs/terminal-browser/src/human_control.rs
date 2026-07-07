@@ -3,18 +3,20 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::actions;
-use crate::actions::HumanMouseDispatchState;
 use crate::input::BrowserKeyInput;
 use crate::input::BrowserMouseInput;
 use crate::input::BrowserMouseKind;
 use crate::session::Inner;
 use crate::session::TerminalBrowser;
+use crate::terminal_input;
+use crate::terminal_input::HumanTerminalMouseState;
 
 const HUMAN_INPUT_CAPACITY: usize = 128;
 const HUMAN_CONTROL_INPUT_CAPACITY: usize = 1;
@@ -65,6 +67,20 @@ impl HumanInput {
     fn complete_release(self, result: std::result::Result<(), String>) {
         if let Self::ReleaseMouseButtons { completion_tx, .. } = self {
             let _ = completion_tx.send(result);
+        }
+    }
+
+    fn complete_stale(self) {
+        match self {
+            Self::ReleaseMouseButtons {
+                completion_tx,
+                after_release: HumanControlAfterRelease::Continue,
+            } => {
+                let _ = completion_tx.send(Ok(()));
+            }
+            input => {
+                input.complete_release(Err("browser control transition was canceled".to_string()))
+            }
         }
     }
 }
@@ -385,10 +401,10 @@ impl Drop for HumanControlTransition<'_> {
 
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "human input must remain serialized with model actions until its CDP call completes"
+    reason = "human input must remain serialized with model actions until Carbonyl receives it"
 )]
 async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputReceivers) {
-    let mut mouse_state = HumanMouseDispatchState::default();
+    let mut mouse_state = HumanTerminalMouseState::default();
     let mut mouse_generation = None;
     let mut deferred = VecDeque::new();
     while let Some(queued) = next_human_input(&mut receivers, &mut deferred).await {
@@ -399,14 +415,14 @@ async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputRec
         if !inner.human_control.load(Ordering::SeqCst)
             || inner.human_control_generation.load(Ordering::SeqCst) != generation
         {
-            input.complete_release(Err("browser control transition was canceled".to_string()));
+            input.complete_stale();
             continue;
         }
         if matches!(&input, HumanInput::ReleaseMouseButtons { .. }) {
             drain_human_inputs_for_generation(&mut receivers, generation, &mut deferred);
         }
         if mouse_generation != Some(generation) {
-            mouse_state = HumanMouseDispatchState::default();
+            mouse_state = HumanTerminalMouseState::default();
             mouse_generation = Some(generation);
         }
         let (result, completion_tx, crash_on_error) = {
@@ -414,7 +430,7 @@ async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputRec
             if !inner.human_control.load(Ordering::SeqCst)
                 || inner.human_control_generation.load(Ordering::SeqCst) != generation
             {
-                input.complete_release(Err("browser control transition was canceled".to_string()));
+                input.complete_stale();
                 continue;
             }
             let cdp = {
@@ -425,23 +441,37 @@ async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputRec
                 };
                 session.cdp.clone()
             };
+            let writer = inner
+                .process
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|process| process.writer_sender())
+                .context("terminal browser process is not open");
             match input {
-                HumanInput::Key(input) => {
-                    (actions::dispatch_human_key(&cdp, &input).await, None, true)
-                }
-                HumanInput::Text(text) => {
-                    (actions::insert_human_text(&cdp, &text).await, None, true)
-                }
-                HumanInput::Mouse(input) => (
-                    actions::dispatch_human_mouse(&cdp, input, &mut mouse_state).await,
+                HumanInput::Key(input) => match terminal_input::key_bytes(&input) {
+                    Some(bytes) => (send_terminal_input(writer, bytes).await, None, true),
+                    None => (actions::dispatch_human_key(&cdp, &input).await, None, true),
+                },
+                HumanInput::Text(text) => (
+                    send_terminal_input(writer, text.into_bytes()).await,
                     None,
                     true,
                 ),
+                HumanInput::Mouse(input) => {
+                    let bytes = terminal_input::mouse_bytes(input, &mut mouse_state);
+                    (
+                        send_optional_terminal_input(writer, bytes).await,
+                        None,
+                        true,
+                    )
+                }
                 HumanInput::ReleaseMouseButtons {
                     completion_tx,
                     after_release,
                 } => {
-                    let result = actions::release_human_mouse_buttons(&cdp, &mut mouse_state).await;
+                    let bytes = terminal_input::release_mouse_bytes(&mut mouse_state);
+                    let result = send_optional_terminal_input(writer, bytes).await;
                     let crash_on_error = result.is_err();
                     let result = result.and_then(|()| {
                         finish_human_control_after_release(&inner, generation, after_release)
@@ -464,6 +494,23 @@ async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputRec
         if let Some(completion_tx) = completion_tx {
             let _ = completion_tx.send(completion_result);
         }
+    }
+}
+
+async fn send_terminal_input(writer: Result<mpsc::Sender<Vec<u8>>>, bytes: Vec<u8>) -> Result<()> {
+    writer?
+        .send(bytes)
+        .await
+        .map_err(|_| anyhow!("terminal browser input channel closed"))
+}
+
+async fn send_optional_terminal_input(
+    writer: Result<mpsc::Sender<Vec<u8>>>,
+    bytes: Option<Vec<u8>>,
+) -> Result<()> {
+    match bytes {
+        Some(bytes) => send_terminal_input(writer, bytes).await,
+        None => Ok(()),
     }
 }
 

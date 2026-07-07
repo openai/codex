@@ -792,6 +792,10 @@ impl App {
             );
             return;
         }
+        if !browser.is_human_control_active() {
+            self.owned_screen_frame
+                .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+        }
         let app_event_tx = self.app_event_tx.unscoped();
         tokio::spawn(async move {
             let result = browser.toggle_human_control(target.token).await;

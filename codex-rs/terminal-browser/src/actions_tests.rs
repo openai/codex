@@ -9,17 +9,14 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::BrowserToolOutput;
-use super::HumanMouseDispatchState;
-use super::dispatch_human_mouse;
-use super::release_human_mouse_buttons;
+use super::dispatch_human_key;
+use super::press;
 use crate::accessibility::click;
 use crate::accessibility::snapshot;
 use crate::cdp::CdpClient;
 use crate::handles::BrowserHandles;
 use crate::input::BrowserInputModifiers;
-use crate::input::BrowserMouseButton;
-use crate::input::BrowserMouseInput;
-use crate::input::BrowserMouseKind;
+use crate::input::BrowserKeyInput;
 use crate::navigation::LoadState;
 use crate::navigation::NavigateRequest;
 use crate::navigation::NavigationAction;
@@ -187,93 +184,45 @@ async fn native_click_uses_the_accessibility_handle_box_center() {
 }
 
 #[tokio::test]
-async fn human_mouse_preserves_drag_buttons_and_cleans_up_held_buttons() {
+async fn keyboard_input_uses_key_down_when_chromium_needs_text() {
     let (url, server) = test_server(|mut socket| {
         tokio::spawn(async move {
             initialize(&mut socket).await;
-            let metrics = request(&mut socket).await;
-            assert_eq!(metrics["method"], "Page.getLayoutMetrics");
-            respond(
-                &mut socket,
-                &metrics,
-                json!({ "cssLayoutViewport": { "clientWidth": 800, "clientHeight": 600 } }),
-            )
-            .await;
-            for (expected_type, expected_buttons) in
-                [("mousePressed", 1), ("mouseMoved", 1), ("mouseReleased", 0)]
-            {
-                let input = request(&mut socket).await;
-                assert_eq!(input["method"], "Input.dispatchMouseEvent");
-                assert_eq!(input["params"]["type"], expected_type);
-                assert_eq!(input["params"]["buttons"], expected_buttons);
-                respond(&mut socket, &input, json!({})).await;
-            }
-            for expected_buttons in [1, 3] {
-                let input = request(&mut socket).await;
-                assert_eq!(input["params"]["type"], "mousePressed");
-                assert_eq!(input["params"]["buttons"], expected_buttons);
-                respond(&mut socket, &input, json!({})).await;
-            }
-            for (expected_button, expected_buttons) in [("left", 2), ("right", 0)] {
-                let input = request(&mut socket).await;
-                assert_eq!(input["params"]["type"], "mouseReleased");
-                assert_eq!(input["params"]["button"], expected_button);
-                assert_eq!(input["params"]["buttons"], expected_buttons);
-                assert_eq!(input["params"]["x"], 200.0);
-                assert_eq!(input["params"]["y"], 150.0);
-                assert_eq!(input["params"]["clickCount"], 0);
-                respond(&mut socket, &input, json!({})).await;
+            for (expected_key, expected_text) in [("Enter", "\r"), ("?", "?")] {
+                let key_down = request(&mut socket).await;
+                assert_eq!(key_down["method"], "Input.dispatchKeyEvent");
+                assert_eq!(key_down["params"]["type"], "keyDown");
+                assert_eq!(key_down["params"]["key"], expected_key);
+                assert_eq!(key_down["params"]["text"], expected_text);
+                respond(&mut socket, &key_down, json!({})).await;
+
+                let key_up = request(&mut socket).await;
+                assert_eq!(key_up["method"], "Input.dispatchKeyEvent");
+                assert_eq!(key_up["params"]["type"], "keyUp");
+                assert_eq!(key_up["params"]["key"], expected_key);
+                respond(&mut socket, &key_up, json!({})).await;
             }
         })
     })
     .await;
     let client = CdpClient::connect(&url).await.expect("connect client");
-    let mut state = HumanMouseDispatchState::default();
-    for kind in [
-        BrowserMouseKind::Down,
-        BrowserMouseKind::Move,
-        BrowserMouseKind::Up,
-    ] {
-        dispatch_human_mouse(
-            &client,
-            BrowserMouseInput {
-                kind,
-                button: BrowserMouseButton::Left,
-                column: 10,
-                row: 5,
-                viewport_cols: 80,
-                viewport_rows: 24,
-                modifiers: BrowserInputModifiers::default(),
-            },
-            &mut state,
-        )
-        .await
-        .expect("dispatch mouse input");
-    }
-    for button in [BrowserMouseButton::Left, BrowserMouseButton::Right] {
-        dispatch_human_mouse(
-            &client,
-            BrowserMouseInput {
-                kind: BrowserMouseKind::Down,
-                button,
-                column: 20,
-                row: 6,
-                viewport_cols: 80,
-                viewport_rows: 24,
-                modifiers: BrowserInputModifiers::default(),
-            },
-            &mut state,
-        )
-        .await
-        .expect("dispatch mouse press");
-    }
 
-    release_human_mouse_buttons(&client, &mut state)
-        .await
-        .expect("release held mouse buttons");
-    release_human_mouse_buttons(&client, &mut state)
-        .await
-        .expect("repeated cleanup is empty");
+    press(&client, "Enter").await.expect("press Enter");
+    dispatch_human_key(
+        &client,
+        &BrowserKeyInput {
+            key: "?".to_string(),
+            code: "Slash".to_string(),
+            text: Some("?".to_string()),
+            modifiers: BrowserInputModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .expect("dispatch human key");
+
     server.await.expect("server task");
 }
 

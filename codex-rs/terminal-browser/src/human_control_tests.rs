@@ -92,6 +92,28 @@ async fn release_discards_its_backlog_and_preserves_a_new_generation() {
     assert!(deferred.is_empty());
 }
 
+#[tokio::test]
+async fn stale_cleanup_release_is_idempotent_while_stale_end_stays_rejected() {
+    let (cleanup_tx, cleanup_rx) = oneshot::channel();
+    HumanInput::ReleaseMouseButtons {
+        completion_tx: cleanup_tx,
+        after_release: HumanControlAfterRelease::Continue,
+    }
+    .complete_stale();
+    let (end_tx, end_rx) = oneshot::channel();
+    HumanInput::ReleaseMouseButtons {
+        completion_tx: end_tx,
+        after_release: HumanControlAfterRelease::End,
+    }
+    .complete_stale();
+
+    assert_eq!(cleanup_rx.await.expect("cleanup acknowledgement"), Ok(()));
+    assert_eq!(
+        end_rx.await.expect("end acknowledgement"),
+        Err("browser control transition was canceled".to_string())
+    );
+}
+
 #[test]
 fn ending_release_deactivates_before_acknowledgement() {
     let browser = TerminalBrowser::discover();

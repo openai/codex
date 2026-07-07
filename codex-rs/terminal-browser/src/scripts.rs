@@ -20,3 +20,11 @@ pub(crate) fn key_code(key: &str) -> &str {
         _ => key,
     }
 }
+
+pub(crate) fn key_text(key: &str) -> &str {
+    match key {
+        "Enter" => "\r",
+        _ if key.chars().count() == 1 => key,
+        _ => "",
+    }
+}

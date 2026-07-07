@@ -165,6 +165,36 @@ async fn visible_browser_updates_select_the_shared_right_rail_and_hidden_updates
     assert!(!browser.view().visible);
 }
 
+#[tokio::test]
+async fn terminal_browser_control_command_focuses_the_browser_rail() {
+    let mut app = make_test_app().await;
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
+        AltScreenBehavior::Owned,
+        &app.chat_widget,
+        app.keymap.pager.clone(),
+    );
+    app.chat_widget
+        .set_feature_enabled(Feature::TerminalBrowser, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .attach_thread(thread_id, /*receiver*/ None);
+    let browser = Arc::new(TerminalBrowser::discover());
+    browser.set_visibility(/*visible*/ true);
+    app.terminal_browser = Some(browser);
+    app.terminal_browser_owner_thread_id = Some(thread_id);
+    app.owned_screen_frame
+        .set_right_rail_content(OwnedScreenRightRailContent::Browser);
+
+    app.toggle_terminal_browser_control().await;
+
+    assert_eq!(
+        app.owned_screen_frame.focus(),
+        crate::app::owned_screen_frame::OwnedScreenFrameFocus::Summary
+    );
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn managed_network_without_runtime_blocks_panel_but_not_doctor() {

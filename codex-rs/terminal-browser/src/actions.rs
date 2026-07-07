@@ -5,9 +5,6 @@ use serde_json::json;
 
 use crate::cdp::CdpClient;
 use crate::input::BrowserKeyInput;
-use crate::input::BrowserMouseButton;
-use crate::input::BrowserMouseInput;
-use crate::input::BrowserMouseKind;
 use crate::scripts;
 
 const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
@@ -15,13 +12,6 @@ const MAX_SNAPSHOT_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_SNAPSHOT_URL_CHARS: usize = 2_048;
 const MAX_SNAPSHOT_TITLE_CHARS: usize = 512;
 const MAX_SNAPSHOT_TEXT_CHARS: usize = 6_000;
-
-#[derive(Default)]
-pub(crate) struct HumanMouseDispatchState {
-    viewport: Option<(u16, u16, f64, f64)>,
-    last_position: Option<(f64, f64)>,
-    buttons: u8,
-}
 
 pub(crate) struct PageMetadata {
     pub(crate) url: Option<String>,
@@ -54,12 +44,17 @@ pub(crate) async fn press(client: &CdpClient, key: &str) -> Result<BrowserToolOu
     anyhow::ensure!(!key.is_empty(), "key must not be empty");
     anyhow::ensure!(key.chars().count() <= 32, "key is too long");
     let code = scripts::key_code(key);
-    let text = if key.chars().count() == 1 { key } else { "" };
+    let text = scripts::key_text(key);
+    let event_type = if text.is_empty() {
+        "rawKeyDown"
+    } else {
+        "keyDown"
+    };
     client
         .call(
             "Input.dispatchKeyEvent",
             json!({
-                "type": "rawKeyDown",
+                "type": event_type,
                 "key": key,
                 "code": code,
                 "text": text,
@@ -110,12 +105,17 @@ pub(crate) async fn screenshot(client: &CdpClient) -> Result<BrowserToolOutput> 
 
 pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInput) -> Result<()> {
     let text = input.text.as_deref().unwrap_or_default();
+    let event_type = if text.is_empty() {
+        "rawKeyDown"
+    } else {
+        "keyDown"
+    };
     let modifiers = input.modifiers.cdp_mask();
     client
         .call(
             "Input.dispatchKeyEvent",
             json!({
-                "type": "rawKeyDown",
+                "type": event_type,
                 "key": input.key,
                 "code": input.code,
                 "text": text,
@@ -135,114 +135,6 @@ pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInp
             }),
         )
         .await?;
-    Ok(())
-}
-
-pub(crate) async fn release_human_mouse_buttons(
-    client: &CdpClient,
-    state: &mut HumanMouseDispatchState,
-) -> Result<()> {
-    let Some((x, y)) = state.last_position else {
-        state.buttons = 0;
-        return Ok(());
-    };
-    for button in [
-        BrowserMouseButton::Left,
-        BrowserMouseButton::Middle,
-        BrowserMouseButton::Right,
-    ] {
-        let button_mask = button.cdp_buttons_mask();
-        if state.buttons & button_mask == 0 {
-            continue;
-        }
-        state.buttons &= !button_mask;
-        client
-            .call(
-                "Input.dispatchMouseEvent",
-                json!({
-                    "type": "mouseReleased",
-                    "x": x,
-                    "y": y,
-                    "button": button.as_cdp(),
-                    "buttons": state.buttons,
-                    "modifiers": 0,
-                    "clickCount": 0,
-                    "deltaX": 0.0,
-                    "deltaY": 0.0,
-                }),
-            )
-            .await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn insert_human_text(client: &CdpClient, text: &str) -> Result<()> {
-    client
-        .call("Input.insertText", json!({ "text": text }))
-        .await?;
-    Ok(())
-}
-
-pub(crate) async fn dispatch_human_mouse(
-    client: &CdpClient,
-    input: BrowserMouseInput,
-    state: &mut HumanMouseDispatchState,
-) -> Result<()> {
-    anyhow::ensure!(
-        input.viewport_cols > 0 && input.viewport_rows > 0,
-        "browser viewport must be non-zero"
-    );
-    let (width, height) = if let Some((cols, rows, width, height)) = state.viewport
-        && cols == input.viewport_cols
-        && rows == input.viewport_rows
-    {
-        (width, height)
-    } else {
-        let metrics = client.call("Page.getLayoutMetrics", json!({})).await?;
-        let width = metrics
-            .pointer("/cssLayoutViewport/clientWidth")
-            .or_else(|| metrics.pointer("/layoutViewport/clientWidth"))
-            .and_then(Value::as_f64)
-            .context("browser layout metrics omitted viewport width")?;
-        let height = metrics
-            .pointer("/cssLayoutViewport/clientHeight")
-            .or_else(|| metrics.pointer("/layoutViewport/clientHeight"))
-            .and_then(Value::as_f64)
-            .context("browser layout metrics omitted viewport height")?;
-        state.viewport = Some((input.viewport_cols, input.viewport_rows, width, height));
-        (width, height)
-    };
-    let x = f64::from(input.column) * width / f64::from(input.viewport_cols);
-    let y = f64::from(input.row) * height / f64::from(input.viewport_rows);
-    let modifiers = input.modifiers.cdp_mask();
-    let (event_type, delta_x, delta_y) = match input.kind {
-        BrowserMouseKind::Move => ("mouseMoved", 0.0, 0.0),
-        BrowserMouseKind::Down => ("mousePressed", 0.0, 0.0),
-        BrowserMouseKind::Up => ("mouseReleased", 0.0, 0.0),
-        BrowserMouseKind::Wheel { delta_x, delta_y } => ("mouseWheel", delta_x, delta_y),
-    };
-    match input.kind {
-        BrowserMouseKind::Down => state.buttons |= input.button.cdp_buttons_mask(),
-        BrowserMouseKind::Up => state.buttons &= !input.button.cdp_buttons_mask(),
-        BrowserMouseKind::Move | BrowserMouseKind::Wheel { .. } => {}
-    }
-    client
-        .call(
-            "Input.dispatchMouseEvent",
-            json!({
-                "type": event_type,
-                "x": x,
-                "y": y,
-                "button": input.button.as_cdp(),
-                "buttons": state.buttons,
-                "modifiers": modifiers,
-                "clickCount": if matches!(input.kind, BrowserMouseKind::Down | BrowserMouseKind::Up) { 1 } else { 0 },
-                "deltaX": delta_x,
-                "deltaY": delta_y,
-            }),
-        )
-        .await?;
-    state.last_position = Some((x, y));
     Ok(())
 }
 

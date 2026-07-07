@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::actions;
 use crate::cdp::CdpClient;
 use crate::cdp::CdpEvent;
 use crate::session::Inner;
@@ -24,17 +25,15 @@ pub(crate) fn spawn_navigation_policy_task(inner: Arc<Inner>, cdp: CdpClient) ->
         loop {
             match events.recv().await {
                 Ok(CdpEvent::Message(message)) => {
-                    let is_main_frame = message.get("method").and_then(serde_json::Value::as_str)
-                        == Some("Page.frameNavigated")
-                        && message.pointer("/params/frame/parentId").is_none();
-                    let Some(url) = is_main_frame
-                        .then(|| message.pointer("/params/frame/url"))
-                        .flatten()
-                        .and_then(serde_json::Value::as_str)
-                    else {
+                    if is_page_load_event(&message) {
+                        refresh_observed_page_metadata(&inner, &cdp).await;
+                        continue;
+                    }
+                    let Some(url) = observed_main_frame_url(&message) else {
                         continue;
                     };
                     if is_allowed_observed_url(url) {
+                        inner.update_view(|view| view.url = Some(url.to_string()));
                         continue;
                     }
                     tracing::warn!("blocked disallowed terminal-browser main-frame navigation");
@@ -54,3 +53,31 @@ pub(crate) fn spawn_navigation_policy_task(inner: Arc<Inner>, cdp: CdpClient) ->
         }
     })
 }
+
+fn observed_main_frame_url(message: &serde_json::Value) -> Option<&str> {
+    (message.get("method").and_then(serde_json::Value::as_str) == Some("Page.frameNavigated")
+        && message.pointer("/params/frame/parentId").is_none())
+    .then(|| message.pointer("/params/frame/url"))
+    .flatten()
+    .and_then(serde_json::Value::as_str)
+}
+
+fn is_page_load_event(message: &serde_json::Value) -> bool {
+    message.get("method").and_then(serde_json::Value::as_str) == Some("Page.loadEventFired")
+}
+
+async fn refresh_observed_page_metadata(inner: &Inner, cdp: &CdpClient) {
+    let Ok(metadata) = actions::page_metadata(cdp).await else {
+        return;
+    };
+    if metadata.url.as_deref().is_none_or(is_allowed_observed_url) {
+        inner.update_view(|view| {
+            view.url = metadata.url;
+            view.title = metadata.title;
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "url_policy_tests.rs"]
+mod tests;
