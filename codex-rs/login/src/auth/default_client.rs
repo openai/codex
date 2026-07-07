@@ -8,8 +8,9 @@ use codex_http_client::BuildCustomCaTransportError;
 use codex_http_client::BuildRouteAwareHttpClientError;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClient;
+use codex_http_client::OutboundProxyConfig;
 pub use codex_http_client::RequestBuilder as CodexRequestBuilder;
-use codex_http_client::build_reqwest_client_for_route;
+use codex_http_client::build_reqwest_client_for_route as build_route_aware_reqwest_client;
 use codex_http_client::build_reqwest_client_with_custom_ca;
 use codex_http_client::with_chatgpt_cloudflare_cookie_store;
 use codex_terminal_detection::user_agent;
@@ -235,6 +236,28 @@ pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransp
     build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
 }
 
+/// Builds the default Codex reqwest client for a concrete outbound route.
+///
+/// When route-aware proxy handling is disabled, or the client is running inside the Codex
+/// sandbox, this preserves the default client's existing proxy behavior. Otherwise it resolves
+/// the destination through the shared system/PAC-aware routing policy.
+pub fn build_default_reqwest_client_for_route(
+    request_url: &str,
+    route_class: ClientRouteClass,
+    route_config: Option<&OutboundProxyConfig>,
+) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+    if route_config.is_none() || is_sandboxed() {
+        return Ok(build_reqwest_client());
+    }
+
+    build_route_aware_reqwest_client(
+        default_reqwest_client_builder(),
+        request_url,
+        route_class,
+        route_config,
+    )
+}
+
 fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
     if is_sandboxed() {
@@ -248,7 +271,7 @@ pub(crate) fn build_raw_auth_reqwest_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    build_reqwest_client_for_route(
+    build_route_aware_reqwest_client(
         reqwest::Client::builder(),
         endpoint,
         ClientRouteClass::Auth,
@@ -261,20 +284,10 @@ pub(crate) fn build_default_auth_reqwest_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    let Some(route_config) = auth_route_config.map(AuthRouteConfig::route_config) else {
-        return Ok(build_reqwest_client());
-    };
-
-    if is_sandboxed() {
-        // Preserve the sandbox's existing no-proxy policy; sandboxed command egress is routed
-        // separately through network-proxy.
-        return Ok(build_reqwest_client());
-    }
-    build_reqwest_client_for_route(
-        default_reqwest_client_builder(),
+    build_default_reqwest_client_for_route(
         endpoint,
         ClientRouteClass::Auth,
-        Some(route_config),
+        auth_route_config.map(AuthRouteConfig::route_config),
     )
 }
 
