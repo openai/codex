@@ -284,6 +284,9 @@ fn write_history_line<W: Write>(
     line: &HyperlinkLine,
     wrap_width: usize,
 ) -> io::Result<()> {
+    let mut line = line.clone();
+    line.sanitize();
+    let line = &line;
     let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
     if physical_rows > 1 {
         queue!(writer, SavePosition)?;
@@ -510,6 +513,23 @@ mod tests {
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
         );
+    }
+
+    #[test]
+    fn write_history_line_strips_untrusted_terminal_sequences() {
+        let sequence = "\x1b[13;2:3u";
+        let line = HyperlinkLine {
+            line: Line::from(format!("_count_r{sequence}ows")),
+            hyperlinks: Vec::new(),
+        };
+        let mut actual = Vec::new();
+
+        write_history_line(&mut actual, &line, /*wrap_width*/ 80)
+            .expect("write sanitized history line");
+
+        let output = String::from_utf8(actual).expect("UTF-8 terminal output");
+        assert!(!output.contains(sequence));
+        assert!(output.contains("_count_rows"));
     }
 
     #[test]

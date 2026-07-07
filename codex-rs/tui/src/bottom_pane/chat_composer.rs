@@ -222,6 +222,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use crate::terminal_text::sanitize_untrusted_text;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -887,6 +888,7 @@ impl ChatComposer {
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        let pasted = sanitize_untrusted_text(&pasted).into_owned();
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
@@ -7570,6 +7572,18 @@ mod tests {
             InputResult::Submitted { text, .. } => assert_eq!(text, "hello"),
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn handle_paste_strips_terminal_control_sequences_snapshot() {
+        snapshot_composer_state(
+            "paste_terminal_control_sequence_sanitized",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.handle_paste("_count_r\x1b[13;2:3uows".to_string());
+                assert_eq!(composer.draft.textarea.text(), "_count_rows");
+            },
+        );
     }
 
     #[test]
