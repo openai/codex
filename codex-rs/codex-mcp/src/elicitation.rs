@@ -52,6 +52,33 @@ pub trait ElicitationReviewer: Send + Sync {
 
 pub type ElicitationReviewerHandle = Arc<dyn ElicitationReviewer>;
 
+/// Holds an owner-provided registration while an MCP elicitation is waiting for a response.
+#[derive(Clone)]
+pub struct ElicitationLifecycle {
+    register: Arc<dyn Fn() -> Box<dyn Send + Sync> + Send + Sync>,
+}
+
+impl ElicitationLifecycle {
+    pub fn new<T>(register: impl Fn() -> T + Send + Sync + 'static) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        Self {
+            register: Arc::new(move || Box::new(register())),
+        }
+    }
+
+    fn start(&self) -> ActiveElicitation {
+        ActiveElicitation {
+            _registration: (self.register)(),
+        }
+    }
+}
+
+struct ActiveElicitation {
+    _registration: Box<dyn Send + Sync>,
+}
+
 /// Routes model-visible elicitation response tokens to their exact pending responders.
 ///
 /// One router is shared by every MCP runtime created for a thread. The public response token is
@@ -86,6 +113,7 @@ pub(crate) struct ElicitationRequestManager {
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
     reviewer: Option<ElicitationReviewerHandle>,
+    lifecycle: Option<ElicitationLifecycle>,
 }
 
 impl ElicitationRequestManager {
@@ -93,6 +121,7 @@ impl ElicitationRequestManager {
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
         reviewer: Option<ElicitationReviewerHandle>,
+        lifecycle: Option<ElicitationLifecycle>,
         router: ElicitationRequestRouter,
     ) -> Self {
         Self {
@@ -101,6 +130,7 @@ impl ElicitationRequestManager {
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
             reviewer,
+            lifecycle,
         }
     }
 
@@ -140,6 +170,7 @@ impl ElicitationRequestManager {
         let permission_profile = self.permission_profile.clone();
         let auto_deny = self.auto_deny.clone();
         let reviewer = self.reviewer.clone();
+        let lifecycle = self.lifecycle.clone();
         Box::new(move |id, elicitation| {
             let router = router.clone();
             let tx_event = tx_event.clone();
@@ -148,6 +179,7 @@ impl ElicitationRequestManager {
             let permission_profile = permission_profile.clone();
             let auto_deny = auto_deny.clone();
             let reviewer = reviewer.clone();
+            let lifecycle = lifecycle.clone();
             async move {
                 let auto_deny = auto_deny
                     .lock()
@@ -249,6 +281,7 @@ impl ElicitationRequestManager {
                     },
                 };
                 let (tx, rx) = oneshot::channel();
+                let _active_elicitation = lifecycle.as_ref().map(ElicitationLifecycle::start);
                 {
                     let mut lock = router.requests.lock().await;
                     lock.insert((server_name.clone(), routed_request_id), tx);

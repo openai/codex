@@ -1,3 +1,5 @@
+//! Errors returned by the shared Codex HTTP transport.
+
 use http::HeaderMap;
 use http::StatusCode;
 use thiserror::Error;
