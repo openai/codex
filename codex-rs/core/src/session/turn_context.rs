@@ -816,6 +816,20 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn new_default_turn_with_mcp_app_ui_webview_support(
+        &self,
+        supports_mcp_app_ui_webview: bool,
+    ) -> CodexResult<Arc<TurnContext>> {
+        self.new_turn_with_sub_id(
+            self.next_internal_sub_id(),
+            SessionSettingsUpdate {
+                supports_mcp_app_ui_webview: Some(supports_mcp_app_ui_webview),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     pub(crate) async fn new_startup_prewarm_turn_with_sub_id(
         &self,
         sub_id: String,

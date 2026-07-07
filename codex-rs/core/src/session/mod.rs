@@ -752,6 +752,25 @@ impl Codex {
             id: id.clone(),
             op,
             client_user_message_id: None,
+            supports_mcp_app_ui_webview: None,
+            trace,
+        };
+        self.submit_with_id(sub).await?;
+        Ok(id)
+    }
+
+    pub async fn submit_with_trace_and_mcp_app_ui_webview_support(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        supports_mcp_app_ui_webview: bool,
+    ) -> CodexResult<String> {
+        let id = new_submission_id();
+        let sub = Submission {
+            id: id.clone(),
+            op,
+            client_user_message_id: None,
+            supports_mcp_app_ui_webview: Some(supports_mcp_app_ui_webview),
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -763,6 +782,7 @@ impl Codex {
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
+        supports_mcp_app_ui_webview: bool,
     ) -> CodexResult<String> {
         debug_assert!(matches!(op, Op::UserInput { .. }));
         let id = new_submission_id();
@@ -770,6 +790,7 @@ impl Codex {
             id: id.clone(),
             op,
             client_user_message_id,
+            supports_mcp_app_ui_webview: Some(supports_mcp_app_ui_webview),
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -843,12 +864,14 @@ impl Codex {
         &self,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_mcp_app_ui_webview: Option<bool>,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
                 app_server_client_version,
+                supports_mcp_app_ui_webview,
                 ..Default::default()
             })
             .await?;
@@ -1220,7 +1243,11 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+    pub(crate) async fn route_realtime_text_input(
+        self: &Arc<Self>,
+        text: String,
+        supports_mcp_app_ui_webview: Option<bool>,
+    ) {
         handlers::user_input_or_turn_inner(
             self,
             Uuid::now_v7().to_string(),
@@ -1235,6 +1262,7 @@ impl Session {
                 thread_settings: Default::default(),
             },
             /*client_user_message_id*/ None,
+            supports_mcp_app_ui_webview,
         )
         .await;
     }

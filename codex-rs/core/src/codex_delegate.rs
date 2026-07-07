@@ -250,6 +250,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
                         client_user_message_id: None,
+                        supports_mcp_app_ui_webview: None,
                         trace: None,
                     })
                     .await;

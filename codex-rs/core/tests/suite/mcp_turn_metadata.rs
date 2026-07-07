@@ -125,6 +125,71 @@ async fn submit_user_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_tool_call_forwards_mcp_app_ui_webview_capability() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let call_id = "calendar-call-with-ui-capability";
+    let calendar_args = serde_json::to_string(&json!({
+        "title": "Lunch",
+        "starts_at": "2026-03-10T12:00:00Z"
+    }))?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    &calendar_args,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            config.supports_mcp_app_ui_webview = true;
+            set_calendar_approval_mode(config, AppToolApproval::Auto);
+        });
+    let test = builder.build(&server).await?;
+
+    submit_user_turn(
+        &test,
+        "Use [$calendar](app://calendar) to create a calendar event.",
+        AskForApproval::Never,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(mock.requests().len(), 2);
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
+    assert_eq!(
+        apps_tool_call.pointer(
+            "/params/_meta/io.modelcontextprotocol~1clientCapabilities/extensions/io.modelcontextprotocol~1ui/mimeTypes"
+        ),
+        Some(&json!(["text/html;profile=mcp-app"]))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -79,6 +79,7 @@ impl McpRuntimeSnapshot {
             apps_enabled: config.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: config.prefix_mcp_tool_names(),
             client_elicitation_capability: ElicitationCapability::default(),
+            supports_mcp_app_ui_webview: config.supports_mcp_app_ui_webview,
             mcp_server_catalog: ResolvedMcpCatalog::default(),
             connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
         };

@@ -145,6 +145,11 @@ pub struct McpConfig {
     pub prefix_mcp_tool_names: bool,
     /// Client-side elicitation capabilities advertised during MCP initialization.
     pub client_elicitation_capability: ElicitationCapability,
+    /// Whether the active host can render MCP App WebViews.
+    ///
+    /// This is runtime-only and is forwarded only to the host-owned Codex Apps
+    /// server, never to arbitrary configured MCP servers.
+    pub supports_mcp_app_ui_webview: bool,
     /// Resolved MCP registrations keyed by logical server name.
     pub mcp_server_catalog: ResolvedMcpCatalog,
     /// Plugin declarations used to attribute connector tools to plugin display names.
@@ -335,6 +340,7 @@ pub async fn read_mcp_resource(
         codex_apps_tools_cache_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        config.supports_mcp_app_ui_webview,
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance(config),
         auth,
@@ -413,6 +419,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         codex_apps_tools_cache_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        config.supports_mcp_app_ui_webview,
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance,
         auth,

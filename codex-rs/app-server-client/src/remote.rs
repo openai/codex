@@ -101,6 +101,7 @@ impl RemoteAppServerConnectArgs {
                 Some(self.opt_out_notification_methods.clone())
             },
             mcp_server_openai_form_elicitation: self.mcp_server_openai_form_elicitation,
+            extensions: None,
         };
 
         InitializeParams {

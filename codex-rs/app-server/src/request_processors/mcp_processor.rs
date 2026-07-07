@@ -67,8 +67,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.call_mcp_server_tool(request_id, params)
+        self.call_mcp_server_tool(request_id, params, supports_mcp_app_ui_webview)
             .await
             .map(|()| None)
     }
@@ -456,16 +457,22 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
+        let mcp_runtime = thread
+            .current_mcp_runtime_with_mcp_app_ui_webview_support(supports_mcp_app_ui_webview)
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve MCP runtime: {err}")))?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
-            let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
+            let result = mcp_runtime
+                .manager()
+                .call_tool(&params.server, &params.tool, params.arguments, meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));

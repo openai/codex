@@ -225,6 +225,7 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
     pub(crate) supports_openai_form_elicitation: bool,
+    pub(crate) supports_mcp_app_ui_webview: bool,
 }
 
 impl Default for ConnectionSessionState {
@@ -280,6 +281,12 @@ impl ConnectionSessionState {
         self.initialized
             .get()
             .is_some_and(|session| session.supports_openai_form_elicitation)
+    }
+
+    pub(crate) fn supports_mcp_app_ui_webview(&self) -> bool {
+        self.initialized
+            .get()
+            .is_some_and(|session| session.supports_mcp_app_ui_webview)
     }
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
@@ -897,6 +904,7 @@ impl MessageProcessor {
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let supports_openai_form_elicitation = session.supports_openai_form_elicitation();
+        let supports_mcp_app_ui_webview = session.supports_mcp_app_ui_webview();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -913,6 +921,7 @@ impl MessageProcessor {
                         app_server_client_name,
                         client_version,
                         supports_openai_form_elicitation,
+                        supports_mcp_app_ui_webview,
                     )
                     .await;
                 if let Err(error) = result {
@@ -935,6 +944,7 @@ impl MessageProcessor {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_initialized_client_request(
         self: Arc<Self>,
         connection_request_id: ConnectionRequestId,
@@ -943,6 +953,7 @@ impl MessageProcessor {
         app_server_client_name: Option<String>,
         client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1099,6 +1110,7 @@ impl MessageProcessor {
                         app_server_client_name.clone(),
                         client_version.clone(),
                         supports_openai_form_elicitation,
+                        supports_mcp_app_ui_webview,
                         request_context,
                     )
                     .await
@@ -1117,6 +1129,7 @@ impl MessageProcessor {
                         client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
+                        supports_mcp_app_ui_webview,
                     )
                     .await
             }
@@ -1129,6 +1142,7 @@ impl MessageProcessor {
                         client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
+                        supports_mcp_app_ui_webview,
                     )
                     .await
             }
@@ -1330,6 +1344,7 @@ impl MessageProcessor {
                         client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
+                        supports_mcp_app_ui_webview,
                     )
                     .await
             }
@@ -1346,7 +1361,7 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadRealtimeStart { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_start(&request_id, params)
+                    .thread_realtime_start(&request_id, params, supports_mcp_app_ui_webview)
                     .await
             }
             ClientRequest::ThreadRealtimeAppendAudio { params, .. } => {
@@ -1373,7 +1388,9 @@ impl MessageProcessor {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor.review_start(&request_id, params).await
+                self.turn_processor
+                    .review_start(&request_id, params, supports_mcp_app_ui_webview)
+                    .await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await
@@ -1393,7 +1410,7 @@ impl MessageProcessor {
             }
             ClientRequest::McpServerToolCall { params, .. } => {
                 self.mcp_processor
-                    .mcp_server_tool_call(&request_id, params)
+                    .mcp_server_tool_call(&request_id, params, supports_mcp_app_ui_webview)
                     .await
             }
             ClientRequest::WindowsSandboxSetupStart { params, .. } => {

@@ -373,6 +373,11 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(supports_mcp_app_ui_webview) = updates.supports_mcp_app_ui_webview {
+            let mut config = (*next_configuration.original_config_do_not_use).clone();
+            config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
+            next_configuration.original_config_do_not_use = Arc::new(config);
+        }
         Ok(next_configuration)
     }
 
@@ -431,6 +436,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) supports_mcp_app_ui_webview: Option<bool>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -1213,6 +1219,7 @@ impl Session {
                     .config
                     .client_elicitation_capability
                     .clone(),
+                mcp_projection.config.supports_mcp_app_ui_webview,
                 sess.services
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),

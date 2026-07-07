@@ -1558,6 +1558,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         },
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
+        /*supports_mcp_app_ui_webview*/ false,
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         /*auth*/ None,

@@ -159,6 +159,7 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
@@ -167,6 +168,7 @@ impl TurnRequestProcessor {
             app_server_client_name,
             app_server_client_version,
             /*supports_openai_form_elicitation*/ supports_openai_form_elicitation,
+            supports_mcp_app_ui_webview,
         )
         .await
         .map(|response| Some(response.into()))
@@ -216,8 +218,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_start_inner(request_id, params)
+        self.thread_realtime_start_inner(request_id, params, supports_mcp_app_ui_webview)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -277,8 +280,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.review_start_inner(request_id, params)
+        self.review_start_inner(request_id, params, supports_mcp_app_ui_webview)
             .await
             .map(|()| None)
     }
@@ -419,6 +423,22 @@ impl TurnRequestProcessor {
             .await
     }
 
+    async fn submit_core_op_with_mcp_app_ui_webview_support(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread: &CodexThread,
+        op: Op,
+        supports_mcp_app_ui_webview: bool,
+    ) -> CodexResult<String> {
+        thread
+            .submit_with_trace_and_mcp_app_ui_webview_support(
+                op,
+                self.request_trace_context(request_id).await,
+                supports_mcp_app_ui_webview,
+            )
+            .await
+    }
+
     fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
         let mut error = invalid_params(format!(
             "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
@@ -446,6 +466,7 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
@@ -531,6 +552,7 @@ impl TurnRequestProcessor {
                 turn_op,
                 self.request_trace_context(&request_id).await,
                 client_user_message_id,
+                supports_mcp_app_ui_webview,
             )
             .await
             .map_err(|err| {
@@ -840,6 +862,7 @@ impl TurnRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
+                None,
                 mcp_elicitations_auto_deny,
             )
             .await
@@ -990,6 +1013,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
@@ -997,7 +1021,7 @@ impl TurnRequestProcessor {
         else {
             return Ok(None);
         };
-        self.submit_core_op(
+        self.submit_core_op_with_mcp_app_ui_webview_support(
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
@@ -1024,6 +1048,7 @@ impl TurnRequestProcessor {
                 version: params.version,
                 voice: params.voice,
             }),
+            supports_mcp_app_ui_webview,
         )
         .await
         .map_err(|err| internal_error(format!("failed to start realtime conversation: {err}")))?;
@@ -1178,12 +1203,14 @@ impl TurnRequestProcessor {
         review_request: ReviewRequest,
         display_text: &str,
         parent_thread_id: String,
+        supports_mcp_app_ui_webview: bool,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let turn_id = self
-            .submit_core_op(
+            .submit_core_op_with_mcp_app_ui_webview_support(
                 request_id,
                 parent_thread.as_ref(),
                 Op::Review { review_request },
+                supports_mcp_app_ui_webview,
             )
             .await
             .map_err(|err| internal_error(format!("failed to start review: {err}")))?;
@@ -1200,6 +1227,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
+        supports_mcp_app_ui_webview: bool,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -1217,6 +1245,7 @@ impl TurnRequestProcessor {
             })?;
 
         let mut config = self.config.as_ref().clone();
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
@@ -1287,10 +1316,11 @@ impl TurnRequestProcessor {
         }
 
         let turn_id = self
-            .submit_core_op(
+            .submit_core_op_with_mcp_app_ui_webview_support(
                 request_id,
                 review_thread.as_ref(),
                 Op::Review { review_request },
+                supports_mcp_app_ui_webview,
             )
             .await
             .map_err(|err| {
@@ -1309,6 +1339,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,
@@ -1326,6 +1357,7 @@ impl TurnRequestProcessor {
                     review_request,
                     &display_text,
                     thread_id,
+                    supports_mcp_app_ui_webview,
                 )
                 .await?;
             }
@@ -1336,6 +1368,7 @@ impl TurnRequestProcessor {
                     parent_thread,
                     review_request,
                     &display_text,
+                    supports_mcp_app_ui_webview,
                 )
                 .await?;
             }

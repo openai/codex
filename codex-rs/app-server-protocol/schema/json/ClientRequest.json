@@ -1279,6 +1279,14 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "extensions": {
+          "additionalProperties": true,
+          "description": "MCP extension settings declared by the app-server client.\n\nCodex currently consumes `io.modelcontextprotocol/ui` so widget-capable hosts can advertise the same UI support to downstream MCP servers.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "mcpServerOpenaiFormElicitation": {
           "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
           "type": "boolean"

@@ -1,3 +1,4 @@
+pub use client_capabilities::supports_mcp_app_ui_webview;
 pub use connection_manager::McpConnectionManager;
 pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationLifecycle;
@@ -77,6 +78,7 @@ pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod auth_elicitation;
 mod catalog;
+pub(crate) mod client_capabilities;
 pub(crate) mod codex_apps;
 pub(crate) mod codex_apps_cache;
 pub(crate) mod connection_manager;

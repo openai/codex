@@ -57,6 +57,13 @@ pub struct InitializeCapabilities {
     /// connection (for example `thread/started`).
     #[ts(optional = nullable)]
     pub opt_out_notification_methods: Option<Vec<String>>,
+    /// MCP extension settings declared by the app-server client.
+    ///
+    /// Codex currently consumes `io.modelcontextprotocol/ui` so widget-capable
+    /// hosts can advertise the same UI support to downstream MCP servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

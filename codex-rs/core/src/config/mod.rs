@@ -967,6 +967,10 @@ pub struct Config {
 
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
+    /// Whether the active app-server host can render MCP App WebViews.
+    ///
+    /// This is runtime-only state, not a config.toml setting.
+    pub supports_mcp_app_ui_webview: bool,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
@@ -1584,6 +1588,7 @@ impl Config {
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
+            supports_mcp_app_ui_webview: self.supports_mcp_app_ui_webview,
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             auth_keyring_backend_kind: self.auth_keyring_backend_kind(),
@@ -3908,6 +3913,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             respect_system_proxy,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
+            supports_mcp_app_ui_webview: false,
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

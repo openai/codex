@@ -419,6 +419,7 @@ impl ThreadRequestProcessor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn thread_start(
         &self,
         request_id: ConnectionRequestId,
@@ -426,6 +427,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -434,6 +436,7 @@ impl ThreadRequestProcessor {
             app_server_client_name,
             app_server_client_version,
             supports_openai_form_elicitation,
+            supports_mcp_app_ui_webview,
             request_context,
         )
         .await
@@ -457,6 +460,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
@@ -464,6 +468,7 @@ impl ThreadRequestProcessor {
             app_server_client_name,
             app_server_client_version,
             supports_openai_form_elicitation,
+            supports_mcp_app_ui_webview,
         )
         .await
         .map(|()| None)
@@ -476,6 +481,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
@@ -483,6 +489,7 @@ impl ThreadRequestProcessor {
             app_server_client_name,
             app_server_client_version,
             supports_openai_form_elicitation,
+            supports_mcp_app_ui_webview,
         )
         .await
         .map(|()| None)
@@ -776,6 +783,7 @@ impl ThreadRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -785,6 +793,7 @@ impl ThreadRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
+                Some(supports_mcp_app_ui_webview),
                 mcp_elicitations_auto_deny,
             )
             .await
@@ -899,6 +908,7 @@ impl ThreadRequestProcessor {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn thread_start_inner(
         &self,
         request_id: ConnectionRequestId,
@@ -906,6 +916,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -982,6 +993,7 @@ impl ThreadRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 supports_openai_form_elicitation,
+                supports_mcp_app_ui_webview,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -1059,6 +1071,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -1145,6 +1158,8 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
+
         if let Ok(Some(err)) =
             codex_core::check_execpolicy_for_warnings(&config.config_layer_stack).await
         {
@@ -1230,6 +1245,7 @@ impl ThreadRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            supports_mcp_app_ui_webview,
         )
         .await?;
 
@@ -2640,6 +2656,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2684,6 +2701,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                supports_mcp_app_ui_webview,
             )
             .await
         {
@@ -2762,7 +2780,7 @@ impl ThreadRequestProcessor {
         .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -2774,6 +2792,7 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
 
         let response_history = thread_history.clone();
 
@@ -2798,6 +2817,7 @@ impl ThreadRequestProcessor {
                     codex_thread.as_ref(),
                     app_server_client_name,
                     app_server_client_version,
+                    supports_mcp_app_ui_webview,
                 )
                 .await
                 {
@@ -2977,6 +2997,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -3105,6 +3126,7 @@ impl ThreadRequestProcessor {
                 existing_thread.as_ref(),
                 app_server_client_name,
                 app_server_client_version,
+                supports_mcp_app_ui_webview,
             )
             .await?;
 
@@ -3405,6 +3427,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3498,11 +3521,12 @@ impl ThreadRequestProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = self
+        let mut config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
 
         let fallback_model_provider = config.model_provider_id.clone();
 
@@ -3538,6 +3562,7 @@ impl ThreadRequestProcessor {
             forked_thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            supports_mcp_app_ui_webview,
         )
         .await?;
         if session_configured.rollout_path.is_some()

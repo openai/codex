@@ -700,6 +700,7 @@ pub(crate) async fn handle_start(
     sess: &Arc<Session>,
     sub_id: String,
     params: ConversationStartParams,
+    supports_mcp_app_ui_webview: Option<bool>,
 ) -> CodexResult<()> {
     let prepared_start = match prepare_realtime_start(sess, params).await {
         Ok(prepared_start) => prepared_start,
@@ -717,7 +718,9 @@ pub(crate) async fn handle_start(
         }
     };
 
-    if let Err(err) = handle_start_inner(sess, &sub_id, prepared_start).await {
+    if let Err(err) =
+        handle_start_inner(sess, &sub_id, prepared_start, supports_mcp_app_ui_webview).await
+    {
         error!("failed to start realtime conversation: {err}");
         let message = err.to_string();
         sess.send_event_raw(Event {
@@ -982,6 +985,7 @@ async fn handle_start_inner(
     sess: &Arc<Session>,
     sub_id: &str,
     prepared_start: PreparedRealtimeConversationStart,
+    supports_mcp_app_ui_webview: Option<bool>,
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
         api_provider,
@@ -1074,7 +1078,9 @@ async fn handle_start_inner(
             if let Some(text) = maybe_routed_text {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(text, supports_mcp_app_ui_webview)
+                    .await;
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
@@ -1085,7 +1091,9 @@ async fn handle_start_inner(
                 .await;
         }
         if let Ok(text) = transcript_tail_rx.recv().await {
-            sess_clone.route_realtime_text_input(text).await;
+            sess_clone
+                .route_realtime_text_input(text, supports_mcp_app_ui_webview)
+                .await;
         }
         if fanout_realtime_active.swap(false, Ordering::Relaxed) {
             match end {

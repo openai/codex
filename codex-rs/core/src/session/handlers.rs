@@ -85,8 +85,16 @@ pub async fn user_input_or_turn(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    supports_mcp_app_ui_webview: Option<bool>,
 ) {
-    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
+    user_input_or_turn_inner(
+        sess,
+        sub_id,
+        op,
+        client_user_message_id,
+        supports_mcp_app_ui_webview,
+    )
+    .await;
 }
 
 pub async fn update_thread_settings(
@@ -185,6 +193,7 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    supports_mcp_app_ui_webview: Option<bool>,
 ) {
     let Op::UserInput {
         items,
@@ -203,6 +212,7 @@ pub(super) async fn user_input_or_turn_inner(
         SessionSettingsUpdate::default()
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
+    updates.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
@@ -669,8 +679,26 @@ pub async fn review(
     config: &Arc<Config>,
     sub_id: String,
     review_request: ReviewRequest,
+    supports_mcp_app_ui_webview: Option<bool>,
 ) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+    let turn_context = match supports_mcp_app_ui_webview {
+        Some(supports_mcp_app_ui_webview) => {
+            let Ok(turn_context) = sess
+                .new_turn_with_sub_id(
+                    sub_id.clone(),
+                    SessionSettingsUpdate {
+                        supports_mcp_app_ui_webview: Some(supports_mcp_app_ui_webview),
+                        ..Default::default()
+                    },
+                )
+                .await
+            else {
+                return;
+            };
+            turn_context
+        }
+        None => sess.new_default_turn_with_sub_id(sub_id.clone()).await,
+    };
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
@@ -721,8 +749,13 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::RealtimeConversationStart(params) => {
-                    if let Err(err) =
-                        handle_realtime_conversation_start(&sess, sub.id.clone(), params).await
+                    if let Err(err) = handle_realtime_conversation_start(
+                        &sess,
+                        sub.id.clone(),
+                        params,
+                        sub.supports_mcp_app_ui_webview,
+                    )
+                    .await
                     {
                         sess.send_event_raw(Event {
                             id: sub.id.clone(),
@@ -756,8 +789,14 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
-                        .await;
+                    user_input_or_turn(
+                        &sess,
+                        sub.id.clone(),
+                        sub.op,
+                        sub.client_user_message_id,
+                        sub.supports_mcp_app_ui_webview,
+                    )
+                    .await;
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
@@ -829,7 +868,14 @@ pub(super) async fn submission_loop(
                 }
                 Op::Shutdown => shutdown(&sess, sub.id.clone()).await,
                 Op::Review { review_request } => {
-                    review(&sess, &config, sub.id.clone(), review_request).await;
+                    review(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        review_request,
+                        sub.supports_mcp_app_ui_webview,
+                    )
+                    .await;
                     false
                 }
                 Op::ApproveGuardianDeniedAction { event } => {
