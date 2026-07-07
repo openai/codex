@@ -7561,9 +7561,9 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        let sanitized = "_count_rows\tindent\ntworeadylabeldone";
+        let sanitized = "_count_rows\tindent\ntworeadylabeldonetailsafewide";
         let needs_redraw = composer.handle_paste(
-            "_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}\x1b[200~ready\x1b]8;;https://example.com\x1b\\label\x1b]8;;\x1b\\done"
+            "_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}\x1b[200~ready\x1b]8;;https://example.com\x1b\\label\x1b]8;;\x1b\\done\x1bPqpayload\x1b\\tail\x1bcsafe\x1b(Bwide"
                 .to_string(),
         );
         assert!(needs_redraw);

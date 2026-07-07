@@ -19,19 +19,25 @@ pub(crate) fn sanitize_untrusted_text(text: &str) -> Cow<'_, str> {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '\x1b' if chars.next_if_eq(&'[').is_some() => {
-                let _ = chars.find(|ch| ('@'..='~').contains(ch));
-            }
-            '\x1b' if chars.next_if_eq(&']').is_some() => {
-                while let Some(ch) = chars.next() {
-                    if matches!(ch, '\x07' | '\u{9c}')
-                        || ch == '\x1b' && chars.next_if_eq(&'\\').is_some()
-                    {
-                        break;
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    let _ = chars.find(|ch| ('@'..='~').contains(ch));
+                }
+                Some(introducer @ (']' | 'P' | 'X' | '^' | '_')) => {
+                    while let Some(ch) = chars.next() {
+                        if ch == '\u{9c}'
+                            || introducer == ']' && ch == '\x07'
+                            || ch == '\x1b' && chars.next_if_eq(&'\\').is_some()
+                        {
+                            break;
+                        }
                     }
                 }
-            }
-            '\x1b' => {}
+                Some(' '..='/') => {
+                    let _ = chars.find(|ch| ('0'..='~').contains(ch));
+                }
+                Some(_) | None => {}
+            },
             '\n' | '\t' => sanitized.push(ch),
             _ if !ch.is_control() => sanitized.push(ch),
             _ => {}
