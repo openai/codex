@@ -874,7 +874,9 @@ impl AuthModeWidget {
                 .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
                     request_id: onboarding_request_id(),
                     params: LoginAccountParams::Chatgpt {
+                        app_brand: None,
                         codex_streamlined_login: false,
+                        use_hosted_login_success_page: false,
                     },
                 })
                 .await
