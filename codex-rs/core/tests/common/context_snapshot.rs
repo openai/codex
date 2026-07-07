@@ -266,7 +266,7 @@ fn format_request_body_snapshot(
     request: &ResponsesRequest,
     options: &ContextSnapshotOptions,
 ) -> String {
-    let mut body = request.body_json();
+    let mut body = crate::responses::strip_metadata_from_json(request.body_json());
     canonicalize_json_snapshot_value(&mut body, options);
     serde_json::to_string_pretty(&body).expect("request body should serialize")
 }

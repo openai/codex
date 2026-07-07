@@ -6,7 +6,7 @@ use crate::plugins::PluginCapabilitySummary;
 
 #[cfg(test)]
 pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Option<String> {
-    AvailablePluginsInstructions::from_plugins(plugins).map(|instructions| instructions.render())
+    (!plugins.is_empty()).then(|| AvailablePluginsInstructions.render())
 }
 
 pub(crate) fn render_explicit_plugin_instructions(

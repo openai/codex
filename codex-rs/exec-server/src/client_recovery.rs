@@ -58,7 +58,7 @@ impl SessionState {
             exit_code,
             closed,
             failure,
-            sandbox_denied: _,
+            sandbox_denied,
         } = response;
         if let Some(message) = failure {
             return Err(ExecServerError::Protocol(format!(
@@ -102,11 +102,21 @@ impl SessionState {
                 }
             }
 
-            let exit_known = ordered_events.exit_published
-                || ordered_events
-                    .pending
-                    .range(..=target_seq)
-                    .any(|(_, event)| matches!(event, ExecProcessEvent::Exited { .. }));
+            let pending_exit = ordered_events.pending.range_mut(..=target_seq).find_map(
+                |(_, event)| match event {
+                    ExecProcessEvent::Exited {
+                        sandbox_denied: pending_sandbox_denied,
+                        ..
+                    } => Some(pending_sandbox_denied),
+                    _ => None,
+                },
+            );
+            let exit_pending = pending_exit.is_some();
+            if let Some(pending_sandbox_denied) = pending_exit {
+                *pending_sandbox_denied =
+                    Some(pending_sandbox_denied.unwrap_or(false) || sandbox_denied);
+            }
+            let exit_known = ordered_events.exit_published || exit_pending;
             let event_count = target_seq - ordered_events.last_published_seq;
             let retained_count = ordered_events
                 .pending
@@ -123,9 +133,14 @@ impl SessionState {
                         "recovering exited process did not include its exit code".to_string(),
                     )
                 })?;
-                ordered_events
-                    .pending
-                    .insert(seq, ExecProcessEvent::Exited { seq, exit_code });
+                ordered_events.pending.insert(
+                    seq,
+                    ExecProcessEvent::Exited {
+                        seq,
+                        exit_code,
+                        sandbox_denied: Some(sandbox_denied),
+                    },
+                );
             } else if missing_count != 0 {
                 return Err(recovery_gap_error(target_seq));
             }
@@ -530,10 +545,15 @@ fn is_retryable_registry_error(error: &ExecServerError) -> bool {
             if error.is_connect() || error.is_timeout()
     ) || matches!(
         error,
-        ExecServerError::EnvironmentRegistryHttp { status, .. }
+        ExecServerError::EnvironmentRegistryHttp { status, code, .. }
             if status.is_server_error()
                 || *status == reqwest::StatusCode::REQUEST_TIMEOUT
                 || *status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                // TODO: Replace this coarse retry with an explicit registry/presence
+                // recovery FSM so `environment_offline` is retried only while the
+                // executor is expected to reconnect.
+                || (*status == reqwest::StatusCode::CONFLICT
+                    && code.as_deref() == Some("environment_offline"))
     )
 }
 

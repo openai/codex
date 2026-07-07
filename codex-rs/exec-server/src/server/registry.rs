@@ -17,6 +17,7 @@ use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCloseParams;
@@ -28,6 +29,7 @@ use crate::protocol::FsReadBlockParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
@@ -145,6 +147,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_READ_DIRECTORY_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadDirectoryParams| async move {
             handler.fs_read_directory(params).await
+        },
+    );
+    router.request(
+        FS_WALK_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsWalkParams| async move {
+            handler.fs_walk(params).await
         },
     );
     router.request(

@@ -149,10 +149,14 @@ async fn clears_active_handoff_explicitly() {
 
 #[test]
 fn uses_quicksilver_alpha_header_for_realtime_v1() {
-    let headers =
-        realtime_request_headers(Some("session_1"), Some("sk-test"), RealtimeWsVersion::V1)
-            .expect("headers")
-            .expect("headers");
+    let headers = realtime_request_headers(
+        Some("session_1"),
+        Some("sk-test"),
+        RealtimeWsVersion::V1,
+        "codex_work_desktop",
+    )
+    .expect("headers")
+    .expect("headers");
 
     assert_eq!(
         headers
@@ -164,10 +168,39 @@ fn uses_quicksilver_alpha_header_for_realtime_v1() {
 
 #[test]
 fn omits_quicksilver_alpha_header_for_realtime_v2() {
-    let headers =
-        realtime_request_headers(Some("session_1"), Some("sk-test"), RealtimeWsVersion::V2)
-            .expect("headers")
-            .expect("headers");
+    let headers = realtime_request_headers(
+        Some("session_1"),
+        Some("sk-test"),
+        RealtimeWsVersion::V2,
+        "codex_work_desktop",
+    )
+    .expect("headers")
+    .expect("headers");
 
     assert!(headers.get("openai-alpha").is_none());
+}
+
+#[test]
+fn realtime_headers_include_only_non_default_originator() {
+    let default_originator = codex_login::default_client::originator();
+    for (originator, expected_header) in [
+        ("codex_work_desktop", Some("codex_work_desktop")),
+        (default_originator.value.as_str(), None),
+    ] {
+        let headers = realtime_request_headers(
+            Some("session_1"),
+            Some("sk-test"),
+            RealtimeWsVersion::V2,
+            originator,
+        )
+        .expect("headers")
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            expected_header
+        );
+    }
 }

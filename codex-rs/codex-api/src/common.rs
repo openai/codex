@@ -28,7 +28,8 @@ pub struct CompactionInput<'a> {
     pub input: &'a [ResponseItem],
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
@@ -103,6 +104,11 @@ pub enum ResponseEvent {
         delta: String,
         summary_index: i64,
     },
+    ReasoningSummaryDone {
+        item_id: String,
+        text: String,
+        summary_index: i64,
+    },
     ReasoningContentDelta {
         delta: String,
         content_index: i64,
@@ -118,6 +124,15 @@ pub enum ResponseEvent {
 pub struct SafetyBuffering {
     pub use_cases: Vec<String>,
     pub reasons: Vec<String>,
+    #[serde(skip)]
+    pub show_buffering_ui: bool,
+    #[serde(rename = "retry_model")]
+    pub faster_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SafetyBufferingTreatment {
+    pub faster_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
@@ -136,6 +151,17 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ReasoningContext>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummaryDelivery {
+    SequentialCutoff,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct StreamOptions {
+    pub reasoning_summary_delivery: ReasoningSummaryDelivery,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
@@ -192,12 +218,15 @@ pub struct ResponsesApiRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
@@ -222,6 +251,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             reasoning: request.reasoning.clone(),
             store: request.store,
             stream: request.stream,
+            stream_options: request.stream_options.clone(),
             include: request.include.clone(),
             service_tier: request.service_tier.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
@@ -240,12 +270,15 @@ pub struct ResponseCreateWsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,

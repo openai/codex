@@ -401,30 +401,11 @@ fn usage_limit_reached_includes_minutes_when_available() {
 }
 
 #[test]
-fn unexpected_status_cloudflare_html_is_simplified() {
-    let err = UnexpectedResponseError {
-        status: StatusCode::FORBIDDEN,
-        body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
-            .to_string(),
-        url: Some("http://example.com/blocked".to_string()),
-        cf_ray: Some("ray-id".to_string()),
-        request_id: None,
-        identity_authorization_error: None,
-        identity_error_code: None,
-    };
-    let status = StatusCode::FORBIDDEN.to_string();
-    let url = "http://example.com/blocked";
-    assert_eq!(
-        err.to_string(),
-        format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), url: {url}, cf-ray: ray-id")
-    );
-}
-
-#[test]
 fn unexpected_status_non_html_is_unchanged() {
     let err = UnexpectedResponseError {
         status: StatusCode::FORBIDDEN,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("http://example.com/plain".to_string()),
         cf_ray: None,
         request_id: None,
@@ -440,11 +421,31 @@ fn unexpected_status_non_html_is_unchanged() {
 }
 
 #[test]
+fn unexpected_status_uses_user_message_and_preserves_response_context() {
+    let err = UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "provider-specific response".to_string(),
+        user_message: Some("Provider-specific guidance".to_string()),
+        url: Some("https://example.com/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: Some("req-provider".to_string()),
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "Provider-specific guidance, url: https://example.com/v1/responses, request id: req-provider"
+    );
+}
+
+#[test]
 fn unexpected_status_prefers_error_message_when_present() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
         body: r#"{"error":{"message":"Workspace is not authorized in this region."},"status":401}"#
             .to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
         cf_ray: None,
         request_id: Some("req-123".to_string()),
@@ -466,6 +467,7 @@ fn unexpected_status_truncates_long_body_with_ellipsis() {
     let err = UnexpectedResponseError {
         status: StatusCode::BAD_GATEWAY,
         body: long_body,
+        user_message: None,
         url: Some("http://example.com/long".to_string()),
         cf_ray: None,
         request_id: Some("req-long".to_string()),
@@ -487,6 +489,7 @@ fn unexpected_status_includes_cf_ray_and_request_id() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
         cf_ray: Some("9c81f9f18f2fa49d-LHR".to_string()),
         request_id: Some("req-xyz".to_string()),
@@ -507,6 +510,7 @@ fn unexpected_status_includes_identity_auth_details() {
     let err = UnexpectedResponseError {
         status: StatusCode::UNAUTHORIZED,
         body: "plain text error".to_string(),
+        user_message: None,
         url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
         cf_ray: Some("cf-ray-auth-401-test".to_string()),
         request_id: Some("req-auth".to_string()),

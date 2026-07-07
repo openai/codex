@@ -15,11 +15,13 @@ use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::error::UnexpectedResponseError;
 use codex_protocol::parse_command::ParsedCommand;
 use dirs::home_dir;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use reqwest::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -698,6 +700,13 @@ fn cyber_policy_error_event_snapshot() {
 }
 
 #[test]
+fn safety_access_block_event_snapshot() {
+    let cell = new_safety_access_block_event();
+    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn cyber_policy_error_event_narrow_snapshot() {
     let cell = new_cyber_policy_error_event();
     let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
@@ -749,6 +758,31 @@ fn error_event_oversized_input_snapshot() {
         "Message exceeds the maximum length of 1048576 characters (1048577 provided).".to_string(),
     );
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_event_bedrock_expired_signature_snapshot() {
+    let error = UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z \
+(20260614T063025Z - 5 min.)"
+            .to_string(),
+        user_message: Some(
+            "Amazon Bedrock rejected the request because its AWS signature has expired. \
+Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or \
+unset it, then restart Codex"
+                .to_string(),
+        ),
+        url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+    let cell = new_error_event(error.to_string());
+    let rendered = render_lines(&cell.display_lines(/*width*/ 100)).join("\n");
+
     insta::assert_snapshot!(rendered);
 }
 

@@ -10,6 +10,7 @@ use chrono::Utc;
 use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::CurrentTimeReadResponse;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_protocol::ThreadId;
@@ -21,7 +22,8 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
-const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CURRENT_TIME_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn app_server_time_provider(
     outgoing: Arc<OutgoingMessageSender>,
@@ -47,6 +49,35 @@ impl TimeProvider for AppServerTimeProvider {
                 .upgrade()
                 .context("app-server current-time provider is unavailable")?;
             request_current_time(outgoing, thread_state_manager, thread_id).await
+        })
+    }
+
+    fn sleep(&self, thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
+        let outgoing = self.outgoing.clone();
+        let thread_state_manager = self.thread_state_manager.clone();
+        Box::pin(async move {
+            let outgoing = outgoing
+                .upgrade()
+                .context("app-server current-time provider is unavailable")?;
+            let started_at =
+                request_current_time(outgoing.clone(), thread_state_manager.clone(), thread_id)
+                    .await?;
+            let wake_at = started_at
+                .checked_add_signed(
+                    chrono::Duration::from_std(duration)
+                        .context("external sleep duration is outside the supported range")?,
+                )
+                .context("external sleep deadline is outside the supported range")?;
+
+            loop {
+                tokio::time::sleep(CURRENT_TIME_POLL_INTERVAL).await;
+                if request_current_time(outgoing.clone(), thread_state_manager.clone(), thread_id)
+                    .await?
+                    >= wake_at
+                {
+                    return Ok(());
+                }
+            }
         })
     }
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::DirectoryListResponse;
@@ -198,6 +198,8 @@ mod tests {
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -216,6 +218,8 @@ mod tests {
             description: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,

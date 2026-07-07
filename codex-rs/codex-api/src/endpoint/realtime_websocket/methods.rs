@@ -16,7 +16,7 @@ use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
-use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -391,6 +391,13 @@ impl RealtimeWebsocketWriter {
 }
 
 impl RealtimeWebsocketEvents {
+    pub async fn take_transcript_tail(&self) -> Vec<RealtimeTranscriptEntry> {
+        let mut active_transcript = self.active_transcript.lock().await;
+        let tail = active_transcript.entries[active_transcript.last_handoff_entry_count..].to_vec();
+        active_transcript.last_handoff_entry_count = active_transcript.entries.len();
+        tail
+    }
+
     pub async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
             return Ok(None);
@@ -960,6 +967,56 @@ mod tests {
                 active_transcript: Vec::new(),
             }))
         );
+    }
+
+    #[tokio::test]
+    async fn takes_only_transcript_after_last_handoff_once() {
+        let (_tx_message, rx_message) = async_channel::unbounded();
+        let events = RealtimeWebsocketEvents {
+            rx_message,
+            active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
+            event_parser: RealtimeEventParser::V1,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert_eq!(events.take_transcript_tail().await, vec![]);
+
+        let mut covered = RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "already handed off".to_string(),
+        });
+        events.update_active_transcript(&mut covered).await;
+        let mut handoff = RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+            handoff_id: "handoff_1".to_string(),
+            item_id: "item_1".to_string(),
+            input_transcript: "already handed off".to_string(),
+            active_transcript: vec![],
+        });
+        events.update_active_transcript(&mut handoff).await;
+        assert_eq!(
+            handoff,
+            RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id: "handoff_1".to_string(),
+                item_id: "item_1".to_string(),
+                input_transcript: "already handed off".to_string(),
+                active_transcript: vec![RealtimeTranscriptEntry {
+                    role: "user".to_string(),
+                    text: "already handed off".to_string(),
+                }],
+            })
+        );
+
+        let mut tail = RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "tail".to_string(),
+        });
+        events.update_active_transcript(&mut tail).await;
+        assert_eq!(
+            events.take_transcript_tail().await,
+            vec![RealtimeTranscriptEntry {
+                role: "assistant".to_string(),
+                text: "tail".to_string(),
+            }]
+        );
+        assert_eq!(events.take_transcript_tail().await, vec![]);
     }
 
     #[test]

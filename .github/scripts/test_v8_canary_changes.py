@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from v8_canary_changes import changed_files
+from v8_canary_changes import canary_required
 from v8_canary_changes import merge_base
 from v8_canary_changes import resolved_v8_version
 from v8_canary_changes import windows_source_required
@@ -44,6 +45,14 @@ version = "149.2.0"
                 "149.2.0",
                 "149.2.0",
             )
+        )
+
+    def test_setup_ci_change_requires_canary_and_source_build(self) -> None:
+        changed_files = {".github/actions/setup-ci/action.yml"}
+
+        self.assertTrue(canary_required(changed_files, "149.2.0", "149.2.0"))
+        self.assertTrue(
+            windows_source_required(changed_files, "149.2.0", "149.2.0")
         )
 
     def test_manual_dispatch_requires_source_build(self) -> None:

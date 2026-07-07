@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth_mode::auth_mode_to_api;
 use chrono::DateTime;
 
 mod rate_limit_resets;
@@ -179,7 +180,10 @@ impl AccountRequestProcessor {
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+            auth_mode: auth
+                .as_ref()
+                .map(CodexAuth::api_auth_mode)
+                .map(auth_mode_to_api),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
     }
@@ -693,7 +697,10 @@ impl AccountRequestProcessor {
             )
             .await;
             let payload_v2 = AccountUpdatedNotification {
-                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                auth_mode: auth
+                    .as_ref()
+                    .map(CodexAuth::api_auth_mode)
+                    .map(auth_mode_to_api),
                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
             };
             outgoing
@@ -730,7 +737,8 @@ impl AccountRequestProcessor {
             .auth_manager
             .auth_cached()
             .as_ref()
-            .map(CodexAuth::api_auth_mode))
+            .map(CodexAuth::api_auth_mode)
+            .map(auth_mode_to_api))
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
@@ -801,7 +809,7 @@ impl AccountRequestProcessor {
                 Some(auth) => {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
-                    let auth_mode = auth.api_auth_mode();
+                    let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
                         CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
@@ -883,9 +891,11 @@ impl AccountRequestProcessor {
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
-        let response = client
-            .get_rate_limits_with_reset_credits()
-            .await
+        let (response, detailed_rate_limit_reset_credits) = tokio::join!(
+            client.get_rate_limits_with_reset_credits(),
+            Self::detailed_rate_limit_reset_credits(&client),
+        );
+        let response = response
             .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if response.rate_limits.is_empty() {
             return Err(internal_error(
@@ -912,6 +922,15 @@ impl AccountRequestProcessor {
             .cloned()
             .unwrap_or_else(|| response.rate_limits[0].clone());
 
+        let rate_limit_reset_credits = detailed_rate_limit_reset_credits.or_else(|| {
+            response
+                .rate_limit_reset_credits
+                .map(|summary| RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                    credits: None,
+                })
+        });
+
         Ok(GetAccountRateLimitsResponse {
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
@@ -920,11 +939,7 @@ impl AccountRequestProcessor {
                     .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
                     .collect(),
             ),
-            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
-                RateLimitResetCreditsSummary {
-                    available_count: summary.available_count,
-                }
-            }),
+            rate_limit_reset_credits,
         })
     }
 

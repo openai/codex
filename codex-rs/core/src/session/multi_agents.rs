@@ -1,6 +1,7 @@
 use crate::config::MultiAgentV2Config;
 use crate::session::turn_context::TurnContext;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -35,16 +36,26 @@ fn configured_usage_hint_text_for_source<'a>(
     }
 }
 
-pub(crate) fn effective_multi_agent_mode(
-    multi_agent_version: MultiAgentVersion,
-    session_source: &SessionSource,
-    multi_agent_mode: MultiAgentMode,
-) -> Option<MultiAgentMode> {
-    if multi_agent_version != MultiAgentVersion::V2 {
+pub(crate) fn effective_multi_agent_mode(turn_context: &TurnContext) -> Option<MultiAgentMode> {
+    if turn_context.multi_agent_version != MultiAgentVersion::V2 {
         return None;
     }
 
-    match session_source {
+    // A configured hint, including an empty string, defines a custom policy instead of an
+    // effort-derived built-in policy.
+    let multi_agent_mode = match &turn_context
+        .config
+        .multi_agent_v2
+        .multi_agent_mode_hint_text
+    {
+        Some(hint_text) => MultiAgentMode::Custom(hint_text.clone()),
+        None => match turn_context.effective_reasoning_effort() {
+            Some(ReasoningEffort::Ultra) => MultiAgentMode::Proactive,
+            _ => MultiAgentMode::ExplicitRequestOnly,
+        },
+    };
+
+    match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
         | SessionSource::Cli
         | SessionSource::VSCode

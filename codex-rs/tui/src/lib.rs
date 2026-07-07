@@ -3,7 +3,6 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
-use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
@@ -13,7 +12,6 @@ use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_bootstrap_auth_route_config;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
-use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
 pub use crate::startup_error::LocalStateDbStartupError;
@@ -32,7 +30,6 @@ use codex_app_server_client::RemoteAppServerConnectArgs;
 pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
@@ -51,6 +48,7 @@ use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 #[cfg(target_os = "windows")]
@@ -91,6 +89,7 @@ mod app_backtrack;
 mod app_command;
 mod app_event;
 mod app_event_sender;
+mod app_info;
 mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
@@ -136,6 +135,7 @@ mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
+mod managed_new_thread_defaults;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
@@ -626,6 +626,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 parent_thread_id: None,
+                ancestor_thread_id: None,
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
@@ -739,6 +740,7 @@ fn latest_session_lookup_params(
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         parent_thread_id: None,
+        ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: match lookup_mode {
             LatestSessionLookupMode::StateDbOnly => true,
@@ -1136,18 +1138,6 @@ pub async fn run_main(
         .effective_config()
         .as_table()
         .is_some_and(|table| table.contains_key("log_dir"));
-
-    #[allow(clippy::print_stderr)]
-    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
-        Ok(None) => {}
-        Ok(Some(err)) | Err(err) => {
-            eprintln!(
-                "Error loading rules:\n{}",
-                format_exec_policy_error_with_source(&err)
-            );
-            std::process::exit(1);
-        }
-    }
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
@@ -1869,7 +1859,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginStatus {
-    AuthMode(AppServerAuthMode),
+    AuthMode(AuthMode),
     NotAuthenticated,
 }
 
@@ -1886,8 +1876,8 @@ async fn get_login_status(
 
     let account = app_server.read_account().await?;
     Ok(match account.account {
-        Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
-        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
+        Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AuthMode::ApiKey),
+        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AuthMode::Chatgpt),
         Some(AppServerAccount::AmazonBedrock { .. }) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })

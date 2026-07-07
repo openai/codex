@@ -25,6 +25,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginShareDiscoverability;
@@ -144,6 +145,7 @@ apps = true
   "name": "example-plugin",
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
+  "installation_policy_source": "IMPLICIT_CANONICAL_APP",
   "authentication_policy": "ON_USE",
   "release": {
     "version": "1.2.1",
@@ -162,7 +164,8 @@ apps = true
       "short_description": "Example plugin",
       "capabilities": [],
       "default_prompt": "Use the legacy example prompt",
-      "default_prompts": []
+      "default_prompts": [],
+      "logo_url_dark": "https://example.com/example-plugin-dark.png"
     },
     "skills": [],
     "mcp_servers": [
@@ -219,6 +222,8 @@ apps = true
                     description: Some("Example app connector".to_string()),
                     logo_url: Some("https://example.com/example.png".to_string()),
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: Some("featured".to_string()),
                     branding: None,
                     app_metadata: None,
@@ -265,6 +270,10 @@ apps = true
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
     assert_eq!(
+        response.plugin.summary.install_policy_source,
+        Some(PluginInstallPolicySource::ImplicitCanonicalApp)
+    );
+    assert_eq!(
         response
             .plugin
             .summary
@@ -272,6 +281,15 @@ apps = true
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
         Some(vec!["Use the legacy example prompt".to_string()])
+    );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.logo_url_dark.as_deref()),
+        Some("https://example.com/example-plugin-dark.png")
     );
     assert_eq!(
         response.plugin.mcp_servers,
@@ -1330,6 +1348,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     "brandColor": "#3B82F6",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/logo.png",
+    "logoDark": "./assets/logo-dark.png",
     "screenshots": ["./assets/screenshot1.png"]
   }
 }"##,
@@ -1509,6 +1528,18 @@ enabled = false
         ])
     );
     assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.logo_dark.as_ref()),
+        Some(
+            &AbsolutePathBuf::try_from(plugin_root.join("assets/logo-dark.png"))
+                .expect("absolute dark logo path")
+        )
+    );
+    assert_eq!(
         response.plugin.summary.keywords,
         vec!["api-key".to_string(), "developer tools".to_string()]
     );
@@ -1564,6 +1595,8 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: Some("featured".to_string()),
             branding: None,
             app_metadata: Some(AppMetadata {
@@ -1592,6 +1625,8 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
             description: Some("Beta connector".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1667,6 +1702,8 @@ async fn plugin_read_hides_apps_for_api_key_auth() -> Result<()> {
         description: Some("Alpha connector".to_string()),
         logo_url: Some("https://example.com/alpha.png".to_string()),
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: Some("featured".to_string()),
         branding: None,
         app_metadata: Some(AppMetadata {
@@ -2101,7 +2138,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )

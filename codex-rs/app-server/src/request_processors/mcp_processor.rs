@@ -113,19 +113,35 @@ impl McpRequestProcessor {
         &self,
         params: McpServerOauthLoginParams,
     ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let McpServerOauthLoginParams {
             name,
+            thread_id,
             scopes,
             timeout_secs,
         } = params;
 
         let auth = self.auth_manager.auth().await;
-        let effective_servers = self
-            .thread_manager
-            .mcp_manager()
-            .effective_servers(&config, auth.as_ref())
-            .await;
+        let (mcp_config, runtime_context) = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let (_, thread) = self.load_thread(thread_id).await?;
+                let runtime = thread.current_mcp_runtime().await;
+                (runtime.config().clone(), runtime.runtime_context().clone())
+            }
+            None => {
+                let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                let mcp_config = self
+                    .thread_manager
+                    .mcp_manager()
+                    .runtime_config(&config)
+                    .await;
+                let runtime_context = McpRuntimeContext::new(
+                    self.thread_manager.environment_manager(),
+                    config.cwd.to_path_buf(),
+                );
+                (mcp_config, runtime_context)
+            }
+        };
+        let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
         let Some(server) = effective_servers
             .get(&name)
             .and_then(codex_mcp::EffectiveMcpServer::configured_config)
@@ -149,32 +165,41 @@ impl McpRequestProcessor {
             }
         };
 
+        let http_client = runtime_context
+            .resolve_http_client(&name, server)
+            .map_err(|err| {
+                internal_error(format!("failed to resolve MCP server runtime: {err}"))
+            })?;
+
         let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
-            discover_supported_scopes(&server.transport).await
+            discover_supported_scopes_with_http_client(&server.transport, Arc::clone(&http_client))
+                .await
         } else {
             None
         };
         let resolved_scopes =
             resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
 
-        let handle = perform_oauth_login_return_url(
+        let handle = perform_oauth_login_return_url_with_http_client(
             &name,
             &url,
-            config.mcp_oauth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
+            mcp_config.mcp_oauth_credentials_store_mode,
+            mcp_config.auth_keyring_backend_kind,
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,
             server.oauth_client_id(),
             server.oauth_resource.as_deref(),
             timeout_secs,
-            config.mcp_oauth_callback_port,
-            config.mcp_oauth_callback_url.as_deref(),
+            mcp_config.mcp_oauth_callback_port,
+            mcp_config.mcp_oauth_callback_url.as_deref(),
+            http_client,
         )
         .await
         .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;
         let authorization_url = handle.authorization_url().to_string();
         let notification_name = name.clone();
+        let notification_thread_id = thread_id;
         let outgoing = Arc::clone(&self.outgoing);
 
         tokio::spawn(async move {
@@ -186,6 +211,7 @@ impl McpRequestProcessor {
             let notification = ServerNotification::McpServerOauthLoginCompleted(
                 McpServerOauthLoginCompletedNotification {
                     name: notification_name,
+                    thread_id: notification_thread_id,
                     success,
                     error,
                 },
@@ -217,22 +243,24 @@ impl McpRequestProcessor {
             }
             None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
         };
-        let mcp_config = match thread {
-            Some(thread) => thread.runtime_mcp_config(&config).await,
+        let mcp_manager = self.thread_manager.mcp_manager();
+        let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
+        let auth = self.auth_manager.auth().await;
+        let (mcp_config, runtime_context) = match thread {
+            Some(thread) => {
+                let mcp_config = thread.runtime_mcp_config(&config).await;
+                let runtime = thread.current_mcp_runtime().await;
+                (mcp_config, runtime.runtime_context().clone())
+            }
             None => {
-                self.thread_manager
-                    .mcp_manager()
-                    .runtime_config(&config)
-                    .await
+                let mcp_config = mcp_manager.runtime_config(&config).await;
+                let runtime_context = McpRuntimeContext::new(
+                    self.thread_manager.environment_manager(),
+                    config.cwd.to_path_buf(),
+                );
+                (mcp_config, runtime_context)
             }
         };
-        let auth = self.auth_manager.auth().await;
-        let environment_manager = self.thread_manager.environment_manager();
-        // This status path has no turn-selected environment. Use config cwd
-        // as the local stdio fallback; named environment stdio MCPs must
-        // declare their own absolute cwd.
-        let runtime_context =
-            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -242,6 +270,7 @@ impl McpRequestProcessor {
                 mcp_config,
                 auth,
                 runtime_context,
+                codex_apps_tools_cache,
             )
             .await;
         });
@@ -255,6 +284,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        codex_apps_tools_cache: codex_mcp::CodexAppsToolsCache,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
@@ -262,6 +292,7 @@ impl McpRequestProcessor {
             mcp_config,
             auth,
             runtime_context,
+            codex_apps_tools_cache,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -273,6 +304,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        codex_apps_tools_cache: codex_mcp::CodexAppsToolsCache,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -284,6 +316,7 @@ impl McpRequestProcessor {
             auth.as_ref(),
             request_id,
             runtime_context,
+            codex_apps_tools_cache,
             detail,
         )
         .await;
@@ -374,11 +407,9 @@ impl McpRequestProcessor {
         }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let mcp_config = self
-            .thread_manager
-            .mcp_manager()
-            .runtime_config(&config)
-            .await;
+        let mcp_manager = self.thread_manager.mcp_manager();
+        let mcp_config = mcp_manager.runtime_config(&config).await;
+        let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
@@ -393,6 +424,7 @@ impl McpRequestProcessor {
                 &mcp_config,
                 auth.as_ref(),
                 runtime_context,
+                codex_apps_tools_cache,
                 &server,
                 &uri,
             )

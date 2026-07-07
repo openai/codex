@@ -37,6 +37,9 @@ pub(super) fn normalize_model_items(
 ) -> Result<Vec<NormalizedConversationItem>> {
     let mut normalized_items = Vec::new();
     for item in items {
+        if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+            continue;
+        }
         normalized_items.push(normalize_model_item(item, raw_payload)?);
     }
     Ok(normalized_items)

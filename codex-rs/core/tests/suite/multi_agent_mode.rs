@@ -1,6 +1,9 @@
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_features::Feature;
-use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::Op;
@@ -17,10 +20,39 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 
-const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.";
-const NO_MODE_TEXT: &str = "Multi-agent delegation mode instructions are inactive.";
+const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.";
 const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
+const CUSTOM_MODE_HINT_TEXT: &str = "Use the configured delegation policy.";
+
+fn add_ultra_reasoning(model_info: &mut ModelInfo) {
+    model_info.supports_reasoning_summaries = true;
+    model_info
+        .supported_reasoning_levels
+        .push(ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Ultra".to_string(),
+        });
+}
+
+fn configure_multi_agent_v2(config: &mut Config) {
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+}
+
+// Configuring a custom mode hint also enables multi-agent V2 for the test.
+fn configure_custom_mode_hint(config: &mut Config) {
+    configure_multi_agent_v2(config);
+    config.multi_agent_v2.multi_agent_mode_hint_text = Some(CUSTOM_MODE_HINT_TEXT.to_string());
+}
+
+fn configure_ultra(config: &mut Config) {
+    configure_multi_agent_v2(config);
+    config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
+}
 
 fn developer_texts(input: &[Value]) -> Vec<&str> {
     input
@@ -39,7 +71,7 @@ fn count_containing(texts: &[&str], target: &str) -> usize {
 async fn submit_turn(
     codex: &codex_core::CodexThread,
     prompt: &str,
-    mode: Option<MultiAgentMode>,
+    effort: Option<ReasoningEffort>,
 ) -> Result<()> {
     codex
         .submit(Op::UserInput {
@@ -51,7 +83,7 @@ async fn submit_turn(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: ThreadSettingsOverrides {
-                multi_agent_mode: mode,
+                effort: effort.map(Some),
                 ..Default::default()
             },
         })
@@ -61,106 +93,43 @@ async fn submit_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
+async fn ultra_reasoning_uses_max_and_proactive_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
+    let response = mount_sse_once(
         &server,
-        (1..=5)
-            .map(|index| {
-                sse(vec![
-                    ev_response_created(&format!("resp-{index}")),
-                    ev_completed(&format!("resp-{index}")),
-                ])
-            })
-            .collect(),
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
     .await;
     let test = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-        })
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(configure_ultra)
         .build(&server)
         .await?;
 
-    submit_turn(&test.codex, "turn one", /*mode*/ None).await?;
-    assert_eq!(
-        test.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::ExplicitRequestOnly
-    );
-    submit_turn(&test.codex, "turn two", Some(MultiAgentMode::Proactive)).await?;
-    submit_turn(&test.codex, "turn three", /*mode*/ None).await?;
-    submit_turn(&test.codex, "turn four", Some(MultiAgentMode::None)).await?;
-    submit_turn(&test.codex, "turn five", /*mode*/ None).await?;
+    submit_turn(&test.codex, "hello", /*effort*/ None).await?;
 
+    let request = response.single_request();
     assert_eq!(
-        test.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::None
+        request.body_json()["reasoning"]["effort"].as_str(),
+        Some("max")
     );
-
-    let requests = responses.requests();
-    let inputs = requests
-        .iter()
-        .map(core_test_support::responses::ResponsesRequest::input)
-        .collect::<Vec<_>>();
-    let first = developer_texts(&inputs[0]);
-    let second = developer_texts(&inputs[1]);
-    let third = developer_texts(&inputs[2]);
-    let fourth = developer_texts(&inputs[3]);
-    let fifth = developer_texts(&inputs[4]);
-
+    let input = request.input();
+    let texts = developer_texts(&input);
     assert_eq!(
         (
-            count_containing(&first, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&first, NO_SPAWN_TEXT),
-            count_containing(&first, PROACTIVE_TEXT),
+            count_containing(&texts, NO_SPAWN_TEXT),
+            count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (1, 1, 0)
-    );
-    assert_eq!(
-        (
-            count_containing(&second, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&second, NO_SPAWN_TEXT),
-            count_containing(&second, PROACTIVE_TEXT),
-        ),
-        (2, 1, 1)
-    );
-    assert_eq!(
-        (
-            count_containing(&third, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&third, NO_SPAWN_TEXT),
-            count_containing(&third, PROACTIVE_TEXT),
-        ),
-        (2, 1, 1)
-    );
-    assert_eq!(
-        (
-            count_containing(&fourth, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&fourth, NO_SPAWN_TEXT),
-            count_containing(&fourth, PROACTIVE_TEXT),
-            count_containing(&fourth, NO_MODE_TEXT),
-        ),
-        (3, 1, 1, 1)
-    );
-    assert_eq!(
-        (
-            count_containing(&fifth, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&fifth, NO_SPAWN_TEXT),
-            count_containing(&fifth, PROACTIVE_TEXT),
-            count_containing(&fifth, NO_MODE_TEXT),
-        ),
-        (3, 1, 1, 1)
+        (0, 1)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_mode_none_omits_instructions_and_survives_resume() -> Result<()> {
+async fn configured_mode_hint_uses_custom_mode_across_reasoning_efforts() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -176,99 +145,90 @@ async fn multi_agent_mode_none_omits_instructions_and_survives_resume() -> Resul
             .collect(),
     )
     .await;
-    let initial = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-        })
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(configure_custom_mode_hint)
         .build(&server)
         .await?;
-    let home = initial.home.clone();
-    let rollout_path = initial
+    let rollout_path = test
         .session_configured
         .rollout_path
         .clone()
         .expect("rollout path");
 
-    submit_turn(&initial.codex, "before resume", Some(MultiAgentMode::None)).await?;
-    assert_eq!(
-        initial.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::None
-    );
-    drop(initial);
+    submit_turn(&test.codex, "explicit", Some(ReasoningEffort::High)).await?;
+    submit_turn(&test.codex, "proactive", Some(ReasoningEffort::Ultra)).await?;
 
-    let mut resume_builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
-    submit_turn(&resumed.codex, "after resume", /*mode*/ None).await?;
-
-    assert_eq!(
-        resumed.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::None
-    );
     let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    for request in requests {
-        let input = request.input();
-        let texts = developer_texts(&input);
-        assert_eq!(
-            (
-                count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-                count_containing(&texts, NO_SPAWN_TEXT),
-                count_containing(&texts, PROACTIVE_TEXT),
-                count_containing(&texts, NO_MODE_TEXT),
-            ),
-            (0, 0, 0, 0)
-        );
-    }
+    let first_input = requests[0].input();
+    let first_texts = developer_texts(&first_input);
+    let second_input = requests[1].input();
+    let second_texts = developer_texts(&second_input);
+    let instruction_counts = |texts: &[&str]| {
+        (
+            count_containing(texts, CUSTOM_MODE_HINT_TEXT),
+            count_containing(texts, NO_SPAWN_TEXT),
+            count_containing(texts, PROACTIVE_TEXT),
+        )
+    };
+    assert_eq!(instruction_counts(&first_texts), (1, 0, 0));
+    assert_eq!(instruction_counts(&second_texts), (1, 0, 0));
+    let rollout_values = std::fs::read_to_string(rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let recorded_modes = rollout_values
+        .iter()
+        .filter(|value| value.get("type").and_then(Value::as_str) == Some("turn_context"))
+        .filter_map(|value| value.pointer("/payload/multi_agent_mode").cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recorded_modes,
+        [
+            json!({"custom": CUSTOM_MODE_HINT_TEXT}),
+            json!({"custom": CUSTOM_MODE_HINT_TEXT}),
+        ]
+    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_mode_applies_without_usage_hint_text() -> Result<()> {
+async fn empty_configured_mode_hint_suppresses_builtin_text() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let responses = mount_sse_once(
+    let response = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
     .await;
     let test = test_codex()
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-            config.multi_agent_v2.root_agent_usage_hint_text = None;
+            configure_multi_agent_v2(config);
+            config.multi_agent_v2.multi_agent_mode_hint_text = Some(String::new());
         })
         .build(&server)
         .await?;
 
-    submit_turn(&test.codex, "hello", Some(MultiAgentMode::Proactive)).await?;
+    submit_turn(&test.codex, "hello", Some(ReasoningEffort::High)).await?;
 
-    let input = responses.single_request().input();
+    let input = response.single_request().input();
     let texts = developer_texts(&input);
     assert_eq!(
         (
             count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&texts, NO_SPAWN_TEXT),
             count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (1, 1)
+        (1, 0, 0)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result<()> {
+async fn leaving_ultra_after_cold_resume_emits_explicit_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -285,12 +245,8 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
     )
     .await;
     let initial = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-        })
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(configure_ultra)
         .build(&server)
         .await?;
     let home = initial.home.clone();
@@ -300,29 +256,27 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
         .clone()
         .expect("rollout path");
 
-    submit_turn(
-        &initial.codex,
-        "before resume",
-        Some(MultiAgentMode::Proactive),
-    )
-    .await?;
+    submit_turn(&initial.codex, "before resume", /*effort*/ None).await?;
     drop(initial);
 
-    let mut resume_builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
+    let mut resume_builder = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(configure_ultra);
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
-    submit_turn(&resumed.codex, "after resume", /*mode*/ None).await?;
-
-    assert_eq!(
-        resumed.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::Proactive
-    );
+    submit_turn(&resumed.codex, "after resume", Some(ReasoningEffort::High)).await?;
 
     let requests = responses.requests();
+    assert_eq!(
+        (
+            requests[0].body_json()["reasoning"]["effort"]
+                .as_str()
+                .map(str::to_string),
+            requests[1].body_json()["reasoning"]["effort"]
+                .as_str()
+                .map(str::to_string),
+        ),
+        (Some("max".to_string()), Some("high".to_string()))
+    );
     let resumed_input = requests[1].input();
     let texts = developer_texts(&resumed_input);
     assert_eq!(
@@ -331,39 +285,40 @@ async fn resume_compares_against_previous_effective_multi_agent_mode() -> Result
             count_containing(&texts, NO_SPAWN_TEXT),
             count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (1, 0, 1)
+        (2, 1, 1)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_mode_is_retained_without_multi_agent_v2() -> Result<()> {
+async fn ultra_on_multi_agent_v1_uses_max_without_mode_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let responses = mount_sse_once(
+    let response = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
     .await;
-    let test = test_codex().build(&server).await?;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
+        })
+        .build(&server)
+        .await?;
 
-    submit_turn(&test.codex, "hello", Some(MultiAgentMode::Proactive)).await?;
+    submit_turn(&test.codex, "hello", /*effort*/ None).await?;
 
+    let request = response.single_request();
     assert_eq!(
-        test.codex.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::Proactive
+        request.body_json()["reasoning"]["effort"].as_str(),
+        Some("max")
     );
-    let input = responses.single_request().input();
+    let input = request.input();
     let texts = developer_texts(&input);
-    assert_eq!(
-        (
-            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (0, 0)
-    );
+    assert_eq!(count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG), 0);
 
     Ok(())
 }

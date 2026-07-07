@@ -1,15 +1,14 @@
 use super::*;
 use crate::ModelsManagerConfig;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
-use codex_login::ExternalAuthTokens;
 use codex_login::TokenData;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -122,23 +121,15 @@ impl ExternalAuth for TestExternalApiKeyAuth {
         AuthMode::ApiKey
     }
 
-    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
-        Box::pin(async {
-            Ok(Some(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            )))
-        })
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<CodexAuth>> {
+        Box::pin(async { Ok(Some(CodexAuth::from_api_key("test-external-api-key"))) })
     }
 
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
-        Box::pin(async {
-            Ok(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            ))
-        })
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key("test-external-api-key")) })
     }
 }
 
@@ -153,7 +144,7 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
         Box::pin(async { Err(std::io::Error::other("unresolved test auth")) })
     }
 }
@@ -237,6 +228,105 @@ c2ln",
     .await
     .expect("auth should load")
     .expect("auth should be present")
+}
+
+#[tokio::test]
+async fn static_manager_preserves_supported_requested_model_when_fallback_is_allowed() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            remote_model("provider-default", "Default", /*priority*/ 0),
+            remote_model("provider-supported", "Supported", /*priority*/ 1),
+        ],
+    });
+    let requested_model = Some("provider-supported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "provider-supported");
+}
+
+#[tokio::test]
+async fn static_manager_falls_back_from_unsupported_requested_model_when_allowed() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            remote_model("provider-default", "Default", /*priority*/ 0),
+            remote_model("provider-supported", "Supported", /*priority*/ 1),
+        ],
+    });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "provider-default");
+}
+
+#[tokio::test]
+async fn static_manager_preserves_unsupported_requested_model_when_fallback_is_disabled() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote_model(
+            "provider-default",
+            "Default",
+            /*priority*/ 0,
+        )],
+    });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ false,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "unsupported");
+}
+
+#[tokio::test]
+async fn static_manager_uses_empty_default_when_fallback_is_allowed_and_catalog_is_empty() {
+    let manager = static_manager_for_tests(ModelsResponse { models: Vec::new() });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "");
+}
+
+#[tokio::test]
+async fn dynamic_manager_preserves_requested_model_when_fallback_is_allowed() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(Vec::new());
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Online,
+        )
+        .await;
+
+    assert_eq!(model, "unsupported");
+    assert_eq!(endpoint.fetch_count(), 0);
 }
 
 #[tokio::test]

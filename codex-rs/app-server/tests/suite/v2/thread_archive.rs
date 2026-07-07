@@ -38,12 +38,12 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -499,11 +499,11 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut primary = TestAppServer::new(codex_home.path()).await?;
+    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -539,7 +539,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     .await??;
     primary.clear_message_buffer();
 
-    let mut secondary = TestAppServer::new(codex_home.path()).await?;
+    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
 
     let archive_id = primary

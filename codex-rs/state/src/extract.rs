@@ -22,8 +22,10 @@ pub fn apply_rollout_item(
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
-        RolloutItem::InterAgentCommunication(_) => {}
+        RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
         RolloutItem::Compacted(_) => {}
+        RolloutItem::WorldState(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
@@ -40,7 +42,9 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::Compacted(_) => false,
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
+        | RolloutItem::Compacted(_)
+        | RolloutItem::WorldState(_) => false,
     }
 }
 
@@ -52,6 +56,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
+    // Later SessionMeta lines do not redefine the canonical history_mode.
     metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
@@ -173,6 +178,7 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use codex_protocol::protocol::UserMessageEvent;
@@ -339,8 +345,11 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
+                    history_mode: Default::default(),
                     multi_agent_version: None,
+                    context_window: None,
                 },
                 git: None,
             }),
@@ -508,6 +517,7 @@ mod tests {
     #[test]
     fn session_meta_does_not_set_model_or_reasoning_effort() {
         let mut metadata = metadata_for_test();
+        metadata.history_mode = ThreadHistoryMode::Paginated;
         let thread_id = metadata.id;
 
         apply_rollout_item(
@@ -530,8 +540,11 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
+                    history_mode: ThreadHistoryMode::Legacy,
                     multi_agent_version: None,
+                    context_window: None,
                 },
                 git: None,
             }),
@@ -540,6 +553,7 @@ mod tests {
 
         assert_eq!(metadata.model, None);
         assert_eq!(metadata.reasoning_effort, None);
+        assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
     }
 
     fn metadata_for_test() -> ThreadMetadata {
@@ -552,6 +566,7 @@ mod tests {
             updated_at: created_at,
             recency_at: created_at,
             source: "cli".to_string(),
+            history_mode: Default::default(),
             thread_source: None,
             agent_path: None,
             agent_nickname: None,

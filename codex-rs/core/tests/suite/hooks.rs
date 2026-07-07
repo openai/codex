@@ -38,8 +38,8 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
@@ -2200,7 +2200,7 @@ allow_local_binding = true
     )
     .await;
 
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let permission_profile = network_workspace_write_profile();
     let permission_profile_for_config = permission_profile.clone();
     let test = test_codex()
@@ -2279,71 +2279,6 @@ allow_local_binding = true
         matches!(event, EventMsg::ShutdownComplete)
     })
     .await;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tokio::test]
-async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "permissionrequest-retry-shell-command";
-    let marker = "permissionrequest_retry_marker.txt";
-    let command = format!("printf retry > {marker}");
-    let args = serde_json::json!({ "command": command });
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_function_call(
-                    call_id,
-                    "shell_command",
-                    &serde_json::to_string(&args)?,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "permission request hook allowed retry"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            install_allow_permission_request_hook(home)
-                .expect("failed to write permission request hook test fixture");
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-    let marker_path = test.workspace_path(marker);
-    let _ = fs::remove_file(&marker_path);
-
-    test.submit_turn_with_approval_and_permission_profile(
-        "retry the shell command after sandbox denial",
-        AskForApproval::OnFailure,
-        PermissionProfile::read_only(),
-    )
-    .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    requests[1].function_call_output(call_id);
-    assert_eq!(
-        fs::read_to_string(&marker_path).context("read retry marker")?,
-        "retry"
-    );
-
-    assert_single_permission_request_hook_input(
-        test.codex_home_path(),
-        &command,
-        /*description*/ None,
-    )?;
 
     Ok(())
 }
@@ -4077,7 +4012,7 @@ async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
 #[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
     let start_call_id = "posttooluse-exec-session-start";

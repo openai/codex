@@ -1,8 +1,10 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
+use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
+use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -55,6 +57,8 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
+    let safety_buffering_treatment =
+        treatment_from_headers(&stream_response.headers).unwrap_or_default();
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
@@ -79,7 +83,14 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse_with_treatment(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            safety_buffering_treatment,
+        )
+        .await;
     });
 
     ResponseStream {
@@ -149,13 +160,14 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    headers: Option<Value>,
+    pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
     item_id: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
+    text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
@@ -220,8 +232,18 @@ impl ResponsesStreamEvent {
             .map(|metadata| TurnModerationMetadataEvent { metadata })
     }
 
-    pub(crate) fn safety_buffering(&self) -> Option<SafetyBuffering> {
-        serde_json::from_value(self.safety_buffering.as_ref()?.clone()).ok()
+    pub(crate) fn safety_buffering(
+        &self,
+        treatment: &SafetyBufferingTreatment,
+    ) -> Option<SafetyBuffering> {
+        let value = self.safety_buffering.as_ref()?;
+        let retry_model_present = value.as_object()?.contains_key("retry_model");
+        let mut buffering: SafetyBuffering = serde_json::from_value(value.clone()).ok()?;
+        buffering.show_buffering_ui = true;
+        if !retry_model_present {
+            buffering.faster_model.clone_from(&treatment.faster_model);
+        }
+        Some(buffering)
     }
 }
 
@@ -337,6 +359,17 @@ pub fn process_responses_event(
                 }));
             }
         }
+        "response.reasoning_summary_text.done" => {
+            if let (Some(item_id), Some(text), Some(summary_index)) =
+                (event.item_id, event.text, event.summary_index)
+            {
+                return Ok(Some(ResponseEvent::ReasoningSummaryDone {
+                    item_id,
+                    text,
+                    summary_index,
+                }));
+            }
+        }
         "response.reasoning_text.delta" => {
             if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
@@ -437,11 +470,29 @@ pub fn process_responses_event(
     Ok(None)
 }
 
+#[cfg(test)]
 pub async fn process_sse(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+) {
+    process_sse_with_treatment(
+        stream,
+        tx_event,
+        idle_timeout,
+        telemetry,
+        SafetyBufferingTreatment::default(),
+    )
+    .await;
+}
+
+async fn process_sse_with_treatment(
+    stream: ByteStream,
+    tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -486,7 +537,7 @@ pub async fn process_sse(
         };
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
-        let safety_buffering = event.safety_buffering();
+        let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -755,6 +806,32 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn parses_reasoning_summary_done() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "item_id": "reasoning-1",
+                "summary_index": 0,
+                "text": "Checking",
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" },
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryDone {
+                item_id,
+                text,
+                summary_index: 0,
+            } if item_id == "reasoning-1" && text == "Checking"
+        );
     }
 
     #[tokio::test]
@@ -1323,7 +1400,8 @@ mod tests {
                 "delta": "hello",
                 "safety_buffering": {
                     "use_cases": ["cyber"],
-                    "reasons": ["user_risk"]
+                    "reasons": ["user_risk"],
+                    "retry_model": "gpt-fast-wire"
                 }
             }),
             json!({
@@ -1350,7 +1428,10 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::SafetyBuffering(buffering)
-                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+                if buffering.use_cases == ["cyber"]
+                    && buffering.reasons == ["user_risk"]
+                    && buffering.show_buffering_ui
+                    && buffering.faster_model.as_deref() == Some("gpt-fast-wire")
         );
         assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
         assert_matches!(
@@ -1365,6 +1446,46 @@ mod tests {
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
         assert_matches!(&events[6], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
+    }
+
+    #[test]
+    fn safety_buffering_prefers_wire_retry_model_and_only_falls_back_when_omitted() {
+        let treatment = SafetyBufferingTreatment {
+            faster_model: Some("gpt-fast-header".to_string()),
+        };
+
+        for (retry_model, expected_faster_model) in [
+            (None, Some("gpt-fast-header")),
+            (Some(Value::Null), None),
+            (Some(json!("gpt-fast-wire")), Some("gpt-fast-wire")),
+        ] {
+            let mut event = json!({
+                "type": "response.output_text.delta",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            });
+            if let Some(retry_model) = retry_model {
+                event["safety_buffering"]["retry_model"] = retry_model;
+            }
+            let event: ResponsesStreamEvent =
+                serde_json::from_value(event).expect("deserialize safety buffering event");
+
+            let buffering = event
+                .safety_buffering(&treatment)
+                .expect("expected safety buffering payload");
+
+            assert_eq!(
+                buffering,
+                SafetyBuffering {
+                    use_cases: vec!["cyber".to_string()],
+                    reasons: vec!["user_risk".to_string()],
+                    show_buffering_ui: true,
+                    faster_model: expected_faster_model.map(str::to_string),
+                }
+            );
+        }
     }
 
     #[test]

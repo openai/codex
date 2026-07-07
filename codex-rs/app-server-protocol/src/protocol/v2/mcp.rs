@@ -23,6 +23,12 @@ v2_enum_from_core!(
     }
 );
 
+v2_enum_from_core!(
+    pub enum McpServerStartupFailureReason from codex_protocol::protocol::McpStartupFailureReason {
+        ReauthenticationRequired
+    }
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -186,6 +192,8 @@ pub struct McpServerRefreshResponse {}
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginParams {
     pub name: String,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub scopes: Option<Vec<String>>,
@@ -215,6 +223,7 @@ pub struct McpToolCallProgressNotification {
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginCompletedNotification {
     pub name: String,
+    pub thread_id: Option<String>,
     pub success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -239,6 +248,7 @@ pub struct McpServerStatusUpdatedNotification {
     pub name: String,
     pub status: McpServerStartupState,
     pub error: Option<String>,
+    pub failure_reason: Option<McpServerStartupFailureReason>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

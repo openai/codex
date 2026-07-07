@@ -241,7 +241,7 @@ use crate::history_cell;
 use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 #[cfg(test)]
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
@@ -1826,42 +1826,10 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
-                if Self::is_image_path(&sel_path) {
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            let cursor_offset = self.draft.textarea.cursor();
-                            let text = self.draft.textarea.text();
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.draft.textarea.replace_range(start_idx..end_idx, "");
-                            self.draft.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            self.draft.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            self.insert_selected_path(&sel_path);
-                        }
-                    }
-                } else {
-                    self.insert_selected_path(&sel_path);
+                if let Some((token_range, _)) =
+                    self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
+                {
+                    self.insert_selected_file_path(token_range, &sel_path);
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1935,8 +1903,10 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some((insert_text, path)) = selected_mention {
-                self.insert_selected_mention(&insert_text, path.as_deref());
+            if let Some((insert_text, path)) = selected_mention
+                && let Some((token_range, _)) = self.current_mention_token_range()
+            {
+                self.insert_selected_mention(token_range, &insert_text, path.as_deref());
             }
             self.popups.active = ActivePopup::None;
         }
@@ -2040,13 +2010,19 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some(selected) = selected {
+            let token_range = self
+                .current_editable_at_token_range_with_options(/*allow_empty*/ true)
+                .map(|(range, _)| range);
+            if let (Some(selected), Some(token_range)) = (selected, token_range) {
                 match selected {
                     MentionV2Selection::File(path) => {
-                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                        self.insert_selected_file_path(
+                            token_range,
+                            path.to_string_lossy().as_ref(),
+                        );
                     }
                     MentionV2Selection::Tool { insert_text, path } => {
-                        self.insert_selected_mention(&insert_text, path.as_deref());
+                        self.insert_selected_mention(token_range, &insert_text, path.as_deref());
                     }
                 }
             }
@@ -2068,42 +2044,25 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
-    fn insert_selected_file_path(&mut self, selected_path: &str) {
+    fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
             match image::image_dimensions(&path_buf) {
                 Ok((width, height)) => {
                     tracing::debug!("selected image dimensions={}x{}", width, height);
-                    let cursor_offset = self.draft.textarea.cursor();
-                    let text = self.draft.textarea.text();
-                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                    let before_cursor = &text[..safe_cursor];
-                    let after_cursor = &text[safe_cursor..];
-
-                    let start_idx = before_cursor
-                        .char_indices()
-                        .rfind(|(_, c)| c.is_whitespace())
-                        .map(|(idx, c)| idx + c.len_utf8())
-                        .unwrap_or(0);
-                    let end_rel_idx = after_cursor
-                        .char_indices()
-                        .find(|(_, c)| c.is_whitespace())
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(after_cursor.len());
-                    let end_idx = safe_cursor + end_rel_idx;
-
-                    self.draft.textarea.replace_range(start_idx..end_idx, "");
+                    let start_idx = token_range.start;
+                    self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
                     self.attach_image(path_buf);
                     self.draft.textarea.insert_str(" ");
                 }
                 Err(err) => {
                     tracing::trace!("image dimensions lookup failed: {err}");
-                    self.insert_selected_path(selected_path);
+                    self.insert_selected_path(token_range, selected_path);
                 }
             }
         } else {
-            self.insert_selected_path(selected_path);
+            self.insert_selected_path(token_range, selected_path);
         }
     }
 
@@ -2372,7 +2331,10 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
-    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+    fn current_editable_at_token_range_with_options(
+        &self,
+        allow_empty: bool,
+    ) -> Option<(Range<usize>, String)> {
         let (range, token) =
             Self::current_prefixed_token_range(&self.draft.textarea, '@', allow_empty)?;
         if self
@@ -2402,55 +2364,43 @@ impl ChatComposer {
             return None;
         }
 
-        Some(token)
+        Some((range, token))
+    }
+
+    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+        self.current_editable_at_token_range_with_options(allow_empty)
+            .map(|(_, token)| token)
     }
 
     fn current_editable_at_token(&self) -> Option<String> {
         self.current_editable_at_token_with_options(/*allow_empty*/ false)
     }
 
-    fn current_mentions_v2_token(&self) -> Option<String> {
+    fn current_mentions_v2_token_range(&self) -> Option<(Range<usize>, String)> {
         if !self.mentions_v2_enabled {
             return None;
         }
-        self.current_editable_at_token_with_options(/*allow_empty*/ true)
+        self.current_editable_at_token_range_with_options(/*allow_empty*/ true)
     }
 
-    fn current_mention_token(&self) -> Option<String> {
+    fn current_mentions_v2_token(&self) -> Option<String> {
+        self.current_mentions_v2_token_range()
+            .map(|(_, token)| token)
+    }
+
+    fn current_mention_token_range(&self) -> Option<(Range<usize>, String)> {
         if !self.mentions_enabled() {
             return None;
         }
-        Self::current_prefixed_token(&self.draft.textarea, '$', /*allow_empty*/ true)
+        Self::current_prefixed_token_range(&self.draft.textarea, '$', /*allow_empty*/ true)
+    }
+
+    fn current_mention_token(&self) -> Option<String> {
+        self.current_mention_token_range().map(|(_, token)| token)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
-    fn insert_selected_path(&mut self, path: &str) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        // Clamp to a valid char boundary to avoid panics when slicing.
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        // Determine token boundaries.
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_path(&mut self, token_range: Range<usize>, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
         // local prompt arg parser treats it as a single argument. Avoid adding
         // quotes when the path already contains one to keep behavior simple.
@@ -2463,36 +2413,23 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
+        let start_idx = token_range.start;
         self.draft
             .textarea
-            .replace_range(start_idx..end_idx, &format!("{inserted} "));
+            .replace_range(token_range, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.draft.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_mention(
+        &mut self,
+        token_range: Range<usize>,
+        insert_text: &str,
+        path: Option<&str>,
+    ) {
         // Remove the active token and insert the selected mention as an atomic element.
-        self.draft.textarea.replace_range(start_idx..end_idx, "");
+        let start_idx = token_range.start;
+        self.draft.textarea.replace_range(token_range, "");
         self.draft.textarea.set_cursor(start_idx);
         let id = self.draft.textarea.insert_element(insert_text);
 
@@ -6135,6 +6072,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6177,6 +6116,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6314,6 +6255,8 @@ mod tests {
                 description: Some("Look up events and availability".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -6428,6 +6371,8 @@ mod tests {
                         description: Some("Look up events and availability".to_string()),
                         logo_url: None,
                         logo_url_dark: None,
+                        icon_assets: None,
+                        icon_dark_assets: None,
                         distribution_channel: None,
                         branding: None,
                         app_metadata: None,
@@ -6462,6 +6407,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,

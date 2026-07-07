@@ -57,6 +57,7 @@ def _write_fake_codex_package(package_dir: Path, script) -> Path:
     (package_dir / "codex-path").mkdir()
     (package_dir / "codex-package.json").write_text('{"variant":"codex"}\n')
     (package_dir / "bin" / script.runtime_binary_name()).write_text("fake codex\n")
+    (package_dir / "bin" / script.runtime_code_mode_host_name()).write_text("fake code mode host\n")
     (package_dir / "codex-resources" / "bwrap").write_text("fake bwrap\n")
     (package_dir / "codex-path" / "rg").write_text("fake rg\n")
     return package_dir
@@ -112,9 +113,9 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
         "fmt_comment": (
             "# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts."
         ),
-        "fmt_commands": ["{{ python }} ../scripts/format.py"],
+        "fmt_commands": ["@{{ python }} ../scripts/format.py"],
         "fmt_check_comment": "# Check formatting without modifying files.",
-        "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
+        "fmt_check_commands": ["@{{ python }} ../scripts/format.py --check"],
     }
 
     assert actual == expected, (
@@ -243,6 +244,75 @@ def test_root_format_driver_covers_all_formatter_groups(
         ("ruff", "format", "--check", "sdk/python"),
         ("ruff", "format", "--check", "scripts"),
     ]
+
+
+def test_root_format_driver_discards_successful_command_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _load_root_format_script_module()
+    processes = iter(
+        (
+            script.subprocess.CompletedProcess(("first",), 0, "routine output\n"),
+            script.subprocess.CompletedProcess(("second",), 2, "failure output\n"),
+        )
+    )
+    monkeypatch.setattr(script.subprocess, "run", lambda *args, **kwargs: next(processes))
+    group = script.FormatterGroup(
+        "Test",
+        (script.Command(("first",)), script.Command(("second",))),
+    )
+
+    assert script.run_formatter_group(group) == script.FormatterResult(
+        "Test",
+        "$ second\nfailure output\n",
+        2,
+    )
+
+
+def test_root_format_driver_is_silent_when_all_formatters_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (script.FormatterGroup("Quiet", ()),)
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+    monkeypatch.setattr(
+        script,
+        "run_formatter_group",
+        lambda group: script.FormatterResult(group.name, "hidden output\n", 0),
+    )
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 0
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_root_format_driver_reports_only_failed_formatters(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_root_format_script_module()
+    groups = (
+        script.FormatterGroup("Quiet", ()),
+        script.FormatterGroup("Broken", ()),
+    )
+    monkeypatch.setattr(script, "formatter_groups", lambda *, check: groups)
+
+    def fake_run(group):
+        if group.name == "Broken":
+            return script.FormatterResult(group.name, "$ broken\nfailure output\n", 2)
+        return script.FormatterResult(group.name, "hidden output\n", 0)
+
+    monkeypatch.setattr(script, "run_formatter_group", fake_run)
+    monkeypatch.setattr(sys, "argv", ["format.py"])
+
+    assert script.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "==> Broken formatter failed\n$ broken\nfailure output\nFormatting failed: Broken\n"
+    )
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
@@ -613,11 +683,13 @@ def test_stage_runtime_release_copies_package_layout_and_sets_version(
     assert {
         "metadata": (package_root / "codex-package.json").read_text(),
         "codex": (package_root / "bin" / script.runtime_binary_name()).read_text(),
+        "code_mode_host": (package_root / "bin" / script.runtime_code_mode_host_name()).read_text(),
         "bwrap": (package_root / "codex-resources" / "bwrap").read_text(),
         "rg": (package_root / "codex-path" / "rg").read_text(),
     } == {
         "metadata": '{"variant":"codex"}\n',
         "codex": "fake codex\n",
+        "code_mode_host": "fake code mode host\n",
         "bwrap": "fake bwrap\n",
         "rg": "fake rg\n",
     }

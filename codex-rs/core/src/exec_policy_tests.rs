@@ -1,9 +1,9 @@
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
@@ -371,6 +371,42 @@ async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
 
     assert!(allowed.is_empty());
     assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_custom_rules_preserve_requirements_exec_policy() -> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir)?;
+    fs::write(policy_dir.join("broken.rules"), "prefix_rule(")?;
+
+    let mut requirements_exec_policy = Policy::empty();
+    requirements_exec_policy.add_prefix_rule(&["rm".to_string()], Decision::Forbidden)?;
+    let requirements = ConfigRequirements {
+        exec_policy: Some(Sourced::new(
+            RequirementsExecPolicy::new(requirements_exec_policy),
+            RequirementSource::Unknown,
+        )),
+        ..ConfigRequirements::default()
+    };
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        TomlValue::Table(Default::default()),
+    );
+    let config_stack =
+        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+    let (policy, warning) = load_exec_policy_with_warning(&config_stack).await?;
+
+    assert!(matches!(warning, Some(ExecPolicyError::ParsePolicy { .. })));
+    assert_eq!(
+        policy
+            .check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+            .decision,
+        Decision::Forbidden
+    );
     Ok(())
 }
 

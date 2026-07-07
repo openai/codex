@@ -21,6 +21,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 globset = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -44,3 +45,9 @@ tempfile = { workspace = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rama-unix = { version = "=0.3.0-alpha.4" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(windows)'.dependencies]
+schannel = "0.1"

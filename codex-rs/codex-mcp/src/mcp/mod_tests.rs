@@ -27,14 +27,14 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         skill_mcp_dependency_install_enabled: true,
-        approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+        approval_policy: Constrained::allow_any(AskForApproval::OnRequest),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
         prefix_mcp_tool_names: true,
         client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
-        plugin_capability_summaries: Vec::new(),
+        connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
     }
 }
 
@@ -83,7 +83,6 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
 fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
     for approval_policy in [
         AskForApproval::UnlessTrusted,
-        AskForApproval::OnFailure,
         AskForApproval::OnRequest,
         AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: true,
@@ -134,25 +133,26 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
         codex_apps_mcp_server_config("https://alpha.example", /*apps_mcp_product_sku*/ None),
     ));
     config.mcp_server_catalog = catalog.build();
-    config.plugin_capability_summaries = vec![
-        PluginCapabilitySummary {
-            config_name: "alpha@test".to_string(),
-            display_name: "alpha-plugin".to_string(),
-            app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
-            mcp_server_names: vec!["alpha".to_string()],
-            ..PluginCapabilitySummary::default()
-        },
-        PluginCapabilitySummary {
-            config_name: "beta@test".to_string(),
-            display_name: "beta-plugin".to_string(),
-            app_connector_ids: vec![
-                AppConnectorId("connector_example".to_string()),
-                AppConnectorId("connector_gmail".to_string()),
-            ],
-            mcp_server_names: vec!["beta".to_string()],
-            ..PluginCapabilitySummary::default()
-        },
-    ];
+    config.connector_snapshot =
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(&[
+            PluginCapabilitySummary {
+                config_name: "alpha@test".to_string(),
+                display_name: "alpha-plugin".to_string(),
+                app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
+                mcp_server_names: vec!["alpha".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+            PluginCapabilitySummary {
+                config_name: "beta@test".to_string(),
+                display_name: "beta-plugin".to_string(),
+                app_connector_ids: vec![
+                    AppConnectorId("connector_example".to_string()),
+                    AppConnectorId("connector_gmail".to_string()),
+                ],
+                mcp_server_names: vec!["beta".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+        ]);
     let provenance = tool_plugin_provenance(&config);
 
     assert_eq!(
@@ -200,12 +200,15 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
         codex_apps_mcp_server_config("https://github.example", /*apps_mcp_product_sku*/ None),
     ));
     config.mcp_server_catalog = catalog.build();
-    config.plugin_capability_summaries = vec![PluginCapabilitySummary {
-        config_name: "shared-plugin-id".to_string(),
-        display_name: "Local GitHub".to_string(),
-        mcp_server_names: vec!["github".to_string()],
-        ..PluginCapabilitySummary::default()
-    }];
+    config.connector_snapshot =
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(&[
+            PluginCapabilitySummary {
+                config_name: "shared-plugin-id".to_string(),
+                display_name: "Local GitHub".to_string(),
+                mcp_server_names: vec!["github".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+        ]);
 
     let provenance = tool_plugin_provenance(&config);
 
@@ -293,6 +296,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     catalog.register(McpServerRegistration::from_config(
         "sample".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://user.example/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -318,6 +322,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     catalog.register(McpServerRegistration::from_config(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://docs.example/mcp".to_string(),
                 bearer_token_env_var: None,

@@ -6,16 +6,17 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::time::Duration;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use codex_exec_server::HttpHeader;
+use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestBodyDeltaNotification;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::InitializeParams;
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
@@ -63,6 +64,7 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
                 }],
                 body: Some(b"request-body".to_vec().into()),
                 timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
@@ -108,6 +110,61 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
     Ok(())
 }
 
+/// What this tests: OAuth callers can inspect redirect responses without the
+/// executor following the Location header.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_can_stop_at_redirects() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let http_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: format!("{base_url}/redirect"),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Stop,
+                request_id: "redirect-request".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&listener).await?;
+    assert_eq!(captured.request_line, "GET /redirect HTTP/1.1");
+    respond_with_status_and_headers(
+        captured.stream,
+        "302 Found",
+        &[("location", &format!("{base_url}/final"))],
+        b"redirect",
+    )
+    .await?;
+
+    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    assert_eq!(
+        (
+            response.status,
+            response_header(&response.headers, "location"),
+            response.body.into_inner(),
+        ),
+        (302, Some(format!("{base_url}/final")), b"redirect".to_vec(),)
+    );
+    assert!(
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "redirect target should not be requested"
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 /// What this tests: a real exec-server websocket `http/request` can return
 /// response headers immediately and stream the response body as ordered
 /// `http/request/bodyDelta` notifications.
@@ -132,6 +189,7 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
                 }],
                 body: None,
                 timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "stream-1".to_string(),
                 stream_response: true,
             })?,
@@ -218,6 +276,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "stream-dup".to_string(),
                 stream_response: true,
             })?,
@@ -241,6 +300,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "stream-dup".to_string(),
                 stream_response: true,
             })?,
@@ -295,6 +355,7 @@ async fn exec_server_http_request_honors_optional_timeout() -> anyhow::Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
@@ -320,6 +381,7 @@ async fn exec_server_http_request_honors_optional_timeout() -> anyhow::Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: Some(10),
+                redirect_policy: HttpRedirectPolicy::Follow,
                 request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
@@ -392,7 +454,7 @@ where
 async fn wait_for_error_response(
     server: &mut ExecServerHarness,
     request_id: RequestId,
-) -> anyhow::Result<codex_app_server_protocol::JSONRPCErrorError> {
+) -> anyhow::Result<codex_exec_server_protocol::JSONRPCErrorError> {
     let response = server
         .wait_for_event(|event| {
             matches!(
