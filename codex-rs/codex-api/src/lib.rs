@@ -12,6 +12,7 @@ pub(crate) mod safety_buffering;
 pub(crate) mod search;
 pub(crate) mod sse;
 pub(crate) mod telemetry;
+mod websocket_connector;
 
 pub use crate::requests::headers::build_session_headers;
 pub use codex_client::RequestTelemetry;
