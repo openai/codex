@@ -234,11 +234,28 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
             "properties": {
                 "file": {
                     "type": "object",
-                    "description": "Original file payload."
+                    "description": "Original file payload.",
+                    "properties": {
+                        "download_url": {"type": "string"},
+                        "file_id": {"type": "string"}
+                    }
                 },
                 "files": {
-                    "type": "array",
-                    "items": {"type": "object"}
+                    "description": "Original file payloads.",
+                    "anyOf": [
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "download_url": {"type": "string"},
+                                    "file_id": {"type": "string"},
+                                    "mime_type": {"type": "string"}
+                                }
+                            }
+                        },
+                        {"type": "null"}
+                    ]
                 }
             }
         })
@@ -269,7 +286,7 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                    "description": "Original file payloads. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                 }
             }
         })
@@ -280,190 +297,69 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
 }
 
 #[test]
-fn declared_openai_file_input_optional_fields_follows_payload_schema() {
+fn declared_openai_file_input_optional_fields_follow_canonical_payload_schemas() {
     let mut tool = Tool::new(
         "upload".to_string(),
-        "Upload a file".to_string(),
+        "Upload files".to_string(),
         Arc::new(
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "file": {
+                    "photoshop_image": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"}
+                        }
+                    },
+                    "drive_import": {
                         "type": "object",
                         "properties": {
                             "download_url": {"type": "string"},
                             "file_id": {"type": "string"},
                             "mime_type": {"type": "string"},
-                            "file_name": {"type": "string"},
-                            "uri": {"type": "string"},
-                            "file_size_bytes": {"type": "integer"}
+                            "file_name": {"type": "string"}
                         }
                     },
-                    "files": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "download_url": {"type": "string"},
-                                "file_id": {"type": "string"},
-                                "mime_type": {"type": "string"}
-                            }
-                        }
-                    }
-                }
-            })
-            .as_object()
-            .expect("object")
-            .clone(),
-        ),
-    );
-    tool.meta = Some(Meta(
-        serde_json::json!({
-            "openai/fileParams": ["file", "files"]
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    ));
-
-    assert_eq!(
-        declared_openai_file_input_optional_fields(&tool),
-        HashMap::from([
-            (
-                "file".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            ("files".to_string(), vec!["mime_type".to_string()]),
-        ])
-    );
-}
-
-#[test]
-fn declared_openai_file_input_optional_fields_supports_composed_schemas() {
-    let mut tool = Tool::new(
-        "upload".to_string(),
-        "Upload files".to_string(),
-        Arc::new(
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "nullable_file": {
+                    "attachments": {
                         "anyOf": [
                             {
-                                "type": "object",
-                                "properties": {
-                                    "download_url": {"type": "string"},
-                                    "file_id": {"type": "string"},
-                                    "file_name": {"type": "string"}
+                                "type": "array",
+                                "items": {
+                                    "oneOf": [
+                                        {
+                                            "allOf": [{
+                                                "type": "object",
+                                                "properties": {
+                                                    "download_url": {"type": "string"},
+                                                    "file_id": {"type": "string"},
+                                                    "mime_type": {"type": "string"}
+                                                }
+                                            }]
+                                        },
+                                        {"type": "null"}
+                                    ]
                                 }
                             },
                             {"type": "null"}
                         ]
                     },
-                    "files": {
-                        "type": "array",
-                        "items": {
-                            "oneOf": [
-                                {
-                                    "allOf": [
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "download_url": {"type": "string"},
-                                                "file_id": {"type": "string"},
-                                                "mime_type": {"type": "string"}
-                                            }
-                                        },
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "file_name": {"type": "string"}
-                                            }
-                                        }
-                                    ]
-                                },
-                                {"type": "null"}
-                            ]
-                        }
-                    }
-                }
-            })
-            .as_object()
-            .expect("object")
-            .clone(),
-        ),
-    );
-    tool.meta = Some(Meta(
-        serde_json::json!({
-            "openai/fileParams": ["nullable_file", "files"]
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    ));
-
-    assert_eq!(
-        declared_openai_file_input_optional_fields(&tool),
-        HashMap::from([
-            ("nullable_file".to_string(), vec!["file_name".to_string()]),
-            (
-                "files".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-        ])
-    );
-}
-
-#[test]
-fn declared_openai_file_input_optional_fields_supports_local_schema_refs() {
-    let mut tool = Tool::new(
-        "upload".to_string(),
-        "Upload files".to_string(),
-        Arc::new(
-            serde_json::json!({
-                "type": "object",
-                "$defs": {
-                    "Provided/File": {
+                    "noncanonical_file": {
                         "type": "object",
                         "properties": {
                             "download_url": {"type": "string"},
                             "file_id": {"type": "string"},
-                            "mime_type": {"type": "string"}
+                            "mime_type": {"type": "string"},
+                            "uri": {"type": "string"}
                         }
                     },
-                    "ProvidedFileAlias": {
-                        "$ref": "#/$defs/Provided~1File"
-                    },
-                    "RecursiveFile": {
-                        "$ref": "#/$defs/RecursiveFile"
-                    }
-                },
-                "definitions": {
-                    "NamedFile": {
+                    "unrelated_object": {
                         "type": "object",
                         "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
+                            "mime_type": {"type": "string"},
                             "file_name": {"type": "string"}
                         }
                     }
-                },
-                "properties": {
-                    "file": {
-                        "anyOf": [
-                            {"$ref": "#/$defs/ProvidedFileAlias"},
-                            {"type": "null"}
-                        ]
-                    },
-                    "files": {
-                        "type": "array",
-                        "items": {
-                            "$ref": "#/definitions/NamedFile"
-                        }
-                    },
-                    "recursive_file": {
-                        "$ref": "#/$defs/RecursiveFile"
-                    }
                 }
             })
             .as_object()
@@ -473,7 +369,13 @@ fn declared_openai_file_input_optional_fields_supports_local_schema_refs() {
     );
     tool.meta = Some(Meta(
         serde_json::json!({
-            "openai/fileParams": ["file", "files", "recursive_file"]
+            "openai/fileParams": [
+                "photoshop_image",
+                "drive_import",
+                "attachments",
+                "noncanonical_file",
+                "unrelated_object"
+            ]
         })
         .as_object()
         .expect("object")
@@ -483,9 +385,14 @@ fn declared_openai_file_input_optional_fields_supports_local_schema_refs() {
     assert_eq!(
         declared_openai_file_input_optional_fields(&tool),
         HashMap::from([
-            ("file".to_string(), vec!["mime_type".to_string()]),
-            ("files".to_string(), vec!["file_name".to_string()]),
-            ("recursive_file".to_string(), Vec::new()),
+            ("photoshop_image".to_string(), Vec::new()),
+            (
+                "drive_import".to_string(),
+                vec!["mime_type".to_string(), "file_name".to_string()]
+            ),
+            ("attachments".to_string(), vec!["mime_type".to_string()]),
+            ("noncanonical_file".to_string(), Vec::new()),
+            ("unrelated_object".to_string(), Vec::new()),
         ])
     );
 }
