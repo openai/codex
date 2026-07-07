@@ -78,7 +78,7 @@ impl CodexAppsToolsCacheContext {
     pub(crate) fn server_info_cache_path(&self) -> PathBuf {
         self.entry
             .identity
-            .cache_path_in(CODEX_APPS_SERVER_INFO_CACHE_DIR)
+            .auth_cache_path_in(CODEX_APPS_SERVER_INFO_CACHE_DIR)
     }
 
     pub(crate) fn current_tools(&self) -> Option<Vec<ToolInfo>> {
@@ -156,11 +156,12 @@ impl CodexAppsToolsCache {
         let mut expected_connector_ids = expected_connector_ids.into_iter().collect::<Vec<_>>();
         expected_connector_ids.sort_unstable();
         expected_connector_ids.dedup();
-        let expected_connector_ids = Arc::new(expected_connector_ids);
         let identity = CodexAppsToolsCacheIdentity {
             codex_home,
             auth_key,
+            expected_connector_ids: expected_connector_ids.clone(),
         };
+        let expected_connector_ids = Arc::new(expected_connector_ids);
         let mut entries = lock_unpoisoned(&self.entries);
         let entry = entries
             .entry(identity.clone())
@@ -214,12 +215,14 @@ impl CodexAppsToolsCacheEntry {
 
 /// Everything that decides whether two Codex Apps clients can share tools.
 ///
-/// The auth key says whose catalog we are reading. `codex_home` keeps the
+/// The auth key says whose catalog we are reading. Expected connector IDs keep
+/// plugin contexts from sharing a raw snapshot. `codex_home` keeps the
 /// persisted cache under the right home directory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CodexAppsToolsCacheIdentity {
     codex_home: PathBuf,
     auth_key: CodexAppsToolsCacheKey,
+    expected_connector_ids: Vec<String>,
 }
 
 impl CodexAppsToolsCacheIdentity {
@@ -227,6 +230,15 @@ impl CodexAppsToolsCacheIdentity {
         // `codex_home` is already the parent directory. Keep it out of the
         // filename hash so non-UTF-8 Unix paths cannot collapse distinct auth
         // keys onto the same disk cache file.
+        let identity_json = serde_json::to_string(&(&self.auth_key, &self.expected_connector_ids))
+            .unwrap_or_default();
+        let identity_hash = sha1_hex(&identity_json);
+        self.codex_home
+            .join(cache_dir)
+            .join(format!("{identity_hash}.json"))
+    }
+
+    fn auth_cache_path_in(&self, cache_dir: &str) -> PathBuf {
         let identity_json = serde_json::to_string(&self.auth_key).unwrap_or_default();
         let identity_hash = sha1_hex(&identity_json);
         self.codex_home
