@@ -10,7 +10,6 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
-use crate::session::turn_context::TurnContext;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
@@ -19,28 +18,19 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 pub(super) struct RemoteCompactAttempt {
-    pub(super) turn_context: Arc<TurnContext>,
     pub(super) new_history: Vec<ResponseItem>,
     pub(super) trace_input_history: Vec<ResponseItem>,
-    pub(super) compaction_trace: CompactionTraceContext,
 }
 
 pub(super) async fn run_remote_compact_attempt(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
     turn_state: Option<Arc<OnceLock<String>>>,
-    compaction_item_id: &str,
+    compaction_trace: &CompactionTraceContext,
     compaction_metadata: CompactionTurnMetadata,
-    active_context_tokens_before: Option<i64>,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<RemoteCompactAttempt> {
-    let turn_context = Arc::clone(&step_context.turn);
-    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
-        turn_context.sub_id.as_str(),
-        compaction_item_id,
-        turn_context.model_info.slug.as_str(),
-        turn_context.provider.info().name.as_str(),
-    );
+    let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
     let (rewritten_outputs, estimated_deleted_tokens) =
@@ -56,13 +46,13 @@ pub(super) async fn run_remote_compact_attempt(
             "rewrote history outputs before remote compaction"
         );
     }
-    analytics_details.active_context_tokens_before = active_context_tokens_before;
     if estimated_deleted_tokens > 0 {
         let max_local_deleted_tokens = sess
             .estimated_tokens_after_last_model_generated_item()
             .await;
-        analytics_details.active_context_tokens_before =
-            active_context_tokens_before.map(|active_context_tokens_before| {
+        analytics_details.active_context_tokens_before = analytics_details
+            .active_context_tokens_before
+            .map(|active_context_tokens_before| {
                 active_context_tokens_before
                     .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens))
             });
@@ -106,14 +96,12 @@ pub(super) async fn run_remote_compact_attempt(
                 },
             },
             &turn_context.session_telemetry,
-            &compaction_trace,
+            compaction_trace,
             &responses_metadata,
         )
         .await?;
     Ok(RemoteCompactAttempt {
-        turn_context,
         new_history,
         trace_input_history,
-        compaction_trace,
     })
 }

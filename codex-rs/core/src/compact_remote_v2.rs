@@ -193,34 +193,28 @@ async fn run_remote_compact_task_inner_impl(
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
-    let compaction_item_id = context_compaction_item.id.clone();
+    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
+        turn_context.sub_id.as_str(),
+        context_compaction_item.id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
 
-    let mut owned_client_session;
-    let client_session = match client_session {
-        Some(client_session) => client_session,
-        None => {
-            owned_client_session = sess.services.model_client.new_session();
-            &mut owned_client_session
-        }
-    };
-    let active_context_tokens_before = analytics_details.active_context_tokens_before;
     let RemoteCompactV2Attempt {
-        turn_context,
         trace_input_history,
         prompt_input,
         compaction_output,
         token_usage,
-        compaction_trace,
+        owned_client_session: _owned_client_session,
     } = run_remote_compact_v2_attempt(
         sess,
         step_context,
         client_session,
-        compaction_item_id.as_str(),
+        &compaction_trace,
         compaction_metadata,
-        active_context_tokens_before,
         analytics_details,
     )
     .await?;
@@ -268,9 +262,9 @@ async fn run_remote_compact_task_inner_impl(
         compacted_item,
     )
     .await;
-    sess.recompute_token_usage(&turn_context).await;
+    sess.recompute_token_usage(turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
+    sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
 }

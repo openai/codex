@@ -180,23 +180,26 @@ async fn run_remote_compact_task_inner_impl(
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
-    let compaction_item_id = context_compaction_item.id.clone();
+    // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
+    // endpoint attempts, and the installed history checkpoint all have one join key.
+    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
+        turn_context.sub_id.as_str(),
+        context_compaction_item.id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    let active_context_tokens_before = analytics_details.active_context_tokens_before;
     let RemoteCompactAttempt {
-        turn_context,
         new_history,
         trace_input_history,
-        compaction_trace,
     } = run_remote_compact_attempt(
         sess,
         step_context,
         turn_state,
-        compaction_item_id.as_str(),
+        &compaction_trace,
         compaction_metadata,
-        active_context_tokens_before,
         analytics_details,
     )
     .await?;
@@ -238,9 +241,9 @@ async fn run_remote_compact_task_inner_impl(
         compacted_item,
     )
     .await;
-    sess.recompute_token_usage(&turn_context).await;
+    sess.recompute_token_usage(turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
+    sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
 }
