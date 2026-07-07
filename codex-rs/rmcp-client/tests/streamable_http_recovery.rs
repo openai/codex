@@ -11,6 +11,8 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::HttpResponseBodyStream;
+use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::is_authentication_required_error;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
@@ -124,7 +126,13 @@ async fn streamable_http_initialize_retries_remote_no_response_error() -> anyhow
 async fn streamable_http_initialize_retries_transient_http_status() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
 
-    arm_initialize_post_failure(&base_url, /*status*/ 502, /*remaining*/ 1).await?;
+    arm_initialize_post_failure(
+        &base_url,
+        /*status*/ 502,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[],
+    )
+    .await?;
 
     let client = create_client(&base_url).await?;
     let result = call_echo_tool(&client, "after-status-retry").await?;
@@ -298,6 +306,37 @@ async fn streamable_http_401_does_not_trigger_recovery() -> anyhow::Result<()> {
         .unwrap_err();
     assert!(second_error.to_string().contains("401"));
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn static_bearer_initialize_401_requires_authentication() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    arm_initialize_post_failure(
+        &base_url,
+        /*status*/ 401,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[r#"Bearer realm="mcp""#],
+    )
+    .await?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        "test-static-bearer-401",
+        &format!("{base_url}/mcp"),
+        Some("test-bearer".to_string()),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        codex_config::types::OAuthCredentialsStoreMode::File,
+        codex_config::types::AuthKeyringBackendKind::default(),
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    let error = streamable_http_test_support::initialize_client(&client)
+        .await
+        .expect_err("a challenged static bearer token should require authentication");
+
+    assert!(is_authentication_required_error(&error));
     Ok(())
 }
 
