@@ -10,6 +10,7 @@ use codex_otel::TURN_TTFM_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
+use tracing::info_span;
 
 use crate::ResponseEvent;
 use crate::session::turn_context::TurnContext;
@@ -23,6 +24,15 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
     else {
         return;
     };
+
+    let duration_ms = duration_to_i64_ms(duration);
+    info_span!(
+        "turn_ttft",
+        otel.name = "codex.turn.ttft",
+        codex.turn.ttft.duration_ms = duration_ms,
+    )
+    .in_scope(|| {});
+
     turn_context.session_telemetry.record_turn_ttft(duration);
 }
 
@@ -109,9 +119,7 @@ impl TurnTimingState {
 
     pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
         let state = self.state.lock().await;
-        state
-            .time_to_first_token()
-            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        state.time_to_first_token().map(duration_to_i64_ms)
     }
 
     pub(crate) fn complete_profile(&self) -> TurnProfile {
@@ -189,6 +197,10 @@ pub(crate) fn now_unix_timestamp_ms() -> i64 {
 
 fn duration_to_u64_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn duration_to_i64_ms(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 impl TurnProfileState {

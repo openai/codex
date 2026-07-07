@@ -31,13 +31,21 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use opentelemetry::Value;
+use opentelemetry::trace::SpanId;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::InMemorySpanExporter;
+use opentelemetry_sdk::trace::SdkTracerProvider;
+use pretty_assertions::assert_eq;
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing::Level;
-use tracing_test::traced_test;
-
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_test::internal::MockWriter;
+use tracing_test::traced_test;
 
 fn extract_log_field(line: &str, key: &str) -> Option<String> {
     let quoted_prefix = format!("{key}=\"");
@@ -624,35 +632,47 @@ async fn process_sse_emits_completed_telemetry() {
     });
 }
 
+/// Ensures completed responses and turns expose exact usage and TTFT fields for trace queries.
 #[tokio::test(flavor = "current_thread")]
-async fn turn_and_completed_response_spans_record_token_usage() {
+async fn turn_and_completed_response_spans_record_usage_and_ttft() {
     let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_ansi(false)
-        .with_max_level(Level::TRACE)
-        .with_span_events(FmtSpan::FULL)
-        .with_writer(MockWriter::new(buffer))
-        .finish();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("codex-core-otel-test");
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_level(true)
+                .with_ansi(false)
+                .with_span_events(FmtSpan::FULL)
+                .with_writer(MockWriter::new(buffer))
+                .with_filter(LevelFilter::TRACE),
+        )
+        .with(tracing_opentelemetry::layer().with_tracer(tracer));
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
 
     mount_sse_once(
         &server,
-        sse(vec![serde_json::json!({
-            "type": "response.completed",
-            "response": {
-                "id": "resp1",
-                "usage": {
-                    "input_tokens": 3,
-                    "input_tokens_details": { "cached_tokens": 1 },
-                    "output_tokens": 5,
-                    "output_tokens_details": { "reasoning_tokens": 2 },
-                    "total_tokens": 9
+        sse(vec![
+            ev_assistant_message("msg-1", "hello"),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp1",
+                    "usage": {
+                        "input_tokens": 3,
+                        "input_tokens_details": { "cached_tokens": 1 },
+                        "output_tokens": 5,
+                        "output_tokens_details": { "reasoning_tokens": 2 },
+                        "total_tokens": 9
+                    }
                 }
-            }
-        })]),
+            }),
+        ]),
     )
     .await;
 
@@ -684,7 +704,64 @@ async fn turn_and_completed_response_spans_record_token_usage() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let turn_complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let EventMsg::TurnComplete(turn_complete) = turn_complete else {
+        unreachable!("wait_for_event returned a non-matching event")
+    };
+    let time_to_first_token_ms = turn_complete
+        .time_to_first_token_ms
+        .expect("assistant message should establish TTFT");
+
+    let spans = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tracer_provider.force_flush().expect("flush traces");
+            let spans = span_exporter.get_finished_spans().expect("span export");
+            if spans.iter().any(|span| span.name == "session_task.turn") {
+                break spans;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("turn span should finish");
+
+    let ttft_span = spans
+        .iter()
+        .find(|span| span.name == "codex.turn.ttft")
+        .unwrap_or_else(|| panic!("missing codex.turn.ttft span; exported spans:\n{spans:#?}"));
+    let turn_span = spans
+        .iter()
+        .find(|span| span.name == "session_task.turn")
+        .expect("session_task.turn span should be exported");
+    let ttft_duration_ms = ttft_span
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key.as_str() == "codex.turn.ttft.duration_ms")
+        .map(|attribute| &attribute.value);
+    assert_eq!(ttft_duration_ms, Some(&Value::I64(time_to_first_token_ms)));
+    assert_eq!(
+        ttft_span.span_context.trace_id(),
+        turn_span.span_context.trace_id()
+    );
+
+    let turn_span_id = turn_span.span_context.span_id();
+    let mut parent_span_id = ttft_span.parent_span_id;
+    while parent_span_id != turn_span_id {
+        assert_ne!(
+            parent_span_id,
+            SpanId::INVALID,
+            "TTFT span should descend from session_task.turn"
+        );
+        parent_span_id = spans
+            .iter()
+            .find(|span| span.span_context.span_id() == parent_span_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing parent {parent_span_id} while walking TTFT ancestry; exported spans:\n{spans:#?}"
+                )
+            })
+            .parent_span_id;
+    }
 
     let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
 
