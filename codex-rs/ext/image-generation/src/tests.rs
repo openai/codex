@@ -224,9 +224,12 @@ async fn recent_image_fallback_requires_requested_count() {
 fn generated_output_returns_image_input_and_output_hint() {
     let output_hint =
         extension_image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
+    let expected_output_hint = "Generated images are saved to /tmp as /tmp/call-1.png by default.
+The generated image is already displayed to the user. Do not embed or link it, or an unchanged copy of it, in Markdown.
+If you need to use the generated image at another path for further work, copy it and leave the original in place unless the user explicitly asks you to delete it.";
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
-        output_hint: Some(output_hint.clone()),
+        output_hint: Some(output_hint),
     };
 
     let ResponseInputItem::FunctionCallOutput {
@@ -246,7 +249,9 @@ fn generated_output_returns_image_input_and_output_hint() {
                 image_url: format!("data:image/png;base64,{RESULT}"),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
-            FunctionCallOutputContentItem::InputText { text: output_hint },
+            FunctionCallOutputContentItem::InputText {
+                text: expected_output_hint.to_string(),
+            },
         ]
     );
 }
