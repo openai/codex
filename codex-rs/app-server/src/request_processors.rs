@@ -630,5 +630,42 @@ pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<T
             builder.handle_rollout_item(item);
         }
     }
-    builder.finish()
+    let turns = builder.finish();
+    if let Some(metrics) = codex_otel::global() {
+        for turn in &turns {
+            for item in &turn.items {
+                let ThreadItem::McpToolCall {
+                    server,
+                    app_context,
+                    mcp_app_resource_uri,
+                    plugin_id,
+                    ..
+                } = item
+                else {
+                    continue;
+                };
+                let has_mcp_app_resource_uri = mcp_app_resource_uri
+                    .as_deref()
+                    .is_some_and(|resource_uri| !resource_uri.is_empty());
+                let is_missing_trusted_connector_id = app_context
+                    .as_ref()
+                    .is_none_or(|context| context.connector_id.is_empty());
+                if has_mcp_app_resource_uri && is_missing_trusted_connector_id {
+                    let server_kind = if server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME {
+                        "codex_apps"
+                    } else if plugin_id.is_some() {
+                        "selected_plugin"
+                    } else {
+                        "other"
+                    };
+                    let _ = metrics.counter(
+                        "codex.mcp.ui_resource_uri_without_trusted_connector_id",
+                        /*inc*/ 1,
+                        &[("server_kind", server_kind), ("source", "history")],
+                    );
+                }
+            }
+        }
+    }
+    turns
 }

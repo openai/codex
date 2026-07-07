@@ -175,7 +175,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context.session_telemetry.counter(
             "codex.mcp.ui_resource_uri_without_trusted_connector_id",
             /*inc*/ 1,
-            &[("server_kind", server_kind)],
+            &[("server_kind", server_kind), ("source", "live")],
         );
     }
     let app_tool_policy = if is_codex_apps_server {
