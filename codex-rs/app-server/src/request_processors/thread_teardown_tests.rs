@@ -59,115 +59,141 @@ async fn teardown_is_singleflight_and_outlives_its_first_waiter() {
 }
 
 #[tokio::test]
-async fn overlapping_multi_claim_extensions_release_before_retrying_without_partial_claims() {
+async fn freeze_handoffs_are_gapless_serialized_and_cancellation_safe() {
     let pending = PendingThreadUnloads::default();
-    let root_a = ThreadId::new();
-    let root_b = ThreadId::new();
+    let mut freeze = pending
+        .acquire_freeze_guard()
+        .await
+        .expect("freeze guard should be available");
+    let root = ThreadId::new();
+    let free_sibling = ThreadId::new();
     let late_a = ThreadId::new();
+    let late_a_alias = ThreadId::new();
     let late_b = ThreadId::new();
 
-    let PendingThreadUnloadClaimResult::Claimed(claim_a) = pending.try_claim_many([root_a]) else {
-        panic!("first root should be claimable");
+    let PendingThreadUnloadClaimResult::Claimed(predecessor_a) =
+        pending.try_claim_many([late_a, late_a_alias])
+    else {
+        panic!("first predecessor should claim late descendants");
     };
-    let PendingThreadUnloadClaimResult::Claimed(claim_b) = pending.try_claim_many([root_b]) else {
-        panic!("second root should be claimable");
-    };
-    let (conflicts_a_tx, conflicts_a_rx) = oneshot::channel();
-    let (release_a_tx, release_a_rx) = oneshot::channel();
-    let completion_a = claim_a.start_with(move |owner| async move {
-        let PendingThreadUnloadExtendResult::Pending(conflicts) =
-            owner.try_extend([root_b, late_a])
-        else {
-            panic!("first extension should conflict with the second owner");
-        };
-        assert!(conflicts_a_tx.send(conflicts).is_ok());
-        let _ = release_a_rx.await;
+    let (release_predecessor_a_tx, release_predecessor_a_rx) = oneshot::channel();
+    let predecessor_a_completion = predecessor_a.start(async move {
+        let _ = release_predecessor_a_rx.await;
     });
-    let (conflicts_b_tx, conflicts_b_rx) = oneshot::channel();
-    let (release_b_tx, release_b_rx) = oneshot::channel();
-    let completion_b = claim_b.start_with(move |owner| async move {
-        let PendingThreadUnloadExtendResult::Pending(conflicts) =
-            owner.try_extend([root_a, late_b])
-        else {
-            panic!("second extension should conflict with the first owner");
-        };
-        assert!(conflicts_b_tx.send(conflicts).is_ok());
-        let _ = release_b_rx.await;
+    let PendingThreadUnloadClaimResult::Claimed(predecessor_b) = pending.try_claim(late_b) else {
+        panic!("second predecessor should claim its late descendant");
+    };
+    let (release_predecessor_b_tx, release_predecessor_b_rx) = oneshot::channel();
+    let predecessor_b_completion = predecessor_b.start(async move {
+        let _ = release_predecessor_b_rx.await;
     });
-    let conflicts_a = conflicts_a_rx.await.expect("first extension result");
-    let conflicts_b = conflicts_b_rx.await.expect("second extension result");
-    assert_eq!(conflicts_a.completions.len(), 1);
-    assert_eq!(conflicts_b.completions.len(), 1);
-    assert!(!pending.contains(late_a));
-    assert!(!pending.contains(late_b));
-    let unclaimed = ThreadId::new();
-    let PendingThreadUnloadClaimResult::Pending(all_conflicts) =
-        pending.try_claim_many([root_a, root_b, unclaimed])
-    else {
-        panic!("an overlapping multi-claim should report every conflicting owner");
+    let PendingThreadUnloadClaimResult::Claimed(successor) = pending.try_claim(root) else {
+        panic!("successor should claim its root");
     };
-    assert_eq!(all_conflicts.completions.len(), 2);
-    assert!(!pending.contains(unclaimed));
-
-    // Neither owner may wait while retaining its partial group: each one is the other's
-    // conflict. Ending both tracked operations lets every conflict subscription complete.
-    release_a_tx.send(()).expect("release first owner");
-    release_b_tx.send(()).expect("release second owner");
-    wait_for_thread_unload(completion_a).await;
-    wait_for_thread_unload(completion_b).await;
-    wait_for_thread_unloads(conflicts_a).await;
-    wait_for_thread_unloads(conflicts_b).await;
-    wait_for_thread_unloads(all_conflicts).await;
-
-    let PendingThreadUnloadClaimResult::Claimed(full_claim) =
-        pending.try_claim_many([root_a, root_b, late_a, late_b, late_a])
-    else {
-        panic!("the complete deduplicated set should be claimable after both owners release");
-    };
-    let same_owner_unclaimed = ThreadId::new();
-    let PendingThreadUnloadClaimResult::Pending(same_owner_conflict) =
-        pending.try_claim_many([root_a, late_a, same_owner_unclaimed])
-    else {
-        panic!("overlap with one owner should conflict");
-    };
-    assert_eq!(same_owner_conflict.completions.len(), 1);
-    assert!(!pending.contains(same_owner_unclaimed));
-    let full_completion = full_claim.completed.clone();
-    drop(full_claim);
-    wait_for_thread_unload(full_completion).await;
-    wait_for_thread_unloads(same_owner_conflict).await;
-    assert!(pending.is_empty());
-
-    let stale_root = ThreadId::new();
-    let closing_late = ThreadId::new();
-    let stale_late = ThreadId::new();
-    let PendingThreadUnloadClaimResult::Claimed(stale_claim) = pending.try_claim_many([stale_root])
-    else {
-        panic!("stale-handle root should be claimable");
-    };
-    let (extend_tx, extend_rx) = oneshot::channel();
-    let (stale_tx, stale_rx) = oneshot::channel();
-    let stale_completion = stale_claim.start_with(move |owner| async move {
-        let _ = extend_rx.await;
+    let (conflicts_tx, conflicts_rx) = oneshot::channel();
+    let (retry_tx, retry_rx) = oneshot::channel();
+    let (stable_tx, stable_rx) = oneshot::channel();
+    let (release_successor_tx, release_successor_rx) = oneshot::channel();
+    let successor_completion = successor.start_with(move |owner| async move {
+        let PendingThreadUnloadExtendResult::Pending(conflicts) = owner.try_extend(
+            &mut freeze,
+            [root, free_sibling, late_a, late_a_alias, late_b],
+        ) else {
+            panic!("late descendants should conflict with their predecessor");
+        };
+        assert!(conflicts_tx.send(conflicts).is_ok());
+        let _ = retry_rx.await;
         assert!(matches!(
-            owner.try_extend([closing_late]),
+            owner.try_extend(
+                &mut freeze,
+                [root, free_sibling, late_a, late_a_alias, late_b]
+            ),
             PendingThreadUnloadExtendResult::Extended
         ));
-        assert!(stale_tx.send(owner).is_ok());
+        let _ = stable_tx.send(());
+        let _ = release_successor_rx.await;
     });
-    let pending_for_drain = pending.clone();
-    let drain = tokio::spawn(async move { pending_for_drain.close_and_wait().await });
-    while !pending.lock_registry().closing {
-        tokio::task::yield_now().await;
-    }
-    extend_tx.send(()).expect("extend while coordinator closes");
-    let stale_owner = stale_rx.await.expect("stale owner handle");
-    wait_for_thread_unload(stale_completion).await;
-    drain.await.expect("coordinator drain should complete");
+    let conflicts = conflicts_rx.await.expect("extension conflicts");
+    assert_eq!(conflicts.completions.len(), 2);
+    assert!(pending.contains(free_sibling));
+
+    let pending_for_freeze = pending.clone();
+    let next_freeze = tokio::spawn(async move { pending_for_freeze.acquire_freeze_guard().await });
+    tokio::task::yield_now().await;
+    assert!(!next_freeze.is_finished());
+
+    release_predecessor_a_tx
+        .send(())
+        .expect("release first predecessor");
+    release_predecessor_b_tx
+        .send(())
+        .expect("release second predecessor");
+    wait_for_thread_unload(predecessor_a_completion).await;
+    wait_for_thread_unload(predecessor_b_completion).await;
+    wait_for_thread_unloads(conflicts).await;
+    let PendingThreadUnloadClaimResult::Pending(successor_conflict) =
+        pending.try_claim_many([root, free_sibling, late_a, late_a_alias, late_b])
+    else {
+        panic!("every ID should transfer to the one successor owner");
+    };
+    assert_eq!(successor_conflict.completions.len(), 1);
+    retry_tx.send(()).expect("retry extension after handoff");
+    stable_rx.await.expect("successor should become stable");
+    release_successor_tx.send(()).expect("release successor");
+    wait_for_thread_unload(successor_completion).await;
+    wait_for_thread_unloads(successor_conflict).await;
+    let mut freeze = next_freeze
+        .await
+        .expect("freeze waiter should not fail")
+        .expect("next freeze guard should become available");
+    assert!(pending.is_empty());
+
+    let cancelled_root = ThreadId::new();
+    let cancelled_free = ThreadId::new();
+    let contested = ThreadId::new();
+    let PendingThreadUnloadClaimResult::Claimed(predecessor) = pending.try_claim(contested) else {
+        panic!("cancellation predecessor should be claimable");
+    };
+    let (release_predecessor_tx, release_predecessor_rx) = oneshot::channel();
+    let predecessor_completion = predecessor.start(async move {
+        let _ = release_predecessor_rx.await;
+    });
+    let PendingThreadUnloadClaimResult::Claimed(cancelled) = pending.try_claim(cancelled_root)
+    else {
+        panic!("cancelled successor should claim its root");
+    };
+    let (cancelled_conflicts_tx, cancelled_conflicts_rx) = oneshot::channel();
+    let (stale_owner_tx, stale_owner_rx) = oneshot::channel();
+    let cancelled_completion = cancelled.start_with(move |owner| async move {
+        let PendingThreadUnloadExtendResult::Pending(conflicts) =
+            owner.try_extend(&mut freeze, [cancelled_root, cancelled_free, contested])
+        else {
+            panic!("cancelled successor should register a handoff");
+        };
+        assert!(cancelled_conflicts_tx.send(conflicts).is_ok());
+        assert!(stale_owner_tx.send(owner).is_ok());
+    });
+    let cancelled_conflicts = cancelled_conflicts_rx
+        .await
+        .expect("cancelled extension conflicts");
+    let stale_owner = stale_owner_rx.await.expect("cancelled owner handle");
+    wait_for_thread_unload(cancelled_completion).await;
+    assert!(!pending.contains(cancelled_root));
+    assert!(!pending.contains(cancelled_free));
+    assert!(pending.contains(contested));
+    let mut stale_freeze = pending
+        .acquire_freeze_guard()
+        .await
+        .expect("cancelled freeze guard should be released");
     assert!(matches!(
-        stale_owner.try_extend([stale_late]),
+        stale_owner.try_extend(&mut stale_freeze, [cancelled_free]),
         PendingThreadUnloadExtendResult::Finished
     ));
-    assert!(!pending.contains(stale_late));
+    drop(stale_freeze);
+    release_predecessor_tx
+        .send(())
+        .expect("release cancellation predecessor");
+    wait_for_thread_unload(predecessor_completion).await;
+    wait_for_thread_unloads(cancelled_conflicts).await;
     assert!(pending.is_empty());
 }

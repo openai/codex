@@ -1,6 +1,7 @@
 use super::*;
 use std::pin::Pin;
 use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -11,16 +12,31 @@ pub(crate) struct PendingThreadUnloads {
     inner: Arc<PendingThreadUnloadsInner>,
 }
 
-#[derive(Default)]
 struct PendingThreadUnloadsInner {
     registry: StdMutex<PendingThreadUnloadRegistry>,
     tasks: TaskTracker,
+    freeze: Arc<Semaphore>,
+}
+
+impl Default for PendingThreadUnloadsInner {
+    fn default() -> Self {
+        Self {
+            registry: StdMutex::new(PendingThreadUnloadRegistry::default()),
+            tasks: TaskTracker::new(),
+            freeze: Arc::new(Semaphore::new(1)),
+        }
+    }
 }
 
 #[derive(Default)]
 struct PendingThreadUnloadRegistry {
     closing: bool,
-    entries: HashMap<ThreadId, Arc<PendingThreadUnloadOperation>>,
+    entries: HashMap<ThreadId, PendingThreadUnloadEntry>,
+}
+
+struct PendingThreadUnloadEntry {
+    owner: Arc<PendingThreadUnloadOperation>,
+    successor: Option<Weak<PendingThreadUnloadOperation>>,
 }
 
 struct PendingThreadUnloadOperation {
@@ -41,14 +57,22 @@ pub(super) enum PendingThreadUnloadClaimResult {
 )]
 pub(super) enum PendingThreadUnloadExtendResult {
     Extended,
-    /// No requested ID was added. The tracked owner must end and release its existing group
-    /// before any caller awaits these conflicts, then retry one claim for the full known set.
+    /// Free IDs are owned and contested IDs have exact successor handoffs registered. The caller
+    /// retains both its owner and freeze guard while awaiting these predecessors, then retries.
     Pending(PendingThreadUnloadConflicts),
     Finished,
 }
 
 pub(super) struct PendingThreadUnloadConflicts {
     completions: Vec<watch::Receiver<bool>>,
+}
+
+/// Coordinator-wide affine token for one tree-freeze extension phase. Acquire it before the
+/// global thread-list permit and retain it across any temporary permit drops until the tree is
+/// stable; no other operation may register successor handoffs while it is held.
+pub(super) struct PendingThreadUnloadFreezeGuard {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    operation: Option<Weak<PendingThreadUnloadOperation>>,
 }
 
 pub(super) enum PendingThreadUnloadStartResult {
@@ -98,11 +122,27 @@ impl PendingThreadUnloadClaimHandle {
         dead_code,
         reason = "consumed by the stacked complete-tree teardown layer"
     )]
-    pub(super) fn try_extend<I>(&self, thread_ids: I) -> PendingThreadUnloadExtendResult
+    pub(super) fn try_extend<I>(
+        &self,
+        guard: &mut PendingThreadUnloadFreezeGuard,
+        thread_ids: I,
+    ) -> PendingThreadUnloadExtendResult
     where
         I: IntoIterator<Item = ThreadId>,
     {
-        self.pending.try_extend(self, thread_ids)
+        self.pending.try_extend(self, guard, thread_ids)
+    }
+}
+
+impl PendingThreadUnloadFreezeGuard {
+    fn bind(&mut self, operation: &Arc<PendingThreadUnloadOperation>) -> bool {
+        match self.operation.as_ref().and_then(Weak::upgrade) {
+            Some(bound) => Arc::ptr_eq(&bound, operation),
+            None => {
+                self.operation = Some(Arc::downgrade(operation));
+                true
+            }
+        }
     }
 }
 
@@ -129,11 +169,23 @@ impl PendingThreadUnloads {
         self.lock_registry().entries.contains_key(&thread_id)
     }
 
+    #[allow(
+        dead_code,
+        reason = "consumed by the stacked complete-tree teardown layer"
+    )]
+    pub(super) async fn acquire_freeze_guard(&self) -> Option<PendingThreadUnloadFreezeGuard> {
+        let permit = self.inner.freeze.clone().acquire_owned().await.ok()?;
+        Some(PendingThreadUnloadFreezeGuard {
+            _permit: permit,
+            operation: None,
+        })
+    }
+
     pub(super) fn subscribe(&self, thread_id: ThreadId) -> Option<watch::Receiver<bool>> {
         self.lock_registry()
             .entries
             .get(&thread_id)
-            .map(|operation| operation.completed.subscribe())
+            .map(|entry| entry.owner.completed.subscribe())
     }
 
     pub(super) fn try_claim(&self, thread_id: ThreadId) -> PendingThreadUnloadClaimResult {
@@ -163,7 +215,13 @@ impl PendingThreadUnloads {
             finished: AtomicBool::new(false),
         });
         for thread_id in &thread_ids {
-            registry.entries.insert(*thread_id, Arc::clone(&operation));
+            registry.entries.insert(
+                *thread_id,
+                PendingThreadUnloadEntry {
+                    owner: Arc::clone(&operation),
+                    successor: None,
+                },
+            );
         }
         let owner = PendingThreadUnloadOwner {
             pending: self.clone(),
@@ -192,6 +250,7 @@ impl PendingThreadUnloads {
     fn try_extend<I>(
         &self,
         owner: &PendingThreadUnloadClaimHandle,
+        guard: &mut PendingThreadUnloadFreezeGuard,
         thread_ids: I,
     ) -> PendingThreadUnloadExtendResult
     where
@@ -199,27 +258,50 @@ impl PendingThreadUnloads {
     {
         let thread_ids = dedupe_thread_ids(thread_ids);
         let mut registry = self.lock_registry();
-        if owner.operation.finished.load(Ordering::Acquire) {
+        if owner.operation.finished.load(Ordering::Acquire) || !guard.bind(&owner.operation) {
             return PendingThreadUnloadExtendResult::Finished;
         }
-        let conflicts = conflicting_completions(&registry, &thread_ids, Some(&owner.operation));
-        if !conflicts.is_empty() {
-            return PendingThreadUnloadExtendResult::Pending(PendingThreadUnloadConflicts {
-                completions: conflicts,
-            });
-        }
-
         let mut owned_thread_ids = owner
             .operation
             .thread_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut conflicts = Vec::new();
         for thread_id in thread_ids {
-            registry
-                .entries
-                .entry(thread_id)
-                .or_insert_with(|| Arc::clone(&owner.operation));
-            owned_thread_ids.insert(thread_id);
+            match registry.entries.entry(thread_id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(PendingThreadUnloadEntry {
+                        owner: Arc::clone(&owner.operation),
+                        successor: None,
+                    });
+                    owned_thread_ids.insert(thread_id);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let entry = entry.get_mut();
+                    if Arc::ptr_eq(&entry.owner, &owner.operation) {
+                        owned_thread_ids.insert(thread_id);
+                        continue;
+                    }
+                    let successor = entry.successor.as_ref().and_then(Weak::upgrade);
+                    if successor
+                        .as_ref()
+                        .is_none_or(|successor| successor.finished.load(Ordering::Acquire))
+                    {
+                        entry.successor = Some(Arc::downgrade(&owner.operation));
+                    } else if let Some(successor) = successor.as_ref()
+                        && !Arc::ptr_eq(successor, &owner.operation)
+                    {
+                        push_conflict(&mut conflicts, successor);
+                    }
+                    push_conflict(&mut conflicts, &entry.owner);
+                }
+            }
+        }
+        drop(owned_thread_ids);
+        if !conflicts.is_empty() {
+            return PendingThreadUnloadExtendResult::Pending(PendingThreadUnloadConflicts {
+                completions: conflict_receivers(conflicts),
+            });
         }
         PendingThreadUnloadExtendResult::Extended
     }
@@ -246,20 +328,39 @@ impl PendingThreadUnloads {
 
     fn release(&self, operation: &Arc<PendingThreadUnloadOperation>) {
         let mut registry = self.lock_registry();
+        operation.finished.store(true, Ordering::Release);
         let thread_ids = operation
             .thread_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for thread_id in thread_ids.iter() {
-            if registry
-                .entries
-                .get(thread_id)
-                .is_some_and(|current| Arc::ptr_eq(current, operation))
-            {
-                registry.entries.remove(thread_id);
+            let std::collections::hash_map::Entry::Occupied(mut entry) =
+                registry.entries.entry(*thread_id)
+            else {
+                continue;
+            };
+            if !Arc::ptr_eq(&entry.get().owner, operation) {
+                continue;
+            }
+            let successor = entry
+                .get()
+                .successor
+                .as_ref()
+                .and_then(Weak::upgrade)
+                .filter(|successor| !successor.finished.load(Ordering::Acquire));
+            if let Some(successor) = successor {
+                let mut successor_thread_ids = successor
+                    .thread_ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let entry = entry.get_mut();
+                entry.owner = Arc::clone(&successor);
+                entry.successor = None;
+                successor_thread_ids.insert(*thread_id);
+            } else {
+                entry.remove();
             }
         }
-        operation.finished.store(true, Ordering::Release);
         drop(thread_ids);
         drop(registry);
         let _ = operation.completed.send(true);
@@ -269,6 +370,7 @@ impl PendingThreadUnloads {
         {
             let mut registry = self.lock_registry();
             registry.closing = true;
+            self.inner.freeze.close();
             self.inner.tasks.close();
         }
         self.inner.tasks.wait().await;
@@ -305,18 +407,32 @@ fn conflicting_completions(
 ) -> Vec<watch::Receiver<bool>> {
     let mut conflicts = Vec::<Arc<PendingThreadUnloadOperation>>::new();
     for thread_id in thread_ids {
-        let Some(operation) = registry.entries.get(thread_id) else {
+        let Some(entry) = registry.entries.get(thread_id) else {
             continue;
         };
-        if owner.is_some_and(|owner| Arc::ptr_eq(operation, owner))
-            || conflicts
-                .iter()
-                .any(|conflict| Arc::ptr_eq(conflict, operation))
-        {
+        if owner.is_some_and(|owner| Arc::ptr_eq(&entry.owner, owner)) {
             continue;
         }
+        push_conflict(&mut conflicts, &entry.owner);
+    }
+    conflict_receivers(conflicts)
+}
+
+fn push_conflict(
+    conflicts: &mut Vec<Arc<PendingThreadUnloadOperation>>,
+    operation: &Arc<PendingThreadUnloadOperation>,
+) {
+    if !conflicts
+        .iter()
+        .any(|conflict| Arc::ptr_eq(conflict, operation))
+    {
         conflicts.push(Arc::clone(operation));
     }
+}
+
+fn conflict_receivers(
+    conflicts: Vec<Arc<PendingThreadUnloadOperation>>,
+) -> Vec<watch::Receiver<bool>> {
     conflicts
         .into_iter()
         .map(|operation| operation.completed.subscribe())
