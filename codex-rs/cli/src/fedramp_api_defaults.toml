@@ -1,0 +1,50 @@
+forced_login_method = "api"
+openai_base_url = "https://gov.api.openai.com/v1"
+model_provider = "openai"
+mcp_servers = {}
+model_providers = {}
+plugins = {}
+
+[features]
+apps = false
+enable_mcp_apps = false
+plugins = false
+remote_plugin = false
+tool_suggest = false
+memories = false
+memory_tool = false
+multi_agent = false
+multi_agent_mode = false
+multi_agent_v2 = false
+remote_control = false
+plugin_hooks = false
+plugin_sharing = false
+skill_mcp_dependency_install = false
+mentions_v2 = false
+
+[memories]
+generate_memories = false
+use_memories = false
+dedicated_tools = false
+
+[skills]
+include_instructions = false
+config = []
+
+[skills.bundled]
+enabled = false
+
+[orchestrator.skills]
+enabled = false
+
+[orchestrator.mcp]
+enabled = false
+
+[analytics]
+enabled = false
+
+[otel]
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none"
+log_user_prompt = false

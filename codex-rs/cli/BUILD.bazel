@@ -3,6 +3,7 @@ load("//bazel/platforms:release_binaries.bzl", "multiplatform_binaries")
 
 codex_rust_crate(
     name = "cli",
+    compile_data = ["src/fedramp_api_defaults.toml"],
     crate_name = "codex_cli",
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",

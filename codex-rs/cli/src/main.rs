@@ -50,6 +50,7 @@ mod app_cmd;
 mod desktop_app;
 mod doctor;
 mod exec_server_telemetry;
+mod fedramp_api;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
@@ -954,9 +955,10 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    let flavor = fedramp_api::CodexFlavor::compiled();
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
-        cli_main(arg0_paths, remote_control_disabled).await?;
+        cli_main(arg0_paths, remote_control_disabled, flavor).await?;
         Ok(())
     })
 }
@@ -964,6 +966,7 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(
     arg0_paths: Arg0DispatchPaths,
     remote_control_disabled: bool,
+    flavor: fedramp_api::CodexFlavor,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
@@ -976,6 +979,7 @@ async fn cli_main(
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+    fedramp_api::apply(flavor, &mut root_config_overrides, subcommand.as_ref())?;
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
     let root_strict_config = interactive.strict_config;

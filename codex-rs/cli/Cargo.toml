@@ -9,6 +9,11 @@ build = "build.rs"
 name = "codex"
 path = "src/main.rs"
 
+[[bin]]
+name = "codex-fedramp-api"
+path = "src/main.rs"
+test = false
+
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"
