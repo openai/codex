@@ -10,10 +10,16 @@ use std::sync::atomic::Ordering;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecServerError;
+use codex_exec_server::HttpClient;
+use codex_exec_server::HttpRequestParams;
+use codex_exec_server::HttpRequestResponse;
+use codex_exec_server::HttpResponseBodyStream;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
 use codex_rmcp_client::save_oauth_tokens;
+use futures::future::BoxFuture;
 use keyring::credential::Credential;
 use keyring::credential::CredentialApi;
 use keyring::credential::CredentialBuilderApi;
@@ -36,6 +42,60 @@ const SERVER_NAME: &str = "test-streamable-http-oauth-store-pinning";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_PINNED_STORE_SERVER_URL";
 const KEYRING_ACCESS_TOKEN: &str = "keyring-access-token";
 const FILE_ACCESS_TOKEN: &str = "stale-file-access-token";
+
+#[derive(Clone)]
+struct RecordingHttpClient {
+    inner: Arc<dyn HttpClient>,
+    bearer_tokens: Arc<Mutex<Vec<String>>>,
+}
+
+impl RecordingHttpClient {
+    fn new(inner: Arc<dyn HttpClient>) -> Self {
+        Self {
+            inner,
+            bearer_tokens: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn record_bearer_token(&self, params: &HttpRequestParams) {
+        let Some(header) = params
+            .headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case("authorization"))
+        else {
+            return;
+        };
+        self.bearer_tokens
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(header.value.clone());
+    }
+
+    fn bearer_tokens(&self) -> Vec<String> {
+        self.bearer_tokens
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl HttpClient for RecordingHttpClient {
+    fn http_request(
+        &self,
+        params: HttpRequestParams,
+    ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
+        self.record_bearer_token(&params);
+        self.inner.http_request(params)
+    }
+
+    fn http_request_stream(
+        &self,
+        params: HttpRequestParams,
+    ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
+        self.record_bearer_token(&params);
+        self.inner.http_request_stream(params)
+    }
+}
 
 #[derive(Debug, Default)]
 struct TestKeyringState {
@@ -163,6 +223,7 @@ async fn auto_store_remains_pinned_across_session_recovery_child() -> anyhow::Re
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::Direct,
     )?;
+    let http_client = RecordingHttpClient::new(Environment::default_for_tests().get_http_client());
 
     let client = RmcpClient::new_streamable_http_client(
         SERVER_NAME,
@@ -172,7 +233,7 @@ async fn auto_store_remains_pinned_across_session_recovery_child() -> anyhow::Re
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::Auto,
         AuthKeyringBackendKind::Direct,
-        Environment::default_for_tests().get_http_client(),
+        Arc::new(http_client.clone()),
         /*auth_provider*/ None,
     )
     .await?;
@@ -193,13 +254,29 @@ async fn auto_store_remains_pinned_across_session_recovery_child() -> anyhow::Re
     // reevaluates Auto, it adopts the stale File token and this operation incorrectly succeeds.
     state.fail_reads.store(true, Ordering::SeqCst);
 
-    let error = call_echo_tool(&client, "recovery-must-not-fallback")
-        .await
-        .expect_err("recovery must surface failure from the pinned keyring store");
-    let error_chain = format!("{error:#}");
+    match call_echo_tool(&client, "recovery-must-not-fallback").await {
+        Ok(result) => assert_eq!(result, expected_echo_result("recovery-must-not-fallback")),
+        Err(error) => {
+            let error_chain = format!("{error:#}");
+            assert!(
+                error_chain.contains("failed to reread OAuth tokens from resolved keyring storage"),
+                "unexpected recovery error: {error_chain}"
+            );
+        }
+    }
+
+    let bearer_tokens = http_client.bearer_tokens();
     assert!(
-        error_chain.contains("failed to reread OAuth tokens from resolved keyring storage"),
-        "unexpected recovery error: {error_chain}"
+        bearer_tokens
+            .iter()
+            .any(|token| token == &format!("Bearer {KEYRING_ACCESS_TOKEN}")),
+        "expected requests authenticated by the keyring token: {bearer_tokens:?}"
+    );
+    assert!(
+        bearer_tokens
+            .iter()
+            .all(|token| token != &format!("Bearer {FILE_ACCESS_TOKEN}")),
+        "stale File token must never be sent during recovery: {bearer_tokens:?}"
     );
     Ok(())
 }
