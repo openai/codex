@@ -406,6 +406,43 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
 }
 
 #[test]
+fn codex_apps_tools_cache_scopes_plugin_connector_expectations() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let auth_key = CodexAppsToolsCacheKey {
+        account_id: Some("account-one".to_string()),
+        chatgpt_user_id: Some("user-one".to_string()),
+        is_workspace_account: false,
+    };
+    let connector_a = cache.context(
+        codex_home.path().to_path_buf(),
+        auth_key.clone(),
+        ["connector_a".to_string()],
+    );
+    let connector_b = cache.context(
+        codex_home.path().to_path_buf(),
+        auth_key,
+        ["connector_b".to_string()],
+    );
+
+    connector_a.store_current_tools_for_test(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "connector_a_search",
+    )]);
+
+    assert!(connector_a.current_tools().is_some());
+    assert!(connector_b.current_tools().is_none());
+    assert_ne!(
+        connector_a.tools_cache_path(),
+        connector_b.tools_cache_path()
+    );
+    assert_eq!(
+        connector_a.server_info_cache_path(),
+        connector_b.server_info_cache_path()
+    );
+}
+
+#[test]
 fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
     let codex_home = tempdir().expect("tempdir");
     let codex_home_file = codex_home.path().join("not-a-directory");
