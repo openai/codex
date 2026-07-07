@@ -199,6 +199,32 @@ async fn resolve_install_elicitation(
     Ok(())
 }
 
+async fn wait_for_analytics_event(server: &wiremock::MockServer, event_type: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == event_type)
+                        .cloned()
+                })
+            })
+        {
+            return event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {event_type} analytics");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn mount_remote_calendar_recommendation(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
         .and(path("/ps/plugins/suggested"))
@@ -325,6 +351,81 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
             .iter()
             .any(|tool| tool["id"] == DISCOVERABLE_GMAIL_ID && tool["tool_type"] == "connector")
     }));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_connector_install_emits_attributed_suggestion_outcome() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_recommendations(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({"enabled": false, "plugins": []})),
+    )
+    .await;
+    let call_id = "install-gmail";
+    let _mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    &serde_json::to_string(&json!({
+                        "tool_type": "connector",
+                        "action_type": "install",
+                        "tool_id": DISCOVERABLE_GMAIL_ID,
+                        "suggest_reason": "Use Gmail for this request"
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = build_test(&server, &apps_server).await?;
+
+    let elicitation = start_install_turn(&test, "use Gmail").await?;
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Decline).await?;
+
+    let outcome_event =
+        wait_for_analytics_event(&server, "codex_plugin_install_suggestion_outcome").await;
+    let thread_id = outcome_event["event_params"]["thread_id"].clone();
+    let turn_id = outcome_event["event_params"]["turn_id"].clone();
+    assert_eq!(
+        outcome_event,
+        json!({
+            "event_type": "codex_plugin_install_suggestion_outcome",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_install-gmail",
+                "source": "legacy_discovery",
+                "tools": [{
+                    "tool_type": "connector",
+                    "tool_id": DISCOVERABLE_GMAIL_ID,
+                    "tool_name": DISCOVERABLE_GMAIL_ID,
+                    "remote_plugin_id": null,
+                    "connector_ids": [DISCOVERABLE_GMAIL_ID],
+                    "selected": false,
+                    "completed": false,
+                }],
+                "response_action": "decline",
+                "user_confirmed": false,
+                "completed": false,
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "model_slug": "gpt-5.4",
+                "product_client_id": codex_login::default_client::originator().value,
+            }
+        })
+    );
     Ok(())
 }
 
@@ -476,29 +577,7 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
     assert_eq!(meta["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(meta["app_connector_ids"], json!([APP_CONNECTOR_ID]));
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let analytics_event = loop {
-        let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(event) = requests
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .find_map(|request| {
-                let payload: Value = serde_json::from_slice(&request.body).ok()?;
-                payload["events"].as_array().and_then(|events| {
-                    events
-                        .iter()
-                        .find(|event| event["event_type"] == "codex_plugin_install_requested")
-                        .cloned()
-                })
-            })
-        {
-            break event;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for plugin install request analytics");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let analytics_event = wait_for_analytics_event(&server, "codex_plugin_install_requested").await;
     let thread_id = analytics_event["event_params"]["thread_id"].clone();
     let turn_id = analytics_event["event_params"]["turn_id"].clone();
     assert_eq!(
@@ -514,8 +593,8 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
                     "connector_ids": [APP_CONNECTOR_ID],
                 }],
                 "source": "endpoint_recommendation",
-                "thread_id": thread_id,
-                "turn_id": turn_id,
+                "thread_id": thread_id.clone(),
+                "turn_id": turn_id.clone(),
                 "model_slug": "gpt-5.4",
                 "product_client_id": codex_login::default_client::originator().value,
             }
@@ -523,6 +602,35 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
     );
 
     resolve_install_elicitation(&test, elicitation, ElicitationAction::Decline).await?;
+
+    let outcome_event =
+        wait_for_analytics_event(&server, "codex_plugin_install_suggestion_outcome").await;
+    assert_eq!(
+        outcome_event,
+        json!({
+            "event_type": "codex_plugin_install_suggestion_outcome",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_install-github",
+                "source": "endpoint_recommendation",
+                "tools": [{
+                    "tool_type": "plugin",
+                    "tool_id": "github@openai-curated-remote",
+                    "tool_name": "GitHub",
+                    "remote_plugin_id": REMOTE_PLUGIN_ID,
+                    "connector_ids": [APP_CONNECTOR_ID],
+                    "selected": false,
+                    "completed": false,
+                }],
+                "response_action": "decline",
+                "user_confirmed": false,
+                "completed": false,
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "model_slug": "gpt-5.4",
+                "product_client_id": codex_login::default_client::originator().value,
+            }
+        })
+    );
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
@@ -540,15 +648,37 @@ enum RefreshedAppsTools {
     Missing,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_plugin_install_refreshes_plugin_and_apps_tool_caches() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Available).await?;
-    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Missing).await
+#[derive(Clone, Copy)]
+enum RefreshedPluginInventory {
+    Installed,
+    Missing,
 }
 
-async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTools) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_plugin_completion_uses_refreshed_plugin_inventory() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Installed,
+        RefreshedAppsTools::Available,
+    )
+    .await?;
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Installed,
+        RefreshedAppsTools::Missing,
+    )
+    .await?;
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Missing,
+        RefreshedAppsTools::Available,
+    )
+    .await
+}
+
+async fn run_remote_plugin_install_refresh_case(
+    refreshed_plugin_inventory: RefreshedPluginInventory,
+    refreshed_tools: RefreshedAppsTools,
+) -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = match refreshed_tools {
         RefreshedAppsTools::Available => {
@@ -587,9 +717,50 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
     let test = build_test(&server, &apps_server).await?;
 
     let elicitation = start_install_turn(&test, "use Calendar").await?;
-    mount_remote_calendar_installed_plugins(&server).await;
-    drop(initial_remote_installed_plugins);
+    if matches!(
+        refreshed_plugin_inventory,
+        RefreshedPluginInventory::Installed
+    ) {
+        mount_remote_calendar_installed_plugins(&server).await;
+        drop(initial_remote_installed_plugins);
+    }
     resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
+
+    let completed = matches!(
+        refreshed_plugin_inventory,
+        RefreshedPluginInventory::Installed
+    );
+    let apps_tools_available = matches!(refreshed_tools, RefreshedAppsTools::Available);
+    let outcome_event =
+        wait_for_analytics_event(&server, "codex_plugin_install_suggestion_outcome").await;
+    let thread_id = outcome_event["event_params"]["thread_id"].clone();
+    let turn_id = outcome_event["event_params"]["turn_id"].clone();
+    assert_eq!(
+        outcome_event,
+        json!({
+            "event_type": "codex_plugin_install_suggestion_outcome",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_install-calendar",
+                "source": "endpoint_recommendation",
+                "tools": [{
+                    "tool_type": "plugin",
+                    "tool_id": REMOTE_CALENDAR_PLUGIN_CONFIG_ID,
+                    "tool_name": "Calendar",
+                    "remote_plugin_id": REMOTE_CALENDAR_PLUGIN_ID,
+                    "connector_ids": [CALENDAR_CONNECTOR_ID],
+                    "selected": true,
+                    "completed": completed,
+                }],
+                "response_action": "accept",
+                "user_confirmed": true,
+                "completed": completed,
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "model_slug": "gpt-5.4",
+                "product_client_id": codex_login::default_client::originator().value,
+            }
+        })
+    );
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
@@ -599,7 +770,6 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
             .is_none(),
         "calendar tool should be absent before the remote install"
     );
-    let completed = matches!(refreshed_tools, RefreshedAppsTools::Available);
     assert_eq!(
         serde_json::from_str::<Value>(
             &requests[1]
@@ -620,15 +790,17 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         requests[1]
             .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
             .is_some(),
-        completed,
+        apps_tools_available,
         "the resumed router should reflect the refreshed Apps tools"
     );
-    assert!(
-        !tool_names(&requests[1].body_json())
-            .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "the refreshed installed-plugin cache should filter the cached recommendation"
-    );
+    if completed {
+        assert!(
+            !tool_names(&requests[1].body_json())
+                .iter()
+                .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+            "the refreshed installed-plugin cache should filter the cached recommendation"
+        );
+    }
     Ok(())
 }
 
