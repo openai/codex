@@ -419,6 +419,17 @@ pub struct HttpHeader {
     pub value: String,
 }
 
+/// Redirect behavior for an executor-side HTTP request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HttpRedirectPolicy {
+    /// Follow redirects using the HTTP client's normal limits.
+    #[default]
+    Follow,
+    /// Return the redirect response without following its location.
+    Stop,
+}
+
 /// Executor-side HTTP request envelope.
 ///
 /// This intentionally stays transport-shaped rather than MCP-shaped so callers
@@ -443,6 +454,9 @@ pub struct HttpRequestParams {
     /// millisecond deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Whether the executor should follow HTTP redirects.
+    #[serde(default)]
+    pub redirect_policy: HttpRedirectPolicy,
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
@@ -513,6 +527,8 @@ pub struct ExecExitedNotification {
     pub process_id: ProcessId,
     pub seq: u64,
     pub exit_code: i32,
+    #[serde(default)]
+    pub sandbox_denied: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -550,6 +566,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecExitedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -693,5 +710,17 @@ mod tests {
             ),
             ("req-explicit-timeout", Some(1234))
         );
+    }
+
+    #[test]
+    fn exited_notification_accepts_legacy_payload_without_sandbox_denied() {
+        let notification: ExecExitedNotification = serde_json::from_value(serde_json::json!({
+            "processId": "proc-1",
+            "seq": 3,
+            "exitCode": 1,
+        }))
+        .expect("legacy exited notification should deserialize");
+
+        assert_eq!(notification.sandbox_denied, None);
     }
 }

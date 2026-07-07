@@ -10,6 +10,8 @@ use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,6 +33,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -76,6 +79,32 @@ fn write_global_file(
     let path = home.path().join(filename);
     std::fs::write(&path, contents)?;
     Ok(path.abs())
+}
+
+fn remove_agents_md_world_state_section(rollout_path: &Path) -> Result<()> {
+    let rollout = std::fs::read_to_string(rollout_path)?;
+    let mut removed_section = false;
+    let retained = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|mut line| {
+            if let RolloutItem::WorldState(world_state) = &mut line.item
+                && let Some(state) = world_state.state.as_object_mut()
+            {
+                removed_section |= state.remove("agents_md").is_some();
+            }
+            serde_json::to_string(&line)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    anyhow::ensure!(
+        removed_section,
+        "rollout did not contain a persisted AGENTS.md WorldState section"
+    );
+    std::fs::write(rollout_path, format!("{retained}\n"))?;
+    Ok(())
 }
 
 fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
@@ -457,7 +486,9 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
         .thread_manager
         .start_thread_with_options(StartThreadOptions {
             config: test.config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -662,7 +693,9 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         .thread_manager
         .start_thread_with_options(StartThreadOptions {
             config: test.config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -771,7 +804,7 @@ async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resume_injects_changed_agents_md_once() -> Result<()> {
+async fn cold_resume_invalidates_deleted_legacy_agents_md_once() -> Result<()> {
     // Set up an initial turn and a later cold-resumed turn against the same rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -821,23 +854,20 @@ async fn cold_resume_injects_changed_agents_md_once() -> Result<()> {
     })
     .await;
 
-    // Add a preferred override source, then cold-resume with freshly loaded configuration.
-    let new_source = write_global_file(
-        home.as_ref(),
-        GLOBAL_AGENTS_OVERRIDE_FILENAME,
-        NEW_GLOBAL_INSTRUCTIONS,
-    )?;
-    assert_ne!(old_source, new_source);
+    // Simulate a rollout written before AGENTS.md had a persisted WorldState section.
+    remove_agents_md_world_state_section(&rollout_path)?;
+
+    std::fs::remove_file(old_source.as_path())?;
     let mut resume_builder = test_codex().with_home(Arc::clone(&home));
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
 
-    // Assert the API reports the new source while model history replays the old structured prefix.
+    // Model history still contains the old fragment, but the source no longer exists.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![PathUri::from_abs_path(&new_source)],
-        "resume reports sources from the newly loaded config"
+        Vec::<PathUri>::new(),
+        "resume reports no deleted instruction source"
     );
 
     resumed.submit_turn("continue resumed thread").await?;
@@ -852,11 +882,16 @@ async fn cold_resume_injects_changed_agents_md_once() -> Result<()> {
         Some(initial_input.as_slice()),
         "cold resume should replay the original structured input prefix"
     );
-    assert_instruction_replacement_once(
-        &requests,
-        OLD_GLOBAL_INSTRUCTIONS,
-        NEW_GLOBAL_INSTRUCTIONS,
+    let initial = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
+    let removal = expected_provider_only_instruction_fragment(
+        "The previously provided AGENTS.md instructions no longer apply.",
     );
+    assert_eq!(instruction_fragments(&requests[0]), vec![initial.clone()]);
+    assert_eq!(
+        instruction_fragments(&requests[1]),
+        vec![initial.clone(), removal.clone()]
+    );
+    assert_eq!(instruction_fragments(&requests[2]), vec![initial, removal]);
 
     Ok(())
 }

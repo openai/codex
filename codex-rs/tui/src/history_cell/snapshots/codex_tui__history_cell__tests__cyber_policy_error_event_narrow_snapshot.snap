@@ -1,12 +1,16 @@
 ---
-source: tui/src/history_cell.rs
-assertion_line: 3312
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
-ⓘ This chat was flagged for possible cybersecurity risk
-  If this seems wrong, try
-  rephrasing your request. To get
-  authorized for security work,
-  join the Trusted Access for
-  Cyber program.
-  https://chatgpt.com/cyber
+ⓘ This content can't be shown
+  We take extra caution with
+  cybersecurity requests. If
+  you’re a security professional,
+  you may be able to apply for
+  Trusted Access.
+  Trusted Access: https://
+  openai.com/form/enterprise-
+  trusted-access-for-cyber/
+  Learn more: https://
+  help.openai.com/en/
+  articles/20001326

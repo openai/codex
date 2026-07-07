@@ -110,6 +110,46 @@ allow_remote_control = false
 }
 
 #[test]
+fn new_thread_model_defaults_use_toml_priority() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[models.new_thread]
+model = "low-priority-model"
+model_reasoning_effort = "low"
+service_tier = "flex"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[models.new_thread]
+model = "high-priority-model"
+model_reasoning_effort = "high"
+service_tier = "fast"
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[models.new_thread]
+model = "high-priority-model"
+model_reasoning_effort = "high"
+service_tier = "fast"
+"#
+        )
+    );
+}
+
+#[test]
 fn composition_strategy_applies_to_non_cloud_layers() {
     let mdm_source = RequirementSource::MdmManagedPreferences {
         domain: "com.openai.codex".to_string(),

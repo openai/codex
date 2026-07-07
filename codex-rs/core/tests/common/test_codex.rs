@@ -658,7 +658,9 @@ impl TestCodexBuilder {
                 Box::pin(
                     thread_manager.start_thread_with_options(StartThreadOptions {
                         config: config.clone(),
+                        allow_provider_model_fallback: false,
                         initial_history: InitialHistory::New,
+                        history_mode: None,
                         session_source: None,
                         thread_source: None,
                         dynamic_tools: Vec::new(),

@@ -21,11 +21,15 @@ impl WorldStateSection for TestSection {
 
     fn render_diff(
         &self,
-        previous: Option<&Self::Snapshot>,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
-        let previous = previous?;
-        (self.value != previous.value)
-            .then(|| Box::new(TestFragment(self.value.clone())) as Box<dyn ContextualUserFragment>)
+        match previous {
+            PreviousSectionState::Known(previous) if self.value != previous.value => {
+                Some(Box::new(TestFragment(self.value.clone())))
+            }
+            PreviousSectionState::Unknown => Some(Box::new(TestFragment("unknown".to_string()))),
+            PreviousSectionState::Absent | PreviousSectionState::Known(_) => None,
+        }
     }
 }
 
@@ -59,7 +63,7 @@ impl WorldStateSection for DuplicateTestSection {
 
     fn render_diff(
         &self,
-        _previous: Option<&Self::Snapshot>,
+        _previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
         None
     }
@@ -99,6 +103,114 @@ fn render_diff_restores_the_typed_section_snapshot() {
 
     assert_eq!(
         vec!["after"],
+        rendered
+            .into_iter()
+            .map(|fragment| fragment.body())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn extension_owned_section_uses_its_snapshot_and_renderer() {
+    let mut world_state = WorldState::default();
+    world_state.add_extension_section(WorldStateSectionContribution::new(
+        "extension_test",
+        json!({"value": "after", "optional": null}),
+        |previous| match previous {
+            PreviousWorldStateSection::Known(previous)
+                if previous == &json!({"value": "before"}) =>
+            {
+                Some(RenderedWorldStateFragment::new(
+                    "developer",
+                    ("<extension_test>", "</extension_test>"),
+                    "after",
+                ))
+            }
+            PreviousWorldStateSection::Absent
+            | PreviousWorldStateSection::Unknown
+            | PreviousWorldStateSection::Known(_) => None,
+        },
+    ));
+    let previous = WorldStateSnapshot {
+        sections: BTreeMap::from([("extension_test".to_string(), json!({"value": "before"}))]),
+    };
+
+    let rendered = world_state.render_diff(&previous);
+
+    assert_eq!(
+        serde_json::to_value(world_state.snapshot()).expect("serialize world-state snapshot"),
+        json!({"extension_test": {"value": "after"}})
+    );
+    assert_eq!(rendered.len(), 1);
+    assert_eq!(rendered[0].role(), "developer");
+    assert_eq!(
+        rendered[0].render(),
+        "<extension_test>after</extension_test>"
+    );
+}
+
+#[test]
+fn missing_retained_fragment_is_rendered_again() {
+    let mut world_state = WorldState::default();
+    world_state.add_extension_section(
+        WorldStateSectionContribution::new(
+            "extension_test",
+            json!({"body": "current catalog"}),
+            |previous| match previous {
+                PreviousWorldStateSection::Absent => Some(RenderedWorldStateFragment::new(
+                    "developer",
+                    ("<extension_test>", "</extension_test>"),
+                    "current catalog",
+                )),
+                PreviousWorldStateSection::Unknown | PreviousWorldStateSection::Known(_) => None,
+            },
+        )
+        .with_retained_fragment_matcher(|role, text| {
+            role == "developer" && text.contains("current catalog")
+        }),
+    );
+    let previous = world_state.snapshot();
+    let retained = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "<extension_test>current catalog</extension_test>".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert_eq!(
+        world_state
+            .render_history_diff(Some(&previous), &[])
+            .into_iter()
+            .map(|fragment| fragment.body())
+            .collect::<Vec<_>>(),
+        vec!["current catalog"]
+    );
+    assert!(
+        world_state
+            .render_history_diff(Some(&previous), &[retained])
+            .is_empty()
+    );
+}
+
+#[test]
+fn unreadable_section_snapshot_is_treated_as_unknown() {
+    let mut current = WorldState::default();
+    current.add_section(TestSection {
+        value: "current".to_string(),
+        optional: None,
+        array: Vec::new(),
+    });
+    let previous = WorldStateSnapshot {
+        sections: BTreeMap::from([("test".to_string(), json!({"invalid": true}))]),
+    };
+
+    let rendered = current.render_diff(&previous);
+
+    assert_eq!(
+        vec!["unknown"],
         rendered
             .into_iter()
             .map(|fragment| fragment.body())
