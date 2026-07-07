@@ -1,4 +1,4 @@
-use codex_client::build_reqwest_client_with_custom_ca;
+use codex_http_client::build_reqwest_client_with_custom_ca;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;

@@ -17,7 +17,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 clatter = { workspace = true }
 codex-api = { workspace = true }
-codex-client = { workspace = true }
+codex-http-client = { workspace = true }
 codex-exec-server-protocol = { workspace = true }
 codex-file-system = { workspace = true }
 codex-network-proxy = { workspace = true }

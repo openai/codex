@@ -55,8 +55,8 @@ use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
-use codex_client::CodexHttpClient;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::HttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
@@ -171,7 +171,7 @@ pub struct ChatgptAuthTokens {
 #[derive(Debug, Clone)]
 struct ChatgptAuthState {
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
-    client: CodexHttpClient,
+    client: HttpClient,
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
@@ -805,7 +805,7 @@ impl ChatgptAuth {
         &self.storage
     }
 
-    fn client(&self) -> &CodexHttpClient {
+    fn client(&self) -> &HttpClient {
         &self.state.client
     }
 
@@ -1331,7 +1331,7 @@ fn persist_tokens(
 // The caller is responsible for persisting any returned tokens.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
-    client: &CodexHttpClient,
+    client: &HttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: oauth_client_id(),
