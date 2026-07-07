@@ -4,7 +4,5 @@
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
 </dict>
 </plist>
