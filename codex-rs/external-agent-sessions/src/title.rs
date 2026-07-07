@@ -2,15 +2,17 @@ use crate::SESSION_TITLE_MAX_LEN;
 use crate::truncate;
 
 const IMPORTED_SESSION_FALLBACK_TITLE: &str = "Imported session";
-const RECOGNIZED_CONTROL_WRAPPERS: [(&str, &str); 8] = [
+const RECOGNIZED_CONTROL_WRAPPERS: [(&str, &str); 10] = [
     ("<command-message>", "</command-message>"),
     ("<command-name>", "</command-name>"),
     ("<command-args>", "</command-args>"),
     ("<local-command-caveat>", "</local-command-caveat>"),
+    ("<local-command-stderr>", "</local-command-stderr>"),
     ("<local-command-stdout>", "</local-command-stdout>"),
     ("<task-notification>", "</task-notification>"),
     ("<system-reminder>", "</system-reminder>"),
     ("<ide_opened_file>", "</ide_opened_file>"),
+    ("<ide_selection>", "</ide_selection>"),
 ];
 
 pub(super) struct SessionTitleCandidates {

@@ -65,6 +65,10 @@ fn strips_observed_external_agent_control_wrapper_families() {
         "<local-command-caveat>Command output follows</local-command-caveat>\n\
          <local-command-stdout>tests passed</local-command-stdout>\n\
          Fix auth flow",
+        "<local-command-stderr>tests failed</local-command-stderr>\n\
+         Fix auth flow",
+        "<ide_selection>src/auth.rs:1-5</ide_selection>\n\
+         Fix auth flow",
     ];
 
     for message in cases {
