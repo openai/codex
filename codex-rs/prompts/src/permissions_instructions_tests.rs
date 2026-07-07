@@ -73,7 +73,7 @@ fn builds_permissions_from_profile() {
     let instructions = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::UnlessTrusted,
-        ApprovalPromptContext::new(ApprovalsReviewer::User, None),
+        ApprovalPromptContext::new(ApprovalsReviewer::User, /*messages*/ None),
         &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
@@ -118,7 +118,7 @@ fn builds_permissions_from_profile_with_denied_reads() {
     let instructions = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
-        ApprovalPromptContext::new(ApprovalsReviewer::AutoReview, None),
+        ApprovalPromptContext::new(ApprovalsReviewer::AutoReview, /*messages*/ None),
         &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
@@ -279,6 +279,8 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
     exec_policy
         .add_prefix_rule(&["git".to_string(), "pull".to_string()], Decision::Allow)
         .expect("add rule");
+    let writable_root =
+        AbsolutePathBuf::from_absolute_path(test_path_buf("/tmp/repo")).expect("absolute path");
 
     let instructions = PermissionsInstructions::from_permissions_with_network(
         SandboxMode::WorkspaceWrite,
@@ -292,8 +294,7 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
             request_permissions_tool_enabled: true,
         },
         Some(vec![WritableRoot {
-            root: AbsolutePathBuf::from_absolute_path(test_path_buf("/tmp/repo"))
-                .expect("absolute path"),
+            root: writable_root.clone(),
             read_only_subpaths: Vec::new(),
             protected_metadata_names: Vec::new(),
         }]),
@@ -302,7 +303,7 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
 
     assert!(text.contains("`sandbox_mode` is `workspace-write`"));
     assert!(text.contains("Network access is restricted."));
-    assert!(text.contains("`/tmp/repo`"));
+    assert!(text.contains(writable_root.to_string_lossy().as_ref()));
     assert!(!text.contains("How to request escalation"));
     assert!(!text.contains("request_permissions Tool"));
     assert!(!text.contains("Approved command prefixes"));
@@ -341,7 +342,7 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
     let text = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -357,7 +358,7 @@ fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_nev
     let text = approval_text(
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -410,7 +411,7 @@ fn granular_policy_lists_prompted_and_rejected_categories_separately() {
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
@@ -448,7 +449,7 @@ fn granular_policy_includes_command_permission_instructions_when_sandbox_approva
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
@@ -481,7 +482,7 @@ fn granular_policy_omits_shell_permission_instructions_when_inline_requests_are_
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -514,7 +515,7 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
@@ -530,7 +531,7 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
@@ -549,7 +550,7 @@ fn granular_policy_lists_request_permissions_category_without_tool_section_when_
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
-        None,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,

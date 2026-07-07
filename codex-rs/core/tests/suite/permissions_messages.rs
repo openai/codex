@@ -691,7 +691,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let expected = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
-        ApprovalPromptContext::new(test.config.approvals_reviewer, None),
+        ApprovalPromptContext::new(test.config.approvals_reviewer, /*messages*/ None),
         &exec_policy,
         test.config.cwd.as_path(),
         /*exec_permission_approvals_enabled*/ false,
