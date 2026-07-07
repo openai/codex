@@ -17731,10 +17731,6 @@
           "format": "int64",
           "type": "integer"
         },
-        "createdAtMs": {
-          "format": "int64",
-          "type": "integer"
-        },
         "cwd": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -17782,13 +17778,6 @@
             "null"
           ]
         },
-        "recencyAtMs": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "source": {
           "$ref": "#/definitions/SessionSource"
         },
@@ -17805,22 +17794,16 @@
         "updatedAt": {
           "format": "int64",
           "type": "integer"
-        },
-        "updatedAtMs": {
-          "format": "int64",
-          "type": "integer"
         }
       },
       "required": [
         "createdAt",
-        "createdAtMs",
         "cwd",
         "id",
         "modelProvider",
         "preview",
         "source",
-        "updatedAt",
-        "updatedAtMs"
+        "updatedAt"
       ],
       "type": "object"
     },

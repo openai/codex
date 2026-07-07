@@ -251,9 +251,11 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
         let thread_catalog_subscriptions = ThreadCatalogSubscriptions::new(
             outgoing.clone(),
             Arc::clone(&thread_store),
+            Arc::clone(&thread_list_state_permit),
             config.model_provider_id.clone(),
             config.cwd.clone(),
         );
@@ -317,7 +319,6 @@ impl MessageProcessor {
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
-        let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
         let workspace_settings_cache =
             Arc::new(workspace_settings::WorkspaceSettingsCache::default());
         let app_list_shutdown_token = CancellationToken::new();

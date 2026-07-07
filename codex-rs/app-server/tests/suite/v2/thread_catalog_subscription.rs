@@ -60,10 +60,6 @@ async fn catalog_subscription_tracks_threads_the_client_never_listed() -> Result
     };
     assert_eq!(thread.id, thread_id);
     assert_eq!(thread.name.as_deref(), Some("Renamed without listing"));
-    assert_eq!(
-        thread.recency_at_ms.map(|value| value / 1_000),
-        thread.recency_at
-    );
 
     let delete_id = app
         .send_thread_delete_request(ThreadDeleteParams {

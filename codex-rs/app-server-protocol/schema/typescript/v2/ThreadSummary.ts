@@ -9,4 +9,4 @@ import type { ThreadSource } from "./ThreadSource";
 /**
  * Persisted metadata needed to render and order a thread catalog row.
  */
-export type ThreadSummary = { id: string, forkedFromId: string | null, parentThreadId: string | null, preview: string, modelProvider: string, createdAt: number, createdAtMs: number, updatedAt: number, updatedAtMs: number, recencyAt: number | null, recencyAtMs: number | null, archivedAt: number | null, cwd: AbsolutePathBuf, source: SessionSource, threadSource: ThreadSource | null, agentNickname: string | null, agentRole: string | null, gitInfo: GitInfo | null, name: string | null, };
+export type ThreadSummary = { id: string, forkedFromId: string | null, parentThreadId: string | null, preview: string, modelProvider: string, createdAt: number, updatedAt: number, recencyAt: number | null, archivedAt: number | null, cwd: AbsolutePathBuf, source: SessionSource, threadSource: ThreadSource | null, agentNickname: string | null, agentRole: string | null, gitInfo: GitInfo | null, name: string | null, };

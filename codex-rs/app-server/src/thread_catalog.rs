@@ -10,6 +10,7 @@ use codex_thread_store::ThreadCatalogChange;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
 
@@ -26,6 +27,7 @@ impl ThreadCatalogSubscriptions {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         thread_store: Arc<dyn ThreadStore>,
+        catalog_state_permit: Arc<Semaphore>,
         fallback_provider: String,
         fallback_cwd: AbsolutePathBuf,
     ) -> Self {
@@ -36,6 +38,7 @@ impl ThreadCatalogSubscriptions {
             Arc::downgrade(&thread_store),
             Arc::clone(&outgoing),
             Arc::clone(&connection_ids),
+            catalog_state_permit,
             fallback_provider,
             fallback_cwd,
         ));
@@ -56,6 +59,7 @@ async fn run_catalog_listener(
     thread_store: Weak<dyn ThreadStore>,
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    catalog_state_permit: Arc<Semaphore>,
     fallback_provider: String,
     fallback_cwd: AbsolutePathBuf,
 ) {
@@ -77,6 +81,10 @@ async fn run_catalog_listener(
         if connection_ids.is_empty() {
             continue;
         }
+
+        let Ok(permit) = catalog_state_permit.acquire().await else {
+            break;
+        };
 
         let notification = match change {
             Some(ThreadCatalogChange::Upsert { thread_id }) => {
@@ -117,6 +125,7 @@ async fn run_catalog_listener(
                 ThreadCatalogChangedNotification::Invalidate,
             ),
         };
+        drop(permit);
         outgoing
             .send_server_notification_to_connections(&connection_ids, notification)
             .await;
@@ -128,9 +137,6 @@ fn thread_summary_from_stored_thread(
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
 ) -> ThreadSummary {
-    let created_at_ms = thread.created_at.timestamp_millis();
-    let updated_at_ms = thread.updated_at.timestamp_millis();
-    let recency_at_ms = thread.recency_at.timestamp_millis();
     let archived_at = thread.archived_at.as_ref().map(chrono::DateTime::timestamp);
     let (thread, _) = thread_from_stored_thread(thread, fallback_provider, fallback_cwd);
     ThreadSummary {
@@ -140,11 +146,8 @@ fn thread_summary_from_stored_thread(
         preview: thread.preview,
         model_provider: thread.model_provider,
         created_at: thread.created_at,
-        created_at_ms,
         updated_at: thread.updated_at,
-        updated_at_ms,
         recency_at: thread.recency_at,
-        recency_at_ms: Some(recency_at_ms),
         archived_at,
         cwd: thread.cwd,
         source: thread.source,
