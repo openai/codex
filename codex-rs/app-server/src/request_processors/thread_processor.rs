@@ -355,7 +355,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
     pub(super) thread_store: Arc<dyn ThreadStore>,
-    pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pub(super) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
@@ -394,7 +394,7 @@ impl ThreadRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         thread_store: Arc<dyn ThreadStore>,
-        pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+        pending_thread_unloads: PendingThreadUnloads,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
@@ -798,7 +798,6 @@ impl ThreadRequestProcessor {
     }
 
     async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
-        self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
@@ -867,7 +866,7 @@ impl ThreadRequestProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
-            pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
+            pending_thread_unloads: self.pending_thread_unloads.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
@@ -969,7 +968,7 @@ impl ThreadRequestProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
-            pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
+            pending_thread_unloads: self.pending_thread_unloads.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
@@ -1025,6 +1024,10 @@ impl ThreadRequestProcessor {
 
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.thread_state_manager.clear_all_listeners().await;
+    }
+
+    pub(crate) async fn drain_thread_teardowns(&self) {
+        self.pending_thread_unloads.close_and_wait().await;
     }
 
     pub(crate) async fn shutdown_threads(&self) {
@@ -2648,22 +2651,22 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
-            && self
-                .pending_thread_unloads
-                .lock()
-                .await
-                .contains(&thread_id)
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(format!(
-                        "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-                    )),
-                )
-                .await;
-            return Ok(());
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id) {
+            let unload_pending = {
+                let _admission = self.pending_thread_unloads.lock_admission().await;
+                self.pending_thread_unloads.contains(thread_id)
+            };
+            if unload_pending {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        invalid_request(format!(
+                            "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                        )),
+                    )
+                    .await;
+                return Ok(());
+            }
         }
 
         if params.sandbox.is_some() && params.permissions.is_some() {

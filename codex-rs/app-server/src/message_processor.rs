@@ -32,6 +32,7 @@ use crate::request_processors::GitRequestProcessor;
 use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
+use crate::request_processors::PendingThreadUnloads;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
@@ -84,7 +85,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
-use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -392,7 +392,7 @@ impl MessageProcessor {
             .set_analytics_events_client(analytics_events_client.clone());
         let skills_watcher = SkillsWatcher::new(thread_manager.skills_service(), outgoing.clone());
 
-        let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
+        let pending_thread_unloads = PendingThreadUnloads::default();
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
@@ -487,7 +487,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager.clone(),
             Arc::clone(&thread_store),
-            Arc::clone(&pending_thread_unloads),
+            pending_thread_unloads.clone(),
             thread_state_manager.clone(),
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
@@ -772,6 +772,10 @@ impl MessageProcessor {
 
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.thread_processor.clear_all_thread_listeners().await;
+    }
+
+    pub(crate) async fn drain_thread_teardowns(&self) {
+        self.thread_processor.drain_thread_teardowns().await;
     }
 
     pub(crate) async fn shutdown_threads(&self) {

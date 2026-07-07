@@ -8,7 +8,7 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
-    pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pub(super) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
@@ -124,41 +124,45 @@ impl UnloadingState {
     clippy::await_holding_invalid_type,
     reason = "idle unload admission holds both lifecycle guards through its final rechecks"
 )]
-async fn claim_idle_unload_if_permitted(
+async fn try_start_idle_thread_unload<F>(
     unloading_state: &mut UnloadingState,
     thread_list_state_permit: Arc<Semaphore>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: &PendingThreadUnloads,
     thread_state_manager: &ThreadStateManager,
     conversation_id: ThreadId,
     is_running: impl std::future::Future<Output = bool>,
-) -> bool {
+    teardown: F,
+) -> Option<PendingThreadUnloadStartResult>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     let Ok(permit) = thread_list_state_permit.acquire_owned().await else {
-        return false;
+        return None;
     };
-    let mut pending = pending_thread_unloads.lock().await;
-    if pending.contains(&conversation_id) {
-        return false;
+    let admission = pending_thread_unloads.lock_admission().await;
+    if pending_thread_unloads.contains(conversation_id) {
+        return None;
     }
     if !unloading_state.should_unload_now() {
-        return false;
+        return None;
     }
     if is_running.await {
         unloading_state.note_thread_activity_observed();
-        return false;
+        return None;
     }
     if thread_state_manager
         .has_connections_or_reservations(conversation_id)
         .await
     {
-        return false;
+        return None;
     }
     if !unloading_state.should_unload_now() {
-        return false;
+        return None;
     }
-    pending.insert(conversation_id);
-    drop(pending);
+    let start = pending_thread_unloads.try_start(conversation_id, teardown);
+    drop(admission);
     drop(permit);
-    true
+    Some(start)
 }
 
 #[cfg(test)]
@@ -199,8 +203,14 @@ pub(super) async fn ensure_conversation_listener(
         }
     };
     let thread_state = {
-        let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&conversation_id) {
+        let _admission = listener_task_context
+            .pending_thread_unloads
+            .lock_admission()
+            .await;
+        if listener_task_context
+            .pending_thread_unloads
+            .contains(conversation_id)
+        {
             return Err(invalid_request(format!(
                 "thread {conversation_id} is closing; retry after the thread is closed"
             )));
@@ -305,8 +315,8 @@ pub(super) async fn ensure_listener_task_running(
         ..
     } = listener_task_context;
 
-    let pending_thread_unloads_guard = pending_thread_unloads.lock().await;
-    if pending_thread_unloads_guard.contains(&conversation_id) {
+    let pending_thread_unloads_guard = pending_thread_unloads.lock_admission().await;
+    if pending_thread_unloads.contains(conversation_id) {
         return Err(invalid_request(format!(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
@@ -336,7 +346,7 @@ pub(super) async fn ensure_listener_task_running(
     };
     let listener_command_tx_for_task = listener_command_tx.clone();
     let thread_state_for_task = Arc::clone(&thread_state);
-    let pending_thread_unloads_for_task = Arc::clone(&pending_thread_unloads);
+    let pending_thread_unloads_for_task = pending_thread_unloads.clone();
     let listener_registry = thread_state_manager.clone();
     let outgoing_for_task = Arc::clone(&outgoing);
     let listener_task = async move {
@@ -429,7 +439,7 @@ pub(super) async fn ensure_listener_task_running(
                         unloading_state.note_thread_activity_observed();
                         continue;
                     }
-                    if !claim_idle_unload_if_permitted(
+                    let Some(start) = try_start_idle_thread_unload(
                         &mut unloading_state,
                         thread_list_state_permit.clone(),
                         &pending_thread_unloads,
@@ -438,21 +448,26 @@ pub(super) async fn ensure_listener_task_running(
                         async {
                             matches!(conversation.agent_status().await, AgentStatus::Running)
                         },
+                        unload_thread_without_subscribers(
+                            thread_manager.clone(),
+                            outgoing_for_task.clone(),
+                            thread_state_manager.clone(),
+                            thread_watch_manager.clone(),
+                            conversation_id,
+                            conversation.clone(),
+                        ),
                     )
                     .await
-                    {
+                    else {
                         continue;
+                    };
+                    match start {
+                        PendingThreadUnloadStartResult::Started(_completed) => {}
+                        PendingThreadUnloadStartResult::Pending(completed) => {
+                            wait_for_thread_unload(completed).await;
+                        }
+                        PendingThreadUnloadStartResult::Closing => {}
                     }
-                    unload_thread_without_subscribers(
-                        thread_manager.clone(),
-                        outgoing_for_task.clone(),
-                        pending_thread_unloads.clone(),
-                        thread_state_manager.clone(),
-                        thread_watch_manager.clone(),
-                        conversation_id,
-                        conversation.clone(),
-                    )
-                    .await;
                     break;
                 }
             }
@@ -501,7 +516,6 @@ pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> Threa
 pub(super) async fn unload_thread_without_subscribers(
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_id: ThreadId,
@@ -514,40 +528,36 @@ pub(super) async fn unload_thread_without_subscribers(
     outgoing
         .cancel_requests_for_thread(thread_id, /*error*/ None)
         .await;
-    let _ = thread_state_manager.remove_thread_state(thread_id).await;
+    if let Some(listener) = thread_state_manager.remove_thread_state(thread_id).await {
+        listener.wait_until_closed().await;
+    }
 
-    tokio::spawn(async move {
-        match wait_for_thread_shutdown(&thread).await {
-            ThreadShutdownResult::Complete => {
-                if thread_manager.remove_thread(&thread_id).await.is_none() {
-                    info!("thread {thread_id} was already removed before teardown finalized");
-                    thread_watch_manager
-                        .remove_thread(&thread_id.to_string())
-                        .await;
-                    pending_thread_unloads.lock().await.remove(&thread_id);
-                    return;
-                }
+    match wait_for_thread_shutdown(&thread).await {
+        ThreadShutdownResult::Complete => {
+            if thread_manager.remove_thread(&thread_id).await.is_none() {
+                info!("thread {thread_id} was already removed before teardown finalized");
                 thread_watch_manager
                     .remove_thread(&thread_id.to_string())
                     .await;
-                let notification = ThreadClosedNotification {
-                    thread_id: thread_id.to_string(),
-                };
-                outgoing
-                    .send_server_notification(ServerNotification::ThreadClosed(notification))
-                    .await;
-                pending_thread_unloads.lock().await.remove(&thread_id);
+                return;
             }
-            ThreadShutdownResult::SubmitFailed => {
-                pending_thread_unloads.lock().await.remove(&thread_id);
-                warn!("failed to submit Shutdown to thread {thread_id}");
-            }
-            ThreadShutdownResult::TimedOut => {
-                pending_thread_unloads.lock().await.remove(&thread_id);
-                warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
-            }
+            thread_watch_manager
+                .remove_thread(&thread_id.to_string())
+                .await;
+            let notification = ThreadClosedNotification {
+                thread_id: thread_id.to_string(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ThreadClosed(notification))
+                .await;
         }
-    });
+        ThreadShutdownResult::SubmitFailed => {
+            warn!("failed to submit Shutdown to thread {thread_id}");
+        }
+        ThreadShutdownResult::TimedOut => {
+            warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -559,7 +569,7 @@ pub(super) async fn handle_thread_listener_command(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: &PendingThreadUnloads,
     listener_command: ThreadListenerCommand,
 ) {
     match listener_command {
@@ -623,7 +633,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: &PendingThreadUnloads,
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let active_turn = {
@@ -691,11 +701,11 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
-    if pending_thread_unloads
-        .lock()
-        .await
-        .contains(&conversation_id)
-    {
+    let unload_pending = {
+        let _admission = pending_thread_unloads.lock_admission().await;
+        pending_thread_unloads.contains(conversation_id)
+    };
+    if unload_pending {
         outgoing
             .send_error(
                 request_id,

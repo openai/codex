@@ -13,7 +13,7 @@ async fn resume_reservation_prevents_idle_unload_before_listener_commit() {
         thread_status_rx,
         is_active: (false, now),
     };
-    let pending = Arc::new(Mutex::new(HashSet::new()));
+    let pending = PendingThreadUnloads::default();
     let thread_state_manager = ThreadStateManager::new();
     let thread_id = ThreadId::new();
     let connection_id = ConnectionId(1);
@@ -32,17 +32,19 @@ async fn resume_reservation_prevents_idle_unload_before_listener_commit() {
         .expect("live connection should reserve the thread");
     drop(resume_permit);
     assert!(
-        !claim_idle_unload_if_permitted(
+        try_start_idle_thread_unload(
             &mut unloading_state,
             permit,
             &pending,
             &thread_state_manager,
             thread_id,
             std::future::ready(false),
+            std::future::ready(()),
         )
         .await
+        .is_none()
     );
-    assert!(pending.lock().await.is_empty());
+    assert!(!pending.contains(thread_id));
 
     assert!(
         thread_state_manager
@@ -92,6 +94,7 @@ async fn resume_reservation_prevents_idle_unload_before_listener_commit() {
             .await
             .is_empty()
     );
+    pending.close_and_wait().await;
     thread_state_manager.clear_all_listeners().await;
 }
 

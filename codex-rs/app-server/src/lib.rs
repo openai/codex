@@ -1162,6 +1162,7 @@ pub async fn run_main_with_transport_options(
                 connection_cleanup_tasks.drain().await;
                 processor.drain_background_tasks().await;
                 processor.clear_all_thread_listeners().await;
+                processor.drain_thread_teardowns().await;
                 processor.shutdown_threads().await;
             } else {
                 connection_cleanup_tasks.abort();

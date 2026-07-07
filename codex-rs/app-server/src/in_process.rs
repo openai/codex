@@ -528,6 +528,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 .await;
             processor.drain_background_tasks().await;
             processor.clear_all_thread_listeners().await;
+            processor.drain_thread_teardowns().await;
             processor.shutdown_threads().await;
         });
         let mut pending_request_responses =
