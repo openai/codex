@@ -70,7 +70,6 @@ use crate::oauth::OAuthPersistor;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::ResolvedOAuthTokens;
 use crate::oauth::StoredOAuthTokens;
-use crate::oauth::load_oauth_tokens_from_store;
 use crate::oauth::resolve_oauth_tokens;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
@@ -806,7 +805,10 @@ impl RmcpClient {
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
                     if let Some(store) = resolved_store.get().copied() {
-                        load_oauth_tokens_from_store(&DefaultKeyringStore, server_name, url, store)?
+                        // Rebuilds reread the source selected during first construction. Only the
+                        // initial construction below evaluates configured store policy.
+                        store
+                            .load(&DefaultKeyringStore, server_name, url)?
                             .map(|tokens| ResolvedOAuthTokens { tokens, store })
                     } else {
                         match resolve_oauth_tokens(

@@ -69,7 +69,6 @@ use codex_utils_home_dir::find_codex_home;
 
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
-pub(crate) use self::resolved_store::load_oauth_tokens_from_store;
 pub(crate) use self::resolved_store::resolve_oauth_tokens;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
@@ -168,10 +167,11 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore + Clone + 'static>(
     keyring_backend_kind: AuthKeyringBackendKind,
     server_name: &str,
     url: &str,
-) -> Result<Option<StoredOAuthTokens>> {
+) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     match keyring_backend_kind {
         AuthKeyringBackendKind::Direct => {
             load_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
+                .map_err(OAuthKeyringLoadError::Backend)
         }
         AuthKeyringBackendKind::Secrets => {
             load_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
@@ -201,9 +201,9 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     url: &str,
-) -> Result<Option<StoredOAuthTokens>> {
+) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
-    let codex_home = find_codex_home()?;
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
         SecretsBackendKind::Local,
@@ -223,6 +223,17 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
         }
         None => Ok(None),
     }
+}
+
+/// Classifies keyring load failures that affect Auto fallback policy.
+#[derive(Debug, thiserror::Error)]
+enum OAuthKeyringLoadError {
+    /// Store coordination failed, so consulting another authority would be unsafe.
+    #[error(transparent)]
+    StoreLock(#[from] OAuthStoreLockFailure),
+    /// The selected keyring backend itself was unavailable or its data was invalid.
+    #[error(transparent)]
+    Backend(#[from] anyhow::Error),
 }
 
 pub fn save_oauth_tokens(
@@ -334,7 +345,12 @@ fn save_oauth_tokens_with_keyring_and_cleanup_file<K: KeyringStore + Clone + 'st
     save_oauth_tokens_with_keyring(keyring_store, keyring_backend_kind, server_name, tokens)?;
     let key = compute_store_key(server_name, &tokens.url)?;
     if let Err(error) = delete_oauth_tokens_from_file(&key) {
-        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
+        warn!(
+            server_name,
+            keyring_backend = ?keyring_backend_kind,
+            error = %error,
+            "failed to remove OAuth tokens from fallback storage"
+        );
     }
     Ok(())
 }
@@ -527,18 +543,21 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
-                    save_to_resolved_store(&DefaultKeyringStore, &self.inner, &stored)?;
+                    self.inner.credential_store.save(
+                        &DefaultKeyringStore,
+                        &self.inner.server_name,
+                        &stored,
+                    )?;
                     *last_credentials = Some(stored);
                 }
             }
             None => {
                 let mut last_credentials = self.inner.last_credentials.lock().await;
                 if last_credentials.take().is_some()
-                    && let Err(error) = delete_from_resolved_store(
+                    && let Err(error) = self.inner.credential_store.delete(
                         &DefaultKeyringStore,
                         &self.inner.server_name,
                         &self.inner.url,
-                        self.inner.credential_store,
                     )
                 {
                     warn!(
@@ -579,44 +598,6 @@ impl OAuthPersistor {
         }
 
         self.persist_if_needed().await
-    }
-}
-
-fn save_to_resolved_store<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    inner: &OAuthPersistorInner,
-    tokens: &StoredOAuthTokens,
-) -> Result<()> {
-    match inner.credential_store {
-        ResolvedOAuthCredentialStore::File => save_oauth_tokens_to_file(tokens),
-        ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
-            save_oauth_tokens_with_keyring(
-                keyring_store,
-                keyring_backend_kind,
-                &inner.server_name,
-                tokens,
-            )
-        }
-    }
-}
-
-fn delete_from_resolved_store<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    server_name: &str,
-    url: &str,
-    credential_store: ResolvedOAuthCredentialStore,
-) -> Result<bool> {
-    match credential_store {
-        ResolvedOAuthCredentialStore::File => {
-            let key = compute_store_key(server_name, url)?;
-            delete_oauth_tokens_from_file(&key)
-        }
-        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct) => {
-            delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
-        }
-        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Secrets) => {
-            delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
-        }
     }
 }
 
@@ -974,13 +955,9 @@ mod tests {
         )?;
 
         assert_eq!(fs::read(fallback_path)?, fallback_before);
-        let loaded = super::load_oauth_tokens_from_store(
-            &store,
-            &keyring_tokens.server_name,
-            &keyring_tokens.url,
-            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
-        )?
-        .expect("tokens should load from the selected keyring store");
+        let loaded = ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct)
+            .load(&store, &keyring_tokens.server_name, &keyring_tokens.url)?
+            .expect("tokens should load from the selected keyring store");
         assert_tokens_match_without_expiry(&loaded, &keyring_tokens);
         Ok(())
     }

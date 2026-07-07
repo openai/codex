@@ -137,10 +137,7 @@ fn store_lock_is_released_when_holder_process_exits() -> Result<()> {
             }
             Err(error) => error,
         };
-        assert!(matches!(
-            error.downcast_ref::<OAuthStoreLockFailure>(),
-            Some(OAuthStoreLockFailure::Timeout { .. })
-        ));
+        assert!(matches!(error, OAuthStoreLockFailure::Timeout { .. }));
 
         child
             .kill()
@@ -447,12 +444,12 @@ fn secrets_store_load_and_delete_observe_aggregate_lock() -> Result<()> {
     let url = tokens.url.clone();
     let loaded =
         complete_after_store_lock_contention(env.path(), OAuthStore::Secrets, move || {
-            load_oauth_tokens_from_keyring(
+            Ok(load_oauth_tokens_from_keyring(
                 &store_for_load,
                 AuthKeyringBackendKind::Secrets,
                 &server_name,
                 &url,
-            )
+            )?)
         })?
         .expect("encrypted credentials should remain readable after contention");
     assert_tokens_match_without_expiry(&loaded, &tokens);

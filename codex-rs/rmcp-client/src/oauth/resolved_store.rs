@@ -7,10 +7,16 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_keyring_store::KeyringStore;
 use tracing::warn;
 
+use super::OAuthKeyringLoadError;
 use super::StoredOAuthTokens;
+use super::compute_store_key;
+use super::delete_oauth_tokens_from_direct_keyring;
+use super::delete_oauth_tokens_from_file;
+use super::delete_oauth_tokens_from_secrets_keyring;
 use super::load_oauth_tokens_from_file;
 use super::load_oauth_tokens_from_keyring;
-use super::store_lock::OAuthStoreLockFailure;
+use super::save_oauth_tokens_to_file;
+use super::save_oauth_tokens_with_keyring;
 
 /// Concrete credential store resolved for one MCP OAuth client lifecycle.
 ///
@@ -22,6 +28,72 @@ use super::store_lock::OAuthStoreLockFailure;
 pub(crate) enum ResolvedOAuthCredentialStore {
     File,
     Keyring(AuthKeyringBackendKind),
+}
+
+impl ResolvedOAuthCredentialStore {
+    /// Loads credentials only from this already-resolved authority.
+    ///
+    /// Unlike `resolve_oauth_tokens`, this never evaluates configured `Auto` fallback policy.
+    pub(crate) fn load<K: KeyringStore + Clone + 'static>(
+        self,
+        keyring_store: &K,
+        server_name: &str,
+        url: &str,
+    ) -> Result<Option<StoredOAuthTokens>> {
+        match self {
+            Self::File => load_oauth_tokens_from_file(server_name, url)
+                .context("failed to reread OAuth tokens from resolved file storage"),
+            Self::Keyring(keyring_backend_kind) => load_oauth_tokens_from_keyring(
+                keyring_store,
+                keyring_backend_kind,
+                server_name,
+                url,
+            )
+            .map_err(anyhow::Error::from)
+            .context(
+                "failed to reread OAuth tokens from resolved keyring storage; refusing file fallback",
+            ),
+        }
+    }
+
+    /// Saves credentials only to this already-resolved authority.
+    pub(crate) fn save<K: KeyringStore + Clone + 'static>(
+        self,
+        keyring_store: &K,
+        server_name: &str,
+        tokens: &StoredOAuthTokens,
+    ) -> Result<()> {
+        match self {
+            Self::File => save_oauth_tokens_to_file(tokens),
+            Self::Keyring(keyring_backend_kind) => save_oauth_tokens_with_keyring(
+                keyring_store,
+                keyring_backend_kind,
+                server_name,
+                tokens,
+            ),
+        }
+    }
+
+    /// Deletes credentials only from this already-resolved authority.
+    pub(crate) fn delete<K: KeyringStore + Clone + 'static>(
+        self,
+        keyring_store: &K,
+        server_name: &str,
+        url: &str,
+    ) -> Result<bool> {
+        match self {
+            Self::File => {
+                let key = compute_store_key(server_name, url)?;
+                delete_oauth_tokens_from_file(&key)
+            }
+            Self::Keyring(AuthKeyringBackendKind::Direct) => {
+                delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
+            }
+            Self::Keyring(AuthKeyringBackendKind::Secrets) => {
+                delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -67,7 +139,7 @@ pub(crate) fn resolve_oauth_tokens<K: KeyringStore + Clone + 'static>(
                 // Auto may fall back when the keyring backend is unavailable, but a Secrets
                 // aggregate-lock failure means authority may be changing. Consulting File in
                 // that state could replay credentials hidden behind a newer Secrets entry.
-                Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
+                Err(OAuthKeyringLoadError::StoreLock(error)) => Err(error.into()),
                 Err(error) => {
                     warn!("failed to read OAuth tokens from keyring: {error}");
                     Ok(load_oauth_tokens_from_file(server_name, url)
@@ -93,33 +165,11 @@ pub(crate) fn resolve_oauth_tokens<K: KeyringStore + Clone + 'static>(
             server_name,
             url,
         )
-        .with_context(|| "failed to read OAuth tokens from keyring".to_string())?
+        .map_err(anyhow::Error::from)
+        .context("failed to read OAuth tokens from keyring")?
         .map(|tokens| ResolvedOAuthTokens {
             tokens,
             store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
         })),
-    }
-}
-
-pub(crate) fn load_oauth_tokens_from_store<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    server_name: &str,
-    url: &str,
-    store: ResolvedOAuthCredentialStore,
-) -> Result<Option<StoredOAuthTokens>> {
-    match store {
-        ResolvedOAuthCredentialStore::File => load_oauth_tokens_from_file(server_name, url)
-            .context("failed to reread OAuth tokens from resolved file storage"),
-        ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
-            load_oauth_tokens_from_keyring(
-                keyring_store,
-                keyring_backend_kind,
-                server_name,
-                url,
-            )
-            .context(
-                "failed to reread OAuth tokens from resolved keyring storage; refusing file fallback",
-            )
-        }
     }
 }
