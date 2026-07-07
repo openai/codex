@@ -531,13 +531,7 @@ impl McpConnectionManager {
     /// the caller. On failure, existing shared cache contents remain unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let refresh_start = Instant::now();
-        let managed_client = self
-            .clients
-            .get(CODEX_APPS_MCP_SERVER_NAME)
-            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
-            .client()
-            .await
-            .context("failed to get client")?;
+        let managed_client = self.client_by_name(CODEX_APPS_MCP_SERVER_NAME).await?;
 
         let list_start = Instant::now();
         let fetch_ticket = managed_client
@@ -602,9 +596,15 @@ impl McpConnectionManager {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
+            if !async_managed_client.connector_runtime_context_is_active() {
+                continue;
+            }
             let Ok(managed_client) = async_managed_client.client().await else {
                 continue;
             };
+            if !async_managed_client.connector_runtime_context_is_active() {
+                continue;
+            }
             let timeout = managed_client.tool_timeout;
             let client = managed_client.client.clone();
 
@@ -673,9 +673,15 @@ impl McpConnectionManager {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name_cloned = server_name.clone();
+            if !async_managed_client.connector_runtime_context_is_active() {
+                continue;
+            }
             let Ok(managed_client) = async_managed_client.client().await else {
                 continue;
             };
+            if !async_managed_client.connector_runtime_context_is_active() {
+                continue;
+            }
             let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
 
@@ -875,15 +881,14 @@ impl McpConnectionManager {
             .clients
             .get(name)
             .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
-        if client.is_codex_apps_mcp_server
-            && client
-                .codex_apps_tools_cache_context
-                .as_ref()
-                .is_some_and(|context| !context.is_active())
-        {
+        if !client.connector_runtime_context_is_active() {
             return Err(anyhow!("connector runtime context was discarded"));
         }
-        client.client().await.context("failed to get client")
+        let managed = client.client().await.context("failed to get client")?;
+        if !client.connector_runtime_context_is_active() {
+            return Err(anyhow!("connector runtime context was discarded"));
+        }
+        Ok(managed)
     }
 
     #[cfg(test)]

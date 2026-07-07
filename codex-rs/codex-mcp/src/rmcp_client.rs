@@ -509,6 +509,14 @@ impl AsyncManagedClient {
             .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
     }
 
+    pub(crate) fn connector_runtime_context_is_active(&self) -> bool {
+        !self.is_codex_apps_mcp_server
+            || self
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .is_none_or(CodexAppsToolsCacheContext::is_active)
+    }
+
     fn cached_tools(&self) -> Option<Vec<ToolInfo>> {
         self.codex_apps_tools_cache_context
             .as_ref()
@@ -517,12 +525,7 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        if self.is_codex_apps_mcp_server
-            && self
-                .codex_apps_tools_cache_context
-                .as_ref()
-                .is_some_and(|context| !context.is_active())
-        {
+        if !self.connector_runtime_context_is_active() {
             return None;
         }
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
@@ -536,6 +539,9 @@ impl AsyncManagedClient {
                 Err(_) => self.cached_tools(),
             }
         }?;
+        if !self.connector_runtime_context_is_active() {
+            return None;
+        }
         Some(if self.is_codex_apps_mcp_server {
             prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
         } else {

@@ -142,6 +142,45 @@ async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> AsyncManaged
     }
 }
 
+async fn create_blocked_codex_apps_client(
+    tools: Vec<ToolInfo>,
+    cache_context: CodexAppsToolsCacheContext,
+    tool_filter: ToolFilter,
+) -> (
+    AsyncManagedClient,
+    tokio::sync::oneshot::Receiver<()>,
+    Arc<tokio::sync::Notify>,
+) {
+    let mut managed_client = create_test_managed_client(tools).await;
+    managed_client.tool_filter = tool_filter.clone();
+    managed_client.codex_apps_tools_cache_context = Some(cache_context.clone());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let release_for_client = Arc::clone(&release);
+    let client = async move {
+        let _ = started_tx.send(());
+        release_for_client.notified().await;
+        Ok(managed_client)
+    }
+    .boxed()
+    .shared();
+    (
+        AsyncManagedClient {
+            client,
+            is_codex_apps_mcp_server: true,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: Some(cache_context),
+            tool_filter,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_reconnect: None,
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+        started_rx,
+        release,
+    )
+}
+
 fn create_test_manager_with_failed_apps_startup(
     cached_tools: Vec<ToolInfo>,
     reconnect_factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
@@ -1462,6 +1501,127 @@ async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
             /*meta*/ None,
         )
         .await
+        .expect_err("discarded context should reject tool calls");
+    assert_eq!(error.to_string(), "connector runtime context was discarded");
+}
+
+#[tokio::test]
+async fn context_discard_during_startup_hides_codex_apps_tools() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
+        context,
+        ToolFilter::default(),
+    )
+    .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let list_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move { manager.list_all_tools().await }
+    });
+
+    startup_started
+        .await
+        .expect("tool listing should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    let tools = tokio::time::timeout(Duration::from_secs(1), list_task)
+        .await
+        .expect("tool listing should finish")
+        .expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn context_discard_during_startup_rejects_codex_apps_calls() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
+        context,
+        ToolFilter {
+            enabled: None,
+            disabled: HashSet::from(["old_tool".to_string()]),
+        },
+    )
+    .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let call_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .call_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "old_tool",
+                    /*arguments*/ None,
+                    /*meta*/ None,
+                )
+                .await
+        }
+    });
+
+    startup_started
+        .await
+        .expect("tool call should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), call_task)
+        .await
+        .expect("tool call should finish")
+        .expect("tool call task should not panic")
         .expect_err("discarded context should reject tool calls");
     assert_eq!(error.to_string(), "connector runtime context was discarded");
 }
