@@ -620,7 +620,11 @@ impl ModelClient {
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
-        let trace_attempt = compaction_trace.start_attempt(&payload);
+        let trace_attempt = compaction_trace.start_attempt(
+            model.as_str(),
+            self.state.provider.info().name.as_str(),
+            &payload,
+        );
         let result = client
             .compact_input(
                 &payload,
