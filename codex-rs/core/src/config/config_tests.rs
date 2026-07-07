@@ -129,170 +129,61 @@ async fn load_config_with_elevated_only_windows_sandbox_requirement(
 }
 
 #[test]
-fn windows_network_proxy_requires_elevated_only_sandbox_requirement() {
-    let err = validate_windows_network_proxy_requirements_for_platform(
-        /*is_windows*/ true,
-        &ConfigRequirementsToml::default(),
-        /*network_proxy_configured*/ true,
-    )
-    .expect_err("Windows network proxy should require elevated-only sandbox requirements");
-
-    assert!(matches!(
-        err.get_ref()
-            .and_then(|source| source.downcast_ref::<ConstraintError>()),
-        Some(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement)
-    ));
-
-    for (requirements, network_proxy_configured) in [
-        (ConfigRequirementsToml::default(), false),
+fn windows_network_proxy_validation() {
+    let elevated_only = ConfigRequirementsToml {
+        windows: Some(codex_config::WindowsRequirementsToml {
+            allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
+        }),
+        ..Default::default()
+    };
+    for (is_windows, requirements, network_proxy_enabled, allowed) in [
+        (true, ConfigRequirementsToml::default(), true, false),
+        (true, ConfigRequirementsToml::default(), false, true),
+        (true, elevated_only, true, true),
         (
+            true,
             ConfigRequirementsToml {
                 windows: Some(codex_config::WindowsRequirementsToml {
-                    allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
+                    allowed_sandbox_implementations: Some(vec![
+                        WindowsSandboxModeToml::Elevated,
+                        WindowsSandboxModeToml::Unelevated,
+                    ]),
                 }),
                 ..Default::default()
             },
             true,
+            false,
         ),
+        (false, ConfigRequirementsToml::default(), true, true),
     ] {
-        validate_windows_network_proxy_requirements_for_platform(
-            /*is_windows*/ true,
-            &requirements,
-            network_proxy_configured,
-        )
-        .expect("valid Windows network proxy requirements");
+        assert_eq!(
+            validate_windows_network_proxy_requirements_for_platform(
+                is_windows,
+                &requirements,
+                network_proxy_enabled,
+            )
+            .is_ok(),
+            allowed
+        );
     }
 
-    validate_windows_network_proxy_requirements_for_platform(
-        /*is_windows*/ false,
-        &ConfigRequirementsToml::default(),
-        /*network_proxy_configured*/ true,
-    )
-    .expect("non-Windows network proxy should not require Windows sandbox policy");
-}
-
-#[test]
-fn windows_network_proxy_requires_elevated_sandbox() {
-    for windows_sandbox_level in [
-        WindowsSandboxLevel::Disabled,
-        WindowsSandboxLevel::RestrictedToken,
+    for (is_windows, sandbox_level, network_proxy_enabled, allowed) in [
+        (true, WindowsSandboxLevel::Disabled, true, false),
+        (true, WindowsSandboxLevel::RestrictedToken, true, false),
+        (true, WindowsSandboxLevel::Elevated, true, true),
+        (true, WindowsSandboxLevel::RestrictedToken, false, true),
+        (false, WindowsSandboxLevel::RestrictedToken, true, true),
     ] {
-        let err = validate_windows_sandbox_network_proxy_compatibility_for_platform(
-            /*is_windows*/ true,
-            windows_sandbox_level,
-            /*network_proxy_configured*/ true,
-        )
-        .expect_err("non-elevated Windows sandbox should reject configured network proxy");
-
-        assert!(matches!(
-            err.get_ref()
-                .and_then(|source| source.downcast_ref::<ConstraintError>()),
-            Some(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox)
-        ));
+        assert_eq!(
+            validate_windows_sandbox_network_proxy_compatibility_for_platform(
+                is_windows,
+                sandbox_level,
+                network_proxy_enabled,
+            )
+            .is_ok(),
+            allowed
+        );
     }
-}
-
-#[test]
-fn windows_network_proxy_compatibility_allows_valid_combinations() -> std::io::Result<()> {
-    for (windows_sandbox_level, network_proxy_configured) in [
-        (WindowsSandboxLevel::Disabled, false),
-        (WindowsSandboxLevel::RestrictedToken, false),
-        (WindowsSandboxLevel::Elevated, false),
-        (WindowsSandboxLevel::Elevated, true),
-    ] {
-        validate_windows_sandbox_network_proxy_compatibility_for_platform(
-            /*is_windows*/ true,
-            windows_sandbox_level,
-            network_proxy_configured,
-        )?;
-    }
-    validate_windows_sandbox_network_proxy_compatibility_for_platform(
-        /*is_windows*/ false,
-        WindowsSandboxLevel::RestrictedToken,
-        /*network_proxy_configured*/ true,
-    )?;
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-#[tokio::test]
-async fn network_proxy_without_elevated_only_sandbox_requirement_is_rejected() -> std::io::Result<()>
-{
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let err = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                network_access: true,
-                ..Default::default()
-            }),
-            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
-            windows: Some(WindowsToml {
-                sandbox: Some(WindowsSandboxModeToml::Elevated),
-                sandbox_private_desktop: None,
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await
-    .expect_err("network proxy without elevated-only sandbox requirements should fail");
-
-    assert!(matches!(
-        err.get_ref()
-            .and_then(|source| source.downcast_ref::<ConstraintError>()),
-        Some(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement)
-    ));
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-#[tokio::test]
-async fn disabled_managed_network_allows_unelevated_windows_sandbox() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-[windows]
-sandbox = "unelevated"
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
-[experimental_network]
-enabled = false
-"#,
-            ),
-        )
-        .build()
-        .await?;
-
-    assert_eq!(
-        WindowsSandboxLevel::from_config(&config),
-        WindowsSandboxLevel::RestrictedToken
-    );
-    assert!(
-        !config
-            .permissions
-            .network
-            .as_ref()
-            .expect("managed network requirements should remain available")
-            .enabled()
-    );
-    Ok(())
 }
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;

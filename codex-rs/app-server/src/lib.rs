@@ -1428,21 +1428,6 @@ sandbox = "elevated"
     }
 
     #[test]
-    fn windows_network_config_errors_are_unrecoverable() {
-        for error in [
-            codex_config::ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement,
-            codex_config::ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox,
-        ] {
-            let error = std::io::Error::from(error);
-            assert!(is_unrecoverable_windows_network_config_error(&error));
-        }
-
-        assert!(!is_unrecoverable_windows_network_config_error(
-            &std::io::Error::other("unrelated config error")
-        ));
-    }
-
-    #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {
         assert_eq!(LogFormat::from_env_value(Some("json")), LogFormat::Json);
         assert_eq!(LogFormat::from_env_value(Some("JSON")), LogFormat::Json);

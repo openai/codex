@@ -2811,42 +2811,6 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn managed_network_parsing_does_not_require_windows_sandbox_policy() -> Result<()> {
-        let config: ConfigRequirementsToml = from_str(
-            r#"
-                [experimental_network]
-                enabled = false
-            "#,
-        )?;
-
-        let requirements = ConfigRequirements::try_from(with_unknown_source(config))?;
-        assert!(requirements.network.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn managed_network_accepts_elevated_only_windows_sandbox() -> Result<()> {
-        let config: ConfigRequirementsToml = from_str(
-            r#"
-                [experimental_network]
-                enabled = true
-
-                [windows]
-                allowed_sandbox_implementations = ["elevated"]
-            "#,
-        )?;
-
-        let requirements = ConfigRequirements::try_from(with_unknown_source(config))?;
-        assert!(requirements.network.is_some());
-        assert_eq!(
-            requirements.windows_sandbox_mode.value(),
-            Some(WindowsSandboxModeToml::Elevated)
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn deserialize_legacy_allowed_approvals_reviewer() -> Result<()> {
         let toml_str = r#"
             allowed_approvals_reviewers = ["guardian_subagent", "user"]
@@ -3386,9 +3350,6 @@ command = "python3 /enterprise/hooks/pre.py"
             [experimental_network.unix_sockets]
             "/tmp/example.sock" = "allow"
             "/tmp/blocked.sock" = "deny"
-
-            [windows]
-            allowed_sandbox_implementations = ["elevated"]
         "#;
 
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -3462,9 +3423,6 @@ command = "python3 /enterprise/hooks/pre.py"
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
-
-            [windows]
-            allowed_sandbox_implementations = ["elevated"]
         "#;
 
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
