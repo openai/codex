@@ -1567,6 +1567,40 @@ async fn does_not_inherit_namespace_for_skills_in_symlinked_plain_dir() {
     );
 }
 
+// Directory symlinks on Windows can require Developer Mode or administrator privileges.
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_inherited_namespace_when_symlink_target_is_scan_root_ancestor() {
+    // temp-root/
+    // └── outer-plugin/
+    //     ├── .codex-plugin/plugin.json
+    //     └── skills/
+    //         ├── root/SKILL.md
+    //         └── link -> temp-root/
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("outer-plugin");
+    write_plugin_manifest(&plugin_root, r#"{"name":"outer"}"#);
+    let skills_root = plugin_root.join("skills");
+    let skill_path = write_skill_at(&skills_root, "root", "root-skill", "root description");
+    symlink_dir(root.path(), &skills_root.join("link"));
+
+    let outcome = load_user_skills_root(&skills_root).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "outer:root-skill",
+            "root description",
+        )]
+    );
+}
+
 #[tokio::test]
 async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
     let root = tempfile::tempdir().expect("tempdir");
