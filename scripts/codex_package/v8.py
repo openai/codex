@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping
@@ -16,6 +17,10 @@ from .targets import TargetSpec
 
 
 DOWNLOAD_TIMEOUT_SECS = 120
+V8_SOURCE_ARCHIVE_PATTERN = re.compile(
+    r"https://github\.com/v8/v8/archive/refs/tags/"
+    r"([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz"
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +61,7 @@ def resolve_codex_v8_cargo_env(
 def fetch_codex_v8_artifacts(
     spec: TargetSpec,
     *,
-    version: str | None = None,
+    crate_version: str | None = None,
     cache_root: Path | None = None,
 ) -> RustyV8ArtifactPair:
     if spec.is_windows:
@@ -64,12 +69,14 @@ def fetch_codex_v8_artifacts(
             f"No Codex-built V8 release artifacts for target: {spec.target}"
         )
 
-    version = version or resolved_v8_crate_version()
-    release_url = (
-        f"https://github.com/openai/codex/releases/download/rusty-v8-v{version}"
+    crate_version = crate_version or resolved_v8_crate_version()
+    release_tag = rusty_v8_release_tag(
+        crate_version=crate_version,
+        source_version=resolved_v8_source_version(),
     )
+    release_url = f"https://github.com/openai/codex/releases/download/{release_tag}"
     target = spec.target
-    cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
+    cache_dir = (cache_root or default_cache_root()) / f"{release_tag}-{target}"
     archive = cache_dir / f"librusty_v8_release_{target}.a.gz"
     binding = cache_dir / f"src_binding_release_{target}.rs"
     checksums = cache_dir / f"rusty_v8_release_{target}.sha256"
@@ -102,6 +109,27 @@ def resolved_v8_crate_version() -> str:
             f"Expected exactly one resolved v8 version, found: {versions}"
         )
     return versions[0]
+
+
+def resolved_v8_source_version(module_bazel: Path | None = None) -> str:
+    module_bazel = module_bazel or REPO_ROOT / "MODULE.bazel"
+    matches = sorted(set(V8_SOURCE_ARCHIVE_PATTERN.findall(module_bazel.read_text())))
+    if len(matches) != 1:
+        raise RuntimeError(
+            "Expected exactly one pinned V8 source version in MODULE.bazel, "
+            f"found: {matches}"
+        )
+    return matches[0]
+
+
+def rusty_v8_release_tag(
+    *,
+    crate_version: str | None = None,
+    source_version: str | None = None,
+) -> str:
+    crate_version = crate_version or resolved_v8_crate_version()
+    source_version = source_version or resolved_v8_source_version()
+    return f"rusty-v8-v{crate_version}-v8-{source_version}"
 
 
 def default_cache_root() -> Path:

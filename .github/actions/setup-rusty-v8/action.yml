@@ -15,8 +15,7 @@ runs:
       run: |
         set -euo pipefail
 
-        version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
-        release_tag="rusty-v8-v${version}"
+        release_tag="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" rusty-v8-release-tag)"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
         archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
