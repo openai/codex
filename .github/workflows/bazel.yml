@@ -230,7 +230,7 @@ jobs:
             --test_env=CODEX_BAZEL_TEST_CACHE_BUST=${GITHUB_SHA}
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
-            --build_metadata=TAG_windows_local_test_jobs=8
+            --build_metadata=TAG_windows_local_test_jobs=12
             --profile=${RUNNER_TEMP}/windows-bazel-profile-shard-${BAZEL_TEST_SHARD}.gz
             --noslim_profile
           )
