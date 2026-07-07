@@ -63,11 +63,13 @@ pub(crate) fn bundle_shape_tag(bundle: Option<&CloudConfigBundle>) -> String {
     };
 
     let mut sources = Vec::new();
-    if !bundle.config_toml.enterprise_managed.is_empty() {
-        sources.push("enterprise_config");
+    let config_layers = &bundle.config_toml.managed_layers;
+    if !config_layers.baseline.is_empty() || !config_layers.system_overlay.is_empty() {
+        sources.push("cloud_managed_config");
     }
-    if !bundle.requirements_toml.enterprise_managed.is_empty() {
-        sources.push("enterprise_requirements");
+    let requirements_layers = &bundle.requirements_toml.managed_layers;
+    if !requirements_layers.baseline.is_empty() || !requirements_layers.system_overlay.is_empty() {
+        sources.push("cloud_managed_requirements");
     }
 
     if sources.is_empty() {

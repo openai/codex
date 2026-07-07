@@ -18,6 +18,10 @@ impl CloudConfigBundleFixture {
         Self::default().add_enterprise_requirement(contents)
     }
 
+    pub fn system_overlay_requirement(contents: impl Into<String>) -> Self {
+        Self::default().add_managed_requirement(CloudManagedLayer::SystemOverlay, contents)
+    }
+
     pub fn enterprise_config(contents: impl Into<String>) -> Self {
         Self::default().add_enterprise_config(contents)
     }
@@ -26,6 +30,12 @@ impl CloudConfigBundleFixture {
         contents: impl Into<String>,
     ) -> CloudConfigBundleLoader {
         Self::enterprise_requirement(contents).into_loader()
+    }
+
+    pub fn loader_with_system_overlay_requirement(
+        contents: impl Into<String>,
+    ) -> CloudConfigBundleLoader {
+        Self::system_overlay_requirement(contents).into_loader()
     }
 
     pub fn loader_with_enterprise_config(contents: impl Into<String>) -> CloudConfigBundleLoader {

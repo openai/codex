@@ -1,5 +1,6 @@
 use codex_backend_client::Client as BackendClient;
 use codex_backend_client::ConfigBundleResponse;
+use codex_backend_client::DeliveredManagedLayers;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::CloudConfigBundle;
 use codex_config::CloudConfigFragment;
@@ -33,12 +34,15 @@ pub(crate) enum BundleRequestError {
         status_code: Option<u16>,
         message: String,
     },
+    InvalidBundle {
+        message: String,
+    },
 }
 
 /// Retrieves one cloud config bundle from the backend.
 ///
-/// Implementations should return the backend-selected bundle exactly as delivered and leave
-/// validation, caching, and config/requirements parsing decisions to the service layer.
+/// Implementations translate the backend response into the managed-only domain model. TOML
+/// parsing, semantic validation, and caching remain service-layer responsibilities.
 pub(crate) trait BundleClient: Send + Sync {
     fn get_bundle(
         &self,
@@ -85,40 +89,75 @@ impl BundleClient for BackendBundleClient {
                 }
             })?;
 
-        Ok(bundle_from_response(response))
+        bundle_from_response(response)
     }
 }
 
-pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfigBundle {
-    let config_toml = response
-        .config_toml
-        .flatten()
-        .map(|config_toml| *config_toml)
-        .and_then(|config_toml| config_toml.enterprise_managed.flatten())
-        .unwrap_or_default()
-        .into_iter()
-        .map(config_fragment_from_delivered)
-        .collect();
-    let requirements_toml = response
-        .requirements_toml
-        .flatten()
-        .map(|requirements_toml| *requirements_toml)
-        .and_then(|requirements_toml| requirements_toml.enterprise_managed.flatten())
-        .unwrap_or_default()
-        .into_iter()
-        .map(requirements_fragment_from_delivered)
-        .collect();
+pub(crate) fn bundle_from_response(
+    response: ConfigBundleResponse,
+) -> Result<CloudConfigBundle, BundleRequestError> {
+    let config_toml = match response.config_toml.flatten() {
+        Some(config_toml) => {
+            let (baseline, system_overlay) = managed_fragments_from_delivered(
+                config_toml.managed_layers,
+                config_fragment_from_delivered,
+                "config_toml",
+            )?;
+            CloudConfigTomlBundle {
+                enterprise_managed: Vec::new(),
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline,
+                    system_overlay,
+                },
+            }
+        }
+        None => CloudConfigTomlBundle::default(),
+    };
+    let requirements_toml = match response.requirements_toml.flatten() {
+        Some(requirements_toml) => {
+            let (baseline, system_overlay) = managed_fragments_from_delivered(
+                requirements_toml.managed_layers,
+                requirements_fragment_from_delivered,
+                "requirements_toml",
+            )?;
+            CloudRequirementsTomlBundle {
+                enterprise_managed: Vec::new(),
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline,
+                    system_overlay,
+                },
+            }
+        }
+        None => CloudRequirementsTomlBundle::default(),
+    };
 
-    CloudConfigBundle {
-        config_toml: CloudConfigTomlBundle {
-            enterprise_managed: config_toml,
-            managed_layers: CloudConfigTomlManagedLayers::default(),
-        },
-        requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: requirements_toml,
-            managed_layers: CloudRequirementsTomlManagedLayers::default(),
-        },
-    }
+    Ok(CloudConfigBundle {
+        config_toml,
+        requirements_toml,
+    })
+}
+
+fn managed_fragments_from_delivered<T>(
+    managed_layers: Option<Option<Box<DeliveredManagedLayers>>>,
+    convert: fn(DeliveredTomlFragment) -> T,
+    document_name: &str,
+) -> Result<(Vec<T>, Vec<T>), BundleRequestError> {
+    let managed_layers = managed_layers
+        .flatten()
+        .map(|managed_layers| *managed_layers)
+        .ok_or_else(|| BundleRequestError::InvalidBundle {
+            message: format!(
+                "cloud config bundle {document_name} is present but managed_layers is missing or null"
+            ),
+        })?;
+    let DeliveredManagedLayers {
+        baseline,
+        system_overlay,
+    } = managed_layers;
+    Ok((
+        baseline.into_iter().map(convert).collect(),
+        system_overlay.into_iter().map(convert).collect(),
+    ))
 }
 
 fn config_fragment_from_delivered(fragment: DeliveredTomlFragment) -> CloudConfigFragment {

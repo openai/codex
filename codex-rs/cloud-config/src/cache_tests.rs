@@ -13,20 +13,26 @@ use tempfile::tempdir;
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: vec![CloudConfigFragment {
-                id: "cfg_1".to_string(),
-                name: "Base config".to_string(),
-                contents: "model = \"gpt-5\"".to_string(),
-            }],
-            managed_layers: CloudConfigTomlManagedLayers::default(),
+            enterprise_managed: Vec::new(),
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: vec![CloudConfigFragment {
+                    id: "cfg_1".to_string(),
+                    name: "Base config".to_string(),
+                    contents: "model = \"gpt-5\"".to_string(),
+                }],
+                system_overlay: Vec::new(),
+            },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_1".to_string(),
-                name: "Base requirements".to_string(),
-                contents: "allowed_approval_policies = [\"never\"]".to_string(),
-            }],
-            managed_layers: CloudRequirementsTomlManagedLayers::default(),
+            enterprise_managed: Vec::new(),
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                }],
+            },
         },
     }
 }
@@ -83,6 +89,8 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let cache_file: CloudConfigBundleCacheFile =
         serde_json::from_slice(&std::fs::read(cache.path()).expect("read cache"))
             .expect("parse cache");
+    let cache_json = serde_json::to_string(&cache_file).expect("serialize cache as JSON");
+    assert!(!cache_json.contains("enterprise_managed"));
     assert!(
         cache_file.signed_payload.expires_at
             <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)
@@ -141,22 +149,34 @@ async fn load_reports_missing_and_malformed_cache_files() {
 }
 
 #[tokio::test]
-async fn load_rejects_tampered_payload() {
-    let codex_home = tempdir().expect("tempdir");
-    let cache = create_test_cache(codex_home.path());
-    let mut cache_file = signed_cache_file(valid_signed_payload());
-    cache_file
+async fn load_rejects_tampering_in_either_managed_bucket() {
+    let mut baseline = signed_cache_file(valid_signed_payload());
+    baseline
+        .signed_payload
+        .bundle
+        .config_toml
+        .managed_layers
+        .baseline[0]
+        .contents = "model = \"tampered\"".to_string();
+    let mut system_overlay = signed_cache_file(valid_signed_payload());
+    system_overlay
         .signed_payload
         .bundle
         .requirements_toml
-        .enterprise_managed[0]
+        .managed_layers
+        .system_overlay[0]
         .contents = "allowed_approval_policies = [\"on-request\"]".to_string();
-    write_cache_file(&cache, &cache_file);
 
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheSignatureInvalid)
-    );
+    for cache_file in [baseline, system_overlay] {
+        let codex_home = tempdir().expect("tempdir");
+        let cache = create_test_cache(codex_home.path());
+        write_cache_file(&cache, &cache_file);
+
+        assert_eq!(
+            cache.load(Some("user-12345"), Some("account-12345")).await,
+            Err(CacheLoadStatus::CacheSignatureInvalid)
+        );
+    }
 }
 
 #[tokio::test]
@@ -196,15 +216,15 @@ async fn load_rejects_expired_cache() {
 }
 
 #[tokio::test]
-async fn load_rejects_unsupported_cache_version() {
+async fn load_rejects_v1_cache() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let mut signed_payload = valid_signed_payload();
-    signed_payload.version = 2;
+    signed_payload.version = 1;
     write_cache_file(&cache, &signed_cache_file(signed_payload));
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheVersionUnsupported(2))
+        Err(CacheLoadStatus::CacheVersionUnsupported(1))
     );
 }

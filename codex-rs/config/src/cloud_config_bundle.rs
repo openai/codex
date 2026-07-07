@@ -56,6 +56,7 @@ impl CloudConfigBundle {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigTomlBundle {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enterprise_managed: Vec<CloudConfigFragment>,
     #[serde(
         default,
@@ -78,6 +79,7 @@ impl CloudConfigTomlManagedLayers {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudRequirementsTomlBundle {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enterprise_managed: Vec<CloudRequirementsFragment>,
     #[serde(
         default,

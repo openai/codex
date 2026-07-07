@@ -5,10 +5,13 @@ use crate::backend::RetryableFailureKind;
 use crate::backend::bundle_from_response;
 use crate::cache::CLOUD_CONFIG_BUNDLE_CACHE_FILENAME;
 use crate::cache::CloudConfigBundleCache;
+use crate::cache::sign_cache_payload;
+use crate::cache::verify_cache_signature;
 use crate::metrics::bundle_shape_tag;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_backend_client::ConfigBundleResponse;
+use codex_backend_client::DeliveredManagedLayers;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigFragment;
@@ -37,6 +40,60 @@ fn write_auth_json(codex_home: &Path, value: serde_json::Value) -> std::io::Resu
 
 fn create_test_cache(codex_home: &Path) -> CloudConfigBundleCache {
     CloudConfigBundleCache::new(AbsolutePathBuf::resolve_path_against_base(codex_home, "/"))
+}
+
+fn write_legacy_v1_cache(cache: &CloudConfigBundleCache) {
+    #[derive(serde::Serialize)]
+    struct LegacyTomlBundle<T> {
+        enterprise_managed: Vec<T>,
+    }
+    #[derive(serde::Serialize)]
+    struct LegacyBundle {
+        config_toml: LegacyTomlBundle<CloudConfigFragment>,
+        requirements_toml: LegacyTomlBundle<CloudRequirementsFragment>,
+    }
+    #[derive(serde::Serialize)]
+    struct LegacySignedPayload {
+        version: u32,
+        cached_at: chrono::DateTime<chrono::Utc>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        chatgpt_user_id: Option<String>,
+        account_id: Option<String>,
+        bundle: LegacyBundle,
+    }
+
+    let cached_at = chrono::Utc::now();
+    let signed_payload = LegacySignedPayload {
+        version: 1,
+        cached_at,
+        expires_at: cached_at + chrono::Duration::minutes(30),
+        chatgpt_user_id: Some("user-12345".to_string()),
+        account_id: Some("account-12345".to_string()),
+        bundle: LegacyBundle {
+            config_toml: LegacyTomlBundle {
+                enterprise_managed: vec![config_fragment("cfg_legacy", "model = \"legacy\"")],
+            },
+            requirements_toml: LegacyTomlBundle {
+                enterprise_managed: vec![requirements_fragment(
+                    "req_legacy",
+                    "allowed_approval_policies = [\"never\"]",
+                )],
+            },
+        },
+    };
+    let payload_bytes = serde_json::to_vec(&signed_payload).expect("serialize legacy payload");
+    let signature = sign_cache_payload(&payload_bytes).expect("sign legacy payload");
+    assert!(verify_cache_signature(&payload_bytes, &signature));
+    std::fs::write(
+        cache.path(),
+        serde_json::to_vec_pretty(&json!({
+            "signed_payload": serde_json::to_value(signed_payload)
+                .expect("serialize legacy signed payload"),
+            "signature": signature,
+        }))
+        .expect("serialize legacy cache"),
+    )
+    .expect("write legacy cache");
 }
 
 async fn auth_manager_with_api_key() -> Arc<AuthManager> {
@@ -198,43 +255,122 @@ fn chatgpt_auth_json_with_mode(
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: vec![test_config_fragment()],
-            managed_layers: CloudConfigTomlManagedLayers::default(),
+            enterprise_managed: Vec::new(),
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: vec![test_config_fragment()],
+                system_overlay: Vec::new(),
+            },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![test_requirements_fragment()],
-            managed_layers: CloudRequirementsTomlManagedLayers::default(),
+            enterprise_managed: Vec::new(),
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![test_requirements_fragment()],
+            },
         },
     }
 }
 
 fn test_config_fragment() -> CloudConfigFragment {
-    CloudConfigFragment {
-        id: "cfg_1".to_string(),
-        name: "Base config".to_string(),
-        contents: "model = \"gpt-5\"".to_string(),
-    }
+    config_fragment("cfg_1", "model = \"gpt-5\"")
 }
 
 fn test_requirements_fragment() -> CloudRequirementsFragment {
+    requirements_fragment("req_1", "allowed_approval_policies = [\"never\"]")
+}
+
+fn delivered_fragment(id: &str, contents: &str) -> DeliveredTomlFragment {
+    DeliveredTomlFragment::new(id.to_string(), id.to_string(), contents.to_string())
+}
+
+fn config_fragment(id: &str, contents: &str) -> CloudConfigFragment {
+    CloudConfigFragment {
+        id: id.to_string(),
+        name: id.to_string(),
+        contents: contents.to_string(),
+    }
+}
+
+fn requirements_fragment(id: &str, contents: &str) -> CloudRequirementsFragment {
     CloudRequirementsFragment {
-        id: "req_1".to_string(),
-        name: "Base requirements".to_string(),
-        contents: "allowed_approval_policies = [\"never\"]".to_string(),
+        id: id.to_string(),
+        name: id.to_string(),
+        contents: contents.to_string(),
+    }
+}
+
+fn delivered_managed_layers(
+    baseline: Vec<DeliveredTomlFragment>,
+    system_overlay: Vec<DeliveredTomlFragment>,
+) -> Option<Option<Box<DeliveredManagedLayers>>> {
+    Some(Some(Box::new(DeliveredManagedLayers::new(
+        baseline,
+        system_overlay,
+    ))))
+}
+
+fn replacement_requirements_bundle() -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle::default(),
+        requirements_toml: CloudRequirementsTomlBundle {
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_2".to_string(),
+                    name: "Replacement requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
+                }],
+            },
+            ..Default::default()
+        },
     }
 }
 
 fn invalid_config_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: vec![CloudConfigFragment {
-                id: "cfg_invalid".to_string(),
-                name: "Invalid config".to_string(),
-                contents: "model = [".to_string(),
-            }],
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: vec![CloudConfigFragment {
+                    id: "cfg_invalid".to_string(),
+                    name: "Invalid config".to_string(),
+                    contents: "model = [".to_string(),
+                }],
+                system_overlay: Vec::new(),
+            },
             ..Default::default()
         },
         requirements_toml: CloudRequirementsTomlBundle::default(),
+    }
+}
+
+fn conflicting_managed_requirements_bundle() -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle::default(),
+        requirements_toml: CloudRequirementsTomlBundle {
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: vec![CloudRequirementsFragment {
+                    id: "req_baseline".to_string(),
+                    name: "Baseline requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/baseline"
+windows_managed_dir = 'C:\managed\baseline'
+"#
+                    .to_string(),
+                }],
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_overlay".to_string(),
+                    name: "System overlay requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/overlay"
+windows_managed_dir = 'C:\managed\overlay'
+"#
+                    .to_string(),
+                }],
+            },
+            ..Default::default()
+        },
     }
 }
 
@@ -335,7 +471,7 @@ impl BundleClient for UnauthorizedBundleClient {
 }
 
 #[test]
-fn bundle_shape_tag_describes_sorted_enterprise_sources() {
+fn bundle_shape_tag_describes_managed_documents() {
     assert_eq!(bundle_shape_tag(/*bundle*/ None), "none");
     assert_eq!(
         bundle_shape_tag(Some(&CloudConfigBundle::default())),
@@ -344,35 +480,21 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
     assert_eq!(
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![test_config_fragment()],
-                ..Default::default()
-            },
-            requirements_toml: CloudRequirementsTomlBundle::default(),
-        })),
-        "enterprise_config"
-    );
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle::default(),
-            requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![test_requirements_fragment()],
-                ..Default::default()
-            },
-        })),
-        "enterprise_requirements"
-    );
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![test_config_fragment()],
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: vec![test_config_fragment()],
+                    system_overlay: vec![test_config_fragment()],
+                },
                 ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![test_requirements_fragment()],
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline: vec![test_requirements_fragment()],
+                    system_overlay: vec![test_requirements_fragment()],
+                },
                 ..Default::default()
             },
         })),
-        "enterprise_config,enterprise_requirements"
+        "cloud_managed_config,cloud_managed_requirements"
     );
 }
 
@@ -485,8 +607,47 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 
 #[tokio::test]
 async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
+    for bundle in [
+        invalid_config_bundle(),
+        conflicting_managed_requirements_bundle(),
+    ] {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticBundleClient::new(bundle));
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
+
+        let err = service
+            .load_startup_bundle()
+            .await
+            .expect_err("invalid remote bundle should fail closed");
+
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(err.to_string().contains("invalid cloud config bundle"));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !codex_home
+                .path()
+                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+                .exists()
+        );
+    }
+}
+
+#[tokio::test]
+async fn get_bundle_does_not_retry_or_cache_invalid_transport_bundle() {
     let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(invalid_config_bundle()));
+    let fetcher = Arc::new(SequenceBundleClient::new(vec![
+        Err(BundleRequestError::InvalidBundle {
+            message:
+                "cloud config bundle config_toml is present but managed_layers is missing or null"
+                    .to_string(),
+        }),
+        Ok(test_bundle()),
+    ]));
     let service = CloudConfigBundleService::new(
         auth_manager_with_plan("business").await,
         fetcher.clone(),
@@ -497,10 +658,13 @@ async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
     let err = service
         .load_startup_bundle()
         .await
-        .expect_err("invalid remote bundle should fail closed");
+        .expect_err("invalid transport bundle should fail closed");
 
     assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
-    assert!(err.to_string().contains("invalid cloud config bundle"));
+    assert!(
+        err.to_string()
+            .contains("managed_layers is missing or null")
+    );
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     assert!(
         !codex_home
@@ -592,6 +756,51 @@ async fn get_bundle_uses_cache_when_valid() {
 }
 
 #[tokio::test]
+async fn get_bundle_treats_legacy_v1_cache_as_miss_and_rewrites_v2() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    write_legacy_v1_cache(&cache);
+    let replacement_bundle = test_bundle();
+    let fetcher = Arc::new(StaticBundleClient::new(replacement_bundle.clone()));
+    let service = CloudConfigBundleService::new(
+        auth_manager_with_plan("business").await,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+
+    assert_eq!(
+        service.load_startup_bundle().await,
+        Ok(Some(replacement_bundle.clone()))
+    );
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cache
+            .load(Some("user-12345"), Some("account-12345"))
+            .await
+            .expect("load rewritten cache")
+            .bundle,
+        replacement_bundle
+    );
+    let cache_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cache.path()).expect("read rewritten cache"))
+            .expect("parse rewritten cache");
+    assert_eq!(cache_json["signed_payload"]["version"], 2);
+    let bundle_json = &cache_json["signed_payload"]["bundle"];
+    assert!(bundle_json["config_toml"]["managed_layers"].is_object());
+    assert!(
+        bundle_json["config_toml"]
+            .get("enterprise_managed")
+            .is_none()
+    );
+    assert!(
+        bundle_json["requirements_toml"]
+            .get("enterprise_managed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn get_bundle_ignores_cache_for_different_auth_identity() {
     let codex_home = tempdir().expect("tempdir");
     let prime_service = CloudConfigBundleService::new(
@@ -603,17 +812,7 @@ async fn get_bundle_ignores_cache_for_different_auth_identity() {
     );
     let _ = prime_service.load_startup_bundle().await;
 
-    let replacement_bundle = CloudConfigBundle {
-        config_toml: CloudConfigTomlBundle::default(),
-        requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_2".to_string(),
-                name: "Replacement requirements".to_string(),
-                contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
-            }],
-            ..Default::default()
-        },
-    };
+    let replacement_bundle = replacement_requirements_bundle();
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
         replacement_bundle.clone()
     )]));
@@ -933,17 +1132,7 @@ async fn get_bundle_does_not_use_cache_when_auth_identity_is_incomplete() {
     );
     let _ = prime_service.load_startup_bundle().await;
 
-    let replacement_bundle = CloudConfigBundle {
-        config_toml: CloudConfigTomlBundle::default(),
-        requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_2".to_string(),
-                name: "Replacement requirements".to_string(),
-                contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
-            }],
-            ..Default::default()
-        },
-    };
+    let replacement_bundle = replacement_requirements_bundle();
     let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(
         replacement_bundle.clone()
     )]));
@@ -999,17 +1188,7 @@ async fn get_bundle_stops_after_max_retries() {
 
 #[tokio::test]
 async fn refresh_from_remote_updates_cached_bundle() {
-    let replacement_bundle = CloudConfigBundle {
-        config_toml: CloudConfigTomlBundle::default(),
-        requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_2".to_string(),
-                name: "Replacement requirements".to_string(),
-                contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
-            }],
-            ..Default::default()
-        },
-    };
+    let replacement_bundle = replacement_requirements_bundle();
     let codex_home = tempdir().expect("tempdir");
     let fetcher = Arc::new(SequenceBundleClient::new(vec![
         Ok(test_bundle()),
@@ -1034,69 +1213,135 @@ async fn refresh_from_remote_updates_cached_bundle() {
 }
 
 #[test]
-fn bundle_response_conversion_preserves_fragment_order() {
+fn bundle_response_conversion_uses_only_managed_layers_and_preserves_order() {
+    let legacy_config = delivered_fragment("legacy", "model = [");
+    let baseline_config = delivered_fragment("baseline", "model = \"baseline\"");
+    let high_config = delivered_fragment("high", "model = \"high\"");
+    let low_config = delivered_fragment("low", "model = \"low\"");
+    let overlay_requirements =
+        delivered_fragment("overlay", "allowed_approval_policies = [\"never\"]");
     let response = ConfigBundleResponse {
         config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
-            enterprise_managed: Some(Some(vec![
-                DeliveredTomlFragment::new(
-                    "cfg_high".to_string(),
-                    "High config".to_string(),
-                    "model = \"high\"".to_string(),
-                ),
-                DeliveredTomlFragment::new(
-                    "cfg_low".to_string(),
-                    "Low config".to_string(),
-                    "model = \"low\"".to_string(),
-                ),
-            ])),
-            managed_layers: None,
+            enterprise_managed: Some(Some(vec![legacy_config])),
+            managed_layers: delivered_managed_layers(
+                vec![baseline_config],
+                vec![high_config, low_config],
+            ),
         }))),
         requirements_toml: Some(Some(Box::new(
             codex_backend_client::DeliveredRequirementsToml {
-                enterprise_managed: Some(Some(vec![DeliveredTomlFragment::new(
-                    "req_high".to_string(),
-                    "High requirements".to_string(),
-                    "allowed_approval_policies = [\"never\"]".to_string(),
+                enterprise_managed: Some(Some(vec![delivered_fragment(
+                    "legacy",
+                    "allowed_approval_policies = [",
                 )])),
-                managed_layers: None,
+                managed_layers: delivered_managed_layers(Vec::new(), vec![overlay_requirements]),
             },
         ))),
     };
 
     assert_eq!(
         bundle_from_response(response),
-        CloudConfigBundle {
+        Ok(CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![
-                    CloudConfigFragment {
-                        id: "cfg_high".to_string(),
-                        name: "High config".to_string(),
-                        contents: "model = \"high\"".to_string(),
-                    },
-                    CloudConfigFragment {
-                        id: "cfg_low".to_string(),
-                        name: "Low config".to_string(),
-                        contents: "model = \"low\"".to_string(),
-                    },
-                ],
+                managed_layers: CloudConfigTomlManagedLayers {
+                    baseline: vec![config_fragment("baseline", "model = \"baseline\"")],
+                    system_overlay: vec![
+                        config_fragment("high", "model = \"high\""),
+                        config_fragment("low", "model = \"low\""),
+                    ],
+                },
                 ..Default::default()
             },
             requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![CloudRequirementsFragment {
-                    id: "req_high".to_string(),
-                    name: "High requirements".to_string(),
-                    contents: "allowed_approval_policies = [\"never\"]".to_string(),
-                }],
+                managed_layers: CloudRequirementsTomlManagedLayers {
+                    baseline: Vec::new(),
+                    system_overlay: vec![requirements_fragment(
+                        "overlay",
+                        "allowed_approval_policies = [\"never\"]",
+                    )],
+                },
                 ..Default::default()
             },
-        }
+        })
     );
 }
 
 #[test]
-fn bundle_response_conversion_treats_missing_sections_as_empty() {
+fn bundle_response_conversion_treats_missing_or_null_sections_as_empty() {
     assert_eq!(
         bundle_from_response(ConfigBundleResponse::new()),
-        CloudConfigBundle::default()
+        Ok(CloudConfigBundle::default())
     );
+    assert_eq!(
+        bundle_from_response(ConfigBundleResponse {
+            config_toml: Some(None),
+            requirements_toml: Some(None),
+        }),
+        Ok(CloudConfigBundle::default())
+    );
+}
+
+#[test]
+fn bundle_response_conversion_accepts_explicitly_empty_managed_layers() {
+    assert_eq!(
+        bundle_from_response(ConfigBundleResponse {
+            config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
+                enterprise_managed: Some(Some(vec![delivered_fragment("legacy", "model = [")])),
+                managed_layers: delivered_managed_layers(Vec::new(), Vec::new()),
+            }))),
+            requirements_toml: Some(Some(Box::new(
+                codex_backend_client::DeliveredRequirementsToml {
+                    enterprise_managed: None,
+                    managed_layers: delivered_managed_layers(Vec::new(), Vec::new()),
+                },
+            ))),
+        }),
+        Ok(CloudConfigBundle::default())
+    );
+}
+
+#[test]
+fn bundle_response_conversion_rejects_present_section_without_managed_layers() {
+    for managed_layers in [None, Some(None)] {
+        assert_eq!(
+            bundle_from_response(ConfigBundleResponse {
+                config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
+                    enterprise_managed: Some(Some(vec![delivered_fragment(
+                        "legacy",
+                        "model = \"ignored\"",
+                    )])),
+                    managed_layers,
+                }))),
+                requirements_toml: Some(None),
+            }),
+            Err(BundleRequestError::InvalidBundle {
+                message: concat!(
+                    "cloud config bundle config_toml is present but managed_layers ",
+                    "is missing or null"
+                )
+                .to_string(),
+            })
+        );
+    }
+
+    for managed_layers in [None, Some(None)] {
+        assert_eq!(
+            bundle_from_response(ConfigBundleResponse {
+                config_toml: Some(None),
+                requirements_toml: Some(Some(Box::new(
+                    codex_backend_client::DeliveredRequirementsToml {
+                        enterprise_managed: Some(Some(Vec::new())),
+                        managed_layers,
+                    },
+                ))),
+            }),
+            Err(BundleRequestError::InvalidBundle {
+                message: concat!(
+                    "cloud config bundle requirements_toml is present but managed_layers ",
+                    "is missing or null"
+                )
+                .to_string(),
+            })
+        );
+    }
 }
