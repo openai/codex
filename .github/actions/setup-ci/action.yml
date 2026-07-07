@@ -4,11 +4,49 @@ description: Prepare common tools and environment shared by CI jobs.
 runs:
   using: composite
   steps:
-    # TODO(anp): Move this under CI_BUILD_ROOT once all consumers use the
-    # shared build-path contract.
-    - name: Configure Cargo target directory
+    # setup-ci expects either this step or the Unix fallback below to define
+    # CI_BUILD_ROOT. Windows puts it on a Dev Drive because Cargo and Bazel
+    # spend significant time reading and writing build/cache trees.
+    - name: Configure Dev Drive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./.github/scripts/setup-dev-drive.ps1
+
+    - name: Configure CI build root (Unix)
+      if: runner.os != 'Windows'
       shell: bash
-      run: echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/codex-rs/target}" >> "$GITHUB_ENV"
+      run: echo "CI_BUILD_ROOT=$HOME/.cache/codex-ci" >> "$GITHUB_ENV"
+
+    - name: Configure CI build paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Keep this directory name tiny on every platform so the shared path
+        # contract preserves Windows' short Bazel output root. Long Windows
+        # Bazel paths can overflow argv and confuse test MANIFEST handling.
+        bazel_output_user_root="$CI_BUILD_ROOT/b"
+        bazel_repository_cache="$CI_BUILD_ROOT/bazel-repository-cache"
+        bazel_repo_contents_cache="$CI_BUILD_ROOT/bazel-repo-contents-cache-$GITHUB_RUN_ID-$GITHUB_JOB"
+        cargo_target_dir="$CI_BUILD_ROOT/cargo-target"
+        tmp="$CI_BUILD_ROOT/tmp"
+
+        build_dirs=(
+          "$bazel_output_user_root"
+          "$bazel_repository_cache"
+          "$bazel_repo_contents_cache"
+          "$cargo_target_dir"
+          "$tmp"
+        )
+        mkdir -p "${build_dirs[@]}"
+
+        {
+          echo "BAZEL_OUTPUT_USER_ROOT=$bazel_output_user_root"
+          echo "BAZEL_REPOSITORY_CACHE=$bazel_repository_cache"
+          echo "BAZEL_REPO_CONTENTS_CACHE=$bazel_repo_contents_cache"
+          echo "CARGO_TARGET_DIR=$cargo_target_dir"
+          echo "TMP=$tmp"
+          echo "TEMP=$tmp"
+        } >> "$GITHUB_ENV"
 
     - name: Prefer the Git CLI for Cargo git dependencies
       shell: bash
