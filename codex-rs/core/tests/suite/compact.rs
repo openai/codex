@@ -48,6 +48,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_compact_json_once;
+use core_test_support::responses::mount_compact_response_sequence;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -2532,6 +2533,112 @@ async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on
     );
     assert_eq!(requests[2].body_json()["model"].as_str(), Some(next_model));
     assert_eq!(requests[3].body_json()["model"].as_str(), Some(next_model));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_legacy_remote_compact_falls_back_after_previous_model_invalid_request() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let retired_model = "gpt-5.6";
+    let previous_model_family = "gpt-5.6";
+    let next_model = "gpt-5.5";
+    let mut previous_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 273_000);
+    previous_model_info.slug = previous_model_family.to_string();
+    let mut next_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 125_000);
+    next_model_info.slug = next_model.to_string();
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![previous_model_info, next_model_info],
+        },
+    )
+    .await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+    let compact_request_log = mount_compact_response_sequence(
+        &server,
+        vec![
+            invalid_request_response("previous-model compaction was rejected"),
+            wiremock::ResponseTemplate::new(/*status*/ 200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "output": [{
+                        "type": "compaction",
+                        "encrypted_content": "DOWNSHIFT_SUMMARY",
+                    }],
+                })),
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            retired_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit smaller-model turn");
+    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
+
+    let requests = request_log.requests();
+    let compact_requests = compact_request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(compact_requests.len(), 2);
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    assert_eq!(
+        compact_requests[0].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    assert_eq!(
+        compact_requests[1].body_json()["model"].as_str(),
+        Some(next_model)
+    );
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some(next_model));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
