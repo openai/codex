@@ -1,5 +1,6 @@
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
+use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 
 mod rate_limit_resets;
@@ -624,7 +625,10 @@ impl AccountRequestProcessor {
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager
-            .install_external_auth(auth)
+            .set_external_auth(Arc::new(ExternalAuthBridge::new(
+                Arc::clone(&self.outgoing),
+                auth,
+            )))
             .await
             .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager.replace_cloud_config_bundle_loader(

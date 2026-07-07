@@ -211,16 +211,12 @@ pub struct ExternalAuthRefreshContext {
 
 /// Pluggable auth provider used by `AuthManager` for externally managed auth flows.
 ///
-/// Implementations may either resolve auth eagerly via `resolve()` or provide refreshed
-/// auth on demand via `refresh()`.
+/// Implementations own the current auth value and any source-specific refresh mechanism.
 pub trait ExternalAuth: Send + Sync {
-    /// Returns cached or immediately available auth, if this provider owns the current value.
-    /// Returning `None` lets the manager use externally installed ChatGPT auth from its cache.
-    fn resolve(&self) -> ExternalAuthFuture<'_, Option<CodexAuth>> {
-        Box::pin(async { Ok(None) })
-    }
+    /// Returns the provider's current auth value.
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth>;
 
-    /// Refreshes auth in response to a manager-driven refresh attempt.
+    /// Refreshes auth and makes the returned value current for future `resolve()` calls.
     fn refresh(&self, context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth>;
 }
 
@@ -2214,11 +2210,19 @@ impl AuthManager {
         }
     }
 
-    pub fn set_external_auth(&self, external_auth: Arc<dyn ExternalAuth>) {
+    pub async fn set_external_auth(
+        &self,
+        external_auth: Arc<dyn ExternalAuth>,
+    ) -> Result<(), RefreshTokenError> {
+        let auth = external_auth
+            .resolve()
+            .await
+            .map_err(RefreshTokenError::Transient)?;
+        self.apply_external_auth(auth).await?;
         if let Ok(mut guard) = self.external_auth.write() {
             *guard = Some(external_auth);
         }
-        self.set_resolved_external_auth(None);
+        Ok(())
     }
 
     pub fn clear_external_auth(&self) {
@@ -2334,16 +2338,12 @@ impl AuthManager {
         let external_auth = self.external_auth()?;
 
         match external_auth.resolve().await {
-            Ok(Some(auth)) => {
-                if let Err(err) = self.install_external_auth(auth.clone()).await {
+            Ok(auth) => {
+                if let Err(err) = self.apply_external_auth(auth.clone()).await {
                     tracing::error!("Failed to install resolved external auth: {err}");
                     return None;
                 }
                 Some(auth)
-            }
-            Ok(None) => {
-                self.set_resolved_external_auth(None);
-                None
             }
             Err(err) => {
                 self.set_resolved_external_auth(None);
@@ -2456,6 +2456,7 @@ impl AuthManager {
             self.keyring_backend_kind,
         )?;
         // Always reload to clear any cached auth (even if file absent).
+        self.clear_external_auth();
         self.reload().await;
         Ok(removed)
     }
@@ -2475,6 +2476,7 @@ impl AuthManager {
             self.keyring_backend_kind,
         )?;
         // Always reload to clear any cached auth (even if file absent).
+        self.clear_external_auth();
         self.reload().await;
         Ok(result)
     }
@@ -2540,11 +2542,10 @@ impl AuthManager {
             .refresh(context)
             .await
             .map_err(RefreshTokenError::Transient)?;
-        self.install_external_auth(refreshed).await
+        self.apply_external_auth(refreshed).await
     }
 
-    /// Validates and installs auth returned by an [`ExternalAuth`] provider.
-    pub async fn install_external_auth(&self, auth: CodexAuth) -> Result<(), RefreshTokenError> {
+    async fn apply_external_auth(&self, auth: CodexAuth) -> Result<(), RefreshTokenError> {
         if auth.api_auth_mode() == AuthMode::ApiKey {
             self.set_resolved_external_auth(Some(auth));
             return Ok(());

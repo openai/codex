@@ -1015,9 +1015,13 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
-struct RefreshOnlyExternalChatgptAuth;
+struct TestExternalChatgptAuth(CodexAuth);
 
-impl ExternalAuth for RefreshOnlyExternalChatgptAuth {
+impl ExternalAuth for TestExternalChatgptAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+
     fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
         Box::pin(async { Err(std::io::Error::other("refresh should not be called")) })
     }
@@ -1025,7 +1029,7 @@ impl ExternalAuth for RefreshOnlyExternalChatgptAuth {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
-async fn external_chatgpt_auth_resolves_from_the_manager_cache() {
+async fn external_chatgpt_auth_resolves_from_its_provider() {
     let codex_home = tempdir().unwrap();
     let params = AuthFileParams {
         openai_api_key: None,
@@ -1046,8 +1050,10 @@ async fn external_chatgpt_auth_resolves_from_the_manager_cache() {
         /*auth_route_config*/ None,
     )
     .await;
-    manager.set_external_auth(Arc::new(RefreshOnlyExternalChatgptAuth));
-    manager.install_external_auth(auth).await.unwrap();
+    manager
+        .set_external_auth(Arc::new(TestExternalChatgptAuth(auth)))
+        .await
+        .unwrap();
 
     let auth = manager.auth().await.expect("external auth should resolve");
 
