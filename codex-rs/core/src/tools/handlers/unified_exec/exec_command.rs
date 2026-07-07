@@ -9,6 +9,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::dependency_guard::dependency_permission_request_message;
+use crate::tools::handlers::dependency_guard::dependency_permissions_overlap_project;
+use crate::tools::handlers::dependency_install_redirect;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
@@ -228,7 +231,6 @@ impl ExecCommandHandler {
                 )));
             }
         }
-        let process_id = manager.allocate_process_id().await;
         let resolved_command = get_command(
             &args,
             shell,
@@ -239,6 +241,25 @@ impl ExecCommandHandler {
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+
+        if session.features().enabled(Feature::DependencyCheck)
+            && let Some(message) = dependency_install_redirect(&command)
+        {
+            return Ok(boxed_tool_output(ExecCommandToolOutput {
+                event_call_id: context.call_id.clone(),
+                chunk_id: generate_chunk_id(),
+                wall_time: std::time::Duration::ZERO,
+                raw_output: message.into_bytes(),
+                truncation_policy: turn.model_info.truncation_policy.into(),
+                max_output_tokens: None,
+                process_id: None,
+                exit_code: Some(2),
+                original_token_count: None,
+                hook_command: Some(hook_command),
+            }));
+        }
+
+        let process_id = manager.allocate_process_id().await;
 
         let ExecCommandArgs {
             tty,
@@ -310,6 +331,19 @@ impl ExecCommandHandler {
                 return Err(FunctionCallError::RespondToModel(err));
             }
         };
+
+        if session.features().enabled(Feature::DependencyCheck)
+            && dependency_permissions_overlap_project(
+                effective_additional_permissions.sandbox_permissions,
+                normalized_additional_permissions.as_ref(),
+                permission_cwd,
+            )
+        {
+            manager.release_process_id(process_id).await;
+            return Err(FunctionCallError::RespondToModel(
+                dependency_permission_request_message(),
+            ));
+        }
 
         if let Some(output) = intercept_apply_patch(
             &command,

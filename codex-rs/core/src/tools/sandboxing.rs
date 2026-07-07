@@ -335,6 +335,10 @@ pub(crate) trait Approvable<Req> {
         SandboxPermissions::UseDefault
     }
 
+    fn approval_review_mode(&self, _req: &Req) -> ApprovalReviewMode {
+        ApprovalReviewMode::Configured
+    }
+
     fn should_bypass_approval(&self, policy: AskForApproval, already_approved: bool) -> bool {
         if already_approved {
             // We do not ask one more time
@@ -372,6 +376,13 @@ pub(crate) trait Approvable<Req> {
     ) -> BoxFuture<'a, ReviewDecision>;
 
     fn approval_action(&self, req: &Req, ctx: &ApprovalCtx<'_>) -> std::io::Result<ApprovalAction>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ApprovalReviewMode {
+    #[default]
+    Configured,
+    User,
 }
 
 pub(crate) trait Sandboxable {

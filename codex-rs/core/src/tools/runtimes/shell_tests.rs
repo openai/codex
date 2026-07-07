@@ -32,6 +32,7 @@ async fn approval_key_includes_environment_id() {
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         },
+        approval_review_mode: ApprovalReviewMode::Configured,
     };
     let runtime = ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
     let original_key = runtime.approval_keys(&request);

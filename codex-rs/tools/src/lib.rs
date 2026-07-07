@@ -2,6 +2,7 @@
 //! outside `codex-core`.
 
 mod code_mode;
+mod dependency_check_tool;
 mod dynamic_tool;
 mod function_call_error;
 mod image_detail;
@@ -25,6 +26,7 @@ pub use code_mode::code_mode_name_for_tool_name;
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
 pub use code_mode::collect_code_mode_tool_definitions;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
+pub use dependency_check_tool::create_dependency_check_tool;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use function_call_error::FunctionCallError;

@@ -23,6 +23,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
+use crate::tools::handlers::dependency_guard::path_uri_is_dependency_manifest;
+use crate::tools::handlers::dependency_manifest_edit_message;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
@@ -218,6 +220,12 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<PathUri> {
     keys
 }
 
+fn action_touches_dependency_manifest(action: &ApplyPatchAction) -> bool {
+    file_paths_for_action(action)
+        .iter()
+        .any(path_uri_is_dependency_manifest)
+}
+
 fn write_permissions_for_paths(
     file_paths: &[AbsolutePathBuf],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
@@ -396,6 +404,13 @@ impl ApplyPatchHandler {
         .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                if session.features().enabled(Feature::DependencyCheck)
+                    && action_touches_dependency_manifest(&changes)
+                {
+                    return Err(FunctionCallError::RespondToModel(
+                        dependency_manifest_edit_message(),
+                    ));
+                }
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(
                         session.as_ref(),
@@ -559,6 +574,13 @@ pub(crate) async fn intercept_apply_patch(
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            if session.features().enabled(Feature::DependencyCheck)
+                && action_touches_dependency_manifest(&changes)
+            {
+                return Err(FunctionCallError::RespondToModel(
+                    dependency_manifest_edit_message(),
+                ));
+            }
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
                 effective_patch_permissions(
                     session.as_ref(),

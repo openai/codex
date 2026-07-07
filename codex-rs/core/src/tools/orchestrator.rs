@@ -21,6 +21,7 @@ use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalReviewMode;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -155,7 +156,9 @@ impl ToolOrchestrator {
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
+        let force_user_review = tool.approval_review_mode(req) == ApprovalReviewMode::User;
+        let use_guardian =
+            !force_user_review && (routes_approval_to_guardian(turn_ctx) || strict_auto_review);
 
         // 1) Approval
         let mut already_approved = false;
@@ -183,7 +186,7 @@ impl ToolOrchestrator {
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ false,
+                        /*evaluate_permission_request_hooks*/ force_user_review,
                         &otel,
                     )
                     .await?;
@@ -218,7 +221,7 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                    /*evaluate_permission_request_hooks*/ !strict_auto_review || force_user_review,
                     &otel,
                 )
                 .await?;

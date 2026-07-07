@@ -1,0 +1,27 @@
+[package]
+name = "codex-dependency-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_dependency_check"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-client = { workspace = true }
+codex-shell-command = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

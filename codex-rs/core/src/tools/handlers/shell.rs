@@ -16,6 +16,9 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::dependency_guard::dependency_permission_request_message;
+use crate::tools::handlers::dependency_guard::dependency_permissions_overlap_project;
+use crate::tools::handlers::dependency_install_redirect;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
@@ -24,6 +27,7 @@ use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ApprovalReviewMode;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
@@ -77,6 +81,12 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         shell_runtime_backend,
     } = args;
 
+    if session.features().enabled(Feature::DependencyCheck)
+        && let Some(message) = dependency_install_redirect(&exec_params.command)
+    {
+        return Ok(FunctionToolOutput::from_text(message, Some(false)));
+    }
+
     let fs = turn_environment.environment.get_filesystem();
 
     let explicit_env_overrides = turn
@@ -118,6 +128,18 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         |permissions| Ok(Some(permissions)),
     )
     .map_err(FunctionCallError::RespondToModel)?;
+
+    if session.features().enabled(Feature::DependencyCheck)
+        && dependency_permissions_overlap_project(
+            effective_additional_permissions.sandbox_permissions,
+            normalized_additional_permissions.as_ref(),
+            &exec_params.cwd,
+        )
+    {
+        return Err(FunctionCallError::RespondToModel(
+            dependency_permission_request_message(),
+        ));
+    }
 
     // Approval policy guard for explicit escalation in non-OnRequest modes.
     // Sticky turn permissions have already been approved, so they should
@@ -200,6 +222,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
             .permissions_preapproved,
         justification: exec_params.justification.clone(),
         exec_approval_requirement,
+        approval_review_mode: ApprovalReviewMode::Configured,
     };
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = ShellRuntime::for_shell_command(shell_runtime_backend);

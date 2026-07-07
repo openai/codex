@@ -29,6 +29,7 @@ use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalReviewMode;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -68,6 +69,7 @@ pub struct ShellRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub approval_review_mode: ApprovalReviewMode,
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
@@ -204,6 +206,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn sandbox_permissions(&self, req: &ShellRequest) -> SandboxPermissions {
         req.sandbox_permissions
+    }
+
+    fn approval_review_mode(&self, req: &ShellRequest) -> ApprovalReviewMode {
+        req.approval_review_mode
     }
 }
 

@@ -241,6 +241,19 @@ fn browser_controls_are_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn dependency_check_is_experimental_and_disabled_by_default() {
+    assert!(matches!(
+        Feature::DependencyCheck.stage(),
+        Stage::Experimental { .. }
+    ));
+    assert_eq!(Feature::DependencyCheck.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("dependency_check"),
+        Some(Feature::DependencyCheck)
+    );
+}
+
+#[test]
 fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("use_legacy_landlock"),

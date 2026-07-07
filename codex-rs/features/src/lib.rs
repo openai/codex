@@ -168,6 +168,8 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Check npm dependency graphs before lifecycle scripts run.
+    DependencyCheck,
     /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
@@ -1364,6 +1366,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::UseAgentIdentity,
         key: "use_agent_identity",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DependencyCheck,
+        key: "dependency_check",
+        stage: Stage::Experimental {
+            name: "Dependency Check",
+            menu_description: "Resolve and check complete npm dependency graphs before package lifecycle scripts run, and redirect recognizable direct dependency additions to the structured tool.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

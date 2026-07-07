@@ -2640,6 +2640,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-dependency-check",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",
@@ -2841,6 +2842,23 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "codex-dependency-check"
+version = "0.0.0"
+dependencies = [
+ "codex-client",
+ "codex-shell-command",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "semver",
+ "serde",
+ "serde_json",
+ "shlex",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]

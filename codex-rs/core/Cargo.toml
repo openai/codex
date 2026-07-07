@@ -35,6 +35,7 @@ codex-context-fragments = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
+codex-dependency-check = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
