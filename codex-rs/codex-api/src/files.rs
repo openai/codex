@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use crate::AuthProvider;
 use bytes::Bytes;
-use codex_http_client::build_reqwest_client_with_custom_ca;
+use codex_http_client::BuildRouteAwareHttpClientError;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use futures::Stream;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
@@ -55,6 +58,12 @@ pub enum OpenAiFileError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("failed to build OpenAI file client for {url}: {source}")]
+    ClientBuild {
+        url: String,
+        #[source]
+        source: BuildRouteAwareHttpClientError,
+    },
     #[error("OpenAI file upload for `{file_id}` is not ready yet")]
     UploadNotReady { file_id: String },
     #[error("OpenAI file upload for `{file_id}` failed: {message}")]
@@ -84,6 +93,7 @@ pub fn openai_file_uri(file_id: &str) -> String {
 pub async fn upload_openai_file(
     base_url: &str,
     auth: &dyn AuthProvider,
+    http_client_factory: &HttpClientFactory,
     file_name: String,
     file_size_bytes: u64,
     contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
@@ -97,18 +107,23 @@ pub async fn upload_openai_file(
     }
 
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
-    let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&serde_json::json!({
-            "file_name": file_name.as_str(),
-            "file_size": file_size_bytes,
-            "use_case": OPENAI_FILE_USE_CASE,
-        }))
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: create_url.clone(),
-            source,
-        })?;
+    let create_response = authorized_request(
+        http_client_factory,
+        auth,
+        reqwest::Method::POST,
+        &create_url,
+    )?
+    .json(&serde_json::json!({
+        "file_name": file_name.as_str(),
+        "file_size": file_size_bytes,
+        "use_case": OPENAI_FILE_USE_CASE,
+    }))
+    .send()
+    .await
+    .map_err(|source| OpenAiFileError::Request {
+        url: create_url.clone(),
+        source,
+    })?;
     let create_status = create_response.status();
     let create_body = create_response.text().await.unwrap_or_default();
     if !create_status.is_success() {
@@ -124,7 +139,7 @@ pub async fn upload_openai_file(
             source,
         })?;
 
-    let upload_response = build_reqwest_client()
+    let upload_response = build_reqwest_client(http_client_factory, &create_payload.upload_url)?
         .put(&create_payload.upload_url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
         .header("x-ms-blob-type", "BlockBlob")
@@ -153,14 +168,19 @@ pub async fn upload_openai_file(
     );
     let finalize_started_at = Instant::now();
     loop {
-        let finalize_response = authorized_request(auth, reqwest::Method::POST, &finalize_url)
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .map_err(|source| OpenAiFileError::Request {
-                url: finalize_url.clone(),
-                source,
-            })?;
+        let finalize_response = authorized_request(
+            http_client_factory,
+            auth,
+            reqwest::Method::POST,
+            &finalize_url,
+        )?
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: finalize_url.clone(),
+            source,
+        })?;
         let finalize_status = finalize_response.status();
         let finalize_body = finalize_response.text().await.unwrap_or_default();
         if !finalize_status.is_success() {
@@ -213,25 +233,45 @@ pub async fn upload_openai_file(
 }
 
 fn authorized_request(
+    http_client_factory: &HttpClientFactory,
     auth: &dyn AuthProvider,
     method: reqwest::Method,
     url: &str,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder, OpenAiFileError> {
     let mut headers = http::HeaderMap::new();
     auth.add_auth_headers(&mut headers);
 
-    let client = build_reqwest_client();
-    client
+    let client = build_reqwest_client(http_client_factory, url)?;
+    Ok(client
         .request(method, url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .headers(headers)
+        .headers(headers))
 }
 
-fn build_reqwest_client() -> reqwest::Client {
-    build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(|error| {
-        tracing::warn!(error = %error, "failed to build OpenAI file upload client");
-        reqwest::Client::new()
-    })
+fn build_reqwest_client(
+    http_client_factory: &HttpClientFactory,
+    url: &str,
+) -> Result<reqwest::Client, OpenAiFileError> {
+    match http_client_factory.build_reqwest_client(
+        reqwest::Client::builder(),
+        url,
+        ClientRouteClass::Api,
+    ) {
+        Ok(client) => Ok(client),
+        Err(error)
+            if matches!(
+                http_client_factory.outbound_proxy_policy(),
+                OutboundProxyPolicy::ReqwestDefault
+            ) =>
+        {
+            tracing::warn!(%error, "failed to build OpenAI file upload client");
+            Ok(reqwest::Client::new())
+        }
+        Err(source) => Err(OpenAiFileError::ClientBuild {
+            url: url.to_string(),
+            source,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +293,10 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct ChatGptTestAuth;
+
+    fn default_http_client_factory() -> HttpClientFactory {
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+    }
 
     impl AuthProvider for ChatGptTestAuth {
         fn add_auth_headers(&self, headers: &mut reqwest::header::HeaderMap) {
@@ -324,6 +368,7 @@ mod tests {
         let uploaded = upload_openai_file(
             &base_url,
             &chatgpt_auth(),
+            &default_http_client_factory(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
             contents,
