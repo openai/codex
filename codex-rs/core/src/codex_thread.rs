@@ -651,10 +651,17 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        self.current_mcp_runtime()
-            .await
-            .manager_arc()
-            .call_tool(server, tool, arguments, meta)
+        let manager = self.current_mcp_runtime().await.manager_arc();
+        let meta = if manager.server_uses_direct_mcp_v1(server) {
+            meta
+        } else {
+            crate::mcp_tool_call::with_mcp_tool_call_thread_id_meta(
+                meta,
+                &self.session_configured.thread_id.to_string(),
+            )
+        };
+        manager
+            .call_tool_from_app(server, tool, arguments, meta)
             .await
     }
 

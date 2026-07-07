@@ -4,6 +4,8 @@ use codex_config::AppToolApproval;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 
+use crate::egress::McpEgressProfile;
+
 /// The runtime launch strategy for an effective MCP server.
 #[derive(Debug, Clone)]
 pub(crate) enum McpServerLaunch {
@@ -14,12 +16,21 @@ pub(crate) enum McpServerLaunch {
 #[derive(Debug, Clone)]
 pub struct EffectiveMcpServer {
     launch: McpServerLaunch,
+    egress_profile: McpEgressProfile,
 }
 
 impl EffectiveMcpServer {
     pub fn configured(config: McpServerConfig) -> Self {
+        Self::configured_with_egress_profile(config, McpEgressProfile::DirectMcpV1)
+    }
+
+    pub(crate) fn configured_with_egress_profile(
+        config: McpServerConfig,
+        egress_profile: McpEgressProfile,
+    ) -> Self {
         Self {
             launch: McpServerLaunch::Configured(Box::new(config)),
+            egress_profile,
         }
     }
 
@@ -31,6 +42,10 @@ impl EffectiveMcpServer {
         match &self.launch {
             McpServerLaunch::Configured(config) => Some(config.as_ref()),
         }
+    }
+
+    pub(crate) fn egress_profile(&self) -> McpEgressProfile {
+        self.egress_profile
     }
 
     pub fn enabled(&self) -> bool {
@@ -81,6 +96,7 @@ pub(crate) struct McpServerMetadata {
     pub supports_parallel_tool_calls: bool,
     pub default_tools_approval_mode: Option<AppToolApproval>,
     pub tool_approval_modes: HashMap<String, AppToolApproval>,
+    pub egress_profile: McpEgressProfile,
 }
 
 impl McpServerMetadata {
@@ -111,6 +127,7 @@ impl From<&EffectiveMcpServer> for McpServerMetadata {
                             .map(|approval_mode| (name.clone(), approval_mode))
                     })
                     .collect(),
+                egress_profile: server.egress_profile(),
             },
         }
     }

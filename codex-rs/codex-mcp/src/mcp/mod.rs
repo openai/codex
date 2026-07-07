@@ -47,6 +47,7 @@ use crate::ResolvedMcpCatalog;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
+use crate::egress::McpEgressProfile;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
@@ -250,7 +251,20 @@ pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
-    effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
+    let configured_servers = config
+        .mcp_server_catalog
+        .servers()
+        .map(|(name, server)| {
+            (
+                name.to_string(),
+                (
+                    server.config().clone(),
+                    McpEgressProfile::for_registration(name, server.source()),
+                ),
+            )
+        })
+        .collect();
+    effective_mcp_servers_with_profiles(configured_servers, config, auth)
 }
 
 /// Converts a materialized server map to its auth-gated runtime view.
@@ -262,12 +276,31 @@ pub fn effective_mcp_servers_from_configured(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
+    let configured_servers = configured_servers
+        .into_iter()
+        .map(|(name, server)| {
+            let profile = config
+                .mcp_server_catalog
+                .server(&name)
+                .map(|resolved| McpEgressProfile::for_registration(&name, resolved.source()))
+                .unwrap_or_else(|| McpEgressProfile::for_configured_name(&name));
+            (name, (server, profile))
+        })
+        .collect();
+    effective_mcp_servers_with_profiles(configured_servers, config, auth)
+}
+
+fn effective_mcp_servers_with_profiles(
+    configured_servers: HashMap<String, (McpServerConfig, McpEgressProfile)>,
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+) -> HashMap<String, EffectiveMcpServer> {
     let chatgpt_origin = url::Url::parse(CHATGPT_CODEX_BASE_URL)
         .ok()
         .map(|url| url.origin());
     let mut servers = configured_servers
         .into_iter()
-        .map(|(name, mut server)| {
+        .map(|(name, (mut server, egress_profile))| {
             match server.auth.clone() {
                 McpServerAuth::ChatGpt => {
                     let server_origin = match &server.transport {
@@ -285,7 +318,10 @@ pub fn effective_mcp_servers_from_configured(
                 }
                 McpServerAuth::OAuth => {}
             }
-            (name, EffectiveMcpServer::configured(server))
+            (
+                name,
+                EffectiveMcpServer::configured_with_egress_profile(server, egress_profile),
+            )
         })
         .collect::<HashMap<_, _>>();
     if !host_owned_codex_apps_enabled(config, auth) {

@@ -394,8 +394,11 @@ async fn handle_approved_mcp_tool_call(
     let result = async {
         let result = async {
             let rewritten_arguments = rewrite?;
-            let request_meta =
-                build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+            let request_meta = if manager.server_uses_direct_mcp_v1(&server) {
+                None
+            } else {
+                build_host_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata)
+            };
             execute_mcp_tool_call(
                 sess,
                 step_context,
@@ -574,7 +577,12 @@ async fn execute_mcp_tool_call(
 ) -> Result<CallToolResult, String> {
     let turn_context = step_context.turn.as_ref();
     let manager = step_context.mcp.manager();
-    let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string());
+    let include_host_metadata = !manager.server_uses_direct_mcp_v1(&invocation.server);
+    let request_meta = if include_host_metadata {
+        with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string())
+    } else {
+        request_meta
+    };
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
         step_context,
         manager,
@@ -587,7 +595,11 @@ async fn execute_mcp_tool_call(
         .services
         .rollout_thread_trace
         .start_mcp_call_trace(call_id);
-    let request_meta = mcp_call_trace.add_request_meta(request_meta);
+    let request_meta = if include_host_metadata {
+        mcp_call_trace.add_request_meta(request_meta)
+    } else {
+        request_meta
+    };
     let result = manager
         .call_tool(
             &invocation.server,
@@ -1080,7 +1092,7 @@ async fn custom_mcp_tool_approval_mode(
         .unwrap_or_default()
 }
 
-fn build_mcp_tool_call_request_meta(
+fn build_host_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,
     call_id: &str,
@@ -1124,7 +1136,7 @@ fn build_mcp_tool_call_request_meta(
     (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
 }
 
-fn with_mcp_tool_call_thread_id_meta(
+pub(crate) fn with_mcp_tool_call_thread_id_meta(
     meta: Option<serde_json::Value>,
     thread_id: &str,
 ) -> Option<serde_json::Value> {

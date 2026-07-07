@@ -17,6 +17,8 @@ use crate::McpAuthStatusEntry;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
+use crate::egress::McpEgressProfile;
+use crate::egress::sanitize_tool_call_meta;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -436,6 +438,12 @@ impl McpConnectionManager {
         server_name == CODEX_APPS_MCP_SERVER_NAME && self.server_metadata.contains_key(server_name)
     }
 
+    pub fn server_uses_direct_mcp_v1(&self, server_name: &str) -> bool {
+        self.server_metadata
+            .get(server_name)
+            .is_some_and(|metadata| metadata.egress_profile == McpEgressProfile::DirectMcpV1)
+    }
+
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
@@ -742,12 +750,49 @@ impl McpConnectionManager {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
+        self.call_tool_with_meta_policy(
+            server, tool, arguments, meta, /*allow_sandbox_state_meta*/ true,
+        )
+        .await
+    }
+
+    pub async fn call_tool_from_app(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<CallToolResult> {
+        self.call_tool_with_meta_policy(
+            server, tool, arguments, meta, /*allow_sandbox_state_meta*/ false,
+        )
+        .await
+    }
+
+    async fn call_tool_with_meta_policy(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+        allow_sandbox_state_meta: bool,
+    ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
+        let egress_profile = self
+            .server_metadata
+            .get(server)
+            .map(|metadata| metadata.egress_profile)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let meta = sanitize_tool_call_meta(
+            egress_profile,
+            meta,
+            allow_sandbox_state_meta && client.server_supports_sandbox_state_meta_capability,
+        );
 
         let result: rmcp::model::CallToolResult = client
             .client
