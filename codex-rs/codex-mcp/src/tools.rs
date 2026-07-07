@@ -282,13 +282,10 @@ pub(crate) fn declared_openai_file_input_optional_fields(
         .map(|field_name| {
             let optional_fields = properties
                 .and_then(|properties| properties.get(&field_name))
-                .and_then(file_payload_schema)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(JsonValue::as_object)
-                .map(|properties| {
+                .map(|schema| {
                     OPTIONAL_OPENAI_FILE_FIELDS
                         .into_iter()
-                        .filter(|field| properties.contains_key(*field))
+                        .filter(|field| file_payload_schema_declares_property(schema, field))
                         .map(str::to_string)
                         .collect()
                 })
@@ -298,15 +295,32 @@ pub(crate) fn declared_openai_file_input_optional_fields(
         .collect()
 }
 
-fn file_payload_schema(schema: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
-    let schema = schema.as_object()?;
-    if schema.get("type").and_then(JsonValue::as_str) == Some("array")
-        || schema.contains_key("items")
+fn file_payload_schema_declares_property(schema: &JsonValue, property_name: &str) -> bool {
+    let Some(schema) = schema.as_object() else {
+        return false;
+    };
+
+    if schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|properties| properties.contains_key(property_name))
     {
-        schema.get("items")?.as_object()
-    } else {
-        Some(schema)
+        return true;
     }
+
+    schema
+        .get("items")
+        .is_some_and(|items| file_payload_schema_declares_property(items, property_name))
+        || ["anyOf", "oneOf", "allOf"].into_iter().any(|keyword| {
+            schema
+                .get(keyword)
+                .and_then(JsonValue::as_array)
+                .is_some_and(|variants| {
+                    variants.iter().any(|variant| {
+                        file_payload_schema_declares_property(variant, property_name)
+                    })
+                })
+        })
 }
 
 fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {

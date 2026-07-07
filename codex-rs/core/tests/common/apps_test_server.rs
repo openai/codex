@@ -553,9 +553,11 @@ impl Respond for CodexAppsJsonRpcResponder {
                                             "type": "object",
                                             "description": "Document file payload.",
                                             "properties": {
+                                                "download_url": { "type": "string" },
                                                 "file_id": { "type": "string" }
                                             },
-                                            "required": ["file_id"]
+                                            "required": ["download_url", "file_id"],
+                                            "additionalProperties": false
                                         }
                                     },
                                     "required": ["file"],
