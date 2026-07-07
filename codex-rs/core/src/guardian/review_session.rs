@@ -1047,6 +1047,8 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::SpawnCsv,
         Feature::Collab,
         Feature::MultiAgentV2,
+        Feature::CodeMode,
+        Feature::CodeModeOnly,
         Feature::CodexHooks,
         Feature::Apps,
         Feature::Plugins,
