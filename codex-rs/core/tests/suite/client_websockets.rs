@@ -427,10 +427,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
-    assert_eq!(
-        warmup["stream_options"]["reasoning_summary_delivery"].as_str(),
-        Some("sequential_cutoff")
-    );
+    assert_eq!(warmup.get("stream_options"), None);
     assert_eq!(warmup["tools"], serde_json::json!([]));
     let warmup_turn_metadata: serde_json::Value = serde_json::from_str(
         warmup["client_metadata"]["x-codex-turn-metadata"]
