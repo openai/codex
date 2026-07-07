@@ -18,8 +18,10 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_extension_api::WorldStateContributionInput;
+use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -40,9 +42,11 @@ use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
+use crate::state::ExecutorSkillsStepState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
+use crate::world_state::executor_skills_world_state_section;
 
 struct SkillsExtension<C> {
     providers: SkillProviders,
@@ -56,18 +60,12 @@ where
 {
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let selected_roots = input
-                .thread_store
-                .get::<Vec<SelectedCapabilityRoot>>()
-                .map(|selected_roots| selected_roots.as_ref().clone())
-                .unwrap_or_default();
             let orchestrator_skills_available = !input
                 .environments
                 .iter()
                 .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
                 (self.config_from_host)(input.config),
-                selected_roots,
                 orchestrator_skills_available,
             ));
         })
@@ -92,7 +90,6 @@ where
             let orchestrator_skills_available = true;
             thread_store.insert(SkillsThreadState::new(
                 next_config,
-                Vec::new(),
                 orchestrator_skills_available,
             ));
         }
@@ -120,7 +117,7 @@ where
                 .list_skills(
                     SkillListQuery {
                         turn_id: thread_store.level_id().to_string(),
-                        executor_roots: thread_state.selected_roots().to_vec(),
+                        executor_roots: Vec::new(),
                         host_snapshot: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
@@ -133,10 +130,51 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            available_skills_fragment(&catalog)
+            let include_usage = thread_store
+                .get::<ModelInfo>()
+                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            available_skills_fragment(&catalog, include_usage)
                 .map(|fragment| PromptFragment::developer_capability(fragment.render()))
                 .into_iter()
                 .collect()
+        })
+    }
+
+    fn contribute_world_state<'a>(
+        &'a self,
+        input: WorldStateContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        Box::pin(async move {
+            let Some(thread_state) = input.thread_store.get::<SkillsThreadState>() else {
+                return Vec::new();
+            };
+            let config = thread_state.config();
+            let catalog = thread_state
+                .executor_catalog_snapshot(
+                    &self.providers,
+                    SkillListQuery {
+                        turn_id: input.turn_id.to_string(),
+                        executor_roots: input.ready_selected_capability_roots.to_vec(),
+                        host_snapshot: None,
+                        include_host_skills: false,
+                        include_bundled_skills: config.bundled_skills_enabled,
+                        include_orchestrator_skills: false,
+                        mcp_resources: input.session_store.get::<McpResourceClient>(),
+                    },
+                )
+                .await;
+            input
+                .turn_store
+                .insert(ExecutorSkillsStepState(catalog.clone()));
+            let include_usage = input
+                .thread_store
+                .get::<ModelInfo>()
+                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            vec![executor_skills_world_state_section(
+                &catalog,
+                config.include_instructions,
+                include_usage,
+            )]
         })
     }
 }
@@ -187,14 +225,17 @@ where
             let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
-                executor_roots: thread_state.selected_roots().to_vec(),
+                executor_roots: Vec::new(),
                 host_snapshot: host_snapshot.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.list_skills(query, &thread_state).await;
+            let mut catalog = self.list_skills(query, &thread_state).await;
+            if let Some(executor_skills) = turn_store.get::<ExecutorSkillsStepState>() {
+                catalog.extend(executor_skills.0.clone());
+            }
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -207,7 +248,10 @@ where
                     entry.authority.kind != SkillSourceKind::Executor
                         && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
-                if let Some(fragment) = available_skills_fragment(&turn_catalog) {
+                let include_usage = thread_store
+                    .get::<ModelInfo>()
+                    .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+                if let Some(fragment) = available_skills_fragment(&turn_catalog, include_usage) {
                     fragments.push(Box::new(fragment));
                 }
             }

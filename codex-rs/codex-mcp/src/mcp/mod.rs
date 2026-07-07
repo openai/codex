@@ -339,6 +339,8 @@ pub async fn read_mcp_resource(
         tool_plugin_provenance(config),
         auth,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
+        crate::elicitation::ElicitationRequestRouter::default(),
     )
     .await;
 
@@ -415,6 +417,8 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         tool_plugin_provenance,
         auth,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
+        crate::elicitation::ElicitationRequestRouter::default(),
     )
     .await;
 
@@ -567,7 +571,7 @@ fn auth_statuses_from_entries(
 ) -> HashMap<String, McpAuthStatus> {
     auth_status_entries
         .iter()
-        .map(|(name, entry)| (name.clone(), entry.auth_status))
+        .map(|(name, entry)| (name.clone(), McpAuthStatus::from(entry.auth_state)))
         .collect::<HashMap<_, _>>()
 }
 

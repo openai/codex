@@ -219,6 +219,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
@@ -243,6 +244,7 @@ mod tests {
             Uuid::from_u128(102),
             "Hello from user",
             /*model_provider*/ None,
+            ThreadHistoryMode::Legacy,
         )
         .expect("session file");
 

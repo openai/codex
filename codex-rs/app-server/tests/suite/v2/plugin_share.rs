@@ -171,6 +171,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                 plugin: PluginSummary {
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
+                    version: Some("0.1.0".to_string()),
                     local_version: Some("0.1.0".to_string()),
                     name: "demo-plugin".to_string(),
                     share_context: Some(expected_share_context("plugins_123")),
@@ -178,6 +179,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                     installed: true,
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: None,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -344,7 +346,6 @@ chatgpt_base_url = "{}/backend-api"
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -575,6 +576,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                 plugin: PluginSummary {
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
+                    version: Some("0.1.0".to_string()),
                     local_version: Some("0.1.0".to_string()),
                     name: "demo-plugin".to_string(),
                     share_context: Some(expected_share_context("plugins_123")),
@@ -582,6 +584,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                     installed: true,
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: None,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -1050,7 +1053,6 @@ chatgpt_base_url = "{}/backend-api"
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -1176,6 +1178,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                 plugin: PluginSummary {
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
+                    version: Some("0.1.0".to_string()),
                     local_version: Some("0.1.0".to_string()),
                     name: "demo-plugin".to_string(),
                     share_context: Some(expected_share_context("plugins_123")),
@@ -1183,6 +1186,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                     installed: true,
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: None,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -1204,7 +1208,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )

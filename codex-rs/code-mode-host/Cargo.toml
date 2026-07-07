@@ -8,5 +8,24 @@ license.workspace = true
 name = "codex-code-mode-host"
 path = "src/main.rs"
 
+[lib]
+doctest = false
+name = "codex_code_mode_host"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-code-mode = { workspace = true }
+codex-code-mode-protocol = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+codex-protocol = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

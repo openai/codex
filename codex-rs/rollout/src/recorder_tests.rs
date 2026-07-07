@@ -15,6 +15,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
@@ -103,6 +104,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             dynamic_tools: None,
             selected_capability_roots: Vec::new(),
             memory_mode: None,
+            history_mode: Default::default(),
             multi_agent_version: None,
             context_window: None,
         },
@@ -224,6 +226,43 @@ async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> 
         RolloutItem::ResponseItem(ResponseItem::Message { .. })
     ));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_ignores_unknown_fork_source_history_mode() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let rollout_path = write_session_file(home.path(), "2025-01-03T12-00-00", uuid)?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    let source_uuid = Uuid::new_v4();
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": "2025-01-03T12:00:01Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": source_uuid,
+                "id": source_uuid,
+                "timestamp": "2025-01-03T12:00:01Z",
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "test-provider",
+                "history_mode": "future",
+            },
+        })
+    )?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 1);
+    assert_eq!(items.len(), 2);
     Ok(())
 }
 
@@ -391,6 +430,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             Vec::new(),
         )
         .with_session_id(session_id)
+        .with_history_mode(ThreadHistoryMode::Paginated)
         .with_initial_window_id(initial_window_id.clone()),
     )
     .await?;
@@ -442,6 +482,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         panic!("expected session metadata in rollout");
     };
     assert_eq!(session_meta.meta.session_id, session_id);
+    assert_eq!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(
         session_meta
             .meta
@@ -1004,6 +1045,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("filesystem-sha".to_string()),
         git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
@@ -1023,6 +1065,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("state-sha".to_string()),
         git_origin_url: Some("https://example.com/state.git".to_string()),
         source: Some(SessionSource::Exec),
+        history_mode: Default::default(),
         parent_thread_id: None,
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),
