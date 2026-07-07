@@ -251,6 +251,54 @@ fn apply_patch_responses(
     ]
 }
 
+async fn assert_apply_patch_crlf_update(
+    configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
+    expected: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(configure).await?;
+    let call_id = "apply-patch-crlf-rollout";
+    let file_name = "crlf.txt";
+    harness.write_file(file_name, "before\r\n").await?;
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
+    );
+    mount_apply_patch(&harness, call_id, &patch, "apply_patch done").await;
+
+    harness
+        .test()
+        .submit_turn_with_permission_profile(
+            "update the CRLF file with apply_patch",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+
+    assert_eq!(harness.read_file_text(file_name).await?, expected);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> Result<()> {
+    assert_apply_patch_crlf_update(|builder| builder, "after\n").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Result<()> {
+    assert_apply_patch_crlf_update(
+        |builder| {
+            builder.with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be enabled");
+            })
+        },
+        "after\r\n",
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -> Result<()> {
