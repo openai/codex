@@ -78,6 +78,9 @@ use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnStartAvailability;
+use crate::facts::TurnStartAvailabilityFact;
+use crate::facts::TurnStartConnectorIdentity;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
 use crate::facts::TurnTokenUsageFact;
@@ -425,6 +428,119 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         workspace_kind: None,
         is_first_turn: true,
     }
+}
+
+fn sample_turn_start_availability() -> TurnStartAvailability {
+    TurnStartAvailability::new(
+        ["zeta_mcp", "alpha_mcp", "alpha_mcp"].map(str::to_string),
+        [
+            ("drive".to_string(), "Google Drive".to_string()),
+            ("calendar".to_string(), "Google Calendar".to_string()),
+        ],
+    )
+}
+
+fn sample_turn_start_availability_fact(turn_id: &str) -> AnalyticsFact {
+    AnalyticsFact::Custom(CustomAnalyticsFact::TurnStartAvailability(Box::new(
+        TurnStartAvailabilityFact {
+            turn_id: turn_id.to_string(),
+            availability: sample_turn_start_availability(),
+        },
+    )))
+}
+
+#[test]
+fn turn_start_availability_is_deterministic_and_bounded() {
+    let item_count = crate::facts::TURN_START_AVAILABILITY_MAX_ITEMS + 2;
+    let mut mcp_server_names = (0..item_count)
+        .rev()
+        .map(|index| format!("server_{index:03}"))
+        .collect::<Vec<_>>();
+    mcp_server_names.push("server_001".to_string());
+    let mut connectors = (0..item_count)
+        .rev()
+        .map(|index| {
+            (
+                format!("connector_{index:03}"),
+                format!("Connector {index:03}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    connectors.push(("connector_001".to_string(), "Alpha".to_string()));
+
+    let availability = TurnStartAvailability::new(mcp_server_names, connectors);
+
+    assert_eq!(
+        availability.available_mcp_server_names.len(),
+        crate::facts::TURN_START_AVAILABILITY_MAX_ITEMS
+    );
+    assert_eq!(
+        availability
+            .available_mcp_server_names
+            .first()
+            .map(String::as_str),
+        Some("server_000")
+    );
+    assert_eq!(
+        availability
+            .available_mcp_server_names
+            .last()
+            .map(String::as_str),
+        Some("server_099")
+    );
+    assert!(availability.available_mcp_server_names_truncated);
+    assert_eq!(
+        availability.available_connectors.len(),
+        crate::facts::TURN_START_AVAILABILITY_MAX_ITEMS
+    );
+    assert_eq!(availability.available_connectors[1].connector_name, "Alpha");
+    assert_eq!(
+        availability
+            .available_connectors
+            .last()
+            .map(|connector| connector.connector_id.as_str()),
+        Some("connector_099")
+    );
+    assert!(availability.available_connectors_truncated);
+}
+
+#[test]
+fn turn_start_availability_drops_whole_identities_to_enforce_byte_budget() {
+    let oversized =
+        "x".repeat(crate::facts::TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD);
+    let availability = TurnStartAvailability::new(
+        [oversized.clone(), "small_server".to_string()],
+        [
+            (oversized, "Oversized".to_string()),
+            ("small_connector".to_string(), "Small Connector".to_string()),
+        ],
+    );
+
+    assert_eq!(
+        availability.available_mcp_server_names,
+        ["small_server".to_string()]
+    );
+    assert!(availability.available_mcp_server_names_truncated);
+    assert_eq!(
+        availability.available_connectors,
+        [TurnStartConnectorIdentity {
+            connector_id: "small_connector".to_string(),
+            connector_name: "Small Connector".to_string(),
+        }]
+    );
+    assert!(availability.available_connectors_truncated);
+    assert!(
+        serde_json::to_vec(&availability.available_mcp_server_names)
+            .expect("MCP server names should serialize")
+            .len()
+            <= crate::facts::TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD
+    );
+    assert!(
+        serde_json::to_vec(&availability.available_connectors)
+            .expect("connectors should serialize")
+            .len()
+            <= crate::facts::TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD
+    );
 }
 
 fn sample_turn_profile() -> TurnProfile {
@@ -3869,6 +3985,12 @@ async fn reducer_ingests_external_agent_config_import_failure_fact() {
 
 #[test]
 fn turn_event_serializes_expected_shape() {
+    let TurnStartAvailability {
+        available_mcp_server_names,
+        available_mcp_server_names_truncated,
+        available_connectors,
+        available_connectors_truncated,
+    } = sample_turn_start_availability();
     let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
         event_type: "codex_turn_event",
         event_params: crate::events::CodexTurnEventParams {
@@ -3897,6 +4019,10 @@ fn turn_event_serializes_expected_shape() {
             workspace_kind: Some("projectless".to_string()),
             num_input_images: 2,
             is_first_turn: true,
+            turn_start_available_mcp_server_names: available_mcp_server_names,
+            turn_start_available_mcp_server_names_truncated: available_mcp_server_names_truncated,
+            turn_start_available_connectors: available_connectors,
+            turn_start_available_connectors_truncated: available_connectors_truncated,
             status: Some(TurnStatus::Completed),
             turn_error: None,
             codex_error_kind: None,
@@ -3969,6 +4095,19 @@ fn turn_event_serializes_expected_shape() {
                 "workspace_kind": "projectless",
                 "num_input_images": 2,
                 "is_first_turn": true,
+                "turn_start_available_mcp_server_names": ["alpha_mcp", "zeta_mcp"],
+                "turn_start_available_mcp_server_names_truncated": false,
+                "turn_start_available_connectors": [
+                    {
+                        "connector_id": "calendar",
+                        "connector_name": "Google Calendar"
+                    },
+                    {
+                        "connector_id": "drive",
+                        "connector_name": "Google Drive"
+                    }
+                ],
+                "turn_start_available_connectors_truncated": false,
                 "status": "completed",
                 "turn_error": null,
                 "codex_error_kind": null,
@@ -4254,6 +4393,9 @@ async fn turn_lifecycle_emits_turn_event() {
     )
     .await;
     reducer
+        .ingest(sample_turn_start_availability_fact("turn-2"), &mut out)
+        .await;
+    reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
@@ -4297,6 +4439,31 @@ async fn turn_lifecycle_emits_turn_event() {
     assert_eq!(payload["event_params"]["ephemeral"], json!(false));
     assert_eq!(payload["event_params"]["workspace_kind"], json!(null));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
+    assert_eq!(
+        payload["event_params"]["turn_start_available_mcp_server_names"],
+        json!(["alpha_mcp", "zeta_mcp"])
+    );
+    assert_eq!(
+        payload["event_params"]["turn_start_available_mcp_server_names_truncated"],
+        json!(false)
+    );
+    assert_eq!(
+        payload["event_params"]["turn_start_available_connectors"],
+        json!([
+            {
+                "connector_id": "calendar",
+                "connector_name": "Google Calendar",
+            },
+            {
+                "connector_id": "drive",
+                "connector_name": "Google Drive",
+            },
+        ])
+    );
+    assert_eq!(
+        payload["event_params"]["turn_start_available_connectors_truncated"],
+        json!(false)
+    );
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));
     assert_eq!(payload["event_params"]["total_tool_call_count"], json!(0));

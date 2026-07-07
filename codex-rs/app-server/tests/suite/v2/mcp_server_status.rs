@@ -450,7 +450,7 @@ url = "{underscore_server_url}/mcp"
     Ok(())
 }
 
-async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+pub(super) async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());

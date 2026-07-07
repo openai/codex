@@ -92,6 +92,7 @@ use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
+use super::mcp_server_status::start_mcp_server;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -854,6 +855,7 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
         ],
     )
     .await;
+    let (generic_mcp_url, generic_mcp_handle) = start_mcp_server("analytics_lookup").await?;
 
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml_with_chatgpt_base_url(
@@ -864,7 +866,16 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?
         .replace("stream_max_retries = 0", "stream_max_retries = 1");
-    std::fs::write(config_path, config)?;
+    std::fs::write(
+        config_path,
+        format!(
+            r#"{config}
+
+[mcp_servers.analytics_generic]
+url = "{generic_mcp_url}/mcp"
+"#
+        ),
+    )?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
@@ -946,6 +957,15 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["output_tokens"], 0);
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
+    assert_eq!(
+        event["event_params"]["turn_start_available_mcp_server_names"],
+        json!(["analytics_generic"])
+    );
+    assert_eq!(
+        event["event_params"]["turn_start_available_connectors"],
+        json!([])
+    );
+    assert_eq!(event["event_params"]["mcp_tool_call_count"], 0);
     let params = &event["event_params"];
     let timings_are_numbers = [
         "before_first_sampling_ms",
@@ -972,6 +992,13 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
             "responseRequestCount": 2,
         })
     );
+    assert!(
+        response_mock.requests()[0]
+            .tool_by_name("mcp__analytics_generic", "analytics_lookup")
+            .is_some()
+    );
+    generic_mcp_handle.abort();
+    let _ = generic_mcp_handle.await;
 
     Ok(())
 }

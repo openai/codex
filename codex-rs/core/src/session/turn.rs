@@ -29,6 +29,7 @@ use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
+use crate::mcp_tool_exposure::turn_start_availability;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
@@ -72,6 +73,8 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnStartAvailability;
+use codex_analytics::TurnStartAvailabilityFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
@@ -208,6 +211,7 @@ pub(crate) async fn run_turn(
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    let mut turn_start_availability_tracked = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
@@ -281,15 +285,34 @@ pub(crate) async fn run_turn(
                 window_id,
                 CodexResponsesRequestKind::Turn,
             );
+            let sampling_cancellation_token = cancellation_token.child_token();
+            let (router, availability) = built_tools_with_turn_start_availability(
+                sess.as_ref(),
+                step_context.as_ref(),
+                &sampling_cancellation_token,
+            )
+            .await?;
+            if !turn_start_availability_tracked {
+                // The first step context was captured before turn-scoped dependency installation,
+                // so this is the frozen post-policy exposure for turn-start analytics.
+                sess.services
+                    .analytics_events_client
+                    .track_turn_start_availability(TurnStartAvailabilityFact {
+                        turn_id: turn_context.sub_id.clone(),
+                        availability,
+                    });
+                turn_start_availability_tracked = true;
+            }
             run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
+                router,
                 Arc::clone(&turn_extension_data),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
                 &responses_metadata,
                 sampling_request_input,
-                cancellation_token.child_token(),
+                sampling_cancellation_token,
             )
             .await
         }
@@ -1059,6 +1082,16 @@ pub(crate) fn build_prompt(
     }
 }
 
+pub(crate) async fn built_tools(
+    sess: &Session,
+    step_context: &StepContext,
+    cancellation_token: &CancellationToken,
+) -> CodexResult<Arc<ToolRouter>> {
+    let (router, _) =
+        built_tools_with_turn_start_availability(sess, step_context, cancellation_token).await?;
+    Ok(router)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(deprecated)]
 #[instrument(level = "trace",
@@ -1072,6 +1105,7 @@ pub(crate) fn build_prompt(
 async fn run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
+    router: Arc<ToolRouter>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
@@ -1080,7 +1114,6 @@ async fn run_sampling_request(
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
-    let router = built_tools(sess.as_ref(), step_context.as_ref(), &cancellation_token).await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1166,7 +1199,7 @@ async fn run_sampling_request(
     }
 }
 
-#[instrument(level = "trace",
+#[instrument(name = "built_tools", level = "trace",
     skip_all,
     fields(
         turn_id = %step_context.turn.sub_id,
@@ -1174,11 +1207,11 @@ async fn run_sampling_request(
         apps_enabled = step_context.turn.apps_enabled()
     )
 )]
-pub(crate) async fn built_tools(
+async fn built_tools_with_turn_start_availability(
     sess: &Session,
     step_context: &StepContext,
     cancellation_token: &CancellationToken,
-) -> CodexResult<Arc<ToolRouter>> {
+) -> CodexResult<(Arc<ToolRouter>, TurnStartAvailability)> {
     let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
@@ -1294,19 +1327,23 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         search_tool_enabled(turn_context),
     );
+    let turn_start_availability = turn_start_availability(&mcp_tool_exposure);
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_context(
-        step_context,
-        ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            tool_suggest_candidates,
-            extension_tool_executors: extension_tool_executors(sess),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-        &sess.services.tool_search_handler_cache,
-    )))
+    Ok((
+        Arc::new(ToolRouter::from_context(
+            step_context,
+            ToolRouterParams {
+                mcp_tools,
+                deferred_mcp_tools,
+                tool_suggest_candidates,
+                extension_tool_executors: extension_tool_executors(sess),
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+            &sess.services.tool_search_handler_cache,
+        )),
+        turn_start_availability,
+    ))
 }
 
 #[derive(Debug)]

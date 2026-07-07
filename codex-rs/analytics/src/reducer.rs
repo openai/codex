@@ -90,6 +90,8 @@ use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnStartAvailability;
+use crate::facts::TurnStartAvailabilityFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
@@ -363,6 +365,7 @@ struct TurnState {
     thread_id: Option<String>,
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
+    turn_start_availability: Option<TurnStartAvailability>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
     profile: Option<TurnProfile>,
@@ -511,6 +514,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out).await;
+                }
+                CustomAnalyticsFact::TurnStartAvailability(input) => {
+                    self.ingest_turn_start_availability(*input, out).await;
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
@@ -677,6 +683,19 @@ impl AnalyticsReducer {
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_turn_start_availability(
+        &mut self,
+        input: TurnStartAvailabilityFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id;
+        self.turns
+            .entry(turn_id.clone())
+            .or_default()
+            .turn_start_availability = Some(input.availability);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -2596,6 +2615,10 @@ fn codex_turn_event_params(
     else {
         unreachable!("turn event params require a fully populated turn state");
     };
+    let turn_start_availability = turn_state
+        .turn_start_availability
+        .clone()
+        .unwrap_or_default();
     let started_at = turn_state.started_at;
     let TurnResolvedConfigFact {
         turn_id: _resolved_turn_id,
@@ -2619,6 +2642,12 @@ fn codex_turn_event_params(
         workspace_kind,
         is_first_turn,
     } = resolved_config;
+    let TurnStartAvailability {
+        available_mcp_server_names: turn_start_available_mcp_server_names,
+        available_mcp_server_names_truncated: turn_start_available_mcp_server_names_truncated,
+        available_connectors: turn_start_available_connectors,
+        available_connectors_truncated: turn_start_available_connectors_truncated,
+    } = turn_start_availability;
     let TurnProfile {
         before_first_sampling_ms,
         sampling_ms,
@@ -2661,6 +2690,10 @@ fn codex_turn_event_params(
         workspace_kind,
         num_input_images,
         is_first_turn,
+        turn_start_available_mcp_server_names,
+        turn_start_available_mcp_server_names_truncated,
+        turn_start_available_connectors,
+        turn_start_available_connectors_truncated,
         status: completed.status,
         turn_error: completed.turn_error,
         codex_error_kind: codex_error.map(|error| error.kind),

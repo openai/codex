@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use codex_analytics::TurnStartAvailability;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -93,6 +94,33 @@ fn filter_codex_apps_mcp_tools(
         })
         .cloned()
         .collect()
+}
+
+/// Projects the post-policy direct and deferred tool exposure into analytics identities.
+pub(crate) fn turn_start_availability(exposure: &McpToolExposure) -> TurnStartAvailability {
+    let exposed_tools = || {
+        exposure
+            .direct_tools
+            .iter()
+            .chain(exposure.deferred_tools.iter().flatten())
+    };
+    TurnStartAvailability::new(
+        exposed_tools()
+            .filter(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+            .map(|tool| tool.server_name.clone()),
+        exposed_tools()
+            .filter(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+            .filter_map(|tool| {
+                let connector_id = tool.connector_id.as_ref()?;
+                let connector_name = tool
+                    .connector_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(connector_id);
+                Some((connector_id.clone(), connector_name.to_string()))
+            }),
+    )
 }
 
 #[cfg(test)]

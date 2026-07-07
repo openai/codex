@@ -295,4 +295,17 @@ async fn defers_apps_and_non_app_mcp_tools() {
         "mcp__codex_apps__calendar",
         "_create_event"
     )));
+    assert_eq!(
+        serde_json::to_value(turn_start_availability(&exposure))
+            .expect("availability should serialize"),
+        serde_json::json!({
+            "available_mcp_server_names": ["rmcp"],
+            "available_mcp_server_names_truncated": false,
+            "available_connectors": [{
+                "connector_id": "calendar",
+                "connector_name": "Calendar",
+            }],
+            "available_connectors_truncated": false,
+        })
+    );
 }

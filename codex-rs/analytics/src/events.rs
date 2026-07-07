@@ -19,6 +19,7 @@ use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnStartConnectorIdentity;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
@@ -875,6 +876,10 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) workspace_kind: Option<String>,
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
+    pub(crate) turn_start_available_mcp_server_names: Vec<String>,
+    pub(crate) turn_start_available_mcp_server_names_truncated: bool,
+    pub(crate) turn_start_available_connectors: Vec<TurnStartConnectorIdentity>,
+    pub(crate) turn_start_available_connectors_truncated: bool,
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
