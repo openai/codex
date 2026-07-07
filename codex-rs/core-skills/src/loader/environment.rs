@@ -244,25 +244,16 @@ pub async fn load_environment_skills_from_root(
         return outcome;
     }
 
-    let mut skill_ancestors = HashSet::new();
-    for skill in &discovery.skills {
-        let mut ancestor = skill.path.parent();
-        while let Some(path) = ancestor {
-            skill_ancestors.insert(path.clone());
-            ancestor = path.parent();
-        }
-    }
-
-    // Only pass roots above loaded skills so unused sibling manifests are never probed.
-    let plugin_roots = discovery
-        .plugin_roots
-        .into_iter()
-        .filter(|plugin_root| skill_ancestors.contains(plugin_root))
-        .collect();
+    let skill_paths = discovery
+        .skills
+        .iter()
+        .map(|skill| skill.path.clone())
+        .collect::<Vec<_>>();
     let namespace_resolver = SkillNamespaceResolver::discover(
         file_system,
         root,
-        plugin_roots,
+        &skill_paths,
+        discovery.plugin_roots,
         discovery.namespace_roots,
     );
 
@@ -285,7 +276,7 @@ pub async fn load_environment_skills_from_root(
     for (path, result) in skill_results {
         let result = result.and_then(|skill| {
             let name = namespace_resolver
-                .for_skill(&skill.path_to_skills_md)
+                .for_skill(root, &skill.path_to_skills_md)
                 .qualify(&skill.base_name);
             validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
                 .map_err(|err| err.to_string())?;

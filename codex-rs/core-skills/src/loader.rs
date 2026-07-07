@@ -689,12 +689,14 @@ async fn load_skills_under_root(
     for warning in warnings {
         error!("{warning}");
     }
+    let root_uri = PathUri::from_abs_path(root);
     let namespace_resolver = match plugin_namespace {
         Some(namespace) => SkillNamespaceResolver::with_provided_namespace(namespace),
         None => {
             SkillNamespaceResolver::discover(
                 fs,
-                &PathUri::from_abs_path(root),
+                &root_uri,
+                &skill_files,
                 plugin_roots,
                 namespace_roots,
             )
@@ -714,7 +716,7 @@ async fn load_skills_under_root(
             &path,
             scope,
             plugin_id,
-            namespace_resolver.for_skill(&path_uri),
+            namespace_resolver.for_skill(&root_uri, &path_uri),
             plugin_root.as_ref(),
         )
         .await

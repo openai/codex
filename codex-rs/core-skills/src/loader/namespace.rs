@@ -37,9 +37,24 @@ impl SkillNamespaceResolver {
     pub(crate) async fn discover(
         fs: &dyn ExecutorFileSystem,
         root: &PathUri,
+        skill_paths: &[PathUri],
         plugin_roots: HashSet<PathUri>,
         namespace_roots: HashSet<PathUri>,
     ) -> Self {
+        // Only probe plugin roots above loaded skills; unused siblings cannot affect names.
+        let mut skill_ancestors = HashSet::new();
+        for skill_path in skill_paths {
+            let mut ancestor = skill_path.parent();
+            while let Some(path) = ancestor {
+                skill_ancestors.insert(path.clone());
+                ancestor = path.parent();
+            }
+        }
+        let plugin_roots = plugin_roots
+            .into_iter()
+            .filter(|plugin_root| skill_ancestors.contains(plugin_root))
+            .collect::<HashSet<_>>();
+
         // Ordinary descendants fall back to the nearest valid manifest at or above the scan root.
         let inherited_namespace = plugin_namespace_for_skill_uri(fs, root)
             .await
@@ -84,11 +99,16 @@ impl SkillNamespaceResolver {
         }
     }
 
-    pub(crate) fn for_skill(&self, path: &PathUri) -> &ResolvedSkillNamespace {
+    pub(crate) fn for_skill(&self, root: &PathUri, path: &PathUri) -> &ResolvedSkillNamespace {
+        // Ancestor symlink targets cannot override skills still owned by the scan root.
+        let path_is_under_root = path.starts_with(root);
         // The deepest matching path prefix is the nearest applicable namespace.
         self.nested_namespaces
             .iter()
-            .filter(|(namespace_root, _)| path.starts_with(namespace_root))
+            .filter(|(namespace_root, _)| {
+                path.starts_with(namespace_root)
+                    && (!path_is_under_root || !root.starts_with(namespace_root))
+            })
             .max_by_key(|(namespace_root, _)| namespace_root.ancestors().count())
             .map(|(_, namespace)| namespace)
             .unwrap_or(&self.inherited_namespace)
