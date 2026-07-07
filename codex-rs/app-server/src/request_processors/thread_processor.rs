@@ -371,6 +371,12 @@ pub(crate) struct ThreadRequestProcessor {
 enum RunningThreadResumeResult {
     /// The request was delegated to the loaded thread.
     Handled,
+    /// The listener owns the response after the caller releases the global
+    /// thread-list permit.
+    ListenerPending {
+        thread_id: ThreadId,
+        outcome_rx: oneshot::Receiver<ConnectionReservationOutcome>,
+    },
     /// No loaded thread handled the request.
     ///
     /// The optional stored thread contains the history-bearing probe that cold
@@ -2672,7 +2678,7 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
+        let thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2689,6 +2695,23 @@ impl ThreadRequestProcessor {
             .await
         {
             Ok(RunningThreadResumeResult::Handled) => return Ok(()),
+            Ok(RunningThreadResumeResult::ListenerPending {
+                thread_id,
+                outcome_rx,
+            }) => {
+                drop(thread_list_state_permit);
+                if !matches!(outcome_rx.await, Ok(ConnectionReservationOutcome::Handled)) {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            internal_error(format!(
+                                "failed to subscribe running thread resume for thread {thread_id}: thread listener closed before handling the request"
+                            )),
+                        )
+                        .await;
+                }
+                return Ok(());
+            }
             Ok(RunningThreadResumeResult::NotRunning(stored_thread)) => stored_thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -3131,10 +3154,18 @@ impl ThreadRequestProcessor {
                 .thread_goal_processor
                 .pending_resume_goal_state(existing_thread.as_ref())
                 .await;
+            let Some((resume_handled_tx, outcome_rx)) = self
+                .thread_state_manager
+                .start_connection_reservation(existing_thread_id, request_id.connection_id)
+                .await
+            else {
+                return Ok(RunningThreadResumeResult::Handled);
+            };
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
+                    resume_handled_tx,
                     history_items,
                     config_snapshot,
                     instruction_sources,
@@ -3151,7 +3182,10 @@ impl ThreadRequestProcessor {
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            return Ok(RunningThreadResumeResult::Handled);
+            return Ok(RunningThreadResumeResult::ListenerPending {
+                thread_id: existing_thread_id,
+                outcome_rx,
+            });
         }
         Ok(RunningThreadResumeResult::NotRunning(None))
     }

@@ -120,6 +120,51 @@ impl UnloadingState {
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "idle unload admission holds both lifecycle guards through its final rechecks"
+)]
+async fn claim_idle_unload_if_permitted(
+    unloading_state: &mut UnloadingState,
+    thread_list_state_permit: Arc<Semaphore>,
+    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    thread_state_manager: &ThreadStateManager,
+    conversation_id: ThreadId,
+    is_running: impl std::future::Future<Output = bool>,
+) -> bool {
+    let Ok(permit) = thread_list_state_permit.acquire_owned().await else {
+        return false;
+    };
+    let mut pending = pending_thread_unloads.lock().await;
+    if pending.contains(&conversation_id) {
+        return false;
+    }
+    if !unloading_state.should_unload_now() {
+        return false;
+    }
+    if is_running.await {
+        unloading_state.note_thread_activity_observed();
+        return false;
+    }
+    if thread_state_manager
+        .has_connections_or_reservations(conversation_id)
+        .await
+    {
+        return false;
+    }
+    if !unloading_state.should_unload_now() {
+        return false;
+    }
+    pending.insert(conversation_id);
+    drop(pending);
+    drop(permit);
+    true
+}
+
+#[cfg(test)]
+#[path = "thread_lifecycle_tests.rs"]
+mod tests;
+
 pub(super) enum ThreadShutdownResult {
     Complete,
     SubmitFailed,
@@ -384,15 +429,19 @@ pub(super) async fn ensure_listener_task_running(
                         unloading_state.note_thread_activity_observed();
                         continue;
                     }
+                    if !claim_idle_unload_if_permitted(
+                        &mut unloading_state,
+                        thread_list_state_permit.clone(),
+                        &pending_thread_unloads,
+                        &thread_state_manager,
+                        conversation_id,
+                        async {
+                            matches!(conversation.agent_status().await, AgentStatus::Running)
+                        },
+                    )
+                    .await
                     {
-                        let mut pending_thread_unloads = pending_thread_unloads.lock().await;
-                        if pending_thread_unloads.contains(&conversation_id) {
-                            continue;
-                        }
-                        if !unloading_state.should_unload_now() {
-                            continue;
-                        }
-                        pending_thread_unloads.insert(conversation_id);
+                        continue;
                     }
                     unload_thread_without_subscribers(
                         thread_manager.clone(),
@@ -519,7 +568,6 @@ pub(super) async fn handle_thread_listener_command(
                 conversation_id,
                 conversation,
                 codex_home,
-                thread_state_manager,
                 thread_state,
                 thread_watch_manager,
                 outgoing,
@@ -568,15 +616,10 @@ pub(super) async fn handle_thread_listener_command(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "running-thread resume subscription must be serialized against pending unloads"
-)]
 pub(super) async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
     _codex_home: &Path,
-    thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
@@ -602,6 +645,7 @@ pub(super) async fn handle_pending_thread_resume_request(
                 .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
+    let resume_handled_tx = pending.resume_handled_tx;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
     if pending.include_turns {
@@ -633,6 +677,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             Ok(page) => Some(page),
             Err(error) => {
                 outgoing.send_error(request_id, error).await;
+                let _ = resume_handled_tx.send(ConnectionReservationAction::Cancel);
                 return;
             }
         }
@@ -646,31 +691,21 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
+    if pending_thread_unloads
+        .lock()
+        .await
+        .contains(&conversation_id)
     {
-        let pending_thread_unloads = pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&conversation_id) {
-            drop(pending_thread_unloads);
-            outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(format!(
-                        "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
-                    )),
-                )
-                .await;
-            return;
-        }
-        if !thread_state_manager
-            .try_add_connection_to_thread(conversation_id, connection_id)
-            .await
-        {
-            tracing::debug!(
-                thread_id = %conversation_id,
-                connection_id = ?connection_id,
-                "skipping running thread resume for closed connection"
-            );
-            return;
-        }
+        outgoing
+            .send_error(
+                request_id,
+                invalid_request(format!(
+                    "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
+                )),
+            )
+            .await;
+        let _ = resume_handled_tx.send(ConnectionReservationAction::Cancel);
+        return;
     }
 
     let config_snapshot = pending.config_snapshot;
@@ -714,6 +749,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)
         .await;
+    let _ = resume_handled_tx.send(ConnectionReservationAction::Commit);
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {

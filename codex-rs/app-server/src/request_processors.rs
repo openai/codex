@@ -545,6 +545,8 @@ use crate::error_code::invalid_request;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ConnectionCapabilities;
+use crate::thread_state::ConnectionReservationAction;
+use crate::thread_state::ConnectionReservationOutcome;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadListenerRegistration;
 use crate::thread_state::ThreadState;

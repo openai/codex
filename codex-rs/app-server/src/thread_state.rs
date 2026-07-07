@@ -32,6 +32,7 @@ type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
+    pub(crate) resume_handled_tx: oneshot::Sender<ConnectionReservationAction>,
     pub(crate) history_items: Vec<RolloutItem>,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
     pub(crate) instruction_sources: Vec<LegacyAppPathString>,
@@ -389,6 +390,7 @@ mod tests {
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
+    pending_connection_reservations: HashMap<ConnectionId, HashSet<u64>>,
     has_connections_watcher: watch::Sender<bool>,
 }
 
@@ -397,6 +399,7 @@ impl Default for ThreadEntry {
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
+            pending_connection_reservations: HashMap::new(),
             has_connections_watcher: watch::channel(false).0,
         }
     }
@@ -417,6 +420,7 @@ struct ThreadStateManagerInner {
     live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+    next_connection_reservation_id: u64,
 }
 
 #[derive(Default)]
@@ -428,6 +432,25 @@ struct ThreadListenerRegistry {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionReservationOutcome {
+    Handled,
+    Abandoned,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ConnectionReservationAction {
+    Commit,
+    Cancel,
+}
+
+#[derive(Clone, Copy)]
+struct ConnectionReservation {
+    thread_id: ThreadId,
+    connection_id: ConnectionId,
+    reservation_id: u64,
 }
 
 #[derive(Clone, Default)]
@@ -748,15 +771,25 @@ impl ThreadStateManager {
                 return false;
             }
 
+            let removed = if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
+                let removed_subscription = thread_entry.connection_ids.remove(&connection_id);
+                let canceled_reservation = thread_entry
+                    .pending_connection_reservations
+                    .remove(&connection_id)
+                    .is_some();
+                thread_entry.update_has_connections();
+                removed_subscription || canceled_reservation
+            } else {
+                false
+            };
+            if !removed {
+                return false;
+            }
             if let Some(thread_ids) = state.thread_ids_by_connection.get_mut(&connection_id) {
                 thread_ids.remove(&thread_id);
                 if thread_ids.is_empty() {
                     state.thread_ids_by_connection.remove(&connection_id);
                 }
-            }
-            if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
-                thread_entry.connection_ids.remove(&connection_id);
-                thread_entry.update_has_connections();
             }
         };
 
@@ -771,6 +804,18 @@ impl ThreadStateManager {
             .threads
             .get(&thread_id)
             .is_some_and(|thread_entry| !thread_entry.connection_ids.is_empty())
+    }
+
+    pub(crate) async fn has_connections_or_reservations(&self, thread_id: ThreadId) -> bool {
+        self.state
+            .lock()
+            .await
+            .threads
+            .get(&thread_id)
+            .is_some_and(|thread_entry| {
+                !thread_entry.connection_ids.is_empty()
+                    || !thread_entry.pending_connection_reservations.is_empty()
+            })
     }
 
     pub(crate) async fn try_ensure_connection_subscribed(
@@ -809,6 +854,7 @@ impl ThreadStateManager {
         Some(thread_state)
     }
 
+    #[cfg(test)]
     pub(crate) async fn try_add_connection_to_thread(
         &self,
         thread_id: ThreadId,
@@ -835,6 +881,117 @@ impl ThreadStateManager {
         true
     }
 
+    pub(crate) async fn start_connection_reservation(
+        &self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+    ) -> Option<(
+        oneshot::Sender<ConnectionReservationAction>,
+        oneshot::Receiver<ConnectionReservationOutcome>,
+    )> {
+        let mut state = self.state.lock().await;
+        let listener_registry = self
+            .listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if listener_registry.closing || !state.live_connections.contains_key(&connection_id) {
+            return None;
+        }
+        let reservation_id = state.next_connection_reservation_id;
+        let Some(next_reservation_id) = reservation_id.checked_add(1) else {
+            error!("connection reservation id space exhausted");
+            return None;
+        };
+        state.next_connection_reservation_id = next_reservation_id;
+        state
+            .thread_ids_by_connection
+            .entry(connection_id)
+            .or_default()
+            .insert(thread_id);
+        let thread_entry = state.threads.entry(thread_id).or_default();
+        thread_entry
+            .pending_connection_reservations
+            .entry(connection_id)
+            .or_default()
+            .insert(reservation_id);
+        let reservation = ConnectionReservation {
+            thread_id,
+            connection_id,
+            reservation_id,
+        };
+        let (handled_tx, handled_rx) = oneshot::channel();
+        let (outcome_tx, outcome_rx) = oneshot::channel();
+        let manager = self.clone();
+        let task = self.listener_tasks.spawn(async move {
+            let (action, outcome) = match handled_rx.await {
+                Ok(action) => (action, ConnectionReservationOutcome::Handled),
+                Err(_) => (
+                    ConnectionReservationAction::Cancel,
+                    ConnectionReservationOutcome::Abandoned,
+                ),
+            };
+            manager
+                .finish_connection_reservation(reservation, action)
+                .await;
+            let _ = outcome_tx.send(outcome);
+        });
+        drop(task);
+        drop(listener_registry);
+        drop(state);
+        Some((handled_tx, outcome_rx))
+    }
+
+    async fn finish_connection_reservation(
+        &self,
+        reservation: ConnectionReservation,
+        action: ConnectionReservationAction,
+    ) {
+        let ConnectionReservation {
+            thread_id,
+            connection_id,
+            reservation_id,
+        } = reservation;
+        let mut state = self.state.lock().await;
+        let connection_is_live = state.live_connections.contains_key(&connection_id);
+        let Some(thread_entry) = state.threads.get_mut(&thread_id) else {
+            return;
+        };
+        let remove_reservation_set = {
+            let Some(reservations) = thread_entry
+                .pending_connection_reservations
+                .get_mut(&connection_id)
+            else {
+                return;
+            };
+            if !reservations.remove(&reservation_id) {
+                return;
+            }
+            reservations.is_empty()
+        };
+        if remove_reservation_set {
+            thread_entry
+                .pending_connection_reservations
+                .remove(&connection_id);
+        }
+        let committed = matches!(action, ConnectionReservationAction::Commit) && connection_is_live;
+        if committed {
+            thread_entry.connection_ids.insert(connection_id);
+        }
+        let keep_connection_mapping = thread_entry.connection_ids.contains(&connection_id)
+            || thread_entry
+                .pending_connection_reservations
+                .contains_key(&connection_id);
+        thread_entry.update_has_connections();
+        if !keep_connection_mapping
+            && let Some(thread_ids) = state.thread_ids_by_connection.get_mut(&connection_id)
+        {
+            thread_ids.remove(&thread_id);
+            if thread_ids.is_empty() {
+                state.thread_ids_by_connection.remove(&connection_id);
+            }
+        }
+    }
+
     pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) -> Vec<ThreadId> {
         {
             let mut state = self.state.lock().await;
@@ -846,16 +1003,19 @@ impl ThreadStateManager {
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
                     thread_entry.connection_ids.remove(&connection_id);
+                    thread_entry
+                        .pending_connection_reservations
+                        .remove(&connection_id);
                     thread_entry.update_has_connections();
                 }
             }
             thread_ids
                 .into_iter()
                 .filter(|thread_id| {
-                    state
-                        .threads
-                        .get(thread_id)
-                        .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
+                    state.threads.get(thread_id).is_some_and(|thread_entry| {
+                        thread_entry.connection_ids.is_empty()
+                            && thread_entry.pending_connection_reservations.is_empty()
+                    })
                 })
                 .collect::<Vec<_>>()
         }
