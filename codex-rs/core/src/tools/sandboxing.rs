@@ -285,6 +285,7 @@ pub(crate) fn sandbox_override_for_first_attempt(
 /// administrator-defined deny-read restrictions.
 pub(crate) fn escalation_profile_preserving_deny_read(
     sandbox_override: SandboxOverride,
+    managed_network_active: bool,
     permission_profile: &PermissionProfile,
 ) -> Option<PermissionProfile> {
     if !matches!(
@@ -297,11 +298,16 @@ pub(crate) fn escalation_profile_preserving_deny_read(
     let mut file_system_policy = FileSystemSandboxPolicy::unrestricted();
     file_system_policy
         .preserve_deny_read_restrictions_from(&permission_profile.file_system_sandbox_policy());
+    let network_sandbox_policy = if managed_network_active {
+        permission_profile.network_sandbox_policy()
+    } else {
+        NetworkSandboxPolicy::Enabled
+    };
     Some(
         PermissionProfile::from_runtime_permissions_with_enforcement(
             permission_profile.enforcement(),
             &file_system_policy,
-            NetworkSandboxPolicy::Enabled,
+            network_sandbox_policy,
         ),
     )
 }

@@ -208,6 +208,7 @@ fn deny_read_is_preserved_during_explicit_escalation_and_policy_bypass() {
     );
     let escalated = escalation_profile_preserving_deny_read(
         SandboxOverride::EscalatedSandboxWithDenyRead,
+        /*managed_network_active*/ false,
         &permission_profile,
     )
     .expect("escalation profile");
@@ -243,9 +244,24 @@ fn deny_read_is_preserved_during_explicit_escalation_and_policy_bypass() {
         /*has_managed_network_requirements*/ false,
     ));
     assert_eq!(
-        escalation_profile_preserving_deny_read(SandboxOverride::NoOverride, &permission_profile,),
+        escalation_profile_preserving_deny_read(
+            SandboxOverride::NoOverride,
+            /*managed_network_active*/ false,
+            &permission_profile,
+        ),
         None,
         "ordinary sandboxed attempts keep their original profile",
+    );
+    let managed_network_escalation = escalation_profile_preserving_deny_read(
+        SandboxOverride::EscalatedSandboxWithDenyRead,
+        /*managed_network_active*/ true,
+        &permission_profile,
+    )
+    .expect("managed network escalation profile");
+    assert_eq!(
+        managed_network_escalation.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted,
+        "managed network restrictions must survive escalation",
     );
 }
 

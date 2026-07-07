@@ -227,8 +227,11 @@ impl ToolOrchestrator {
             &file_system_sandbox_policy,
         );
         let managed_network_active = turn_ctx.network.is_some();
-        let escalation_profile =
-            escalation_profile_preserving_deny_read(sandbox_override, &turn_ctx.permission_profile);
+        let escalation_profile = escalation_profile_preserving_deny_read(
+            sandbox_override,
+            managed_network_active,
+            &turn_ctx.permission_profile,
+        );
         let attempt_permissions = escalation_profile
             .as_ref()
             .unwrap_or(&turn_ctx.permission_profile);
