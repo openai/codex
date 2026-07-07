@@ -4,8 +4,10 @@ use codex_backend_client::DeliveredTomlFragment;
 use codex_config::CloudConfigBundle;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use codex_login::CodexAuth;
 use std::future::Future;
 
@@ -110,9 +112,11 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: config_toml,
+            managed_layers: CloudConfigTomlManagedLayers::default(),
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: requirements_toml,
+            managed_layers: CloudRequirementsTomlManagedLayers::default(),
         },
     }
 }

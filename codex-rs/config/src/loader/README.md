@@ -31,8 +31,10 @@ Precedence is **top overrides bottom**:
 4. `Project` config (`.codex/config.toml`)
 5. `User` profile config, when present
 6. `User` config (`config.toml`)
-7. `EnterpriseManaged` cloud-managed config bundle layers
-8. `System` config (`/etc/codex/config.toml` or the Windows system config path)
+7. `CloudManaged(SystemOverlay)` config bundle layers
+8. `EnterpriseManaged` cloud-managed config bundle layers
+9. `System` config (`/etc/codex/config.toml` or the Windows system config path)
+10. `CloudManaged(Baseline)` config bundle layers
 
 `ConfigLayerStack` stores layers in the opposite order internally: lowest
 precedence first, highest precedence last, so later layers override earlier

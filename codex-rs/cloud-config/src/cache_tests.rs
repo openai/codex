@@ -2,8 +2,10 @@ use super::*;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::tempdir;
@@ -16,6 +18,7 @@ fn test_bundle() -> CloudConfigBundle {
                 name: "Base config".to_string(),
                 contents: "model = \"gpt-5\"".to_string(),
             }],
+            managed_layers: CloudConfigTomlManagedLayers::default(),
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: vec![CloudRequirementsFragment {
@@ -23,6 +26,7 @@ fn test_bundle() -> CloudConfigBundle {
                 name: "Base requirements".to_string(),
                 contents: "allowed_approval_policies = [\"never\"]".to_string(),
             }],
+            managed_layers: CloudRequirementsTomlManagedLayers::default(),
         },
     }
 }
