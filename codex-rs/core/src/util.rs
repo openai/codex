@@ -93,6 +93,12 @@ pub(crate) fn jitter(delay: Duration) -> Duration {
     delay.mul_f64(jitter)
 }
 
+/// Adds positive jitter without allowing a retry earlier than the base delay.
+pub(crate) fn positive_jitter(delay: Duration) -> Duration {
+    let jitter = rand::rng().random_range(1.0..2.0);
+    delay.mul_f64(jitter)
+}
+
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     if cfg!(debug_assertions) {
         panic!("{}", message.to_string());

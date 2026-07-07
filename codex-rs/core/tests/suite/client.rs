@@ -3587,7 +3587,7 @@ async fn server_overload_retries_use_a_separate_budget_on_the_same_turn() -> any
                 if event.codex_error_info == Some(CodexErrorInfo::ServerOverloaded) {
                     server_overload_retry_messages.push(event.message);
                 }
-                tokio::time::advance(Duration::from_secs(360)).await;
+                tokio::time::advance(Duration::from_secs(600)).await;
             }
             EventMsg::TurnComplete(_) => break,
             _ => {}

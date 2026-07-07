@@ -6,7 +6,7 @@ use crate::client::ModelClientSession;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
-use crate::util::jitter;
+use crate::util::positive_jitter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -67,9 +67,9 @@ pub(crate) async fn handle_retryable_response_stream_error(
         *retries += 1;
         let retry_count = *retries;
         let delay = match &err {
-            CodexErr::ServerOverloaded => {
-                jitter(SERVER_OVERLOADED_RETRY_DELAYS[retry_count.saturating_sub(1) as usize])
-            }
+            CodexErr::ServerOverloaded => positive_jitter(
+                SERVER_OVERLOADED_RETRY_DELAYS[retry_count.saturating_sub(1) as usize],
+            ),
             CodexErr::Stream(_, requested_delay) => {
                 requested_delay.unwrap_or_else(|| backoff(retry_count))
             }

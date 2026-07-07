@@ -164,7 +164,11 @@ pub(crate) async fn run_turn(
         if matches!(err, CodexErr::TurnAborted) {
             return Err(err);
         }
-        let error = err.to_codex_protocol_error();
+        let error = if matches!(err, CodexErr::ServerOverloaded) {
+            CodexErrorInfo::ServerOverloadedBeforeInput
+        } else {
+            err.to_codex_protocol_error()
+        };
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");

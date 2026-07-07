@@ -5,6 +5,7 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::build_compaction_initial_context;
+use crate::compact::compaction_error_event;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact_model_fallback::record_model_fallback;
@@ -171,9 +172,11 @@ async fn run_remote_compact_task_inner(
         .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
+        let event = EventMsg::Error(compaction_error_event(
+            &err,
+            phase,
+            Some("Error running remote compact task".to_string()),
+        ));
         sess.send_event(turn_context, event).await;
         return Err(err);
     }

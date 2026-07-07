@@ -14,6 +14,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -743,6 +744,86 @@ async fn local_compact_keeps_provider_server_overload_retries() -> Result<()> {
     .await;
 
     assert_eq!(responses.requests().len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_pre_turn_capacity_exhaustion_marks_input_uncommitted() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let overloaded = || {
+        sse_response(sse_failed(
+            "compact-overloaded",
+            "server_is_overloaded",
+            "selected model is at capacity",
+        ))
+    };
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ])),
+            overloaded(),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.request_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(0);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await?
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let incoming = "prompt that must survive local capacity exhaustion";
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: incoming.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let error_info = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(error) => error.codex_error_info.clone(),
+        _ => None,
+    })
+    .await;
+    assert_eq!(error_info, CodexErrorInfo::ServerOverloadedBeforeInput);
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests[1..] {
+        assert!(!request.body_json().to_string().contains(incoming));
+    }
     Ok(())
 }
 

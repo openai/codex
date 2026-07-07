@@ -7,6 +7,7 @@ use crate::client_common::ResponseEvent;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
+use crate::compact::compaction_error_event;
 use crate::compact::compaction_status_from_result;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_remote::process_compacted_history;
@@ -193,9 +194,11 @@ async fn run_remote_compact_task_inner(
         Err(err @ CodexErr::TurnAborted) => Err(err),
         Err(err) => {
             sess.track_turn_codex_error(turn_context, &err);
-            let event = EventMsg::Error(
-                err.to_error_event(Some("Error running remote compact task".to_string())),
-            );
+            let event = EventMsg::Error(compaction_error_event(
+                &err,
+                phase,
+                Some("Error running remote compact task".to_string()),
+            ));
             sess.send_event(turn_context, event).await;
             Err(err)
         }
