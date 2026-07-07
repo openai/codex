@@ -158,7 +158,6 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/codex-rs/target
       # Speed up repeated builds across CI runs by caching compiled objects, except on
       # arm64 macOS runners cross-targeting x86_64 where ring/cc-rs can produce
       # mixed-architecture archives under sccache.

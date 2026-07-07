@@ -4,7 +4,6 @@ on:
   workflow_call:
 
 env:
-  CARGO_TARGET_DIR: ${{ github.workspace }}/codex-rs/target
   WINDOWS_BINARIES: "codex codex-code-mode-host codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
 
 jobs:

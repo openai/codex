@@ -259,27 +259,23 @@ def stage_artifacts(
 
 
 def upstream_release_pair_paths(
-    source_root: Path,
     target: str,
-    target_dir: Path | None = None,
+    target_dir: Path,
 ) -> tuple[Path, Path]:
     lib_name = (
         "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
     )
-    target_dir = source_root / "target" if target_dir is None else target_dir
     gn_out = target_dir / target / "release" / "gn_out"
     return gn_out / "obj" / lib_name, gn_out / "src_binding.rs"
 
 
 def stage_upstream_release_pair(
-    source_root: Path,
     target: str,
     output_dir: Path,
-    target_dir: Path | None = None,
+    target_dir: Path,
     sandbox: bool = False,
 ) -> None:
     lib_path, binding_path = upstream_release_pair_paths(
-        source_root,
         target,
         target_dir,
     )
@@ -340,9 +336,8 @@ def parse_args() -> argparse.Namespace:
         "stage-upstream-release-pair"
     )
     stage_upstream_release_pair_parser.add_argument(
-        "--source-root", type=Path, required=True
+        "--target-dir", type=Path, required=True
     )
-    stage_upstream_release_pair_parser.add_argument("--target-dir", type=Path)
     stage_upstream_release_pair_parser.add_argument("--target", required=True)
     stage_upstream_release_pair_parser.add_argument("--output-dir", required=True)
     stage_upstream_release_pair_parser.add_argument("--sandbox", action="store_true")
@@ -384,7 +379,6 @@ def main() -> int:
         return 0
     if args.command == "stage-upstream-release-pair":
         stage_upstream_release_pair(
-            source_root=args.source_root,
             target=args.target,
             output_dir=Path(args.output_dir),
             target_dir=args.target_dir,

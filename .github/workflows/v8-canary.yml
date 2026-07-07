@@ -395,6 +395,7 @@ jobs:
 
       - name: Build upstream rusty_v8 sandbox release pair
         env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/upstream-rusty-v8/target
           SCCACHE_IDLE_TIMEOUT: 0
           TARGET: ${{ matrix.target }}
           V8_FROM_SOURCE: "1"
@@ -409,7 +410,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
-            --source-root upstream-rusty-v8 \
+            --target-dir upstream-rusty-v8/target \
             --target "${TARGET}" \
             --output-dir "dist/${TARGET}" \
             --sandbox
