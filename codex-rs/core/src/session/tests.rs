@@ -7854,7 +7854,7 @@ async fn request_scoped_host_mcp_app_ui_capability_survives_later_session_update
     let (session, _) = make_session_and_context().await;
     let session = Arc::new(session);
     let widget_turn_context = session
-        .new_default_turn_with_mcp_app_ui_webview_support(true)
+        .new_default_turn_with_mcp_app_ui_webview_support(/*supports_mcp_app_ui_webview*/ true)
         .await
         .expect("capture widget client turn context");
 

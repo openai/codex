@@ -103,7 +103,7 @@ mod tests {
                 MCP_CLIENT_CAPABILITIES_META_KEY: {"spoofed": true},
                 "caller": "preserved",
             })),
-            true,
+            /*supports_mcp_app_ui_webview*/ true,
         );
 
         assert_eq!(
@@ -131,7 +131,7 @@ mod tests {
                     MCP_CLIENT_CAPABILITIES_META_KEY: {"spoofed": true},
                     "caller": "preserved",
                 })),
-                false,
+                /*supports_mcp_app_ui_webview*/ false,
             ),
             Some(json!({"caller": "preserved"}))
         );
@@ -140,7 +140,10 @@ mod tests {
     #[test]
     fn invalid_caller_metadata_does_not_suppress_trusted_capabilities() {
         assert_eq!(
-            with_client_capabilities_meta(Some(json!("invalid")), true),
+            with_client_capabilities_meta(
+                Some(json!("invalid")),
+                /*supports_mcp_app_ui_webview*/ true,
+            ),
             Some(json!({
                 MCP_CLIENT_CAPABILITIES_META_KEY: {
                     "extensions": {

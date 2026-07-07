@@ -862,7 +862,7 @@ impl TurnRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
-                None,
+                /*supports_mcp_app_ui_webview*/ None,
                 mcp_elicitations_auto_deny,
             )
             .await
