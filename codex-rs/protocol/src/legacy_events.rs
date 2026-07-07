@@ -75,10 +75,10 @@ impl ContextCompactionItem {
 }
 
 impl UserMessageItem {
-    pub fn as_legacy_event(&self) -> EventMsg {
+    pub fn as_legacy_user_message_event(&self) -> UserMessageEvent {
         // Legacy user-message events flatten only text inputs into `message` and
         // rebase text element ranges onto that concatenated text.
-        EventMsg::UserMessage(UserMessageEvent {
+        UserMessageEvent {
             client_id: self.client_id.clone(),
             message: self.message(),
             images: Some(self.image_urls()),
@@ -86,7 +86,11 @@ impl UserMessageItem {
             local_images: self.local_image_paths(),
             local_image_details: self.local_image_details(),
             text_elements: self.text_elements(),
-        })
+        }
+    }
+
+    pub fn as_legacy_event(&self) -> EventMsg {
+        EventMsg::UserMessage(self.as_legacy_user_message_event())
     }
 }
 

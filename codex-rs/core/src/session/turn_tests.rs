@@ -2,6 +2,7 @@ use super::*;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::items::AgentMessageContent;
+use codex_protocol::protocol::ThreadHistoryMode;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -34,6 +35,37 @@ fn assistant_output_text(text: &str) -> ResponseItem {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[tokio::test]
+async fn missing_streamed_response_item_ids_are_rejected_only_for_paginated_threads() {
+    let (_, mut turn_context) = crate::session::tests::make_session_and_context().await;
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert!(
+        validate_streamed_response_item_id(&turn_context, "response.output_item.added", &item)
+            .is_ok()
+    );
+
+    turn_context.history_mode = ThreadHistoryMode::Paginated;
+    let err =
+        validate_streamed_response_item_id(&turn_context, "response.output_item.added", &item)
+            .expect_err("paginated streams should require response item ids");
+
+    match err {
+        CodexErr::Stream(message, None) => {
+            assert_eq!(message, "response.output_item.added item is missing id");
+        }
+        other => panic!("expected stream error, got {other:?}"),
     }
 }
 

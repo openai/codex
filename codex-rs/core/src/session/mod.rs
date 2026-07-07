@@ -1376,7 +1376,7 @@ impl Session {
             }
             InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                if turn_context.config.features.enabled(Feature::ItemIds) {
+                if turn_context.item_ids_enabled() {
                     for rollout_item in &mut rollout_items {
                         if let RolloutItem::ResponseItem(response_item) = rollout_item {
                             Self::assign_missing_response_item_id(response_item);
@@ -1959,7 +1959,7 @@ impl Session {
     }
 
     async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
-        // Persist the event into rollout storage (the store filters as needed).
+        // Persist the event into rollout storage; the store applies its persistence policy.
         if persist {
             let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
             self.persist_rollout_items(&rollout_items).await;
@@ -2773,7 +2773,7 @@ impl Session {
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        if turn_context.config.features.enabled(Feature::ItemIds) {
+        if turn_context.item_ids_enabled() {
             Self::assign_missing_response_item_ids(items)
         } else {
             items
@@ -3032,7 +3032,7 @@ impl Session {
         world_state_baseline: Option<Arc<WorldState>>,
         compacted_item: CompactedItem,
     ) {
-        let items = if turn_context.config.features.enabled(Feature::ItemIds) {
+        let items = if turn_context.item_ids_enabled() {
             Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
         } else {
             items

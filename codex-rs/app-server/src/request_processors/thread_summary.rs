@@ -97,10 +97,7 @@ fn extract_conversation_summary(
             _ => None,
         })?;
 
-    let preview = match preview.find(USER_MESSAGE_BEGIN) {
-        Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim(),
-        None => preview.as_str(),
-    };
+    let preview = strip_user_message_prefix(preview.as_str());
 
     let timestamp = if session_meta.timestamp.is_empty() {
         None
