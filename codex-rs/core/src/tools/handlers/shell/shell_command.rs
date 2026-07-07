@@ -6,6 +6,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
@@ -104,6 +105,7 @@ impl ShellCommandHandler {
             &turn_context.config.permissions.shell_environment_policy,
             Some(session.thread_id),
         );
+        inject_apply_patch_env(&mut env, &turn_context.config.features);
         let active_permission_profile = turn_context.config.permissions.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
 

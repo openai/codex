@@ -1,1 +1,3 @@
 ** text eol=lf
+023_preserves_crlf_line_endings/input/*.txt -diff -text
+023_preserves_crlf_line_endings/expected/*.txt -diff -text

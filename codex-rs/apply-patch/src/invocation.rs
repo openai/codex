@@ -13,12 +13,13 @@ use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
+use crate::ApplyPatchFileUpdateMode;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
-use crate::unified_diff_from_chunks;
+use crate::unified_diff_from_chunks_with_mode;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
@@ -144,6 +145,25 @@ pub async fn maybe_parse_apply_patch_verified(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
+    maybe_parse_apply_patch_verified_with_mode(
+        argv,
+        cwd,
+        ApplyPatchFileUpdateMode::default(),
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Parses and verifies an `apply_patch` invocation using the selected
+/// file-update mode.
+pub async fn maybe_parse_apply_patch_verified_with_mode(
+    argv: &[String],
+    cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
     if let [body] = argv
@@ -158,7 +178,9 @@ pub async fn maybe_parse_apply_patch_verified(
     }
 
     match maybe_parse_apply_patch(argv, cwd) {
-        MaybeApplyPatch::Body(args) => verify_apply_patch_args(args, cwd, fs, sandbox).await,
+        MaybeApplyPatch::Body(args) => {
+            verify_apply_patch_args_with_mode(args, cwd, update_file_mode, fs, sandbox).await
+        }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
         MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
@@ -171,7 +193,19 @@ pub async fn verify_apply_patch_args(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
-    match try_verify_apply_patch_args(args, cwd, fs, sandbox).await {
+    verify_apply_patch_args_with_mode(args, cwd, ApplyPatchFileUpdateMode::default(), fs, sandbox)
+        .await
+}
+
+/// Verifies parsed patch arguments using the selected file-update mode.
+pub async fn verify_apply_patch_args_with_mode(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
+    match try_verify_apply_patch_args(args, cwd, update_file_mode, fs, sandbox).await {
         Ok(action) => MaybeApplyPatchVerified::Body(action),
         Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
     }
@@ -180,6 +214,7 @@ pub async fn verify_apply_patch_args(
 async fn try_verify_apply_patch_args(
     args: ApplyPatchArgs,
     cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> Result<ApplyPatchAction, ApplyPatchError> {
@@ -217,7 +252,14 @@ async fn try_verify_apply_patch_args(
                     unified_diff,
                     content: contents,
                     ..
-                } = unified_diff_from_chunks(&path, &chunks, fs, sandbox).await?;
+                } = unified_diff_from_chunks_with_mode(
+                    &path,
+                    &chunks,
+                    update_file_mode,
+                    fs,
+                    sandbox,
+                )
+                .await?;
                 changes.insert(
                     path,
                     ApplyPatchFileChange::Update {
@@ -233,6 +275,7 @@ async fn try_verify_apply_patch_args(
     }
     Ok(ApplyPatchAction {
         changes,
+        update_file_mode,
         patch,
         cwd: effective_cwd,
     })
@@ -856,6 +899,7 @@ PATCH"#,
                         new_content: "updated session directory content\n".to_string(),
                     },
                 )]),
+                update_file_mode: ApplyPatchFileUpdateMode::default(),
                 patch: argv[1].clone(),
                 cwd: PathUri::from_host_native_path(session_dir.path())
                     .expect("absolute test path"),

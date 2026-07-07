@@ -29,7 +29,9 @@ use text_file::SourceFile;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::maybe_parse_apply_patch_verified_with_mode;
 pub use invocation::verify_apply_patch_args;
+pub use invocation::verify_apply_patch_args_with_mode;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
@@ -42,6 +44,30 @@ use crate::invocation::ExtractHeredocError;
 /// process-invocation contract for the standalone `apply_patch` command
 /// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+/// Internal environment variable used to carry the selected update mode
+/// through the arg0-dispatched standalone executable.
+pub const CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR: &str =
+    "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS";
+
+/// Controls how updates reconstruct the target file after matching a patch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ApplyPatchFileUpdateMode {
+    /// Preserve the historical behavior of normalizing updated files to LF.
+    #[default]
+    NormalizeToLf,
+    /// Preserve existing line endings and use the file's preferred ending for new lines.
+    PreserveLineEndings,
+}
+
+/// Reads the update mode selected for an arg0-dispatched `apply_patch` process.
+#[doc(hidden)]
+pub fn apply_patch_file_update_mode_from_env() -> ApplyPatchFileUpdateMode {
+    match std::env::var(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR).as_deref() {
+        Ok("1") => ApplyPatchFileUpdateMode::PreserveLineEndings,
+        _ => ApplyPatchFileUpdateMode::NormalizeToLf,
+    }
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -141,6 +167,8 @@ pub enum MaybeApplyPatchVerified {
 pub struct ApplyPatchAction {
     changes: HashMap<PathUri, ApplyPatchFileChange>,
 
+    update_file_mode: ApplyPatchFileUpdateMode,
+
     /// The raw patch argument that can be used to apply the patch. i.e., if the
     /// original arg was parsed in "lenient" mode with a
     /// heredoc, this should be the value without the heredoc wrapper.
@@ -160,6 +188,11 @@ impl ApplyPatchAction {
         &self.changes
     }
 
+    /// Returns the update mode selected while the patch was verified.
+    pub fn update_file_mode(&self) -> ApplyPatchFileUpdateMode {
+        self.update_file_mode
+    }
+
     /// Should be used exclusively for testing. (Not worth the overhead of
     /// creating a feature flag for this.)
     pub fn new_add_for_test(path: &PathUri, content: String) -> Self {
@@ -176,6 +209,7 @@ impl ApplyPatchAction {
         #[expect(clippy::expect_used)]
         Self {
             changes,
+            update_file_mode: ApplyPatchFileUpdateMode::default(),
             cwd: path.parent().expect("path should have parent"),
             patch,
         }
@@ -284,6 +318,29 @@ pub async fn apply_patch(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    apply_patch_with_mode(
+        patch,
+        ApplyPatchFileUpdateMode::default(),
+        cwd,
+        stdout,
+        stderr,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Applies the patch using the selected file-update mode and prints the result
+/// to stdout/stderr.
+pub async fn apply_patch_with_mode(
+    patch: &str,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    cwd: &PathUri,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let hunks = match parse_patch(patch) {
         Ok(source) => source.hunks,
         Err(e) => {
@@ -311,7 +368,7 @@ pub async fn apply_patch(
         }
     };
 
-    apply_hunks(&hunks, cwd, stdout, stderr, fs, sandbox).await
+    apply_hunks_with_mode(&hunks, update_file_mode, cwd, stdout, stderr, fs, sandbox).await
 }
 
 /// Applies hunks and continues to update stdout/stderr
@@ -323,8 +380,31 @@ pub async fn apply_hunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    apply_hunks_with_mode(
+        hunks,
+        ApplyPatchFileUpdateMode::default(),
+        cwd,
+        stdout,
+        stderr,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Applies hunks using the selected file-update mode and continues to update
+/// stdout/stderr.
+async fn apply_hunks_with_mode(
+    hunks: &[Hunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
+    cwd: &PathUri,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let mut delta = AppliedPatchDelta::empty();
-    match apply_hunks_to_files(hunks, cwd, fs, sandbox, &mut delta).await {
+    match apply_hunks_to_files(hunks, update_file_mode, cwd, fs, sandbox, &mut delta).await {
         Ok(affected_paths) => {
             print_summary(&affected_paths, stdout).map_err(|error| {
                 ApplyPatchFailure::new(ApplyPatchError::from(error), delta.clone())
@@ -363,6 +443,7 @@ pub struct AffectedPaths {
 /// Returns an error if the patch could not be applied.
 async fn apply_hunks_to_files(
     hunks: &[Hunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
@@ -472,7 +553,14 @@ async fn apply_hunks_to_files(
                 let AppliedPatch {
                     original_contents,
                     new_contents,
-                } = derive_new_contents_from_chunks(&path_uri, chunks, fs, sandbox).await?;
+                } = derive_new_contents_from_chunks(
+                    &path_uri,
+                    chunks,
+                    update_file_mode,
+                    fs,
+                    sandbox,
+                )
+                .await?;
                 if let Some(dest) = move_path {
                     let dest_uri = cwd.join(&dest.to_string_lossy())?;
                     let overwritten_move_content =
@@ -678,6 +766,7 @@ struct AppliedPatch {
 async fn derive_new_contents_from_chunks(
     path: &PathUri,
     chunks: &[UpdateFileChunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
@@ -691,13 +780,37 @@ async fn derive_new_contents_from_chunks(
         })
     })?;
 
-    let mut source_file = SourceFile::parse(&original_contents);
-    let original_lines = source_file.line_texts();
-
     let path_text = path.inferred_native_path_string();
-    let replacements = compute_replacements(&original_lines, &path_text, chunks)?;
-    source_file.apply_replacements(&replacements);
-    let new_contents = source_file.into_contents();
+    let new_contents = match update_file_mode {
+        ApplyPatchFileUpdateMode::NormalizeToLf => {
+            let mut original_lines = original_contents
+                .split('\n')
+                .map(String::from)
+                .collect::<Vec<_>>();
+
+            // Drop the trailing empty element that results from the final newline so
+            // that line counts match the behaviour of standard `diff`.
+            if original_lines.last().is_some_and(String::is_empty) {
+                original_lines.pop();
+            }
+
+            let replacements =
+                compute_replacements(&original_lines, &path_text, chunks, update_file_mode)?;
+            let mut new_lines = apply_replacements(original_lines, &replacements);
+            if !new_lines.last().is_some_and(String::is_empty) {
+                new_lines.push(String::new());
+            }
+            new_lines.join("\n")
+        }
+        ApplyPatchFileUpdateMode::PreserveLineEndings => {
+            let mut source_file = SourceFile::parse(&original_contents);
+            let original_lines = source_file.line_texts();
+            let replacements =
+                compute_replacements(&original_lines, &path_text, chunks, update_file_mode)?;
+            source_file.apply_replacements(&replacements);
+            source_file.into_contents()
+        }
+    };
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -711,6 +824,7 @@ fn compute_replacements(
     original_lines: &[String],
     path: &str,
     chunks: &[UpdateFileChunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
 ) -> std::result::Result<Vec<Replacement>, ApplyPatchError> {
     let mut replacements: Vec<Replacement> = Vec::new();
     let mut line_index: usize = 0;
@@ -779,33 +893,40 @@ fn compute_replacements(
         }
 
         if let Some(start_idx) = found {
-            // Context lines occur in both sides of a patch chunk. Keep those
-            // original lines in place so their exact contents and terminators
-            // survive, especially when the file has mixed line endings.
-            let mut old_start = 0;
-            let mut new_start = 0;
-            for &(old_context, new_context) in &chunk.context_line_indices {
-                // A trailing empty context line can be removed from `pattern`
-                // and `new_slice` above when it represents the final newline.
-                if old_context >= pattern.len() || new_context >= new_slice.len() {
-                    break;
+            match update_file_mode {
+                ApplyPatchFileUpdateMode::NormalizeToLf => {
+                    replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
                 }
-                if old_start != old_context || new_start != new_context {
-                    replacements.push((
-                        start_idx + old_start,
-                        old_context - old_start,
-                        new_slice[new_start..new_context].to_vec(),
-                    ));
+                ApplyPatchFileUpdateMode::PreserveLineEndings => {
+                    // Context lines occur in both sides of a patch chunk. Keep those
+                    // original lines in place so their exact contents and terminators
+                    // survive, especially when the file has mixed line endings.
+                    let mut old_start = 0;
+                    let mut new_start = 0;
+                    for &(old_context, new_context) in &chunk.context_line_indices {
+                        // A trailing empty context line can be removed from `pattern`
+                        // and `new_slice` above when it represents the final newline.
+                        if old_context >= pattern.len() || new_context >= new_slice.len() {
+                            break;
+                        }
+                        if old_start != old_context || new_start != new_context {
+                            replacements.push((
+                                start_idx + old_start,
+                                old_context - old_start,
+                                new_slice[new_start..new_context].to_vec(),
+                            ));
+                        }
+                        old_start = old_context + 1;
+                        new_start = new_context + 1;
+                    }
+                    if old_start != pattern.len() || new_start != new_slice.len() {
+                        replacements.push((
+                            start_idx + old_start,
+                            pattern.len() - old_start,
+                            new_slice[new_start..].to_vec(),
+                        ));
+                    }
                 }
-                old_start = old_context + 1;
-                new_start = new_context + 1;
-            }
-            if old_start != pattern.len() || new_start != new_slice.len() {
-                replacements.push((
-                    start_idx + old_start,
-                    pattern.len() - old_start,
-                    new_slice[new_start..].to_vec(),
-                ));
             }
             line_index = start_idx + pattern.len();
         } else {
@@ -822,6 +943,31 @@ fn compute_replacements(
     Ok(replacements)
 }
 
+/// Apply the `(start_index, old_len, new_lines)` replacements to `original_lines`,
+/// returning the modified file contents as a vector of lines.
+fn apply_replacements(mut lines: Vec<String>, replacements: &[Replacement]) -> Vec<String> {
+    // We must apply replacements in descending order so that earlier replacements
+    // don't shift the positions of later ones.
+    for (start_idx, old_len, new_segment) in replacements.iter().rev() {
+        let start_idx = *start_idx;
+        let old_len = *old_len;
+
+        // Remove old lines.
+        for _ in 0..old_len {
+            if start_idx < lines.len() {
+                lines.remove(start_idx);
+            }
+        }
+
+        // Insert new lines.
+        for (offset, new_line) in new_segment.iter().enumerate() {
+            lines.insert(start_idx + offset, new_line.clone());
+        }
+    }
+
+    lines
+}
+
 /// Intended result of a file update for apply_patch.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ApplyPatchFileUpdate {
@@ -836,7 +982,32 @@ pub async fn unified_diff_from_chunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path, chunks, /*context*/ 1, fs, sandbox).await
+    unified_diff_from_chunks_with_mode(
+        path,
+        chunks,
+        ApplyPatchFileUpdateMode::default(),
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+pub(crate) async fn unified_diff_from_chunks_with_mode(
+    path: &PathUri,
+    chunks: &[UpdateFileChunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    unified_diff_from_chunks_with_context_and_mode(
+        path,
+        chunks,
+        /*context*/ 1,
+        update_file_mode,
+        fs,
+        sandbox,
+    )
+    .await
 }
 
 pub async fn unified_diff_from_chunks_with_context(
@@ -846,10 +1017,29 @@ pub async fn unified_diff_from_chunks_with_context(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    unified_diff_from_chunks_with_context_and_mode(
+        path,
+        chunks,
+        context,
+        ApplyPatchFileUpdateMode::default(),
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+async fn unified_diff_from_chunks_with_context_and_mode(
+    path: &PathUri,
+    chunks: &[UpdateFileChunk],
+    context: usize,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox).await?;
+    } = derive_new_contents_from_chunks(path, chunks, update_file_mode, fs, sandbox).await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {

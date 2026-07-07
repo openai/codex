@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -7,6 +8,7 @@ use tempfile::tempdir;
 
 fn run_apply_patch_in_dir(dir: &Path, patch: &str) -> anyhow::Result<assert_cmd::assert::Assert> {
     let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?);
+    cmd.env(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, "1");
     cmd.current_dir(dir);
     Ok(cmd.arg(patch).assert())
 }
@@ -33,6 +35,7 @@ fn assert_apply_patch_updates_file(
 
 fn apply_patch_command(dir: &Path) -> anyhow::Result<Command> {
     let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?);
+    cmd.env(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, "1");
     cmd.current_dir(dir);
     Ok(cmd)
 }
@@ -114,6 +117,24 @@ fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> 
         patch,
         b"uno\r\ntwo\r\n\r\nbetween\r\nthree\r\n",
     )
+}
+
+#[test]
+fn test_apply_patch_cli_uses_legacy_line_handling_without_rollout_env() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("crlf.txt");
+    fs::write(&target_path, b"one\r\n")?;
+    let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n*** End Patch";
+
+    Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
+        .env_remove(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR)
+        .arg(patch)
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    assert_eq!(fs::read(target_path)?, b"uno\n");
+    Ok(())
 }
 
 #[test]

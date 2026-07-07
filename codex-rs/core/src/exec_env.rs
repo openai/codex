@@ -1,3 +1,6 @@
+use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::ThreadId;
 #[cfg(test)]
 use codex_protocol::config_types::EnvironmentVariablePattern;
@@ -47,6 +50,18 @@ pub(crate) fn inject_permission_profile_env(
         env.insert(
             CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
             active_permission_profile.id.clone(),
+        );
+    }
+}
+
+/// Carries the apply_patch line-ending rollout state into arg0-dispatched
+/// helper processes. The in-process apply_patch path reads the feature directly.
+pub(crate) fn inject_apply_patch_env(env: &mut HashMap<String, String>, features: &Features) {
+    env.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR));
+    if features.enabled(Feature::ApplyPatchPreserveLineEndings) {
+        env.insert(
+            CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+            "1".to_string(),
         );
     }
 }
