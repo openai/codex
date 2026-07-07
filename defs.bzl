@@ -48,6 +48,13 @@ MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
 })
 
 def _workspace_root_test_impl(ctx):
+    fixed_shard_count = ctx.attr.fixed_shard_count
+    fixed_shard_index = ctx.attr.fixed_shard_index
+    if fixed_shard_count == 0 and fixed_shard_index != -1:
+        fail("fixed_shard_index requires fixed_shard_count")
+    if fixed_shard_count != 0 and (fixed_shard_index < 0 or fixed_shard_index >= fixed_shard_count):
+        fail("fixed_shard_index must be in [0, fixed_shard_count)")
+
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     launcher = ctx.actions.declare_file(ctx.label.name + ".bat" if is_windows else ctx.label.name)
     test_bin = ctx.executable.test_bin
@@ -61,6 +68,8 @@ def _workspace_root_test_impl(ctx):
         is_executable = True,
         substitutions = {
             "__RUNFILE_ENV_EXPORTS__": runfile_env_exports,
+            "__FIXED_TEST_SHARD_COUNT__": str(fixed_shard_count) if fixed_shard_count else "",
+            "__FIXED_TEST_SHARD_INDEX__": str(fixed_shard_index) if fixed_shard_count else "",
             "__TEST_BIN__": test_bin.short_path,
             "__WORKSPACE_ROOT_SETUP__": workspace_root_setup,
             "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
@@ -151,6 +160,12 @@ workspace_root_test = rule(
             allow_files = True,
         ),
         "env": attr.string_dict(),
+        "fixed_shard_count": attr.int(
+            default = 0,
+        ),
+        "fixed_shard_index": attr.int(
+            default = -1,
+        ),
         "runfile_env": attr.label_keyed_string_dict(
             cfg = "target",
         ),
@@ -177,6 +192,40 @@ workspace_root_test = rule(
         ),
     },
 )
+
+def _workspace_root_sharded_test_suite(name, shard_count, env, **kwargs):
+    shard_targets = []
+    for shard_index in range(shard_count):
+        shard_name = "{}-shard-{}-of-{}".format(name, shard_index + 1, shard_count)
+        workspace_root_test(
+            name = shard_name,
+            env = env,
+            fixed_shard_count = shard_count,
+            fixed_shard_index = shard_index,
+            flaky = True,
+            **kwargs
+        )
+        shard_targets.append(":" + shard_name)
+
+    native.test_suite(
+        name = name,
+        tests = shard_targets,
+    )
+
+def _workspace_root_test_or_sharded_suite(name, shard_count, env, **kwargs):
+    if shard_count:
+        _workspace_root_sharded_test_suite(
+            name = name,
+            shard_count = shard_count,
+            env = env,
+            **kwargs
+        )
+    else:
+        workspace_root_test(
+            name = name,
+            env = env,
+            **kwargs
+        )
 
 def codex_rust_crate(
         name,
@@ -233,13 +282,14 @@ def codex_rust_crate(
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
-        test_shard_counts: Mapping from generated test target name to Bazel
-            shard count. Matching tests use native Bazel sharding on the outer
-            workspace-root launcher, not rules_rust's inner sharding wrapper.
-            The launcher resolves the real Rust test binary through runfiles
-            and then assigns each libtest case to a stable bucket by hashing
-            the test name. Matching tests are also marked flaky, which gives
-            them Bazel's default three attempts.
+        test_shard_counts: Mapping from generated test target name to shard
+            count. Matching tests materialize one workspace-root launcher per
+            stable libtest bucket and keep the original target name as a test
+            suite over those launchers. Each launcher resolves the real Rust
+            test binary through runfiles and assigns each libtest case to a
+            stable bucket by hashing the test name. The leaf test targets are
+            marked flaky, which gives each bucket Bazel's default three
+            attempts.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         unit_test_timeout: Optional Bazel timeout for the unit-test target
@@ -322,9 +372,9 @@ def codex_rust_crate(
         unit_test_binary = name + "-unit-tests-bin"
         unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
 
-        # Shard at the workspace_root_test layer. rules_rust's sharding wrapper
-        # expects to run from its own runfiles cwd, while workspace_root_test
-        # deliberately changes cwd so Insta sees Cargo-like snapshot paths.
+        # Keep the Rust test binary separate from the workspace-root launchers.
+        # Sharded tests materialize one launcher target per stable libtest
+        # bucket below; unsharded tests keep a single launcher target.
         rust_test(
             name = unit_test_binary,
             crate = name,
@@ -349,12 +399,9 @@ def codex_rust_crate(
         unit_test_kwargs = {}
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
-        if unit_test_shard_count:
-            unit_test_kwargs["shard_count"] = unit_test_shard_count
-            unit_test_kwargs["flaky"] = True
-
-        workspace_root_test(
+        _workspace_root_test_or_sharded_suite(
             name = unit_test_name,
+            shard_count = unit_test_shard_count,
             env = test_env,
             test_bin = ":" + unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
@@ -438,14 +485,6 @@ def codex_rust_crate(
         test_kwargs = {}
         test_kwargs.update(integration_test_kwargs)
         test_shard_count = _test_shard_count(test_shard_counts, test_name)
-        if test_shard_count:
-            # Put Bazel sharding on the label users/CI invoke. Do not set
-            # rules_rust's experimental_enable_sharding on the Rust test
-            # binary: that creates an intermediate wrapper that expects a
-            # symlink runfiles tree, while this repo intentionally runs with
-            # --noenable_runfiles and usually has only a runfiles manifest.
-            test_kwargs["shard_count"] = test_shard_count
-            test_kwargs["flaky"] = True
 
         integration_test_binary = test_name + "-bin"
 
@@ -453,10 +492,10 @@ def codex_rust_crate(
         #
         # 1. Unsharded native tests keep the plain rust_test label for minimal
         #    churn and the usual rules_rust Cargo-like environment.
-        # 2. Sharded native tests split into a manual rust_test binary plus an
-        #    outer workspace_root_test. The outer test action receives Bazel's
-        #    sharding environment, resolves the real binary through the
-        #    runfiles manifest, and implements stable libtest sharding itself.
+        # 2. Sharded native tests split into a manual rust_test binary plus a
+        #    test suite of outer workspace_root_test targets. Each leaf target
+        #    resolves the real binary through the runfiles manifest and runs
+        #    one stable libtest shard.
         # 3. Windows cross tests always use the workspace_root_test wrapper so
         #    runfile env vars become Windows-native absolute paths before the
         #    Rust process starts.
@@ -490,8 +529,9 @@ def codex_rust_crate(
                 tags = test_tags + ["manual"],
             )
 
-            workspace_root_test(
+            _workspace_root_sharded_test_suite(
                 name = test_name,
+                shard_count = test_shard_count,
                 env = test_env,
                 # CARGO_BIN_EXE_* values are rlocation paths at analysis time.
                 # The launcher rewrites them to absolute paths at execution
@@ -557,15 +597,14 @@ def codex_rust_crate(
 
             wine_test_kwargs = {}
             wine_test_kwargs.update(integration_test_kwargs)
-            if test_shard_count:
-                wine_test_kwargs["shard_count"] = test_shard_count
-                wine_test_kwargs["flaky"] = True
 
             # The Wine runner is a binary rather than a rust_test, but it still
-            # needs a Cargo-like cwd, Bazel sharding, and absolute runfile paths.
-            # `workspace_root_test` establishes all three before Wine starts.
-            workspace_root_test(
+            # needs a Cargo-like cwd, stable libtest bucketing, and absolute
+            # runfile paths. `workspace_root_test` establishes all three before
+            # Wine starts.
+            _workspace_root_test_or_sharded_suite(
                 name = wine_test_name,
+                shard_count = test_shard_count,
                 data = wine_runtime.data,
                 env = test_env,
                 runfile_env = wine_runfile_env,
@@ -580,9 +619,6 @@ def codex_rust_crate(
 
         windows_cross_test_kwargs = {}
         windows_cross_test_kwargs.update(integration_test_kwargs)
-        if test_shard_count:
-            windows_cross_test_kwargs["shard_count"] = test_shard_count
-            windows_cross_test_kwargs["flaky"] = True
 
         rust_test(
             name = windows_cross_test_binary,
@@ -602,8 +638,10 @@ def codex_rust_crate(
             tags = test_tags + ["manual"],
         )
 
-        workspace_root_test(
-            name = test_name + "-windows-cross",
+        windows_cross_test_name = test_name + "-windows-cross"
+        _workspace_root_test_or_sharded_suite(
+            name = windows_cross_test_name,
+            shard_count = test_shard_count,
             chdir_workspace_root = False,
             env = integration_test_cargo_env,
             runfile_env = integration_test_cargo_env_runfiles,
