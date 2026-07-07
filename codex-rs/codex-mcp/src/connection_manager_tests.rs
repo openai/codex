@@ -415,6 +415,82 @@ fn declared_openai_file_input_optional_fields_supports_composed_schemas() {
 }
 
 #[test]
+fn declared_openai_file_input_optional_fields_supports_local_schema_refs() {
+    let mut tool = Tool::new(
+        "upload".to_string(),
+        "Upload files".to_string(),
+        Arc::new(
+            serde_json::json!({
+                "type": "object",
+                "$defs": {
+                    "Provided/File": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"},
+                            "mime_type": {"type": "string"}
+                        }
+                    },
+                    "ProvidedFileAlias": {
+                        "$ref": "#/$defs/Provided~1File"
+                    },
+                    "RecursiveFile": {
+                        "$ref": "#/$defs/RecursiveFile"
+                    }
+                },
+                "definitions": {
+                    "NamedFile": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"},
+                            "file_name": {"type": "string"}
+                        }
+                    }
+                },
+                "properties": {
+                    "file": {
+                        "anyOf": [
+                            {"$ref": "#/$defs/ProvidedFileAlias"},
+                            {"type": "null"}
+                        ]
+                    },
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/NamedFile"
+                        }
+                    },
+                    "recursive_file": {
+                        "$ref": "#/$defs/RecursiveFile"
+                    }
+                }
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        ),
+    );
+    tool.meta = Some(Meta(
+        serde_json::json!({
+            "openai/fileParams": ["file", "files", "recursive_file"]
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    assert_eq!(
+        declared_openai_file_input_optional_fields(&tool),
+        HashMap::from([
+            ("file".to_string(), vec!["mime_type".to_string()]),
+            ("files".to_string(), vec!["file_name".to_string()]),
+            ("recursive_file".to_string(), Vec::new()),
+        ])
+    );
+}
+
+#[test]
 fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchanged() {
     let original_tool = create_test_tool("custom", "upload").tool;
 

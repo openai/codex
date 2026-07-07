@@ -285,7 +285,14 @@ pub(crate) fn declared_openai_file_input_optional_fields(
                 .map(|schema| {
                     OPTIONAL_OPENAI_FILE_FIELDS
                         .into_iter()
-                        .filter(|field| file_payload_schema_declares_property(schema, field))
+                        .filter(|field| {
+                            file_payload_schema_declares_property(
+                                schema,
+                                tool.input_schema.as_ref(),
+                                field,
+                                &mut HashSet::new(),
+                            )
+                        })
                         .map(str::to_string)
                         .collect()
                 })
@@ -295,10 +302,33 @@ pub(crate) fn declared_openai_file_input_optional_fields(
         .collect()
 }
 
-fn file_payload_schema_declares_property(schema: &JsonValue, property_name: &str) -> bool {
+fn file_payload_schema_declares_property(
+    schema: &JsonValue,
+    root_schema: &Map<String, JsonValue>,
+    property_name: &str,
+    visited_refs: &mut HashSet<String>,
+) -> bool {
     let Some(schema) = schema.as_object() else {
         return false;
     };
+
+    if let Some(schema_ref) = schema.get("$ref").and_then(JsonValue::as_str)
+        && visited_refs.insert(schema_ref.to_string())
+    {
+        let declares_property =
+            resolve_local_schema_ref(root_schema, schema_ref).is_some_and(|referenced_schema| {
+                file_payload_schema_declares_property(
+                    referenced_schema,
+                    root_schema,
+                    property_name,
+                    visited_refs,
+                )
+            });
+        visited_refs.remove(schema_ref);
+        if declares_property {
+            return true;
+        }
+    }
 
     if schema
         .get("properties")
@@ -308,19 +338,44 @@ fn file_payload_schema_declares_property(schema: &JsonValue, property_name: &str
         return true;
     }
 
-    schema
-        .get("items")
-        .is_some_and(|items| file_payload_schema_declares_property(items, property_name))
-        || ["anyOf", "oneOf", "allOf"].into_iter().any(|keyword| {
-            schema
-                .get(keyword)
-                .and_then(JsonValue::as_array)
-                .is_some_and(|variants| {
-                    variants.iter().any(|variant| {
-                        file_payload_schema_declares_property(variant, property_name)
-                    })
+    schema.get("items").is_some_and(|items| {
+        file_payload_schema_declares_property(items, root_schema, property_name, visited_refs)
+    }) || ["anyOf", "oneOf", "allOf"].into_iter().any(|keyword| {
+        schema
+            .get(keyword)
+            .and_then(JsonValue::as_array)
+            .is_some_and(|variants| {
+                variants.iter().any(|variant| {
+                    file_payload_schema_declares_property(
+                        variant,
+                        root_schema,
+                        property_name,
+                        visited_refs,
+                    )
                 })
-        })
+            })
+    })
+}
+
+fn resolve_local_schema_ref<'a>(
+    root_schema: &'a Map<String, JsonValue>,
+    schema_ref: &str,
+) -> Option<&'a JsonValue> {
+    let pointer = schema_ref.strip_prefix("#/")?;
+    let mut segments = pointer.split('/');
+    let first_segment = segments.next()?.replace("~1", "/").replace("~0", "~");
+    let mut referenced_schema = root_schema.get(&first_segment)?;
+
+    for segment in segments {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        referenced_schema = match referenced_schema {
+            JsonValue::Object(object) => object.get(&segment)?,
+            JsonValue::Array(array) => array.get(segment.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+
+    Some(referenced_schema)
 }
 
 fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
