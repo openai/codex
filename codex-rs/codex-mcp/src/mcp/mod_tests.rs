@@ -4,6 +4,7 @@ use crate::McpServerRegistration;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -21,7 +22,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         apps_mcp_product_sku: None,
-        codex_home,
+        codex_home: Some(codex_home),
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         auth_keyring_backend_kind: AuthKeyringBackendKind::default(),
         mcp_oauth_callback_port: None,
@@ -36,6 +37,31 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
     }
+}
+
+#[test]
+fn local_storage_policy_disables_oauth_storage_only_without_a_local_root() {
+    let configured_home = PathBuf::from("/configured/codex/home");
+    let mut local_config = test_mcp_config(PathBuf::new());
+    local_config.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::File;
+    local_config.apply_local_storage_policy(Some(configured_home.clone()));
+    let mut pathless_config = local_config.clone();
+    pathless_config.apply_local_storage_policy(None);
+
+    assert_eq!(
+        (
+            local_config.codex_home,
+            local_config.mcp_oauth_credentials_store_mode,
+        ),
+        (Some(configured_home), OAuthCredentialsStoreMode::File)
+    );
+    assert_eq!(
+        (
+            pathless_config.codex_home,
+            pathless_config.mcp_oauth_credentials_store_mode,
+        ),
+        (None, OAuthCredentialsStoreMode::Disabled)
+    );
 }
 
 #[test]

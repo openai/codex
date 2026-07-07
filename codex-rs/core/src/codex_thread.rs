@@ -208,6 +208,11 @@ impl CodexThread {
         self.codex.session.services.session_telemetry.clone()
     }
 
+    /// Returns the caller-supplied installation identity, if this session has one.
+    pub fn installation_id(&self) -> Option<&str> {
+        self.codex.session.installation_id.as_deref()
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }

@@ -202,7 +202,7 @@ pub fn responses_metadata(
         subagent_header: subagent_header_value(session_source),
         subagent_kind: request_kind.and_then(|_| subagent_metadata_kind(session_source)),
         ..CodexResponsesMetadata::new(
-            installation_id.to_string(),
+            Some(installation_id.to_string()),
             session_id.to_string(),
             thread_id.to_string(),
             window_id,

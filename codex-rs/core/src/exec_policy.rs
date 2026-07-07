@@ -218,6 +218,9 @@ pub enum ExecPolicyError {
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyUpdateError {
+    #[error("local runtime paths are required to persist an execpolicy amendment")]
+    LocalRuntimePathsUnavailable,
+
     #[error("failed to update rules file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
 

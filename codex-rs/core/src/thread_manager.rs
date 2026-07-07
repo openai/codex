@@ -7,6 +7,9 @@ use crate::config::ThreadStoreConfig;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
+use crate::local_runtime_paths::LocalRuntimePaths;
+use crate::local_runtime_paths::ThreadManagerInitError;
+use crate::local_runtime_paths::validate_remote_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -253,7 +256,10 @@ pub(crate) struct ThreadManagerState {
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     session_source: SessionSource,
-    installation_id: String,
+    local_runtime_paths: Option<LocalRuntimePaths>,
+    // Local entry points resolve and persist this before construction. `None` is a deliberate
+    // hosted-mode choice and must remain absent throughout the session.
+    installation_id: Option<String>,
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
@@ -312,32 +318,103 @@ impl ThreadManager {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
-        installation_id: String,
+        installation_id: impl Into<Option<String>>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
-        let codex_home = config.codex_home.clone();
+        match Self::try_new(
+            config,
+            Some(LocalRuntimePaths::from(config)),
+            auth_manager,
+            session_source,
+            environment_manager,
+            extensions,
+            user_instructions_provider,
+            analytics_events_client,
+            thread_store,
+            agent_graph_store,
+            installation_id.into(),
+            attestation_provider,
+            external_time_provider,
+        ) {
+            Ok(manager) => manager,
+            Err(error) => panic!("local thread manager construction failed: {error}"),
+        }
+    }
+
+    /// Construct a manager with an explicit host-local runtime capability.
+    ///
+    /// Remote-only callers pass `None`. Construction fails before managers or
+    /// background work are created when the selected thread store needs local paths.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        config: &Config,
+        local_runtime_paths: Option<LocalRuntimePaths>,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
+        user_instructions_provider: Arc<dyn UserInstructionsProvider>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
+        installation_id: impl Into<Option<String>>,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        external_time_provider: Option<Arc<dyn TimeProvider>>,
+    ) -> Result<Self, ThreadManagerInitError> {
+        let installation_id = installation_id.into();
+        if local_runtime_paths.is_none() && thread_store.requires_local_runtime_paths() {
+            return Err(ThreadManagerInitError::ThreadStoreRequiresLocalRuntimePaths);
+        }
+        if local_runtime_paths.is_none()
+            && agent_graph_store
+                .as_ref()
+                .is_some_and(|store| store.requires_local_runtime_paths())
+        {
+            return Err(ThreadManagerInitError::AgentGraphStoreRequiresLocalRuntimePaths);
+        }
+
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new_with_options(
-            codex_home.to_path_buf(),
-            restriction_product,
-            auth_manager.get_api_auth_mode(),
-        ));
+        let plugins_manager = Arc::new(match local_runtime_paths.as_ref() {
+            Some(paths) => PluginsManager::new_with_options(
+                paths.codex_home.to_path_buf(),
+                restriction_product,
+                auth_manager.get_api_auth_mode(),
+            ),
+            None => PluginsManager::new_without_host_filesystem_with_options(
+                restriction_product,
+                auth_manager.get_api_auth_mode(),
+            ),
+        });
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
         ));
-        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            codex_home,
-            config.bundled_skills_enabled(),
-            restriction_product,
-        ));
-        Self {
+        let skills_service = Arc::new(match local_runtime_paths.as_ref() {
+            Some(paths) => SkillsService::new_with_restriction_product(
+                paths.codex_home.clone(),
+                config.bundled_skills_enabled(),
+                restriction_product,
+            ),
+            None => SkillsService::new_without_host_filesystem_with_restriction_product(
+                restriction_product,
+            ),
+        });
+        let model_provider = create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        );
+        let models_manager = match local_runtime_paths.as_ref() {
+            Some(paths) => model_provider
+                .models_manager(paths.codex_home.to_path_buf(), config.model_catalog.clone()),
+            None => model_provider.models_manager_without_disk_cache(config.model_catalog.clone()),
+        };
+        Ok(Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(config, auth_manager.clone()),
+                models_manager,
                 environment_manager,
                 skills_service,
                 plugins_manager,
@@ -355,13 +432,14 @@ impl ThreadManager {
                 external_time_provider,
                 auth_manager,
                 session_source,
+                local_runtime_paths,
                 installation_id,
                 analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
             _test_codex_home_guard: None,
-        }
+        })
     }
 
     pub(crate) fn with_code_mode_host_program_for_tests(mut self, host_program: PathBuf) -> Self {
@@ -423,11 +501,15 @@ impl ThreadManager {
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
-        let installation_id = uuid::Uuid::new_v4().to_string();
+        let installation_id = Some(uuid::Uuid::new_v4().to_string());
         let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
             Ok(codex_home) => codex_home,
             Err(err) => panic!("test codex_home should be absolute: {err}"),
         };
+        let local_runtime_paths = Some(LocalRuntimePaths {
+            codex_home: skills_codex_home.clone(),
+            cwd: skills_codex_home.clone(),
+        });
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
@@ -473,6 +555,7 @@ impl ThreadManager {
                 external_time_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
+                local_runtime_paths,
                 installation_id,
                 analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -506,6 +589,11 @@ impl ThreadManager {
         self.state.environment_manager.clone()
     }
 
+    /// Whether this manager owns host-local paths that runtime services may inspect.
+    pub fn has_local_runtime_paths(&self) -> bool {
+        self.state.local_runtime_paths.is_some()
+    }
+
     pub fn default_environment_selections(
         &self,
         cwd: &AbsolutePathBuf,
@@ -517,6 +605,12 @@ impl ThreadManager {
         &self,
         environments: &[TurnEnvironmentSelection],
     ) -> CodexResult<()> {
+        if self.state.local_runtime_paths.is_none() {
+            validate_remote_environment_selections(
+                self.state.environment_manager.as_ref(),
+                environments,
+            )?;
+        }
         let mut environment_ids = HashSet::with_capacity(environments.len());
         for environment in environments {
             if !environment_ids.insert(environment.environment_id.as_str()) {
@@ -1584,10 +1678,20 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        // A local manager owns a stable Codex home, while each thread may load
+        // a different workspace cwd from its effective Config.
+        let local_runtime_paths =
+            self.local_runtime_paths
+                .as_ref()
+                .map(|paths| LocalRuntimePaths {
+                    codex_home: paths.codex_home.clone(),
+                    cwd: config.cwd.clone(),
+                });
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
             config,
+            local_runtime_paths,
             allow_provider_model_fallback,
             user_instructions,
             installation_id: self.installation_id.clone(),

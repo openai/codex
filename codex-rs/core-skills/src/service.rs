@@ -5,6 +5,7 @@ use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -66,7 +67,7 @@ impl SkillsLoadInput {
 ///
 /// Source-specific model exposure remains the responsibility of the skills extension.
 pub struct SkillsService {
-    codex_home: AbsolutePathBuf,
+    codex_home: Option<AbsolutePathBuf>,
     restriction_product: Option<Product>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, HostSkillsSnapshot>>,
@@ -83,6 +84,36 @@ impl SkillsService {
         bundled_skills_enabled: bool,
         restriction_product: Option<Product>,
     ) -> Self {
+        Self::new_inner(
+            Some(codex_home),
+            bundled_skills_enabled,
+            restriction_product,
+        )
+    }
+
+    /// Creates a service that does not discover or mutate host-local skills.
+    ///
+    /// Project skills exposed through a non-local executor filesystem remain available.
+    pub fn new_without_host_filesystem() -> Self {
+        Self::new_without_host_filesystem_with_restriction_product(Some(Product::Codex))
+    }
+
+    /// Creates a host-filesystem-free service with an explicit product restriction.
+    pub fn new_without_host_filesystem_with_restriction_product(
+        restriction_product: Option<Product>,
+    ) -> Self {
+        Self::new_inner(
+            /*codex_home*/ None,
+            /*bundled_skills_enabled*/ false,
+            restriction_product,
+        )
+    }
+
+    fn new_inner(
+        codex_home: Option<AbsolutePathBuf>,
+        bundled_skills_enabled: bool,
+        restriction_product: Option<Product>,
+    ) -> Self {
         let service = Self {
             codex_home,
             restriction_product,
@@ -90,11 +121,14 @@ impl SkillsService {
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
-        if !bundled_skills_enabled {
+        if !bundled_skills_enabled && let Some(codex_home) = service.codex_home.as_ref() {
             // The loader caches bundled skills under `skills/.system`. Clearing that directory is
             // best-effort cleanup; root selection still enforces the config even if removal fails.
-            uninstall_system_skills(&service.codex_home);
-        } else if let Err(err) = install_system_skills(&service.codex_home) {
+            uninstall_system_skills(codex_home);
+        } else if bundled_skills_enabled
+            && let Some(codex_home) = service.codex_home.as_ref()
+            && let Err(err) = install_system_skills(codex_home)
+        {
             tracing::error!("failed to install system skills: {err}");
         }
         service
@@ -130,8 +164,14 @@ impl SkillsService {
     ) -> HostSkillsSnapshot {
         let roots = self.skill_roots_for_config(input, fs).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
-        if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
+        let cache_key = self
+            .codex_home
+            .is_some()
+            .then(|| config_skills_cache_key(&roots, &skill_config_rules));
+        if let Some(snapshot) = cache_key
+            .as_ref()
+            .and_then(|cache_key| self.cached_snapshot_for_config(cache_key))
+        {
             return snapshot;
         }
 
@@ -139,11 +179,13 @@ impl SkillsService {
             self.build_skill_outcome(input, roots, &skill_config_rules)
                 .await,
         ));
-        let mut cache = self
-            .cache_by_config
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cache_key, snapshot.clone());
+        if let Some(cache_key) = cache_key {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.insert(cache_key, snapshot.clone());
+        }
         snapshot
     }
 
@@ -160,6 +202,7 @@ impl SkillsService {
             self.extra_roots(),
         )
         .await;
+        self.remove_host_filesystem_roots(&mut roots);
         if !input.bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
@@ -172,7 +215,9 @@ impl SkillsService {
         force_reload: bool,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> HostSkillsSnapshot {
-        let use_cwd_cache = fs.is_some();
+        // Executor paths are not globally unique: separate remote environments commonly expose
+        // the same `/workspace`. Without a host runtime, caching by path could cross sessions.
+        let use_cwd_cache = self.codex_home.is_some() && fs.is_some();
         if use_cwd_cache
             && !force_reload
             && let Some(snapshot) = self.cached_snapshot_for_cwd(&input.cwd)
@@ -188,6 +233,7 @@ impl SkillsService {
             self.extra_roots(),
         )
         .await;
+        self.remove_host_filesystem_roots(&mut roots);
         if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);
         }
@@ -264,6 +310,15 @@ impl SkillsService {
         match self.extra_roots.read() {
             Ok(roots) => roots.clone(),
             Err(err) => err.into_inner().clone(),
+        }
+    }
+
+    fn remove_host_filesystem_roots(&self, roots: &mut Vec<SkillRoot>) {
+        if self.codex_home.is_none() {
+            // The loader assigns this canonical filesystem to every user, system, plugin, and
+            // extra root it derives from the host. Executor-backed project roots use the caller's
+            // filesystem and remain available to remote-only runtimes.
+            roots.retain(|root| !Arc::ptr_eq(&root.file_system, &LOCAL_FS));
         }
     }
 }

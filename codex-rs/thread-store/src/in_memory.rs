@@ -612,6 +612,10 @@ impl ThreadStore for InMemoryThreadStore {
         self
     }
 
+    fn requires_local_runtime_paths(&self) -> bool {
+        false
+    }
+
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(InMemoryThreadStore::create_thread(self, params))
     }

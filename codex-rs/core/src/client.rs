@@ -596,7 +596,9 @@ impl ModelClient {
         };
 
         let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.installation_id) {
+        if let Some(installation_id) = &responses_metadata.installation_id
+            && let Ok(header_value) = HeaderValue::from_str(installation_id)
+        {
             extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
         }
         extra_headers.extend(build_responses_headers(

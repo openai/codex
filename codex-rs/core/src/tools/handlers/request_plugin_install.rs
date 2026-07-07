@@ -222,7 +222,7 @@ impl RequestPluginInstallHandler {
             .await;
         let response = elicitation.response;
         if let Some(response) = response.as_ref() {
-            maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
+            maybe_persist_disabled_install_request(&session, &tool, response).await;
         }
         let user_confirmed = response
             .as_ref()
@@ -289,7 +289,6 @@ impl CoreToolRuntime for RequestPluginInstallHandler {}
 
 async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,
-    turn: &crate::session::turn_context::TurnContext,
     tool: &DiscoverableTool,
     response: &ElicitationResponse,
 ) {
@@ -297,7 +296,16 @@ async fn maybe_persist_disabled_install_request(
         return;
     }
 
-    if let Err(err) = persist_disabled_install_request(&turn.config.codex_home, tool).await {
+    let Some(local_runtime_paths) = session.local_runtime_paths().await else {
+        warn!(
+            tool_id = tool.id(),
+            "cannot persist a disabled tool suggestion without local runtime paths"
+        );
+        return;
+    };
+
+    if let Err(err) = persist_disabled_install_request(&local_runtime_paths.codex_home, tool).await
+    {
         warn!(
             error = %err,
             tool_id = tool.id(),

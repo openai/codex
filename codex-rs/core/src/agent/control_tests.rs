@@ -2395,7 +2395,7 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         /*analytics_events_client*/ None,
         thread_store.clone(),
         /*agent_graph_store*/ None,
-        uuid::Uuid::new_v4().to_string(),
+        Some(uuid::Uuid::new_v4().to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );

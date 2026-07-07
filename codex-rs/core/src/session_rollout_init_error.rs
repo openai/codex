@@ -5,7 +5,7 @@ use crate::rollout::SESSIONS_SUBDIR;
 use codex_protocol::error::CodexErr;
 use codex_thread_store::ThreadStoreError;
 
-pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> CodexErr {
+pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: Option<&Path>) -> CodexErr {
     if let Some(ThreadStoreError::Unsupported { operation }) = err
         .chain()
         .find_map(|cause| cause.downcast_ref::<ThreadStoreError>())
@@ -13,11 +13,11 @@ pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> 
         return CodexErr::UnsupportedOperation(format!("{operation} is not supported yet"));
     }
 
-    if let Some(mapped) = err
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .find_map(|io_err| map_rollout_io_error(io_err, codex_home))
-    {
+    if let Some(mapped) = codex_home.and_then(|codex_home| {
+        err.chain()
+            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+            .find_map(|io_err| map_rollout_io_error(io_err, codex_home))
+    }) {
         return mapped;
     }
 

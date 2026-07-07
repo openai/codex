@@ -114,6 +114,14 @@ pub enum OAuthCredentialsStoreMode {
     File,
     /// Keyring when available, otherwise fail.
     Keyring,
+    /// Internal runtime mode that neither reads nor persists MCP OAuth credentials.
+    ///
+    /// Hosted sessions use this when host-local storage is unavailable. It is
+    /// deliberately excluded from user configuration because OAuth login
+    /// cannot hand an unpersisted token to a later client connection.
+    #[serde(skip)]
+    #[schemars(skip)]
+    Disabled,
 }
 
 /// Determine how auth credentials should use keyring-backed storage.

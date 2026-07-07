@@ -112,7 +112,7 @@ fn test_model_client_with_thread_id(
 }
 
 #[tokio::test]
-async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::Result<()> {
+async fn compact_without_installation_id_omits_header_after_auth_fallback() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let registration_count = Arc::new(AtomicUsize::new(0));
     let response_count = Arc::clone(&registration_count);
@@ -170,13 +170,14 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         },
         ..Default::default()
     };
-    let responses_metadata = test_responses_metadata_for_client(
+    let mut responses_metadata = test_responses_metadata_for_client(
         &client,
         /*turn_id*/ None,
         format!("{}:0", client.state.thread_id),
         /*parent_thread_id*/ None,
         TestCodexResponsesRequestKind::Turn,
     );
+    responses_metadata.installation_id = None;
 
     let output = client
         .compact_conversation_history(
@@ -217,6 +218,11 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
             .get("ChatGPT-Account-ID")
             .and_then(|value| value.to_str().ok()),
         Some("account-123")
+    );
+    assert!(
+        !compact_request
+            .headers
+            .contains_key(X_CODEX_INSTALLATION_ID_HEADER)
     );
 
     Ok(())
@@ -553,6 +559,30 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .map(String::as_str),
         Some("collab_spawn")
     );
+}
+
+#[test]
+fn build_ws_client_metadata_omits_absent_installation_id() {
+    let client = test_model_client(SessionSource::Exec);
+    let mut responses_metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-123"),
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    responses_metadata.installation_id = None;
+
+    let client_metadata =
+        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+    assert!(!client_metadata.contains_key(X_CODEX_INSTALLATION_ID_HEADER));
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        client_metadata
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .expect("turn metadata"),
+    )
+    .expect("valid turn metadata");
+    assert!(turn_metadata.get("installation_id").is_none());
 }
 
 #[tokio::test]

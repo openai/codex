@@ -136,6 +136,54 @@ fn plugins_manager_tracks_auth_mode() {
 }
 
 #[tokio::test]
+async fn manager_without_host_filesystem_ignores_configured_local_plugins() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
+    let config = auth_projection_config(codex_home.path()).await;
+    let manager = PluginsManager::new_without_host_filesystem_with_options(
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+
+    assert_eq!(outcome, PluginLoadOutcome::default());
+    assert!(manager.plugin_skill_snapshots_for_config(&config).is_none());
+}
+
+#[tokio::test]
+async fn manager_without_host_filesystem_rejects_local_mutations() {
+    let root = TempDir::new().expect("create root");
+    let missing_marketplace = root.path().join("marketplace.json").abs();
+    let manager = PluginsManager::new_without_host_filesystem();
+
+    let install_error = manager
+        .install_plugin(
+            &unrestricted_config_layer_stack(),
+            PluginInstallRequest {
+                plugin_name: "sample".to_string(),
+                marketplace_path: missing_marketplace.clone(),
+            },
+        )
+        .await
+        .expect_err("install should require host filesystem access");
+    let uninstall_error = manager
+        .uninstall_plugin("sample@test".to_string())
+        .await
+        .expect_err("uninstall should require host filesystem access");
+
+    assert!(matches!(
+        install_error,
+        PluginInstallError::Store(PluginStoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        uninstall_error,
+        PluginUninstallError::Store(PluginStoreError::Invalid(_))
+    ));
+    assert!(!missing_marketplace.exists());
+}
+
+#[tokio::test]
 async fn marketplace_policy_projection_disables_installed_plugin_and_invalidates_cache() {
     let codex_home = TempDir::new().expect("create Codex home");
     write_plugin(

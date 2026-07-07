@@ -85,7 +85,8 @@ impl Session {
             .await;
         let available_environment_ids =
             Self::available_selected_environment_ids(&selected_capability_roots);
-        self.services
+        let mut mcp_config = self
+            .services
             .mcp_manager
             .runtime_config_for_step(
                 config,
@@ -95,7 +96,16 @@ impl Session {
                 &available_environment_ids,
             )
             .await
-            .config
+            .config;
+        let codex_home = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .codex_home()
+            .map(AbsolutePathBuf::to_path_buf);
+        mcp_config.apply_local_storage_policy(codex_home);
+        mcp_config
     }
 
     pub(crate) async fn runtime_mcp_servers(
@@ -122,6 +132,10 @@ impl Session {
             return current;
         }
 
+        let codex_home = self
+            .local_runtime_paths()
+            .await
+            .map(|paths| paths.codex_home.to_path_buf());
         let _guard = self.services.mcp_projection_lock.lock().await;
         let current = self.services.latest_mcp_runtime();
         if current.available_environment_ids() == available_environment_ids {
@@ -173,6 +187,7 @@ impl Session {
         self.refresh_mcp_servers_inner(
             turn_context,
             mcp_projection,
+            codex_home,
             environments,
             &available_environment_ids,
             Some(self.mcp_elicitation_reviewer()),
@@ -322,11 +337,13 @@ impl Session {
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        mcp_projection: McpRuntimeProjection,
+        mut mcp_projection: McpRuntimeProjection,
+        codex_home: Option<std::path::PathBuf>,
         environments: &TurnEnvironmentSnapshot,
         available_environment_ids: &[String],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Arc<McpRuntimeSnapshot> {
+        mcp_projection.config.apply_local_storage_policy(codex_home);
         let auth = self.services.auth_manager.auth().await;
         let McpRuntimeProjection {
             config: mcp_config,
@@ -465,6 +482,10 @@ impl Session {
             return;
         }
 
+        let codex_home = self
+            .local_runtime_paths()
+            .await
+            .map(|paths| paths.codex_home.to_path_buf());
         let _guard = self.services.mcp_projection_lock.lock().await;
         let available_environment_ids = self
             .services
@@ -489,6 +510,7 @@ impl Session {
         self.refresh_mcp_servers_inner(
             turn_context,
             mcp_projection,
+            codex_home,
             &turn_context.environments,
             &available_environment_ids,
             elicitation_reviewer,
@@ -534,6 +556,10 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        let codex_home = self
+            .local_runtime_paths()
+            .await
+            .map(|paths| paths.codex_home.to_path_buf());
         let _guard = self.services.mcp_projection_lock.lock().await;
         let available_environment_ids = self
             .services
@@ -554,6 +580,7 @@ impl Session {
         self.refresh_mcp_servers_inner(
             turn_context,
             mcp_projection,
+            codex_home,
             &turn_context.environments,
             &available_environment_ids,
             elicitation_reviewer,

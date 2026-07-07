@@ -4,6 +4,7 @@ use crate::config::ManagedFeatures;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
+use crate::session::tests::make_session_and_context_without_local_runtime_paths;
 use crate::session::turn_context::TurnEnvironment;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
@@ -1452,7 +1453,7 @@ async fn host_owned_codex_apps_manager(
                 turn_context.cwd.to_path_buf()
             },
         ),
-        turn_context.config.codex_home.to_path_buf(),
+        Some(turn_context.config.codex_home.to_path_buf()),
         session.services.mcp_manager.codex_apps_tools_cache(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         turn_context.config.prefix_mcp_tool_names(),
@@ -2492,6 +2493,65 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
     );
     assert!(contents.contains("[mcp_servers.docs.tools.search]"));
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn pathless_accept_and_remember_is_session_only() {
+    let (session, mut turn_context) = make_session_and_context_without_local_runtime_paths().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let project_dir = tempdir().expect("tempdir");
+    std::fs::write(project_dir.path().join(".git"), "gitdir: nowhere").expect("seed git marker");
+    let project_codex_dir = project_dir.path().join(".codex");
+    std::fs::create_dir_all(&project_codex_dir).expect("create project .codex dir");
+    let project_config_path = project_codex_dir.join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &project_config_path,
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed project config");
+    ConfigEditsBuilder::new(&codex_home)
+        .set_project_trust_level(
+            project_dir.path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .apply()
+        .await
+        .expect("trust project");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(project_dir.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load project config");
+    turn_context.config = Arc::new(config);
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config_before = std::fs::read_to_string(&user_config_path).expect("read user config");
+    let project_config_before =
+        std::fs::read_to_string(&project_config_path).expect("read project config");
+    let key = McpToolApprovalKey {
+        server: "docs".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    apply_mcp_tool_approval_decision(
+        &session,
+        &turn_context,
+        &McpToolApprovalDecision::AcceptAndRemember,
+        Some(key.clone()),
+        Some(key.clone()),
+    )
+    .await;
+
+    assert_eq!(
+        std::fs::read_to_string(&user_config_path).expect("read user config"),
+        user_config_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(&project_config_path).expect("read project config"),
+        project_config_before
+    );
+    assert!(mcp_tool_approval_is_remembered(&session, &key).await);
 }
 
 #[tokio::test]

@@ -134,7 +134,7 @@ impl McpConnectionManager {
         startup_cancellation_token: CancellationToken,
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
-        codex_home: PathBuf,
+        codex_home: impl Into<Option<PathBuf>>,
         codex_apps_tools_cache: CodexAppsToolsCache,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         prefix_mcp_tool_names: bool,
@@ -147,6 +147,7 @@ impl McpConnectionManager {
         elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
         elicitation_router: ElicitationRequestRouter,
     ) -> Self {
+        let codex_home = codex_home.into();
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
@@ -203,10 +204,14 @@ impl McpConnectionManager {
                 });
             let shares_codex_apps_tools_cache =
                 should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
-            let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                codex_apps_tools_cache
-                    .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
-            });
+            let codex_apps_tools_cache_context = if shares_codex_apps_tools_cache {
+                codex_home.as_ref().map(|codex_home| {
+                    codex_apps_tools_cache
+                        .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
+                })
+            } else {
+                None
+            };
             // The reserved Codex Apps registration follows the shared
             // AuthManager across refreshes. In the hosted-plugin path, this
             // is the ChatGPT /ps/mcp connection. User-configured MCP

@@ -350,6 +350,71 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
 }
 
 #[tokio::test]
+async fn detached_memory_preserves_absent_installation_id() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = test_codex()
+        .with_home(home)
+        .with_installation_id(/*installation_id*/ None)
+        .build(&server)
+        .await?;
+    let installation_id_path = test.config.codex_home.join("installation_id");
+    assert!(!installation_id_path.exists());
+    assert_eq!(test.codex.installation_id(), None);
+
+    let config_snapshot = test.codex.config_snapshot().await;
+    let context = MemoryStartupContext::new(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.thread_id,
+        Arc::clone(&test.codex),
+        &test.config,
+        config_snapshot.session_source,
+    );
+    let request_context = context
+        .stage_one_request_context(
+            &test.config,
+            test.config.model.as_deref().unwrap_or("gpt-5.4-mini"),
+            ReasoningEffort::Low,
+        )
+        .await;
+    let stage_one = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase1-no-installation"),
+            ev_assistant_message("msg-phase1-no-installation", "phase1 complete"),
+            ev_completed("resp-phase1-no-installation"),
+        ]),
+    )
+    .await;
+
+    context
+        .stream_stage_one_prompt(
+            &test.config,
+            &codex_core::Prompt::default(),
+            &request_context,
+        )
+        .await?;
+
+    let request = wait_for_single_request(&stage_one).await;
+    let request_body = request.body_json();
+    let client_metadata = request_body["client_metadata"]
+        .as_object()
+        .expect("client metadata");
+    assert!(!client_metadata.contains_key("x-codex-installation-id"));
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        client_metadata["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    )?;
+    assert!(turn_metadata.get("installation_id").is_none());
+    assert!(!installation_id_path.exists());
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn memories_startup_phase1_provider_default_drives_request_model() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -631,6 +696,14 @@ impl ModelProvider for MockMemoryModelProvider {
     ) -> codex_models_manager::manager::SharedModelsManager {
         self.delegate
             .models_manager(codex_home, config_model_catalog)
+    }
+
+    fn models_manager_without_disk_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> codex_models_manager::manager::SharedModelsManager {
+        self.delegate
+            .models_manager_without_disk_cache(config_model_catalog)
     }
 }
 

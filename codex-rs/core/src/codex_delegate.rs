@@ -91,8 +91,10 @@ pub(crate) async fn run_codex_thread_interactive(
         instructions: parent_session.user_instructions().await,
         warnings: Vec::new(),
     };
+    let local_runtime_paths = parent_session.local_runtime_paths().await;
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
+        local_runtime_paths,
         allow_provider_model_fallback: false,
         user_instructions,
         installation_id: parent_session.installation_id.clone(),

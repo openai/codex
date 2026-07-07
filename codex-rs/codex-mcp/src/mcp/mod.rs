@@ -119,7 +119,8 @@ pub struct McpConfig {
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
-    pub codex_home: PathBuf,
+    /// Remote-only runtimes omit it and keep the shared app-tool cache in memory.
+    pub codex_home: Option<PathBuf>,
     /// Preferred credential store for MCP OAuth tokens.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
     /// Backend used when MCP OAuth storage is configured for keyring-backed persistence.
@@ -151,6 +152,19 @@ pub struct McpConfig {
     /// Plugin declarations used to attribute connector tools to plugin display names.
     /// MCP registrations retain their own package attribution in the catalog.
     pub connector_snapshot: ConnectorSnapshot,
+}
+
+impl McpConfig {
+    /// Applies the host-local storage capability before auth discovery or client startup.
+    ///
+    /// Without a local state root, OAuth must not consult process-global file
+    /// or keyring storage shared by other hosted sessions.
+    pub fn apply_local_storage_policy(&mut self, codex_home: Option<PathBuf>) {
+        if codex_home.is_none() {
+            self.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::Disabled;
+        }
+        self.codex_home = codex_home;
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

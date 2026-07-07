@@ -49,6 +49,9 @@ pub(crate) async fn export_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
     conversation_id: ThreadId,
 ) -> anyhow::Result<()> {
+    if session_configuration.codex_home().is_none() {
+        return Ok(());
+    }
     let config = session_configuration.original_config_do_not_use.as_ref();
     let Some(export_dir) = config.config_lock_export_dir.as_ref() else {
         return Ok(());
@@ -238,8 +241,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn pathless_session_does_not_export_config_lock() {
+        let mut session_configuration =
+            crate::session::tests::make_session_configuration_for_tests().await;
+        let export_dir = tempfile::tempdir()
+            .expect("tempdir")
+            .path()
+            .join("exports")
+            .abs();
+        let mut config = (*session_configuration.original_config_do_not_use).clone();
+        config.config_lock_export_dir = Some(export_dir.clone());
+        session_configuration.original_config_do_not_use = Arc::new(config);
+        session_configuration.codex_home = None;
+
+        export_config_lock_if_configured(&session_configuration, ThreadId::new())
+            .await
+            .expect("pathless export should be skipped");
+
+        assert!(!export_dir.exists());
+    }
 
     #[tokio::test]
     async fn lock_contains_prompts_and_materializes_features() {

@@ -15,6 +15,14 @@ pub type AgentGraphStoreFuture<'a, T> =
 /// Implementations are expected to return stable ordering for list methods so callers can merge
 /// persisted graph state with live in-memory state without introducing nondeterministic output.
 pub trait AgentGraphStore: Send + Sync {
+    /// Whether this store requires host-local runtime paths.
+    ///
+    /// The default fails closed. Remote or in-memory implementations must opt
+    /// out explicitly before they can be attached to a remote-only manager.
+    fn requires_local_runtime_paths(&self) -> bool {
+        true
+    }
+
     /// Insert or replace the directional parent/child edge for a spawned thread.
     ///
     /// `child_thread_id` has at most one persisted parent. Re-inserting the same child should

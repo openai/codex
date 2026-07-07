@@ -863,11 +863,12 @@ pub(crate) async fn build_realtime_session_config(
     let startup_context = if params.include_startup_context {
         match config.experimental_realtime_ws_startup_context.clone() {
             Some(startup_context) => startup_context,
-            None => {
+            None if sess.local_runtime_paths().await.is_some() => {
                 build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
                     .await
                     .unwrap_or_default()
             }
+            None => String::new(),
         }
     } else {
         String::new()

@@ -65,19 +65,24 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn detached_memory_responses_metadata(
-    installation_id: String,
+    installation_id: Option<String>,
     session_id: String,
     thread_id: String,
     window_id: String,
     session_source: &SessionSource,
     cwd: &AbsolutePathBuf,
+    allow_host_git_enrichment: bool,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
     CodexResponsesMetadata {
         request_kind: Some(CodexResponsesRequestKind::Memory),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
-        workspaces: memory_workspaces(cwd).await,
+        workspaces: if allow_host_git_enrichment {
+            memory_workspaces(cwd).await
+        } else {
+            BTreeMap::new()
+        },
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
 }
@@ -113,11 +118,17 @@ impl TurnMetadataState {
         thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
+        allow_host_git_enrichment: bool,
         permission_profile: &PermissionProfile,
         windows_sandbox_level: WindowsSandboxLevel,
         enforce_managed_network: bool,
     ) -> Self {
-        let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
+        // A path from a remote executor may also exist on the shared host. Never inspect it with
+        // host git commands unless the session explicitly owns local runtime paths.
+        let repo_root = allow_host_git_enrichment
+            .then(|| get_git_repo_root(&cwd))
+            .flatten()
+            .map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(
             permission_profile_sandbox_tag(
                 permission_profile,
@@ -186,7 +197,7 @@ impl TurnMetadataState {
 
     pub(crate) fn to_responses_metadata(
         &self,
-        installation_id: String,
+        installation_id: Option<String>,
         window_id: String,
         request_kind: CodexResponsesRequestKind,
     ) -> CodexResponsesMetadata {
@@ -239,7 +250,7 @@ impl TurnMetadataState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
             ..CodexResponsesMetadata::new(
-                String::new(),
+                None,
                 self.session_id.clone(),
                 self.thread_id.clone(),
                 String::new(),
@@ -309,6 +320,18 @@ impl TurnMetadataState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = task_guard.take() {
             task.abort();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_for_git_enrichment_task_for_test(&self) {
+        let task = self
+            .enrichment_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            let _ = task.await;
         }
     }
 

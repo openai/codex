@@ -34,6 +34,14 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.
     fn as_any(&self) -> &dyn Any;
 
+    /// Whether constructing and operating this store requires host-local runtime paths.
+    ///
+    /// The default fails closed. Stores backed entirely by remote or in-memory
+    /// state must opt out explicitly.
+    fn requires_local_runtime_paths(&self) -> bool {
+        true
+    }
+
     /// Returns the history mode to use when history does not carry a persisted mode.
     ///
     /// The default is legacy so existing stores stay compatible. Stores whose durable contract is

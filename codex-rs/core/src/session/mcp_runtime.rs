@@ -65,7 +65,7 @@ impl McpRuntimeSnapshot {
         let mcp_config = McpConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             apps_mcp_product_sku: config.apps_mcp_product_sku.clone(),
-            codex_home: config.codex_home.to_path_buf(),
+            codex_home: Some(config.codex_home.to_path_buf()),
             mcp_oauth_credentials_store_mode: config.mcp_oauth_credentials_store_mode,
             auth_keyring_backend_kind: config.auth_keyring_backend_kind(),
             mcp_oauth_callback_port: config.mcp_oauth_callback_port,

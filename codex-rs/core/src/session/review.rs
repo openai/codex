@@ -78,11 +78,12 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
-    let (forked_from_thread_id, thread_source) = {
+    let (forked_from_thread_id, thread_source, allow_host_git_enrichment) = {
         let state = sess.state.lock().await;
         (
             state.session_configuration.forked_from_thread_id,
             state.session_configuration.thread_source.clone(),
+            state.session_configuration.codex_home().is_some(),
         )
     };
 
@@ -98,6 +99,7 @@ pub(super) async fn spawn_review_thread(
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
+        allow_host_git_enrichment,
         &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),

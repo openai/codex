@@ -38,7 +38,7 @@ fn test_responses_metadata_json(
 ) -> String {
     state
         .to_responses_metadata(
-            "installation-a".to_string(),
+            Some("installation-a".to_string()),
             window_id.to_string(),
             request_kind,
         )
@@ -114,12 +114,13 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
 
     let header = detached_memory_responses_metadata(
-        String::new(),
+        None,
         String::new(),
         String::new(),
         String::new(),
         &SessionSource::Unknown,
         &repo_path,
+        /*allow_host_git_enrichment*/ true,
         Some("none"),
     )
     .await
@@ -160,12 +161,35 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let cwd = temp_dir.path().abs();
 
     let header = detached_memory_responses_metadata(
-        String::new(),
+        None,
         String::new(),
         String::new(),
         String::new(),
         &SessionSource::Unknown,
         &cwd,
+        /*allow_host_git_enrichment*/ true,
+        /*sandbox*/ None,
+    )
+    .await
+    .turn_metadata_json()
+    .expect("detached memory should emit its request kind");
+    let parsed: Value = serde_json::from_str(&header).expect("valid json");
+
+    assert_eq!(parsed, serde_json::json!({"request_kind": "memory"}));
+}
+
+#[tokio::test]
+async fn pathless_detached_memory_metadata_ignores_existing_host_git_repo() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("host-memory-repo").await;
+
+    let header = detached_memory_responses_metadata(
+        None,
+        String::new(),
+        String::new(),
+        String::new(),
+        &SessionSource::Unknown,
+        &repo_path,
+        /*allow_host_git_enrichment*/ false,
         /*sandbox*/ None,
     )
     .await
@@ -191,6 +215,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -234,6 +259,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -273,6 +299,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -312,6 +339,7 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -357,6 +385,7 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
             /*thread_source*/ None,
             "turn-a".to_string(),
             cwd.clone(),
+            /*allow_host_git_enrichment*/ true,
             &permission_profile,
             WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
@@ -389,6 +418,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -419,6 +449,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -468,6 +499,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -521,6 +553,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -575,6 +608,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some(ThreadSource::Feature("automation".to_string())),
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -697,6 +731,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
@@ -739,6 +774,33 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
 }
 
 #[tokio::test]
+async fn pathless_turn_metadata_ignores_existing_host_git_repo() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("host-repo").await;
+    let permission_profile = PermissionProfile::read_only();
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        repo_path,
+        /*allow_host_git_enrichment*/ false,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    state.spawn_git_enrichment_task();
+    state.wait_for_git_enrichment_task_for_test().await;
+
+    let header = test_turn_metadata_header(&state);
+    let json: Value = serde_json::from_str(&header).expect("json");
+    assert!(json.get("workspaces").is_none());
+}
+
+#[tokio::test]
 async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
 
@@ -760,6 +822,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         /*thread_source*/ None,
         "turn-a".to_string(),
         repo_path,
+        /*allow_host_git_enrichment*/ true,
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,

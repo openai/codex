@@ -37,6 +37,9 @@ use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
+use crate::local_runtime_paths::LocalRuntimePaths;
+use crate::local_runtime_paths::ThreadStartError;
+use crate::local_runtime_paths::remote_legacy_cwd;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
@@ -181,6 +184,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::PermissionProfileState;
@@ -407,9 +411,10 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) local_runtime_paths: Option<LocalRuntimePaths>,
     pub(crate) allow_provider_model_fallback: bool,
     pub(crate) user_instructions: LoadedUserInstructions,
-    pub(crate) installation_id: String,
+    pub(crate) installation_id: Option<String>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -499,6 +504,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            local_runtime_paths,
             allow_provider_model_fallback,
             user_instructions,
             installation_id,
@@ -534,6 +540,22 @@ impl Codex {
             external_time_provider,
             inherited_multi_agent_version,
         } = args;
+        let effective_cwd = match local_runtime_paths.as_ref() {
+            Some(paths) => paths.cwd.clone(),
+            None => remote_legacy_cwd(&environment_manager, &environment_selections)?,
+        };
+        let local_codex_home = local_runtime_paths
+            .as_ref()
+            .map(|paths| paths.codex_home.clone());
+        if local_runtime_paths.is_none() {
+            config.cwd = effective_cwd.clone();
+            if !config.workspace_roots_explicit {
+                config.workspace_roots = vec![effective_cwd.clone()];
+                config
+                    .permissions
+                    .set_workspace_roots(vec![effective_cwd.clone()]);
+            }
+        }
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -552,6 +574,8 @@ impl Codex {
             Arc::new(ExecPolicyManager::default())
         } else if let Some(exec_policy) = &inherited_exec_policy {
             Arc::clone(exec_policy)
+        } else if local_runtime_paths.is_none() {
+            Arc::new(ExecPolicyManager::default())
         } else {
             Arc::new(
                 ExecPolicyManager::load(&config.config_layer_stack)
@@ -559,6 +583,17 @@ impl Codex {
                     .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
             )
         };
+
+        if local_runtime_paths.is_none() && config.model_provider.auth.is_some() {
+            return Err(ThreadStartError::CommandModelAuthNotAllowed.into());
+        }
+        if local_runtime_paths.is_none() {
+            // Custom role files are host-local capabilities. Keep inline roles, but do not retain
+            // declarations that could later make tool-schema construction probe the server.
+            config
+                .agent_roles
+                .retain(|_, role| role.config_file.is_none());
+        }
 
         let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
@@ -654,12 +689,9 @@ impl Codex {
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            environments: TurnEnvironmentSelections::new(
-                config.cwd.clone(),
-                environment_selections,
-            ),
+            environments: TurnEnvironmentSelections::new(effective_cwd, environment_selections),
             workspace_roots: config.workspace_roots.clone(),
-            codex_home: config.codex_home.clone(),
+            codex_home: local_codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
@@ -711,7 +743,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            map_session_init_error(&e, &config.codex_home)
+            map_session_init_error(&e, local_codex_home.as_deref())
         })?;
         if let Some(message) = initial_service_tier_warning {
             session
@@ -1167,7 +1199,11 @@ impl Session {
     #[cfg(test)]
     pub(crate) async fn codex_home(&self) -> AbsolutePathBuf {
         let state = self.state.lock().await;
-        state.session_configuration.codex_home().clone()
+        state
+            .session_configuration
+            .codex_home()
+            .cloned()
+            .expect("test session has local runtime paths")
     }
 
     pub(crate) fn subscribe_elicitation_pause_state(&self) -> watch::Receiver<bool> {
@@ -1521,6 +1557,7 @@ impl Session {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (previous_config, new_config, permission_profile_changed) = {
             let mut state = self.state.lock().await;
+            self.validate_environment_update(&state.session_configuration, &updates)?;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
                 Err(err) => {
@@ -1559,10 +1596,59 @@ impl Session {
         updates: &SessionSettingsUpdate,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
         let state = self.state.lock().await;
+        self.validate_environment_update(&state.session_configuration, updates)?;
         state
             .session_configuration
             .apply(updates)
             .map(|configuration| configuration.thread_config_snapshot())
+    }
+
+    fn validate_environment_update(
+        &self,
+        session_configuration: &SessionConfiguration,
+        updates: &SessionSettingsUpdate,
+    ) -> ConstraintResult<()> {
+        if session_configuration.codex_home().is_some() {
+            return Ok(());
+        }
+        let Some(environments) = updates.environments.as_ref() else {
+            return Ok(());
+        };
+        let validation = remote_legacy_cwd(
+            self.services
+                .turn_environments
+                .environment_manager()
+                .as_ref(),
+            &environments.environments,
+        )
+        .and_then(|expected| {
+            if environments.legacy_fallback_cwd == expected {
+                Ok(())
+            } else {
+                Err(ThreadStartError::LegacyCwdMismatch {
+                    expected,
+                    actual: environments.legacy_fallback_cwd.clone(),
+                })
+            }
+        });
+        validation.map_err(|error| ConstraintError::InvalidValue {
+            field_name: "environments",
+            candidate: error.to_string(),
+            allowed: "a nonempty set of known remote environments".to_string(),
+            requirement_source: codex_config::RequirementSource::Unknown,
+        })
+    }
+
+    pub(crate) async fn local_runtime_paths(&self) -> Option<LocalRuntimePaths> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .codex_home()
+            .cloned()
+            .map(|codex_home| LocalRuntimePaths {
+                codex_home,
+                cwd: state.session_configuration.cwd().clone(),
+            })
     }
 
     pub(crate) async fn set_session_startup_prewarm(
@@ -1660,6 +1746,9 @@ impl Session {
     }
 
     pub(crate) async fn reload_user_config_layer(&self) {
+        if self.local_runtime_paths().await.is_none() {
+            return;
+        }
         // Refresh layer-backed runtime state for an existing session, including enabled plugin,
         // skill, and hook state. Derived config fields such as feature gates and legacy notify
         // settings remain session-static.
@@ -1682,12 +1771,10 @@ impl Session {
                 })
                 .collect::<Vec<_>>();
             if user_config_paths.is_empty() {
-                vec![
-                    state
-                        .session_configuration
-                        .codex_home
-                        .join(CONFIG_TOML_FILE),
-                ]
+                let Some(codex_home) = state.session_configuration.codex_home() else {
+                    return;
+                };
+                vec![codex_home.join(CONFIG_TOML_FILE)]
             } else {
                 user_config_paths
             }
@@ -2026,7 +2113,8 @@ impl Session {
             .await
             .session_configuration
             .codex_home()
-            .clone();
+            .cloned()
+            .ok_or(ExecPolicyUpdateError::LocalRuntimePathsUnavailable)?;
 
         self.services
             .exec_policy
@@ -2090,7 +2178,12 @@ impl Session {
             .await
             .session_configuration
             .codex_home()
-            .clone();
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "local runtime paths are required to persist a network policy amendment"
+                )
+            })?;
         let execpolicy_amendment =
             execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
 

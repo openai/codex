@@ -53,6 +53,23 @@ pub(crate) async fn apply_role_to_config(
         })
 }
 
+/// Applies only roles whose complete definition is already in memory.
+///
+/// Remote-only sessions use this path so selecting an agent role cannot read a role file or
+/// rebuild config through the host filesystem.
+pub(crate) async fn apply_role_to_config_without_host_filesystem(
+    config: &mut Config,
+    role_name: Option<&str>,
+) -> Result<(), String> {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    let role = resolve_role_config(config, role_name)
+        .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
+    if role.config_file.is_some() {
+        return Err(AGENT_TYPE_UNAVAILABLE_ERROR.to_string());
+    }
+    Ok(())
+}
+
 async fn apply_role_to_config_inner(
     config: &mut Config,
     role_name: &str,

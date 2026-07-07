@@ -244,6 +244,9 @@ pub fn save_oauth_tokens(
 ) -> Result<()> {
     let keyring_store = DefaultKeyringStore;
     match store_mode {
+        OAuthCredentialsStoreMode::Disabled => {
+            anyhow::bail!("MCP OAuth credential persistence is disabled for this runtime")
+        }
         OAuthCredentialsStoreMode::Auto => save_oauth_tokens_with_keyring_with_fallback_to_file(
             &keyring_store,
             keyring_backend_kind,
@@ -404,6 +407,10 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
+    if store_mode == OAuthCredentialsStoreMode::Disabled {
+        return Ok(false);
+    }
+
     let key = compute_store_key(server_name, url)?;
     let keyring_result =
         delete_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url);
@@ -416,7 +423,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore + Clone + 'static>(
                 OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring => {
                     return Err(error).context("failed to delete OAuth tokens from keyring");
                 }
-                OAuthCredentialsStoreMode::File => false,
+                OAuthCredentialsStoreMode::File | OAuthCredentialsStoreMode::Disabled => false,
             }
         }
     };
@@ -1013,6 +1020,44 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_store_mode_does_not_read_or_mutate_file_credentials() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let tokens = sample_tokens();
+        super::save_oauth_tokens_to_file(&tokens)?;
+        let fallback_path = super::fallback_file_path()?;
+        let original_file = fs::read(&fallback_path)?;
+
+        let loaded = super::load_oauth_tokens(
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Disabled,
+            AuthKeyringBackendKind::Direct,
+        )?;
+        let save_error = super::save_oauth_tokens(
+            &tokens.server_name,
+            &tokens,
+            OAuthCredentialsStoreMode::Disabled,
+            AuthKeyringBackendKind::Direct,
+        )
+        .expect_err("disabled storage must reject credential persistence");
+        let removed = super::delete_oauth_tokens(
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Disabled,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        assert_eq!(loaded, None);
+        assert_eq!(
+            save_error.to_string(),
+            "MCP OAuth credential persistence is disabled for this runtime"
+        );
+        assert!(!removed);
+        assert_eq!(fs::read(fallback_path)?, original_file);
         Ok(())
     }
 

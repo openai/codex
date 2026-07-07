@@ -4,6 +4,7 @@ use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::agent::role::apply_role_to_config_without_host_filesystem;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
@@ -79,9 +80,12 @@ async fn handle_spawn_agent(
             args.reasoning_effort.clone(),
         )
         .await?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        let role_result = if session.local_runtime_paths().await.is_some() {
+            apply_role_to_config(&mut config, role_name).await
+        } else {
+            apply_role_to_config_without_host_filesystem(&mut config, role_name).await
+        };
+        role_result.map_err(FunctionCallError::RespondToModel)?;
     }
     apply_spawn_agent_service_tier(
         &session,

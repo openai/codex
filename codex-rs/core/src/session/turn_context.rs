@@ -533,6 +533,7 @@ impl Session {
             session_configuration.thread_source.clone(),
             sub_id.clone(),
             cwd.clone(),
+            /*allow_host_git_enrichment*/ session_configuration.codex_home().is_some(),
             &session_configuration.permission_profile(),
             session_configuration.windows_sandbox_level,
             network.is_some(),
@@ -591,7 +592,10 @@ impl Session {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
-            match state.session_configuration.clone().apply(&updates) {
+            let updated = self
+                .validate_environment_update(&state.session_configuration, &updates)
+                .and_then(|()| state.session_configuration.clone().apply(&updates));
+            match updated {
                 Ok(next) => {
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();

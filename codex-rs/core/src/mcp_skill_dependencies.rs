@@ -52,6 +52,9 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     {
         return;
     }
+    if sess.local_runtime_paths().await.is_none() {
+        return;
+    }
 
     let installed = sess.runtime_mcp_servers(config.as_ref()).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
@@ -93,7 +96,12 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    let codex_home = config.codex_home.clone();
+    let Some(local_runtime_paths) = sess.local_runtime_paths().await else {
+        // Installing a dependency mutates config and may persist OAuth credentials. A remote-only
+        // session has no host-local namespace in which either operation is safe.
+        return;
+    };
+    let codex_home = local_runtime_paths.codex_home;
     let installed = sess.runtime_mcp_servers(config).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
@@ -463,4 +471,68 @@ fn collect_missing_mcp_dependencies(
     }
 
     missing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::tests::make_session_and_context_without_local_runtime_paths;
+    use crate::skills::model::SkillDependencies;
+    use codex_config::CONFIG_TOML_FILE;
+    use codex_features::Feature;
+    use codex_protocol::protocol::SkillScope;
+
+    #[tokio::test]
+    async fn pathless_dependency_install_does_not_write_config_or_oauth_state() {
+        let (session, turn_context) = make_session_and_context_without_local_runtime_paths().await;
+        let mut config = (*turn_context.config).clone();
+        config
+            .features
+            .enable(Feature::SkillMcpDependencyInstall)
+            .expect("test config should allow skill dependency installation");
+        std::fs::create_dir_all(&config.codex_home).expect("create sentinel config directory");
+        let config_path = config.codex_home.join(CONFIG_TOML_FILE);
+        let original_config = "model = \"sentinel\"\n";
+        std::fs::write(&config_path, original_config).expect("write sentinel config");
+        let skill = SkillMetadata {
+            name: "remote-skill".to_string(),
+            description: "requires an MCP dependency".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: Some(SkillDependencies {
+                tools: vec![SkillToolDependency {
+                    r#type: "mcp".to_string(),
+                    value: "remote-docs".to_string(),
+                    description: None,
+                    transport: Some("streamable_http".to_string()),
+                    command: None,
+                    url: Some("https://example.com/mcp".to_string()),
+                }],
+            }),
+            policy: None,
+            path_to_skills_md: config.codex_home.join("skills/remote/SKILL.md"),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+        };
+
+        maybe_install_mcp_dependencies(
+            &session,
+            &turn_context,
+            &config,
+            &[skill],
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read sentinel config"),
+            original_config
+        );
+        let mut entries = std::fs::read_dir(&config.codex_home)
+            .expect("read sentinel config directory")
+            .map(|entry| entry.expect("read directory entry").file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, vec![std::ffi::OsString::from(CONFIG_TOML_FILE)]);
+    }
 }

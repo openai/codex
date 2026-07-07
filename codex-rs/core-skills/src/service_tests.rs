@@ -7,7 +7,9 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::LocalFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -199,6 +201,118 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
         !codex_home.path().join("skills/.system").exists(),
         "expected disabling system skills to remove stale cached bundled skills"
     );
+}
+
+#[tokio::test]
+async fn service_without_host_filesystem_ignores_local_skill_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+    write_user_skill(&codex_home, "user", "user-skill", "user skill");
+    let plugin_skill_path = write_plugin_skill(
+        &codex_home,
+        "test",
+        "sample",
+        "plugin",
+        "plugin-skill",
+        "plugin skill",
+    );
+    let extra_skills_root = extra_root.path().join("skills");
+    let extra_skill_dir = extra_skills_root.join("extra");
+    fs::create_dir_all(&extra_skill_dir).expect("create extra skill dir");
+    fs::write(
+        extra_skill_dir.join("SKILL.md"),
+        "---\nname: extra-skill\ndescription: extra skill\n---\n",
+    )
+    .expect("write extra skill");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let service = SkillsService::new_without_host_filesystem();
+    service.set_extra_roots(vec![extra_skills_root.abs()]);
+    let input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        vec![plugin_skill_root_for_skill_path(
+            &plugin_skill_path,
+            "sample@test",
+            "sample",
+        )],
+        config_layer_stack,
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome = service
+        .snapshot_for_config(&input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+
+    assert!(outcome.outcome().skills.is_empty());
+    assert!(outcome.outcome().errors.is_empty());
+    assert!(plugin_skill_path.exists());
+    assert!(extra_skill_dir.join("SKILL.md").exists());
+}
+
+#[tokio::test]
+async fn service_without_host_filesystem_keeps_executor_backed_project_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let repo_dot_codex = cwd.path().join(".codex");
+    let repo_skill_dir = repo_dot_codex.join("skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: executor-backed skill\n---\n",
+    )
+    .expect("write repo skill");
+    write_user_skill(&codex_home, "user", "user-skill", "host-local skill");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            user_config_layer(&codex_home, ""),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: repo_dot_codex.abs(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack,
+        /*bundled_skills_enabled*/ true,
+    );
+    let service = SkillsService::new_without_host_filesystem();
+    // A distinct filesystem instance models an executor-owned namespace. LOCAL_FS roots must be
+    // removed without discarding the project roots assigned to this executor.
+    let executor_fs: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+
+    let outcome = service
+        .snapshot_for_config(&input, Some(Arc::clone(&executor_fs)))
+        .await;
+    let names = outcome
+        .outcome()
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<HashSet<_>>();
+
+    assert!(names.contains("repo-skill"));
+    assert!(!names.contains("user-skill"));
+
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: updated executor skill\n---\n",
+    )
+    .expect("update repo skill");
+    let refreshed = service.snapshot_for_config(&input, Some(executor_fs)).await;
+    let repo_skill = refreshed
+        .outcome()
+        .skills
+        .iter()
+        .find(|skill| skill.name == "repo-skill")
+        .expect("repo skill should remain visible");
+    assert_eq!(repo_skill.description, "updated executor skill");
 }
 
 #[tokio::test]

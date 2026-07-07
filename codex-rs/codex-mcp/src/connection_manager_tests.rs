@@ -1471,7 +1471,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             Arc::new(EnvironmentManager::without_environments()),
             PathBuf::from("/tmp"),
         ),
-        codex_home.path().to_path_buf(),
+        Some(codex_home.path().to_path_buf()),
         CodexAppsToolsCache::default(),
         CodexAppsToolsCacheKey {
             account_id: None,

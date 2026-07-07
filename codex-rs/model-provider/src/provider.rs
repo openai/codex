@@ -199,6 +199,20 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
+
+    /// Creates a model manager that retains fetched catalog state in memory only.
+    fn models_manager_without_disk_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        // Keep this capability source-compatible for external providers. Providers that can
+        // fetch a catalog without a disk cache should override it; the safe default is an
+        // authoritative in-memory catalog with no host filesystem dependency.
+        let model_catalog = config_model_catalog
+            .or_else(|| codex_models_manager::bundled_models_response().ok())
+            .unwrap_or_default();
+        Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
+    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -328,6 +342,28 @@ impl ModelProvider for ConfiguredModelProvider {
                 ));
                 Arc::new(OpenAiModelsManager::new(
                     codex_home,
+                    endpoint,
+                    self.auth_manager.clone(),
+                ))
+            }
+        }
+    }
+
+    fn models_manager_without_disk_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        match config_model_catalog {
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                model_catalog,
+            )),
+            None => {
+                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+                    self.info.clone(),
+                    self.auth_manager.clone(),
+                ));
+                Arc::new(OpenAiModelsManager::new_without_disk_cache(
                     endpoint,
                     self.auth_manager.clone(),
                 ))
@@ -656,7 +692,7 @@ mod tests {
             /*auth_manager*/ None,
         );
         let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+            provider.models_manager_without_disk_cache(/*config_model_catalog*/ None);
 
         let catalog = manager
             .raw_model_catalog(

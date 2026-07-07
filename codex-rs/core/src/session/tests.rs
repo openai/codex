@@ -3747,7 +3747,7 @@ async fn set_rate_limits_retains_previous_credits() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -3854,7 +3854,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -4391,7 +4391,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5262,7 +5262,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5291,7 +5291,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
-        "11111111-1111-4111-8111-111111111111".to_string(),
+        Some("11111111-1111-4111-8111-111111111111".to_string()),
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -5394,7 +5394,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5569,7 +5569,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let session = Session {
         thread_id,
-        installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        installation_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),
@@ -5585,6 +5585,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         next_internal_sub_id: AtomicU64::new(0),
     };
 
+    (session, turn_context)
+}
+
+pub(crate) async fn make_session_and_context_without_local_runtime_paths() -> (Session, TurnContext)
+{
+    let (session, turn_context) = make_session_and_context().await;
+    session.state.lock().await.session_configuration.codex_home = None;
     (session, turn_context)
 }
 
@@ -5648,7 +5655,7 @@ async fn make_session_with_config_and_rx(
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5678,7 +5685,7 @@ async fn make_session_with_config_and_rx(
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
-        "11111111-1111-4111-8111-111111111111".to_string(),
+        Some("11111111-1111-4111-8111-111111111111".to_string()),
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -5756,7 +5763,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -5786,7 +5793,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
-        "11111111-1111-4111-8111-111111111111".to_string(),
+        Some("11111111-1111-4111-8111-111111111111".to_string()),
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -7526,7 +7533,7 @@ where
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         workspace_roots: config.workspace_roots.clone(),
-        codex_home: config.codex_home.clone(),
+        codex_home: Some(config.codex_home.clone()),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -7700,7 +7707,7 @@ where
     ));
     let session = Arc::new(Session {
         thread_id,
-        installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        installation_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),
@@ -7742,6 +7749,36 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+#[tokio::test]
+async fn pathless_mcp_refresh_keeps_oauth_storage_disabled() {
+    let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::File;
+        },
+    )
+    .await;
+    session.state.lock().await.session_configuration.codex_home = None;
+
+    session
+        .refresh_mcp_servers_now(
+            &turn_context,
+            &turn_context.config,
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+
+    let runtime = session.services.latest_mcp_runtime();
+    assert_eq!(
+        (
+            runtime.config().codex_home.clone(),
+            runtime.config().mcp_oauth_credentials_store_mode,
+        ),
+        (None, OAuthCredentialsStoreMode::Disabled)
+    );
 }
 
 #[tokio::test]

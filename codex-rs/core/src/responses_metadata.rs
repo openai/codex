@@ -152,7 +152,7 @@ pub(crate) struct TurnMetadataWorkspace {
 /// truth.
 #[derive(Clone, Debug)]
 pub struct CodexResponsesMetadata {
-    pub(crate) installation_id: String,
+    pub(crate) installation_id: Option<String>,
     pub(crate) session_id: String,
     pub(crate) thread_id: String,
     pub(crate) turn_id: Option<String>,
@@ -171,7 +171,7 @@ pub struct CodexResponsesMetadata {
 
 impl CodexResponsesMetadata {
     pub(crate) fn new(
-        installation_id: String,
+        installation_id: Option<String>,
         session_id: String,
         thread_id: String,
         window_id: String,
@@ -209,14 +209,16 @@ impl CodexResponsesMetadata {
 
     pub(crate) fn client_metadata(&self) -> HashMap<String, String> {
         let mut client_metadata = HashMap::from([
-            (
-                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-                self.installation_id.clone(),
-            ),
             (SESSION_ID_KEY.to_string(), self.session_id.clone()),
             (THREAD_ID_KEY.to_string(), self.thread_id.clone()),
             (X_CODEX_WINDOW_ID_HEADER.to_string(), self.window_id.clone()),
         ]);
+        if let Some(installation_id) = &self.installation_id {
+            client_metadata.insert(
+                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                installation_id.clone(),
+            );
+        }
         if let Some(turn_id) = &self.turn_id {
             client_metadata.insert(TURN_ID_KEY.to_string(), turn_id.clone());
         }
@@ -278,7 +280,9 @@ impl CodexResponsesMetadata {
         let has_request_identity =
             request_kind.is_some_and(CodexResponsesRequestKind::has_turn_identity);
         CodexTurnMetadataPayload {
-            installation_id: has_request_identity.then_some(self.installation_id.as_str()),
+            installation_id: has_request_identity
+                .then_some(self.installation_id.as_deref())
+                .flatten(),
             session_id: has_turn_identity.then_some(self.session_id.as_str()),
             thread_id: has_turn_identity.then_some(self.thread_id.as_str()),
             turn_id: has_turn_identity

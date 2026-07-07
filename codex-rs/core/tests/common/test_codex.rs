@@ -303,6 +303,7 @@ pub struct TestCodexBuilder {
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     code_mode_host_program: Option<PathBuf>,
+    installation_id_override: Option<Option<String>>,
 }
 
 impl TestCodexBuilder {
@@ -411,6 +412,11 @@ impl TestCodexBuilder {
 
     pub fn with_code_mode_host_program(mut self, host_program: PathBuf) -> Self {
         self.code_mode_host_program = Some(host_program);
+        self
+    }
+
+    pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
+        self.installation_id_override = Some(installation_id);
         self
     }
 
@@ -610,7 +616,10 @@ impl TestCodexBuilder {
         let auth = self.auth.clone();
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
-        let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let installation_id = match &self.installation_id_override {
+            Some(installation_id) => installation_id.clone(),
+            None => Some(resolve_installation_id(&config.codex_home).await?),
+        };
         let user_instructions_provider =
             self.user_instructions_provider.clone().unwrap_or_else(|| {
                 Arc::new(CodexHomeUserInstructionsProvider::new(
@@ -1255,6 +1264,7 @@ pub fn test_codex() -> TestCodexBuilder {
         supports_openai_form_elicitation: false,
         external_time_provider: None,
         code_mode_host_program: None,
+        installation_id_override: None,
     }
 }
 

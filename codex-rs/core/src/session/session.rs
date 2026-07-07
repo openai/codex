@@ -27,7 +27,7 @@ use tokio::sync::Semaphore;
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
-    pub(crate) installation_id: String,
+    pub(crate) installation_id: Option<String>,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
@@ -83,8 +83,8 @@ pub(crate) struct SessionConfiguration {
     /// Thread-scoped runtime workspace roots for materializing symbolic
     /// workspace permissions at session runtime.
     pub(super) workspace_roots: Vec<AbsolutePathBuf>,
-    /// Directory containing all Codex state for this session.
-    pub(super) codex_home: AbsolutePathBuf,
+    /// Host-local Codex state for this session. Remote-only sessions omit it.
+    pub(super) codex_home: Option<AbsolutePathBuf>,
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
 
@@ -119,8 +119,8 @@ impl SessionConfiguration {
         &self.environments.environments
     }
 
-    pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
-        &self.codex_home
+    pub(crate) fn codex_home(&self) -> Option<&AbsolutePathBuf> {
+        self.codex_home.as_ref()
     }
 
     pub(super) fn permission_profile_state(&self) -> &PermissionProfileState {
@@ -481,7 +481,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         user_instructions: Option<codex_extension_api::UserInstructions>,
-        installation_id: String,
+        installation_id: Option<String>,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
@@ -682,9 +682,12 @@ impl Session {
         let mcp_runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), mcp_runtime_cwd);
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
+        let mcp_codex_home = session_configuration
+            .codex_home()
+            .map(AbsolutePathBuf::to_path_buf);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_projection = mcp_manager_for_mcp
+            let mut mcp_projection = mcp_manager_for_mcp
                 .runtime_config_for_step(
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
@@ -693,13 +696,16 @@ impl Session {
                     /*available_environment_ids*/ &[],
                 )
                 .await;
+            mcp_projection
+                .config
+                .apply_local_storage_policy(mcp_codex_home);
             let mcp_config = &mcp_projection.config;
             let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                config_for_mcp.auth_keyring_backend_kind(),
+                mcp_config.mcp_oauth_credentials_store_mode,
+                mcp_config.auth_keyring_backend_kind,
                 auth.as_ref(),
                 &mcp_runtime_context_for_auth,
             )
@@ -786,7 +792,9 @@ impl Session {
                     }),
                 });
             }
-            let config_path = config.codex_home.join(CONFIG_TOML_FILE);
+            let config_path = session_configuration
+                .codex_home()
+                .map(|codex_home| codex_home.join(CONFIG_TOML_FILE));
             if let Some(event) = unstable_features_warning_event(
                 config
                     .config_layer_stack
@@ -795,7 +803,9 @@ impl Session {
                     .and_then(TomlValue::as_table),
                 config.suppress_unstable_features_warning,
                 &config.features,
-                &config_path.display().to_string(),
+                &config_path
+                    .as_ref()
+                    .map_or_else(|| "<no local config>".to_string(), |path| path.display().to_string()),
             ) {
                 post_session_configured_events.push(event);
             }
@@ -843,7 +853,9 @@ impl Session {
                 /*inc*/ 1,
                 &[(
                     "is_git",
-                    if get_git_repo_root(session_configuration.cwd()).is_some() {
+                    if session_configuration.codex_home().is_some()
+                        && get_git_repo_root(session_configuration.cwd()).is_some()
+                    {
                         "true"
                     } else {
                         "false"
@@ -887,9 +899,11 @@ impl Session {
             } else {
                 shell::default_user_shell()
             };
-            let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot) {
+            let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot)
+                && let Some(codex_home) = session_configuration.codex_home()
+            {
                 ShellSnapshot::new(
-                    config.codex_home.clone(),
+                    codex_home.clone(),
                     thread_id,
                     session_telemetry.clone(),
                     state_db_ctx.clone(),
@@ -1001,12 +1015,16 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks = build_hooks_for_config(
-                &config,
-                plugins_manager.as_ref(),
-                resolved_environments.single_local_environment(),
-            )
-            .await;
+            let hooks = if session_configuration.codex_home().is_some() {
+                build_hooks_for_config(
+                    &config,
+                    plugins_manager.as_ref(),
+                    resolved_environments.single_local_environment(),
+                )
+                .await
+            } else {
+                Hooks::default()
+            };
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1210,8 +1228,8 @@ impl Session {
                     .then(|| Arc::clone(&sess.services.auth_manager));
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                config.auth_keyring_backend_kind(),
+                mcp_projection.config.mcp_oauth_credentials_store_mode,
+                mcp_projection.config.auth_keyring_backend_kind,
                 auth_statuses,
                 &session_configuration.approval_policy,
                 INITIAL_SUBMIT_ID.to_owned(),
@@ -1219,7 +1237,7 @@ impl Session {
                 mcp_startup_cancellation_token,
                 session_configuration.permission_profile(),
                 mcp_runtime_context.clone(),
-                config.codex_home.to_path_buf(),
+                mcp_projection.config.codex_home.clone(),
                 sess.services.mcp_manager.codex_apps_tools_cache(),
                 codex_apps_tools_cache_key(auth),
                 config.prefix_mcp_tool_names(),

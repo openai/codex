@@ -8,7 +8,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::content_items_to_text;
 use codex_core::detached_memory_responses_metadata;
-use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -71,6 +70,8 @@ pub(crate) struct MemoryStartupContext {
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
+    // Detached requests inherit the session decision; resolving here would write host-local state.
+    installation_id: Option<String>,
     auth_manager: Arc<AuthManager>,
     provider: SharedModelProvider,
     session_telemetry: SessionTelemetry,
@@ -163,6 +164,7 @@ impl MemoryStartupContext {
         provider: SharedModelProvider,
     ) -> Self {
         let model = config.model.as_deref().unwrap_or("unknown");
+        let installation_id = thread.installation_id().map(ToOwned::to_owned);
         let session_telemetry = build_session_telemetry(
             &auth_manager,
             thread_id,
@@ -176,6 +178,7 @@ impl MemoryStartupContext {
             thread_id,
             thread,
             thread_manager,
+            installation_id,
             auth_manager,
             provider,
             session_telemetry,
@@ -244,7 +247,6 @@ impl MemoryStartupContext {
         prompt: &Prompt,
         context: &StageOneRequestContext,
     ) -> anyhow::Result<(String, Option<TokenUsage>)> {
-        let installation_id = resolve_installation_id(&config.codex_home).await?;
         let config_snapshot = self.thread.config_snapshot().await;
         let session_source = config_snapshot.session_source;
         let session_id = SessionId::from(self.thread_id);
@@ -269,12 +271,13 @@ impl MemoryStartupContext {
         let mut client_session = model_client.new_session();
         let window_id = format!("{}:0", self.thread_id);
         let responses_metadata = detached_memory_responses_metadata(
-            installation_id,
+            self.installation_id.clone(),
             session_id_string,
             self.thread_id.to_string(),
             window_id,
             &session_source,
             &config.cwd,
+            self.thread_manager.has_local_runtime_paths(),
             /*sandbox*/ None,
         )
         .await;

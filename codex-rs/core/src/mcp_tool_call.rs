@@ -1227,7 +1227,9 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
-    let persistent_approval_key = if manager.is_selected_plugin_mcp_server(&invocation.server) {
+    let persistent_approval_key = if sess.local_runtime_paths().await.is_none()
+        || manager.is_selected_plugin_mcp_server(&invocation.server)
+    {
         None
     } else {
         persistent_mcp_tool_approval_key(invocation, metadata, approval_mode)
@@ -1979,6 +1981,14 @@ async fn maybe_persist_mcp_tool_approval(
     turn_context: &TurnContext,
     key: McpToolApprovalKey,
 ) {
+    if sess.local_runtime_paths().await.is_none() {
+        // Clients may return an old or forged "always" response even when the current prompt does
+        // not offer persistence. Preserve the approval for this session without touching host
+        // config or project files.
+        remember_mcp_tool_approval(sess, key).await;
+        return;
+    }
+
     let tool_name = key.tool_name.clone();
 
     let persist_result = if key.server == CODEX_APPS_MCP_SERVER_NAME {

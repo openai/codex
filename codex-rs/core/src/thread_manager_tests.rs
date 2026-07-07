@@ -1,4 +1,6 @@
 use super::*;
+use crate::ThreadStartError;
+use crate::config::ConstraintError;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
@@ -8,10 +10,12 @@ use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -24,6 +28,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_utils_path_uri::PathUri;
@@ -600,7 +605,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -819,7 +824,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -945,7 +950,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         /*analytics_events_client*/ None,
         thread_store,
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        installation_id.clone(),
+        Some(installation_id.clone()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -956,7 +961,53 @@ async fn explicit_installation_id_skips_codex_home_file() {
         .expect("start thread with explicit installation id");
 
     assert!(!config.codex_home.join(INSTALLATION_ID_FILENAME).exists());
-    assert_eq!(thread.thread.codex.session.installation_id, installation_id);
+    assert_eq!(
+        thread.thread.codex.session.installation_id,
+        Some(installation_id)
+    );
+
+    thread
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown thread");
+    let _ = manager.remove_thread(&thread.thread_id).await;
+}
+
+#[tokio::test]
+async fn absent_installation_id_skips_codex_home_file() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store,
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
+        /*installation_id*/ None,
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread without installation id");
+
+    assert!(!config.codex_home.join(INSTALLATION_ID_FILENAME).exists());
+    assert_eq!(thread.thread.codex.session.installation_id, None);
 
     thread
         .thread
@@ -986,7 +1037,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1046,7 +1097,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1113,7 +1164,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         /*analytics_events_client*/ None,
         thread_store,
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1205,7 +1256,7 @@ async fn subtree_listing_uses_injected_graph_store_without_state_db() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         Some(agent_graph_store),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1219,6 +1270,431 @@ async fn subtree_listing_uses_injected_graph_store_without_state_db() {
             .expect("subtree should load from injected graph store"),
         expected_thread_ids
     );
+}
+
+fn test_thread_manager_with_runtime_paths(
+    config: &Config,
+    local_runtime_paths: Option<LocalRuntimePaths>,
+    environment_manager: Arc<codex_exec_server::EnvironmentManager>,
+    thread_store: Arc<dyn ThreadStore>,
+    agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
+) -> Result<ThreadManager, ThreadManagerInitError> {
+    ThreadManager::try_new(
+        config,
+        local_runtime_paths,
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        SessionSource::Exec,
+        environment_manager,
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store,
+        agent_graph_store,
+        /*installation_id*/ None,
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    )
+}
+
+fn pathless_start_options(
+    config: Config,
+    environments: Vec<TurnEnvironmentSelection>,
+) -> StartThreadOptions {
+    StartThreadOptions {
+        config,
+        allow_provider_model_fallback: false,
+        initial_history: InitialHistory::New,
+        history_mode: None,
+        session_source: None,
+        thread_source: None,
+        dynamic_tools: Vec::new(),
+        metrics_service_name: None,
+        parent_trace: None,
+        environments,
+        thread_extension_init: Default::default(),
+        supports_openai_form_elicitation: false,
+    }
+}
+
+fn pathless_in_memory_store(test_name: &str) -> Arc<dyn ThreadStore> {
+    InMemoryThreadStore::for_id(format!("{test_name}-{}", uuid::Uuid::new_v4()))
+}
+
+fn pathless_thread_manager(
+    config: &Config,
+    environment_manager: Arc<codex_exec_server::EnvironmentManager>,
+    test_name: &str,
+) -> ThreadManager {
+    test_thread_manager_with_runtime_paths(
+        config,
+        /*local_runtime_paths*/ None,
+        environment_manager,
+        pathless_in_memory_store(test_name),
+        /*agent_graph_store*/ None,
+    )
+    .expect("in-memory storage supports a pathless manager")
+}
+
+async fn assert_pathless_start_error(
+    manager: &ThreadManager,
+    config: Config,
+    environments: Vec<TurnEnvironmentSelection>,
+    expected: ThreadStartError,
+) {
+    let Err(CodexErr::InvalidRequest(message)) = manager
+        .start_thread_with_options(pathless_start_options(config, environments))
+        .await
+    else {
+        panic!("pathless thread should reject invalid environment selections");
+    };
+    assert_eq!(message, expected.to_string());
+}
+
+async fn remote_and_local_environment_manager() -> Arc<codex_exec_server::EnvironmentManager> {
+    Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests_with_local(
+            Some("ws://127.0.0.1:9".to_string()),
+            codex_exec_server::ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current test executable"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("test runtime paths"),
+        )
+        .await,
+    )
+}
+
+#[tokio::test]
+async fn pathless_manager_rejects_a_local_thread_store() {
+    let config = test_config().await;
+    let local_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
+        LocalThreadStoreConfig::from_config(&config),
+        /*state_db*/ None,
+    ));
+
+    let error = test_thread_manager_with_runtime_paths(
+        &config,
+        /*local_runtime_paths*/ None,
+        Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+        local_store,
+        /*agent_graph_store*/ None,
+    )
+    .err();
+
+    assert_eq!(
+        error,
+        Some(ThreadManagerInitError::ThreadStoreRequiresLocalRuntimePaths)
+    );
+}
+
+#[tokio::test]
+async fn pathless_manager_rejects_an_agent_graph_store_that_requires_local_paths() {
+    let config = test_config().await;
+    let agent_graph_store: Arc<dyn AgentGraphStore> = Arc::new(FakeAgentGraphStore {
+        root_thread_id: ThreadId::new(),
+        descendant_thread_ids: Vec::new(),
+    });
+
+    let error = test_thread_manager_with_runtime_paths(
+        &config,
+        /*local_runtime_paths*/ None,
+        Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+        pathless_in_memory_store("pathless-agent-graph-store"),
+        Some(agent_graph_store),
+    )
+    .err();
+
+    assert_eq!(
+        error,
+        Some(ThreadManagerInitError::AgentGraphStoreRequiresLocalRuntimePaths)
+    );
+}
+
+#[tokio::test]
+async fn pathless_manager_accepts_an_in_memory_thread_store() {
+    let config = test_config().await;
+
+    let _manager = pathless_thread_manager(
+        &config,
+        Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+        "pathless-manager-init",
+    );
+}
+
+#[tokio::test]
+async fn pathless_thread_requires_a_remote_environment() {
+    let config = test_config().await;
+    let manager = pathless_thread_manager(
+        &config,
+        Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+        "pathless-missing-environment",
+    );
+    assert_pathless_start_error(
+        &manager,
+        config,
+        Vec::new(),
+        ThreadStartError::MissingRemoteEnvironment,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn pathless_thread_rejects_an_unknown_environment() {
+    let config = test_config().await;
+    let manager = pathless_thread_manager(
+        &config,
+        Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+        "pathless-unknown-environment",
+    );
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id: "missing".to_string(),
+        cwd: PathUri::from_abs_path(&config.cwd),
+    }];
+
+    assert_pathless_start_error(
+        &manager,
+        config,
+        environments,
+        ThreadStartError::UnknownEnvironment {
+            environment_id: "missing".to_string(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn pathless_thread_rejects_a_local_environment() {
+    let config = test_config().await;
+    let manager = pathless_thread_manager(
+        &config,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        "pathless-local-environment",
+    );
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&config.cwd),
+    }];
+
+    assert_pathless_start_error(
+        &manager,
+        config,
+        environments,
+        ThreadStartError::LocalEnvironmentNotAllowed {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn pathless_thread_rejects_a_local_environment_after_a_remote_environment() {
+    let config = test_config().await;
+    let environment_manager = remote_and_local_environment_manager().await;
+    let manager =
+        pathless_thread_manager(&config, environment_manager, "pathless-mixed-environments");
+    let remote_root = tempdir().expect("remote root placeholder");
+    let environments = vec![
+        TurnEnvironmentSelection {
+            environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&remote_root.path().join("workspace").abs()),
+        },
+        TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&config.cwd),
+        },
+    ];
+
+    assert_pathless_start_error(
+        &manager,
+        config,
+        environments,
+        ThreadStartError::LocalEnvironmentNotAllowed {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn pathless_thread_rejects_command_backed_model_auth() {
+    let mut config = test_config().await;
+    config.model_provider.auth = Some(
+        serde_json::from_value::<ModelProviderAuthInfo>(serde_json::json!({
+            "command": "host-token-command"
+        }))
+        .expect("valid command auth config"),
+    );
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:9".to_string()),
+            /*local_runtime_paths*/ None,
+        )
+        .await,
+    );
+    let manager =
+        pathless_thread_manager(&config, environment_manager, "pathless-command-model-auth");
+    let remote_cwd = tempdir()
+        .expect("remote root placeholder")
+        .path()
+        .join("workspace")
+        .abs();
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
+    }];
+
+    assert_pathless_start_error(
+        &manager,
+        config,
+        environments,
+        ThreadStartError::CommandModelAuthNotAllowed,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn pathless_thread_uses_the_first_remote_environment_cwd() {
+    let mut config = test_config().await;
+    config.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::File;
+    let config_for_runtime = config.clone();
+    let local_config_home = config.codex_home.clone();
+    assert!(!local_config_home.exists());
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:9".to_string()),
+            /*local_runtime_paths*/ None,
+        )
+        .await,
+    );
+    let manager =
+        pathless_thread_manager(&config, environment_manager, "pathless-remote-environment");
+    let remote_root = tempdir().expect("remote root placeholder");
+    let remote_cwd = remote_root.path().join("workspace").abs();
+    assert!(!remote_cwd.exists());
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
+    }];
+
+    let started = manager
+        .start_thread_with_options(pathless_start_options(config, environments))
+        .await
+        .expect("explicit remote environment should start a pathless thread");
+
+    let initialized_mcp = started.thread.codex.session.services.latest_mcp_runtime();
+    let runtime_mcp = started.thread.runtime_mcp_config(&config_for_runtime).await;
+    assert_eq!(started.session_configured.cwd, remote_cwd.clone());
+    assert_eq!(
+        (
+            initialized_mcp.config().codex_home.clone(),
+            initialized_mcp.config().mcp_oauth_credentials_store_mode,
+        ),
+        (None, OAuthCredentialsStoreMode::Disabled)
+    );
+    assert_eq!(
+        (
+            runtime_mcp.codex_home,
+            runtime_mcp.mcp_oauth_credentials_store_mode,
+        ),
+        (None, OAuthCredentialsStoreMode::Disabled)
+    );
+    started
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown pathless remote thread");
+    let _ = manager.remove_thread(&started.thread_id).await;
+    assert!(!remote_cwd.exists());
+    assert!(!local_config_home.exists());
+}
+
+#[tokio::test]
+async fn pathless_thread_rejects_selecting_a_local_environment_later() {
+    let config = test_config().await;
+    let local_cwd = config.cwd.clone();
+    let manager = pathless_thread_manager(
+        &config,
+        remote_and_local_environment_manager().await,
+        "pathless-later-local-environment",
+    );
+    let remote_root = tempdir().expect("remote root placeholder");
+    let remote_cwd = remote_root.path().join("workspace").abs();
+    let started = manager
+        .start_thread_with_options(pathless_start_options(
+            config,
+            vec![TurnEnvironmentSelection {
+                environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
+            }],
+        ))
+        .await
+        .expect("explicit remote environment should start a pathless thread");
+
+    let mismatched_cwd_error = started
+        .thread
+        .codex
+        .session
+        .update_settings(SessionSettingsUpdate {
+            environments: Some(TurnEnvironmentSelections::new(
+                local_cwd.clone(),
+                vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_abs_path(&remote_cwd),
+                }],
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect_err("pathless thread must derive its fallback cwd from the remote environment");
+    assert_eq!(
+        mismatched_cwd_error,
+        ConstraintError::InvalidValue {
+            field_name: "environments",
+            candidate: ThreadStartError::LegacyCwdMismatch {
+                expected: remote_cwd.clone(),
+                actual: local_cwd.clone(),
+            }
+            .to_string(),
+            allowed: "a nonempty set of known remote environments".to_string(),
+            requirement_source: codex_config::RequirementSource::Unknown,
+        }
+    );
+
+    let error = started
+        .thread
+        .codex
+        .session
+        .update_settings(SessionSettingsUpdate {
+            environments: Some(TurnEnvironmentSelections::new(
+                remote_cwd,
+                vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_abs_path(&local_cwd),
+                }],
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect_err("pathless thread must remain remote-only");
+
+    assert_eq!(
+        error,
+        ConstraintError::InvalidValue {
+            field_name: "environments",
+            candidate: ThreadStartError::LocalEnvironmentNotAllowed {
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            }
+            .to_string(),
+            allowed: "a nonempty set of known remote environments".to_string(),
+            requirement_source: codex_config::RequirementSource::Unknown,
+        }
+    );
+    started
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown pathless remote thread");
+    let _ = manager.remove_thread(&started.thread_id).await;
 }
 
 #[tokio::test]
@@ -1250,7 +1726,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         /*analytics_events_client*/ None,
         thread_store.clone(),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1355,7 +1831,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1582,7 +2058,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1691,7 +2167,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -1790,7 +2266,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        TEST_INSTALLATION_ID.to_string(),
+        Some(TEST_INSTALLATION_ID.to_string()),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
