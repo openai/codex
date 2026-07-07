@@ -51,51 +51,6 @@ pub(super) struct OAuthStoreLock {
     _file: File,
 }
 
-/// Marks aggregate-store coordination failures in an [`anyhow::Error`] chain.
-///
-/// Auto may fall back when the configured keyring backend is unavailable, but it must surface a
-/// lock failure. Falling back while another process owns the aggregate-store lock could leave the
-/// newer credential in File while a stale Secrets entry remains preferred.
-#[derive(Debug, thiserror::Error)]
-pub(super) enum OAuthStoreLockFailure {
-    #[error("failed to resolve CODEX_HOME for MCP OAuth {store} aggregate-store lock")]
-    CodexHome {
-        store: OAuthStore,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to create MCP OAuth {store} aggregate-store lock directory {}", path.display())]
-    CreateDir {
-        store: OAuthStore,
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to open MCP OAuth {store} aggregate-store lock {}", path.display())]
-    Open {
-        store: OAuthStore,
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error(
-        "timed out after {acquire_timeout:?} waiting for MCP OAuth {store} aggregate-store lock {}",
-        path.display()
-    )]
-    Timeout {
-        store: OAuthStore,
-        path: PathBuf,
-        acquire_timeout: Duration,
-    },
-    #[error("failed to lock MCP OAuth {store} aggregate-store lock {}", path.display())]
-    Lock {
-        store: OAuthStore,
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-}
-
 impl OAuthStoreLock {
     pub(super) fn acquire(store: OAuthStore) -> Result<Self> {
         // This lock intentionally follows the existing local File/Secrets credential-store
@@ -170,6 +125,51 @@ impl OAuthStoreLock {
             }
         }
     }
+}
+
+/// Marks aggregate-store coordination failures in an [`anyhow::Error`] chain.
+///
+/// Auto may fall back when the configured keyring backend is unavailable, but it must surface a
+/// lock failure. Falling back while another process owns the aggregate-store lock could leave the
+/// newer credential in File while a stale Secrets entry remains preferred.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum OAuthStoreLockFailure {
+    #[error("failed to resolve CODEX_HOME for MCP OAuth {store} aggregate-store lock")]
+    CodexHome {
+        store: OAuthStore,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to create MCP OAuth {store} aggregate-store lock directory {}", path.display())]
+    CreateDir {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to open MCP OAuth {store} aggregate-store lock {}", path.display())]
+    Open {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "timed out after {acquire_timeout:?} waiting for MCP OAuth {store} aggregate-store lock {}",
+        path.display()
+    )]
+    Timeout {
+        store: OAuthStore,
+        path: PathBuf,
+        acquire_timeout: Duration,
+    },
+    #[error("failed to lock MCP OAuth {store} aggregate-store lock {}", path.display())]
+    Lock {
+        store: OAuthStore,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 fn oauth_store_lock_path(codex_home: &Path, store: OAuthStore) -> PathBuf {
