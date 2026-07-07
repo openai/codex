@@ -554,12 +554,19 @@ pub fn format_exec_policy_error_with_source(error: &ExecPolicyError) -> String {
     }
 }
 
-async fn load_exec_policy_with_warning(
+pub(crate) async fn load_exec_policy_with_warning(
     config_stack: &ConfigLayerStack,
 ) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
     match load_exec_policy(config_stack).await {
         Ok(policy) => Ok((policy, None)),
-        Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => {
+            let policy = config_stack
+                .requirements()
+                .exec_policy
+                .as_deref()
+                .map_or_else(Policy::empty, |policy| policy.as_ref().clone());
+            Ok((policy, Some(err)))
+        }
         Err(err) => Err(err),
     }
 }

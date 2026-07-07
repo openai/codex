@@ -1,17 +1,17 @@
 //! Default Codex HTTP client: shared `User-Agent`, `originator`, optional residency header, and
-//! reqwest/`CodexHttpClient` construction.
+//! reqwest/`HttpClient` construction.
 //!
 //! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
 //! workspace.
 
-use codex_client::BuildCustomCaTransportError;
-use codex_client::BuildRouteAwareHttpClientError;
-use codex_client::ClientRouteClass;
-use codex_client::CodexHttpClient;
-pub use codex_client::CodexRequestBuilder;
-use codex_client::build_reqwest_client_for_route;
-use codex_client::build_reqwest_client_with_custom_ca;
-use codex_client::with_chatgpt_cloudflare_cookie_store;
+use codex_http_client::BuildCustomCaTransportError;
+use codex_http_client::BuildRouteAwareHttpClientError;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClient;
+pub use codex_http_client::RequestBuilder as CodexRequestBuilder;
+use codex_http_client::build_reqwest_client_for_route;
+use codex_http_client::build_reqwest_client_with_custom_ca;
+use codex_http_client::with_chatgpt_cloudflare_cookie_store;
 use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
@@ -197,9 +197,9 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 ///
 /// This supported default path preserves reqwest's existing proxy behavior and does not opt into
 /// Codex's route-aware system/PAC resolution.
-pub fn create_client() -> CodexHttpClient {
+pub fn create_client() -> HttpClient {
     let inner = build_reqwest_client();
-    CodexHttpClient::new(inner)
+    HttpClient::new(inner)
 }
 
 /// Builds the default reqwest client used for ordinary Codex HTTP traffic.
@@ -282,8 +282,8 @@ pub(crate) fn build_default_auth_reqwest_client(
 pub(crate) fn create_default_auth_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
-) -> Result<CodexHttpClient, BuildRouteAwareHttpClientError> {
-    build_default_auth_reqwest_client(endpoint, auth_route_config).map(CodexHttpClient::new)
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+    build_default_auth_reqwest_client(endpoint, auth_route_config).map(HttpClient::new)
 }
 
 pub fn default_headers() -> HeaderMap {

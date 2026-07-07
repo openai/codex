@@ -1,3 +1,5 @@
+//! macOS system proxy resolution through SystemConfiguration and CFNetwork.
+
 use std::ffi::c_void;
 use std::ptr;
 use std::time::Duration;
