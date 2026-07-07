@@ -252,16 +252,14 @@ fn deny_read_is_preserved_during_explicit_escalation_and_policy_bypass() {
         None,
         "ordinary sandboxed attempts keep their original profile",
     );
-    let managed_network_escalation = escalation_profile_preserving_deny_read(
-        SandboxOverride::EscalatedSandboxWithDenyRead,
-        /*managed_network_active*/ true,
-        &permission_profile,
-    )
-    .expect("managed network escalation profile");
     assert_eq!(
-        managed_network_escalation.network_sandbox_policy(),
-        NetworkSandboxPolicy::Restricted,
-        "managed network restrictions must survive escalation",
+        escalation_profile_preserving_deny_read(
+            SandboxOverride::EscalatedSandboxWithDenyRead,
+            /*managed_network_active*/ true,
+            &permission_profile,
+        ),
+        None,
+        "managed network attempts keep their original profile",
     );
 }
 

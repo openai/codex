@@ -290,26 +290,23 @@ pub(crate) fn escalation_profile_preserving_deny_read(
     managed_network_active: bool,
     permission_profile: &PermissionProfile,
 ) -> Option<PermissionProfile> {
-    if !matches!(
-        sandbox_override,
-        SandboxOverride::EscalatedSandboxWithDenyRead
-    ) {
+    if managed_network_active
+        || !matches!(
+            sandbox_override,
+            SandboxOverride::EscalatedSandboxWithDenyRead
+        )
+    {
         return None;
     }
 
     let mut file_system_policy = FileSystemSandboxPolicy::unrestricted();
     file_system_policy
         .preserve_deny_read_restrictions_from(&permission_profile.file_system_sandbox_policy());
-    let network_sandbox_policy = if managed_network_active {
-        permission_profile.network_sandbox_policy()
-    } else {
-        NetworkSandboxPolicy::Enabled
-    };
     Some(
         PermissionProfile::from_runtime_permissions_with_enforcement(
             permission_profile.enforcement(),
             &file_system_policy,
-            network_sandbox_policy,
+            NetworkSandboxPolicy::Enabled,
         ),
     )
 }
