@@ -22,7 +22,6 @@ pub(crate) fn key_bytes(input: &BrowserKeyInput) -> Option<Vec<u8>> {
         return text.is_ascii().then(|| text.as_bytes().to_vec());
     }
     match input.key.as_str() {
-        "Enter" => Some(vec![b'\r']),
         "Tab" if !input.modifiers.shift => Some(vec![b'\t']),
         "Backspace" => Some(vec![0x7f]),
         "Escape" => Some(vec![0x1b]),

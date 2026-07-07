@@ -30,7 +30,7 @@ fn plain_text_and_navigation_keys_use_carbonyl_terminal_input() {
     };
 
     assert_eq!(key_bytes(&text), Some(b"?".to_vec()));
-    assert_eq!(key_bytes(&enter), Some(b"\r".to_vec()));
+    assert_eq!(key_bytes(&enter), None);
     assert_eq!(key_bytes(&command_left), Some(b"\x1b[1;9D".to_vec()));
 }
 

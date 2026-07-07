@@ -28,3 +28,10 @@ pub(crate) fn key_text(key: &str) -> &str {
         _ => "",
     }
 }
+
+pub(crate) fn control_key_text(key: &str) -> &str {
+    match key {
+        "Enter" => "\r",
+        _ => "",
+    }
+}

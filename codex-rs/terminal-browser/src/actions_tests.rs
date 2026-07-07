@@ -12,6 +12,7 @@ use super::BrowserToolOutput;
 use super::dispatch_human_key;
 use super::press;
 use crate::accessibility::click;
+use crate::accessibility::fill;
 use crate::accessibility::snapshot;
 use crate::cdp::CdpClient;
 use crate::handles::BrowserHandles;
@@ -188,18 +189,28 @@ async fn keyboard_input_uses_key_down_when_chromium_needs_text() {
     let (url, server) = test_server(|mut socket| {
         tokio::spawn(async move {
             initialize(&mut socket).await;
-            for (expected_key, expected_text) in [("Enter", "\r"), ("?", "?")] {
+            for (expected_key, expected_text, expected_virtual_key_code) in
+                [("Enter", "\r", 13), ("?", "?", 191), ("Enter", "\r", 13)]
+            {
                 let key_down = request(&mut socket).await;
                 assert_eq!(key_down["method"], "Input.dispatchKeyEvent");
                 assert_eq!(key_down["params"]["type"], "keyDown");
                 assert_eq!(key_down["params"]["key"], expected_key);
                 assert_eq!(key_down["params"]["text"], expected_text);
+                assert_eq!(
+                    key_down["params"]["windowsVirtualKeyCode"],
+                    expected_virtual_key_code
+                );
                 respond(&mut socket, &key_down, json!({})).await;
 
                 let key_up = request(&mut socket).await;
                 assert_eq!(key_up["method"], "Input.dispatchKeyEvent");
                 assert_eq!(key_up["params"]["type"], "keyUp");
                 assert_eq!(key_up["params"]["key"], expected_key);
+                assert_eq!(
+                    key_up["params"]["windowsVirtualKeyCode"],
+                    expected_virtual_key_code
+                );
                 respond(&mut socket, &key_up, json!({})).await;
             }
         })
@@ -222,7 +233,89 @@ async fn keyboard_input_uses_key_down_when_chromium_needs_text() {
     )
     .await
     .expect("dispatch human key");
+    dispatch_human_key(
+        &client,
+        &BrowserKeyInput {
+            key: "Enter".to_string(),
+            code: "Enter".to_string(),
+            text: None,
+            modifiers: BrowserInputModifiers::default(),
+        },
+    )
+    .await
+    .expect("dispatch human Enter");
 
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn fill_selects_and_replaces_existing_text() {
+    let select_modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
+    let (url, server) = test_server(move |mut socket| {
+        tokio::spawn(async move {
+            initialize(&mut socket).await;
+            let focus = request(&mut socket).await;
+            assert_eq!(focus["method"], "DOM.focus");
+            assert_eq!(focus["params"], json!({ "backendNodeId": 7 }));
+            respond(&mut socket, &focus, json!({})).await;
+
+            for expected_params in [
+                json!({
+                    "type": "rawKeyDown",
+                    "key": "a",
+                    "code": "KeyA",
+                    "text": "",
+                    "unmodifiedText": "",
+                    "modifiers": select_modifier,
+                    "windowsVirtualKeyCode": 65,
+                    "commands": ["selectAll"],
+                }),
+                json!({
+                    "type": "keyUp",
+                    "key": "a",
+                    "code": "KeyA",
+                    "modifiers": select_modifier,
+                    "windowsVirtualKeyCode": 65,
+                }),
+                json!({
+                    "type": "rawKeyDown",
+                    "key": "Backspace",
+                    "code": "Backspace",
+                    "text": "",
+                    "unmodifiedText": "",
+                    "modifiers": 0,
+                    "windowsVirtualKeyCode": 8,
+                }),
+                json!({
+                    "type": "keyUp",
+                    "key": "Backspace",
+                    "code": "Backspace",
+                    "modifiers": 0,
+                    "windowsVirtualKeyCode": 8,
+                }),
+            ] {
+                let key_event = request(&mut socket).await;
+                assert_eq!(key_event["method"], "Input.dispatchKeyEvent");
+                assert_eq!(key_event["params"], expected_params);
+                respond(&mut socket, &key_event, json!({})).await;
+            }
+
+            let insert_text = request(&mut socket).await;
+            assert_eq!(insert_text["method"], "Input.insertText");
+            assert_eq!(insert_text["params"], json!({ "text": "Buy milk" }));
+            respond(&mut socket, &insert_text, json!({})).await;
+        })
+    })
+    .await;
+    let client = CdpClient::connect(&url).await.expect("connect client");
+    let mut handles = BrowserHandles::default();
+    let node_id = handles.insert(/*backend_node_id*/ 7);
+
+    let output = fill(&client, &handles, &node_id, "Buy milk")
+        .await
+        .expect("fill textbox");
+
+    assert_eq!(output, BrowserToolOutput::Text(format!("filled {node_id}")));
     server.await.expect("server task");
 }
 

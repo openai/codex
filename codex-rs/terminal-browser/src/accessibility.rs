@@ -8,6 +8,7 @@ use crate::actions::bounded_snapshot_json;
 use crate::actions::page_metadata;
 use crate::cdp::CdpClient;
 use crate::handles::BrowserHandles;
+use crate::key_event;
 
 const MAX_AX_NODES: usize = 300;
 const MAX_SNAPSHOT_TEXT_CHARS: usize = 6_000;
@@ -147,31 +148,8 @@ pub(crate) async fn fill(
     client
         .call("DOM.focus", json!({ "backendNodeId": backend_node_id }))
         .await?;
-    let select_modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({ "type": "rawKeyDown", "key": "a", "code": "KeyA", "modifiers": select_modifier }),
-        )
-        .await?;
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({ "type": "keyUp", "key": "a", "code": "KeyA", "modifiers": select_modifier }),
-        )
-        .await?;
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({ "type": "rawKeyDown", "key": "Backspace", "code": "Backspace" }),
-        )
-        .await?;
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({ "type": "keyUp", "key": "Backspace", "code": "Backspace" }),
-        )
-        .await?;
+    key_event::dispatch_select_all(client).await?;
+    key_event::dispatch_backspace(client).await?;
     client
         .call("Input.insertText", json!({ "text": text }))
         .await?;

@@ -10,6 +10,7 @@ mod handles;
 mod human_control;
 mod human_navigation;
 mod input;
+mod key_event;
 mod navigation;
 mod network;
 mod process;

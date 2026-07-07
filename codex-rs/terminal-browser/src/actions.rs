@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::cdp::CdpClient;
 use crate::input::BrowserKeyInput;
+use crate::key_event;
 use crate::scripts;
 
 const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
@@ -43,31 +44,7 @@ pub(crate) async fn page_metadata(client: &CdpClient) -> Result<PageMetadata> {
 pub(crate) async fn press(client: &CdpClient, key: &str) -> Result<BrowserToolOutput> {
     anyhow::ensure!(!key.is_empty(), "key must not be empty");
     anyhow::ensure!(key.chars().count() <= 32, "key is too long");
-    let code = scripts::key_code(key);
-    let text = scripts::key_text(key);
-    let event_type = if text.is_empty() {
-        "rawKeyDown"
-    } else {
-        "keyDown"
-    };
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": event_type,
-                "key": key,
-                "code": code,
-                "text": text,
-                "unmodifiedText": text,
-            }),
-        )
-        .await?;
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({ "type": "keyUp", "key": key, "code": code }),
-        )
-        .await?;
+    key_event::dispatch_tool_key(client, key).await?;
     Ok(BrowserToolOutput::Text(format!("pressed {key}")))
 }
 
@@ -104,38 +81,7 @@ pub(crate) async fn screenshot(client: &CdpClient) -> Result<BrowserToolOutput> 
 }
 
 pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInput) -> Result<()> {
-    let text = input.text.as_deref().unwrap_or_default();
-    let event_type = if text.is_empty() {
-        "rawKeyDown"
-    } else {
-        "keyDown"
-    };
-    let modifiers = input.modifiers.cdp_mask();
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": event_type,
-                "key": input.key,
-                "code": input.code,
-                "text": text,
-                "unmodifiedText": text,
-                "modifiers": modifiers,
-            }),
-        )
-        .await?;
-    client
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "keyUp",
-                "key": input.key,
-                "code": input.code,
-                "modifiers": modifiers,
-            }),
-        )
-        .await?;
-    Ok(())
+    key_event::dispatch_human_key(client, input).await
 }
 
 pub(crate) async fn insert_human_text(client: &CdpClient, text: &str) -> Result<()> {
