@@ -198,7 +198,11 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadStartResponse { thread, .. } = to_response(response)?;
+    let ThreadStartResponse {
+        thread,
+        runtime_workspace_roots,
+        ..
+    } = to_response(response)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.start_turn_and_wait_for_completion(text_turn_params(
@@ -233,14 +237,16 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
             )),
         )
     );
-    let host_cwd = codex_home.path().to_path_buf().abs().canonicalize()?;
-    let host_workspace_roots = format!(
+    let [runtime_workspace_root] = runtime_workspace_roots.as_slice() else {
+        anyhow::bail!("expected one runtime workspace root");
+    };
+    let expected_workspace_roots = format!(
         "<workspace_roots><root>{}</root></workspace_roots>",
-        host_cwd.as_path().display()
+        runtime_workspace_root.as_path().display()
     );
     // TODO(anp): Derive model-visible workspace roots from the selected remote environment and
     // render them using its native path convention.
-    assert!(environment_context.contains(&host_workspace_roots));
+    assert!(environment_context.contains(&expected_workspace_roots));
 
     Ok(())
 }
