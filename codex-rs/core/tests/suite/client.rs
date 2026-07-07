@@ -1335,6 +1335,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -2949,6 +2950,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
