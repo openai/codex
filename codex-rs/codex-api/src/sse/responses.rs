@@ -398,7 +398,7 @@ pub fn process_responses_event(
                     } else if is_cyber_policy_error(&error) {
                         let message = cyber_policy_message(error.message);
                         response_error = ApiError::CyberPolicy { message };
-                    } else if is_invalid_prompt_error(&error) {
+                    } else if is_invalid_request_error(&error) {
                         let message = error
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
@@ -632,8 +632,8 @@ fn is_usage_not_included(error: &Error) -> bool {
     error.code.as_deref() == Some("usage_not_included")
 }
 
-fn is_invalid_prompt_error(error: &Error) -> bool {
-    error.code.as_deref() == Some("invalid_prompt")
+fn is_invalid_request_error(error: &Error) -> bool {
+    matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy"))
 }
 
 fn is_cyber_policy_error(error: &Error) -> bool {
@@ -1076,23 +1076,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_prompt_without_type_is_invalid_request() {
-        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_prompt_no_type","object":"response","created_at":1759771628,"status":"failed","background":false,"error":{"code":"invalid_prompt","message":"Invalid prompt: we've limited access to this content for safety reasons."},"incomplete_details":null}}"#;
+    async fn policy_errors_without_type_are_invalid_requests() {
+        for code in ["invalid_prompt", "bio_policy"] {
+            let raw_error = format!(
+                r#"{{"type":"response.failed","sequence_number":3,"response":{{"id":"resp_policy_error","object":"response","created_at":1759771628,"status":"failed","background":false,"error":{{"code":"{code}","message":"Policy error: request blocked."}},"incomplete_details":null}}}}"#
+            );
+            let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+            let events = collect_events(&[sse1.as_bytes()]).await;
 
-        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
-
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Err(ApiError::InvalidRequest { message }) => {
-                assert_eq!(
-                    message,
-                    "Invalid prompt: we've limited access to this content for safety reasons."
-                );
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                Err(ApiError::InvalidRequest { message }) => {
+                    assert_eq!(message, "Policy error: request blocked.");
+                }
+                other => panic!("unexpected event for {code}: {other:?}"),
             }
-            other => panic!("unexpected event: {other:?}"),
         }
     }
 
