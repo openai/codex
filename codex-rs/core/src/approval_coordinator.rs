@@ -1,5 +1,6 @@
 //! Central approval policy-stage execution and reviewer routing.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use crate::guardian::guardian_rejection_message;
@@ -11,6 +12,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::flat_tool_name;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
@@ -22,6 +24,26 @@ use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 
 pub(crate) type ApprovalAction = crate::guardian::GuardianApprovalRequest;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ApprovalReview {
+    pub(crate) action: ApprovalAction,
+    pub(crate) retry_reason: Option<String>,
+}
+
+impl ApprovalReview {
+    pub(crate) fn main_turn(action: ApprovalAction, retry_reason: Option<String>) -> Self {
+        Self {
+            action,
+            retry_reason,
+        }
+    }
+}
+
+pub(crate) struct ApprovalHookRequest<'a> {
+    pub(crate) run_id: &'a str,
+    pub(crate) payload: PermissionRequestPayload,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalReviewer {
@@ -158,6 +180,68 @@ impl ApprovalCoordinator {
         let resolution = Self::normalize_user_rejection(resolution);
         Self::record_resolution(otel, tool_ctx, &resolution);
         Ok(resolution)
+    }
+
+    pub(crate) async fn resolve_event<F, Fut>(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        reviewer: ApprovalReviewer,
+        hook_request: Option<ApprovalHookRequest<'_>>,
+        review: ApprovalReview,
+        user_review: F,
+    ) -> ApprovalResolution
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ReviewDecision>,
+    {
+        if let Some(hook_request) = hook_request
+            && let Some(resolution) =
+                Self::resolve_hook(session, turn, hook_request.run_id, hook_request.payload).await
+        {
+            return resolution;
+        }
+
+        let resolution = match reviewer {
+            ApprovalReviewer::Guardian => {
+                let review_id = new_guardian_review_id();
+                let decision = review_approval_request(
+                    session,
+                    turn,
+                    review_id.clone(),
+                    review.action.clone(),
+                    review.retry_reason.clone(),
+                )
+                .await;
+                Self::normalize_guardian(session, review_id, decision).await
+            }
+            ApprovalReviewer::User => ApprovalResolution {
+                decision: user_review().await,
+                rejection: None,
+                source: ApprovalResolutionSource::User,
+            },
+        };
+        Self::normalize_user_rejection(resolution)
+    }
+
+    async fn resolve_hook(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        run_id: &str,
+        payload: PermissionRequestPayload,
+    ) -> Option<ApprovalResolution> {
+        match run_permission_request_hooks(session, turn, run_id, payload).await {
+            Some(PermissionRequestDecision::Allow) => Some(ApprovalResolution {
+                decision: ReviewDecision::Approved,
+                rejection: None,
+                source: ApprovalResolutionSource::Hook,
+            }),
+            Some(PermissionRequestDecision::Deny { message }) => Some(ApprovalResolution {
+                decision: ReviewDecision::Denied,
+                rejection: Some(message),
+                source: ApprovalResolutionSource::Hook,
+            }),
+            None => None,
+        }
     }
 
     async fn normalize_guardian(
