@@ -1,6 +1,7 @@
 use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::command_migration::migrate_plugin_commands;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
 use crate::loader::PluginHookLoadOutcome;
@@ -1678,15 +1679,42 @@ impl PluginsManager {
         self.list_marketplaces_with_policy(config, &marketplace_roots)
     }
 
+    fn installed_plugin_root(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<AbsolutePathBuf, MarketplaceError> {
+        let plugin_key = plugin_id.as_key();
+        let plugin_root = self.store.active_plugin_root(plugin_id).ok_or_else(|| {
+            MarketplaceError::InvalidPlugin(format!(
+                "installed plugin cache entry is missing for {plugin_key}"
+            ))
+        })?;
+        migrate_plugin_commands(plugin_root.as_path()).map_err(|err| {
+            MarketplaceError::InvalidPlugin(format!(
+                "failed to migrate plugin commands for {plugin_key}: {err}"
+            ))
+        })?;
+        Ok(plugin_root)
+    }
+
     pub(crate) async fn tool_suggest_metadata_for_marketplace_plugin(
         &self,
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         skill_config_rules: &SkillConfigRules,
     ) -> Result<PluginCapabilitySummary, MarketplaceError> {
+        let mut plugin = plugin.clone();
+        if plugin.installed && matches!(&plugin.source, MarketplacePluginSource::Local { .. }) {
+            let plugin_id = PluginId::parse(&plugin.id).map_err(|err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            })?;
+            plugin.source = MarketplacePluginSource::Local {
+                path: self.installed_plugin_root(&plugin_id)?,
+            };
+        }
         let fragment = self
             .tool_suggest_metadata_cache
-            .metadata_for_plugin(marketplace_name, plugin, self.restriction_product)
+            .metadata_for_plugin(marketplace_name, &plugin, self.restriction_product)
             .await?;
         Ok(fragment.project(skill_config_rules, self.auth_mode()))
     }
@@ -1812,12 +1840,8 @@ impl PluginsManager {
             });
         }
 
-        let source_path = if plugin.source.is_install_materialized() && plugin.installed {
-            self.store.active_plugin_root(&plugin_id).ok_or_else(|| {
-                MarketplaceError::InvalidPlugin(format!(
-                    "installed plugin cache entry is missing for {plugin_key}"
-                ))
-            })?
+        let source_path = if plugin.installed {
+            self.installed_plugin_root(&plugin_id)?
         } else {
             let codex_home = self.codex_home.clone();
             let source = plugin.source.clone();

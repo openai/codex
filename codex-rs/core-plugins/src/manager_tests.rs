@@ -1886,6 +1886,78 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
 }
 
 #[tokio::test]
+async fn load_plugins_includes_migrated_command_skills_with_explicit_skill_paths() {
+    let codex_home = TempDir::new().unwrap();
+    let source_root = codex_home.path().join("source/sample");
+
+    write_file(
+        &source_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "skills": "./custom-skills/"
+}"#,
+    );
+    fs::create_dir_all(source_root.join("custom-skills")).unwrap();
+    write_file(
+        &source_root.join("commands/pr/review.md"),
+        "---\ndescription: Review a Claude pull request\n---\nInspect the proposed Claude changes.\n",
+    );
+    write_file(
+        &source_root.join(".codex-plugin/migrated-command-skills/undeclared-command/SKILL.md"),
+        "---\nname: undeclared-command\ndescription: undeclared command\n---\n",
+    );
+    let result = PluginStore::new(codex_home.path().to_path_buf())
+        .install(
+            source_root.abs(),
+            PluginId::parse("sample@test").expect("plugin id should parse"),
+        )
+        .unwrap();
+    let migrated_skill = result
+        .installed_path
+        .join(".codex-plugin/migrated-command-skills/source-command-pr-review/SKILL.md");
+    let expected_migrated_skill = "---\nname: \"source-command-pr-review\"\ndescription: \"Review a Claude pull request\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nInspect the proposed Claude changes.\n";
+    assert_eq!(
+        fs::read_to_string(&migrated_skill).unwrap(),
+        expected_migrated_skill
+    );
+    assert!(
+        !result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills/undeclared-command")
+            .exists()
+    );
+
+    fs::remove_dir_all(
+        result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills"),
+    )
+    .unwrap();
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+        Some(AuthMode::Chatgpt),
+    )
+    .await;
+
+    assert_eq!(
+        outcome.plugins()[0].skill_roots,
+        vec![
+            result
+                .installed_path
+                .join(".codex-plugin/migrated-command-skills"),
+            result.installed_path.join("custom-skills"),
+        ]
+    );
+    assert!(outcome.plugins()[0].has_enabled_skills);
+    assert_eq!(
+        fs::read_to_string(migrated_skill).unwrap(),
+        expected_migrated_skill
+    );
+}
+
+#[tokio::test]
 async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -3559,6 +3631,94 @@ plugins = true
     assert_eq!(
         listed_detail.mcp_server_names,
         vec!["sample-mcp".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn installed_local_plugin_metadata_uses_migrated_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_root = tmp.path().join("source/sample-plugin");
+    write_file(
+        &source_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample-plugin",
+  "description": "Cached sample plugin"
+}"#,
+    );
+    write_file(
+        &source_root.join("commands/review.md"),
+        "---\ndescription: Review changes\n---\nReview the changes.\n",
+    );
+    let plugin_id = PluginId::parse("sample-plugin@debug").unwrap();
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(source_root.abs(), plugin_id.clone())
+        .unwrap();
+    fs::remove_dir_all(
+        result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills"),
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let plugin = ConfiguredMarketplacePlugin {
+        id: plugin_id.as_key(),
+        name: plugin_id.plugin_name.clone(),
+        local_version: None,
+        installed_version: Some(result.plugin_version),
+        source: MarketplacePluginSource::Local {
+            path: source_root.abs(),
+        },
+        policy: MarketplacePluginPolicy {
+            installation: MarketplacePluginInstallPolicy::Available,
+            authentication: MarketplacePluginAuthPolicy::OnInstall,
+            products: None,
+        },
+        interface: None,
+        keywords: Vec::new(),
+        manifest_fallback: None,
+        installed: true,
+        enabled: true,
+    };
+
+    let detail = manager
+        .read_plugin_detail_for_marketplace_plugin(&config, "debug", plugin.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        detail
+            .skills
+            .iter()
+            .map(|skill| (skill.name.as_str(), skill.description.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("sample-plugin:source-command-review", "Review changes")]
+    );
+
+    let summary = manager
+        .tool_suggest_metadata_for_marketplace_plugin(
+            "debug",
+            &plugin,
+            &SkillConfigRules::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        summary,
+        PluginCapabilitySummary {
+            config_name: "sample-plugin@debug".to_string(),
+            display_name: "sample-plugin".to_string(),
+            description: Some("Cached sample plugin".to_string()),
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }
     );
 }
 

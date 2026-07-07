@@ -526,7 +526,7 @@ async fn import_repo_migrates_mcp_hooks_commands_and_subagents() {
             .join("commands")
             .join("pr")
             .join("review.md"),
-        "---\ndescription: Review PR\n---\nReview the pull request carefully.\n",
+        format!("---\ndescription: Review PR with {SOURCE_EXTERNAL_AGENT_PRODUCT_NAME}\n---\nReview the pull request with {SOURCE_EXTERNAL_AGENT_PRODUCT_NAME} carefully.\n"),
     )
     .expect("write command");
     fs::write(
@@ -649,7 +649,7 @@ STATIC = "yes"
                 .join("SKILL.md")
         )
         .expect("read command skill"),
-        "---\nname: \"source-command-pr-review\"\ndescription: \"Review PR\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nReview the pull request carefully.\n"
+        "---\nname: \"source-command-pr-review\"\ndescription: \"Review PR with Codex\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nReview the pull request with Codex carefully.\n"
     );
 
     let agent: TomlValue = toml::from_str(

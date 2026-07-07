@@ -1,5 +1,7 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
+use crate::command_migration::migrate_plugin_commands;
+use crate::command_migration::migrated_command_skills_root;
 use crate::is_openai_curated_marketplace_name;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
@@ -797,6 +799,13 @@ async fn load_plugin(
         return loaded_plugin;
     }
 
+    if let Err(err) = migrate_plugin_commands(plugin_root.as_path()) {
+        loaded_plugin.error = Some(format!(
+            "failed to migrate plugin commands into skills: {err}"
+        ));
+        return loaded_plugin;
+    }
+
     let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
         loaded_plugin.error = Some("missing or invalid plugin.json".to_string());
         return loaded_plugin;
@@ -967,6 +976,10 @@ fn plugin_skill_roots(
     } else {
         manifest_paths.skills.clone()
     };
+    let migrated_command_skills = migrated_command_skills_root(plugin_root);
+    if migrated_command_skills.is_dir() {
+        paths.push(migrated_command_skills);
+    }
     paths.sort_unstable();
     paths.dedup();
     paths
