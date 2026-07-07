@@ -69,7 +69,11 @@ impl WindowsSandboxRequestProcessor {
         };
         codex_core::config::validate_windows_sandbox_network_proxy_compatibility(
             target_windows_sandbox_level,
-            config.permissions.network.is_some(),
+            config
+                .permissions
+                .network
+                .as_ref()
+                .is_some_and(codex_core::config::NetworkProxySpec::enabled),
         )
         .map_err(|err| invalid_request(err.to_string()))?;
 

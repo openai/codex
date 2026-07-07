@@ -268,7 +268,10 @@ impl CommandExecRequestProcessor {
                 self.config.effective_workspace_roots(),
             )
         };
-        let started_network_proxy = match network_proxy_spec.as_ref() {
+        let started_network_proxy = match network_proxy_spec
+            .as_ref()
+            .filter(|spec| !cfg!(target_os = "windows") || spec.enabled())
+        {
             Some(spec) => match spec
                 .start_proxy(
                     &network_proxy_permission_profile,

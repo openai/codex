@@ -253,6 +253,47 @@ async fn network_proxy_without_elevated_only_sandbox_requirement_is_rejected() -
     ));
     Ok(())
 }
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn disabled_managed_network_allows_unelevated_windows_sandbox() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[windows]
+sandbox = "unelevated"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = false
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        WindowsSandboxLevel::from_config(&config),
+        WindowsSandboxLevel::RestrictedToken
+    );
+    assert!(
+        !config
+            .permissions
+            .network
+            .as_ref()
+            .expect("managed network requirements should remain available")
+            .enabled()
+    );
+    Ok(())
+}
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;

@@ -3788,13 +3788,14 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
+        let network_proxy_enabled = network.as_ref().is_some_and(NetworkProxySpec::enabled);
         validate_windows_network_proxy_requirements(
             config_layer_stack.requirements_toml(),
-            network.is_some(),
+            network_proxy_enabled,
         )?;
         validate_windows_sandbox_network_proxy_compatibility(
             windows_sandbox_level,
-            network.is_some(),
+            network_proxy_enabled,
         )?;
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
@@ -4195,13 +4196,14 @@ impl Config {
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
         )?;
+        let network_proxy_enabled = network.as_ref().is_some_and(NetworkProxySpec::enabled);
         validate_windows_network_proxy_requirements(
             self.config_layer_stack.requirements_toml(),
-            network.is_some(),
+            network_proxy_enabled,
         )?;
         validate_windows_sandbox_network_proxy_compatibility(
             WindowsSandboxLevel::from_config(self),
-            network.is_some(),
+            network_proxy_enabled,
         )?;
         Ok(network)
     }
