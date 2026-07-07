@@ -48,6 +48,8 @@ struct EnabledCompactionTraceContext {
     thread_id: AgentThreadId,
     codex_turn_id: CodexTurnId,
     compaction_id: CompactionId,
+    model: String,
+    provider_name: String,
 }
 
 /// One upstream request attempt made while computing a compaction checkpoint.
@@ -98,6 +100,8 @@ impl CompactionTraceContext {
         thread_id: AgentThreadId,
         codex_turn_id: CodexTurnId,
         compaction_id: CompactionId,
+        model: String,
+        provider_name: String,
     ) -> Self {
         Self {
             state: CompactionTraceContextState::Enabled(EnabledCompactionTraceContext {
@@ -105,17 +109,14 @@ impl CompactionTraceContext {
                 thread_id,
                 codex_turn_id,
                 compaction_id,
+                model,
+                provider_name,
             }),
         }
     }
 
     /// Starts a new upstream attempt and records the exact compact endpoint request.
-    pub fn start_attempt(
-        &self,
-        model: &str,
-        provider_name: &str,
-        request: &impl Serialize,
-    ) -> CompactionTraceAttempt {
+    pub fn start_attempt(&self, request: &impl Serialize) -> CompactionTraceAttempt {
         let CompactionTraceContextState::Enabled(context) = &self.state else {
             return CompactionTraceAttempt::disabled();
         };
@@ -126,7 +127,7 @@ impl CompactionTraceContext {
                 compaction_request_id: next_compaction_request_id(),
             }),
         };
-        attempt.record_started(model, provider_name, request);
+        attempt.record_started(request);
         attempt
     }
 
@@ -173,7 +174,7 @@ impl CompactionTraceAttempt {
         }
     }
 
-    fn record_started(&self, model: &str, provider_name: &str, request: &impl Serialize) {
+    fn record_started(&self, request: &impl Serialize) {
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
         };
@@ -192,8 +193,8 @@ impl CompactionTraceAttempt {
                 compaction_request_id: attempt.compaction_request_id.clone(),
                 thread_id: attempt.context.thread_id.clone(),
                 codex_turn_id: attempt.context.codex_turn_id.clone(),
-                model: model.to_string(),
-                provider_name: provider_name.to_string(),
+                model: attempt.context.model.clone(),
+                provider_name: attempt.context.provider_name.clone(),
                 request_payload,
             },
         );

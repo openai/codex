@@ -382,6 +382,8 @@ impl ThreadTraceContext {
         &self,
         codex_turn_id: impl Into<CodexTurnId>,
         compaction_id: impl Into<CompactionId>,
+        model: impl Into<String>,
+        provider_name: impl Into<String>,
     ) -> CompactionTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return CompactionTraceContext::disabled();
@@ -391,6 +393,8 @@ impl ThreadTraceContext {
             context.thread_id.clone(),
             codex_turn_id.into(),
             compaction_id.into(),
+            model.into(),
+            provider_name.into(),
         )
     }
 

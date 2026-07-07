@@ -136,12 +136,14 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
     inference_attempt.record_completed("response-1", Some("req-1"), &token_usage, &[]);
     inference_attempt.record_failed("inference failed", /*upstream_request_id*/ None, &[]);
 
-    let compaction_trace = thread_trace.compaction_trace_context("turn-1", "compaction-1");
-    let compaction_attempt = compaction_trace.start_attempt(
+    let compaction_trace = thread_trace.compaction_trace_context(
+        "turn-1",
+        "compaction-1",
         "gpt-test",
         "test-provider",
-        &serde_json::json!({ "kind": "compaction" }),
     );
+    let compaction_attempt =
+        compaction_trace.start_attempt(&serde_json::json!({ "kind": "compaction" }));
     compaction_attempt.record_completed(&[]);
     compaction_attempt.record_failed("compaction failed");
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
@@ -158,60 +160,6 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
     assert!(!dispatch_trace.is_enabled());
 
     assert_eq!(fs::read_dir(temp.path())?.count(), 0);
-
-    Ok(())
-}
-
-#[test]
-fn compaction_attempts_record_request_scoped_models() -> anyhow::Result<()> {
-    let temp = TempDir::new()?;
-    let thread_id = ThreadId::new();
-    let thread_trace =
-        ThreadTraceContext::start_root_in_root_for_test(temp.path(), minimal_metadata(thread_id))?;
-    thread_trace.record_codex_turn_started("turn-1");
-
-    let compaction_trace = thread_trace.compaction_trace_context("turn-1", "compaction-1");
-    let previous_model_attempt = compaction_trace.start_attempt(
-        "gpt-previous",
-        "test-provider",
-        &serde_json::json!({ "model": "gpt-previous" }),
-    );
-    previous_model_attempt.record_failed("previous model unavailable");
-    let selected_model_attempt = compaction_trace.start_attempt(
-        "gpt-selected",
-        "test-provider",
-        &serde_json::json!({ "model": "gpt-selected" }),
-    );
-    selected_model_attempt.record_completed(&[]);
-
-    let replayed = replay_bundle(&single_bundle_dir(temp.path())?)?;
-    let mut attempts = replayed
-        .compaction_requests
-        .values()
-        .map(|attempt| {
-            (
-                attempt.model.clone(),
-                attempt.provider_name.clone(),
-                attempt.compaction_id.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    attempts.sort();
-    assert_eq!(
-        attempts,
-        vec![
-            (
-                "gpt-previous".to_string(),
-                "test-provider".to_string(),
-                "compaction-1".to_string(),
-            ),
-            (
-                "gpt-selected".to_string(),
-                "test-provider".to_string(),
-                "compaction-1".to_string(),
-            ),
-        ]
-    );
 
     Ok(())
 }
