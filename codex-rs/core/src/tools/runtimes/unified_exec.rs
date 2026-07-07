@@ -274,6 +274,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Deferred,
+            execution_scoped_proxy: req.turn_environment.environment.is_remote(),
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
@@ -325,9 +326,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         let (env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
-                let launch = network.remote_launch_config().await.map_err(|err| {
+                let mut launch = network.remote_launch_config().await.map_err(|err| {
                     ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
                 })?;
+                launch.proxy.request_policy_decisions = network.has_policy_decider();
                 (env, None, Some(launch))
             }
             Some(network) => {

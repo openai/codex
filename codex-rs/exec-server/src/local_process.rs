@@ -34,6 +34,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::StartedExecProcess;
+use crate::network_policy_decisions::NetworkPolicyDecisionRelay;
 use crate::process::ExecProcessEventLog;
 use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
@@ -44,6 +45,7 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
@@ -140,9 +142,10 @@ enum ProcessEntry {
 }
 
 struct Inner {
-    notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
+    notifications: Arc<std::sync::RwLock<Option<RpcNotificationSender>>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     telemetry: ExecServerTelemetry,
+    network_policy_decisions: Arc<NetworkPolicyDecisionRelay>,
 }
 
 #[derive(Clone)]
@@ -195,15 +198,19 @@ impl LocalProcess {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
-                notifications: std::sync::RwLock::new(Some(notifications)),
+                notifications: Arc::new(std::sync::RwLock::new(Some(notifications))),
                 processes: Mutex::new(HashMap::new()),
                 telemetry,
+                network_policy_decisions: Arc::new(NetworkPolicyDecisionRelay::default()),
             }),
             runtime_paths,
         }
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.inner
+            .network_policy_decisions
+            .fail_pending(/*process_id*/ None);
         let remaining = {
             let mut processes = self.inner.processes.lock().await;
             processes
@@ -223,12 +230,25 @@ impl LocalProcess {
     }
 
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
+        let disconnected = notifications.is_none();
         let mut notification_sender = self
             .inner
             .notifications
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *notification_sender = notifications;
+        if disconnected {
+            self.inner
+                .network_policy_decisions
+                .fail_pending(/*process_id*/ None);
+        }
+    }
+
+    pub(crate) fn resolve_network_policy_decision(
+        &self,
+        params: NetworkPolicyDecisionNotification,
+    ) -> Result<(), String> {
+        self.inner.network_policy_decisions.resolve(params)
     }
 
     async fn start_process(
@@ -236,8 +256,23 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref()).await?;
+        let network_policy_decider = params
+            .managed_network
+            .as_ref()
+            .and_then(|context| context.proxy_config.as_ref())
+            .is_some_and(|config| config.request_policy_decisions)
+            .then(|| {
+                self.inner
+                    .network_policy_decisions
+                    .decider(process_id.clone(), Arc::clone(&self.inner.notifications))
+            });
+        let prepared = prepare_exec_request(
+            &params,
+            child_env(&params),
+            self.runtime_paths.as_ref(),
+            network_policy_decider,
+        )
+        .await?;
         let (program, args) = prepared
             .command
             .split_first()
@@ -850,6 +885,9 @@ async fn watch_exit(
     {
         tracing::warn!("failed to shut down executor network proxy: {err}");
     }
+    inner
+        .network_policy_decisions
+        .fail_pending(Some(&process_id));
     if sandboxed {
         let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
     }

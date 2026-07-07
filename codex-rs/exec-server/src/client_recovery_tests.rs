@@ -59,7 +59,9 @@ fn recovery_does_not_retry_other_registry_conflicts() {
 
 #[tokio::test]
 async fn recovery_adds_sandbox_denial_to_pending_exit_event() {
-    let state = SessionState::new(/*recoverable*/ true);
+    let state = SessionState::new(
+        /*recoverable*/ true, /*network_policy_decider*/ None,
+    );
     assert!(!state.publish_ordered_event(ExecProcessEvent::Exited {
         seq: 2,
         exit_code: 1,

@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyDecider;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -91,6 +93,10 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NETWORK_POLICY_REQUEST_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
+use crate::protocol::NetworkPolicyRequestNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
@@ -162,6 +168,7 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
+    network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
 
 #[derive(Default)]
@@ -649,6 +656,24 @@ impl ExecServerClient {
         &self,
         params: ExecParams,
     ) -> Result<Session, ExecServerError> {
+        self.start_process_inner(params, /*network_policy_decider*/ None)
+            .await
+    }
+
+    pub(crate) async fn start_process_with_network_policy_decider(
+        &self,
+        params: ExecParams,
+        network_policy_decider: Arc<dyn NetworkPolicyDecider>,
+    ) -> Result<Session, ExecServerError> {
+        self.start_process_inner(params, Some(network_policy_decider))
+            .await
+    }
+
+    async fn start_process_inner(
+        &self,
+        params: ExecParams,
+        network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    ) -> Result<Session, ExecServerError> {
         loop {
             let rpc_client = self.inner.rpc_client().await?;
             if !self.inner.begin_process_start(&rpc_client) {
@@ -656,7 +681,10 @@ impl ExecServerClient {
             }
 
             let process_id = params.process_id.clone();
-            let state = Arc::new(SessionState::new(/*recoverable*/ false));
+            let state = Arc::new(SessionState::new(
+                /*recoverable*/ false,
+                network_policy_decider.clone(),
+            ));
             if let Err(error) = self.inner.insert_session(&process_id, Arc::clone(&state)) {
                 self.inner.finish_process_start();
                 return Err(error);
@@ -710,7 +738,9 @@ impl ExecServerClient {
         &self,
         process_id: &ProcessId,
     ) -> Result<Session, ExecServerError> {
-        let state = Arc::new(SessionState::new(/*recoverable*/ true));
+        let state = Arc::new(SessionState::new(
+            /*recoverable*/ true, /*network_policy_decider*/ None,
+        ));
         self.inner.insert_session(process_id, Arc::clone(&state))?;
         Ok(Session {
             client: self.clone(),
@@ -835,7 +865,10 @@ impl From<RpcCallError> for ExecServerError {
 }
 
 impl SessionState {
-    fn new(recoverable: bool) -> Self {
+    fn new(
+        recoverable: bool,
+        network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    ) -> Self {
         let (wake_tx, _wake_rx) = watch::channel(0);
         Self {
             wake_tx,
@@ -846,6 +879,7 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
+            network_policy_decider,
         }
     }
 
@@ -1195,6 +1229,37 @@ async fn handle_server_notification(
             inner
                 .handle_http_body_delta_notification(notification.params)
                 .await?;
+        }
+        NETWORK_POLICY_REQUEST_METHOD => {
+            let params: NetworkPolicyRequestNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let decider = inner
+                .get_session(&params.process_id)
+                .and_then(|session| session.network_policy_decider.clone());
+            let inner = Arc::clone(inner);
+            tokio::spawn(async move {
+                let decision = match decider {
+                    Some(decider) => decider.decide(params.request).await,
+                    None => NetworkDecision::deny("not_allowed"),
+                };
+                let response = NetworkPolicyDecisionNotification {
+                    request_id: params.request_id,
+                    process_id: params.process_id,
+                    decision,
+                };
+                let Ok(rpc_client) = inner.rpc_client().await else {
+                    return;
+                };
+                if let Err(err) = rpc_client
+                    .notify(NETWORK_POLICY_DECISION_METHOD, &response)
+                    .await
+                {
+                    debug!(
+                        ?err,
+                        "failed to send network policy decision to exec-server"
+                    );
+                }
+            });
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");

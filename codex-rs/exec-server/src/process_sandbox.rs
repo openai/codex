@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
@@ -38,11 +39,13 @@ pub(crate) async fn prepare_exec_request(
     params: &ExecParams,
     env: HashMap<String, String>,
     runtime_paths: Option<&ExecServerRuntimePaths>,
+    network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     let (env, managed_network, network_proxy_handle) = prepare_managed_network(
         params.managed_network.as_ref(),
         params.network_proxy.as_ref(),
         env,
+        network_policy_decider,
     )
     .await?;
     let Some(sandbox_context) = params.sandbox.as_ref() else {
@@ -162,6 +165,7 @@ async fn prepare_managed_network(
     managed_network: Option<&ManagedNetworkSandboxContext>,
     network_proxy: Option<&RemoteNetworkProxyLaunchConfig>,
     env: HashMap<String, String>,
+    network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<
     (
         HashMap<String, String>,
@@ -175,8 +179,11 @@ async fn prepare_managed_network(
     };
     let state = NetworkProxyState::from_remote_launch_config(network_proxy)
         .map_err(|err| invalid_params(format!("invalid network proxy config: {err}")))?;
-    let proxy = NetworkProxy::builder()
-        .state(Arc::new(state))
+    let mut builder = NetworkProxy::builder().state(Arc::new(state));
+    if let Some(network_policy_decider) = network_policy_decider {
+        builder = builder.policy_decider_arc(network_policy_decider);
+    }
+    let proxy = builder
         .build()
         .await
         .map_err(|err| internal_error(format!("failed to build executor network proxy: {err}")))?;

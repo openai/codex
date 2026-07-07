@@ -5,6 +5,8 @@ use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
@@ -24,6 +26,8 @@ pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
+pub const NETWORK_POLICY_REQUEST_METHOD: &str = "network/policyRequest";
+pub const NETWORK_POLICY_DECISION_METHOD: &str = "network/policyDecision";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_OPEN_METHOD: &str = "fs/open";
@@ -164,6 +168,22 @@ pub struct ExecEnvPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyRequestNotification {
+    pub request_id: String,
+    pub process_id: ProcessId,
+    pub request: NetworkPolicyRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyDecisionNotification {
+    pub request_id: String,
+    pub process_id: ProcessId,
+    pub decision: NetworkDecision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

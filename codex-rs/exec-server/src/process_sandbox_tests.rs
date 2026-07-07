@@ -58,9 +58,14 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
-        .await
-        .expect("prepare sandboxed request");
+    let prepared = prepare_exec_request(
+        &params,
+        HashMap::new(),
+        Some(&runtime_paths),
+        /*network_policy_decider*/ None,
+    )
+    .await
+    .expect("prepare sandboxed request");
 
     assert_ne!(prepared.command, params.argv);
     assert_eq!(prepared.cwd, cwd);
@@ -124,9 +129,14 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
-        .await
-        .expect("prepare managed-network sandbox request");
+    let prepared = prepare_exec_request(
+        &params,
+        HashMap::new(),
+        Some(&runtime_paths),
+        /*network_policy_decider*/ None,
+    )
+    .await
+    .expect("prepare managed-network sandbox request");
     let policy = prepared
         .command
         .windows(2)
@@ -159,9 +169,14 @@ async fn native_request_preserves_native_launch_fields() {
         network_proxy: None,
     };
 
-    let prepared = prepare_exec_request(&params, env.clone(), /*runtime_paths*/ None)
-        .await
-        .expect("prepare native request");
+    let prepared = prepare_exec_request(
+        &params,
+        env.clone(),
+        /*runtime_paths*/ None,
+        /*network_policy_decider*/ None,
+    )
+    .await
+    .expect("prepare native request");
 
     assert_eq!(prepared.command, params.argv);
     assert_eq!(prepared.cwd, cwd);
@@ -202,9 +217,11 @@ async fn remote_proxy_config_starts_executor_local_proxy() {
     let stale_proxy = "http://127.0.0.1:9".to_string();
     let env = HashMap::from([("HTTP_PROXY".to_string(), stale_proxy.clone())]);
 
-    let prepared = prepare_exec_request(&params, env, /*runtime_paths*/ None)
-        .await
-        .expect("prepare request with executor-local proxy");
+    let prepared = prepare_exec_request(
+        &params, env, /*runtime_paths*/ None, /*network_policy_decider*/ None,
+    )
+    .await
+    .expect("prepare request with executor-local proxy");
 
     let http_proxy = prepared.env.get("HTTP_PROXY").expect("HTTP proxy env");
     assert_ne!(http_proxy, &stale_proxy);

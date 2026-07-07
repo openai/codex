@@ -36,6 +36,8 @@ use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ReadParams;
 use crate::protocol::SignalParams;
 use crate::protocol::TerminateParams;
@@ -55,6 +57,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         INITIALIZE_METHOD,
         |handler: Arc<ExecServerHandler>, params: InitializeParams| async move {
             handler.initialize(params).await
+        },
+    );
+    router.notification(
+        NETWORK_POLICY_DECISION_METHOD,
+        |handler: Arc<ExecServerHandler>, params: NetworkPolicyDecisionNotification| async move {
+            handler.resolve_network_policy_decision(params)
         },
     );
     router.request_with_id(

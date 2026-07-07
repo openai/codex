@@ -233,6 +233,83 @@ async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_guardian_receives_exact_trigger_for_network_request() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = managed_network_unified_exec_test(&server).await?;
+    let command = "python3 -c \"import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler()).open('http://1.1.1.1', timeout=10).read()\"".to_string();
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "run one remote network request")
+                && !request_body_contains(request, "exec-network-remote-guardian")
+        },
+        sse(vec![
+            ev_response_created("resp-network-remote"),
+            ev_function_call(
+                "exec-network-remote-guardian",
+                "exec_command",
+                &serde_json::to_string(&network_exec_args(&command))?,
+            ),
+            ev_completed("resp-network-remote"),
+        ]),
+    )
+    .await;
+    let guardian = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            guardian_request_is_for(request, "exec-network-remote-guardian")
+        },
+        sse(vec![
+            ev_response_created("resp-network-remote-guardian"),
+            ev_assistant_message("msg-network-remote-guardian", r#"{"outcome":"deny"}"#),
+            ev_completed("resp-network-remote-guardian"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "exec-network-remote-guardian")
+        },
+        sse(vec![
+            ev_response_created("resp-network-remote-done"),
+            ev_assistant_message("msg-network-remote-done", "done"),
+            ev_completed("resp-network-remote-done"),
+        ]),
+    )
+    .await;
+    let remote = test.executor_environment().selection().clone();
+    assert_eq!(remote.environment_id, REMOTE_ENVIRONMENT_ID);
+
+    submit_managed_network_turn(
+        &test,
+        "run one remote network request",
+        vec![remote],
+        ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(5), wait_for_turn_complete(&test))
+        .await
+        .context("remote Guardian denial should return before the command network timeout")?;
+
+    assert_eq!(
+        guardian_network_triggers(&[&guardian])?,
+        vec![("exec-network-remote-guardian".to_string(), command)]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_network_host_for_one_environment_still_prompts_in_another() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));

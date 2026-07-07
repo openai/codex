@@ -15,6 +15,7 @@ use crate::protocol::ExecParams;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
+use codex_network_proxy::NetworkPolicyDecider;
 
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
@@ -47,6 +48,22 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_> {
         Box::pin(RemoteProcess::start(self, params))
+    }
+
+    fn start_with_network_policy_decider(
+        &self,
+        params: ExecParams,
+        decider: Arc<dyn NetworkPolicyDecider>,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(async move {
+            let client = self.client.get().await?;
+            let session = client
+                .start_process_with_network_policy_decider(params, decider)
+                .await?;
+            Ok(StartedExecProcess {
+                process: Arc::new(RemoteExecProcess { session }),
+            })
+        })
     }
 }
 

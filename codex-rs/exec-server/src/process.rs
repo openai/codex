@@ -202,6 +202,14 @@ pub type ExecProcessFuture<'a, T> =
 
 pub trait ExecBackend: Send + Sync {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_>;
+
+    fn start_with_network_policy_decider(
+        &self,
+        params: ExecParams,
+        _decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider>,
+    ) -> ExecBackendFuture<'_> {
+        self.start(params)
+    }
 }
 
 pub type ExecBackendFuture<'a> =

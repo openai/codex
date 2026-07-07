@@ -923,13 +923,17 @@ impl UnifiedExecProcessManager {
         spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let mut request = if environment.is_remote() {
+        let remote = environment.is_remote();
+        let mut request = if remote {
             attempt.env_for_exec_server(command, options)
         } else {
             attempt.env_for(command, options, network, environment_id)
         }
         .map_err(ToolError::Codex)?;
         request.exec_server_network_proxy = network_proxy_launch;
+        if remote {
+            request.network = network.cloned();
+        }
         request.exec_server_env_config = exec_server_env_config;
         self.open_session_with_prepared_exec_env(
             process_id,
@@ -1053,11 +1057,21 @@ impl UnifiedExecProcessManager {
                 ));
             }
 
-            let started = environment
-                .get_exec_backend()
-                .start(exec_server_params_for_request(process_id, request, tty))
-                .await
-                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            let backend = environment.get_exec_backend();
+            let params = exec_server_params_for_request(process_id, request, tty);
+            let started = match request
+                .network
+                .as_ref()
+                .and_then(NetworkProxy::remote_policy_decider)
+            {
+                Some(decider) => {
+                    backend
+                        .start_with_network_policy_decider(params, decider)
+                        .await
+                }
+                None => backend.start(params).await,
+            }
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_exec_server_started(started).await;
         }

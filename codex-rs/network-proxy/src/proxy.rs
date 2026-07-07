@@ -680,6 +680,29 @@ impl NetworkProxy {
         })
     }
 
+    pub fn has_policy_decider(&self) -> bool {
+        self.policy_decider.is_some()
+    }
+
+    /// Returns the policy decider with this proxy's execution attribution attached.
+    pub fn remote_policy_decider(&self) -> Option<Arc<dyn NetworkPolicyDecider>> {
+        let decider = self.policy_decider.clone()?;
+        let environment_id = self
+            .execution_scope
+            .as_ref()
+            .map(|scope| scope.environment_id.clone());
+        let execution_id = self
+            .execution_scope
+            .as_ref()
+            .map(|scope| scope.execution_id.clone());
+        Some(Arc::new(move |mut request: crate::NetworkPolicyRequest| {
+            let decider = Arc::clone(&decider);
+            request.environment_id = request.environment_id.or_else(|| environment_id.clone());
+            request.execution_id = request.execution_id.or_else(|| execution_id.clone());
+            async move { decider.decide(request).await }
+        }))
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }
@@ -1118,12 +1141,59 @@ impl Drop for NetworkProxyHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NetworkDecision;
     use crate::config::NetworkProxySettings;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn remote_policy_decider_attaches_execution_attribution() {
+        let captured = Arc::new(Mutex::new(None));
+        let captured_for_decider = Arc::clone(&captured);
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let proxy = NetworkProxy::builder()
+            .state(state)
+            .policy_decider(move |request: crate::NetworkPolicyRequest| {
+                let captured = Arc::clone(&captured_for_decider);
+                async move {
+                    *captured
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some((request.environment_id, request.execution_id));
+                    NetworkDecision::Allow
+                }
+            })
+            .build()
+            .await
+            .expect("build proxy");
+        let scoped = proxy
+            .for_execution("remote", "execution-1", "attribution-token".to_string())
+            .expect("scope proxy to execution");
+        let decider = scoped.remote_policy_decider().expect("remote decider");
+        let request = crate::NetworkPolicyRequest::new(crate::NetworkPolicyRequestArgs {
+            protocol: crate::NetworkProtocol::HttpsConnect,
+            host: "example.com".to_string(),
+            port: 443,
+            environment_id: None,
+            client_addr: None,
+            method: None,
+            command: None,
+            exec_policy_hint: None,
+        });
+
+        assert_eq!(decider.decide(request).await, NetworkDecision::Allow);
+        assert_eq!(
+            *captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            Some((Some("remote".to_string()), Some("execution-1".to_string())))
+        );
+    }
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
