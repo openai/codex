@@ -2367,9 +2367,21 @@ impl ChatComposer {
                 .unwrap_or(0);
             let left_fragment = &text[left_fragment_start..safe_cursor];
             if left_fragment.starts_with(prefix) {
+                let left_range = left_fragment_start..safe_cursor;
+                let left_token = &left_fragment[prefix_len..];
+                if Self::prefixed_token_range_is_editable(textarea, prefix, &left_range, left_token)
+                {
+                    return Some((left_range, left_token.to_string()));
+                }
+
+                let right_len = after_cursor
+                    .char_indices()
+                    .find(|(_, c)| c.is_whitespace())
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(after_cursor.len());
                 return Some((
-                    left_fragment_start..safe_cursor,
-                    left_fragment[prefix_len..].to_string(),
+                    safe_cursor..safe_cursor + right_len,
+                    after_cursor[prefix_len..right_len].to_string(),
                 ));
             }
         }
@@ -6395,6 +6407,35 @@ mod tests {
         composer.sync_popups();
     }
 
+    fn configure_bound_skill_left_of_unbound_skill(composer: &mut ChatComposer) {
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "unbound-skill".to_string(),
+            description: "Example skill used in tests.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/unbound-skill/SKILL.md").abs(),
+            scope: crate::test_support::skill_scope_user(),
+            plugin_id: None,
+        }]));
+        composer.set_text_content_with_mention_bindings(
+            "$bound-skill$unbound-skill".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                sigil: '$',
+                mention: "bound-skill".to_string(),
+                path: test_path_buf("/tmp/bound-skill/SKILL.md")
+                    .abs()
+                    .display()
+                    .to_string(),
+            }],
+        );
+        composer.draft.textarea.set_cursor("$bound-skill".len());
+        composer.sync_popups();
+    }
+
     #[test]
     fn skill_popup_targets_unbound_mention_left_of_bound_mention() {
         let (mut composer, _rx) = new_test_composer();
@@ -6425,6 +6466,32 @@ mod tests {
                         .to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention() {
+        let (mut composer, _rx) = new_test_composer();
+        configure_bound_skill_left_of_unbound_skill(&mut composer);
+
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
+            panic!("expected skill popup for unbound right mention");
+        };
+        assert_eq!(
+            popup
+                .selected_mention()
+                .expect("expected unbound skill mention to be selected")
+                .insert_text,
+            "$unbound-skill"
+        );
+    }
+
+    #[test]
+    fn skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention_snapshot() {
+        snapshot_composer_state(
+            "skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention",
+            /*enhanced_keys_supported*/ false,
+            configure_bound_skill_left_of_unbound_skill,
         );
     }
 
