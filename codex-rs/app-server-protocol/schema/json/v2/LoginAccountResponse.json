@@ -87,6 +87,22 @@
       ],
       "title": "ChatgptAuthTokensv2::LoginAccountResponse",
       "type": "object"
+    },
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "amazonBedrock"
+          ],
+          "title": "AmazonBedrockv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AmazonBedrockv2::LoginAccountResponse",
+      "type": "object"
     }
   ],
   "title": "LoginAccountResponse"
