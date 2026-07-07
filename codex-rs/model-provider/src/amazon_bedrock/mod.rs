@@ -9,6 +9,7 @@ use std::sync::Arc;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
@@ -164,6 +165,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
     fn models_manager(
         &self,
         _codex_home: PathBuf,
+        _http_client_factory: HttpClientFactory,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
