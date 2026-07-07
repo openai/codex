@@ -1,7 +1,7 @@
 use crate::SESSION_TITLE_MAX_LEN;
 use crate::truncate;
 
-const IMPORTED_SESSION_FALLBACK_TITLE: &str = "Imported session";
+pub(super) const IMPORTED_SESSION_FALLBACK_TITLE: &str = "Imported session";
 const RECOGNIZED_CONTROL_WRAPPERS: [(&str, &str); 10] = [
     ("<command-message>", "</command-message>"),
     ("<command-name>", "</command-name>"),
@@ -27,13 +27,13 @@ impl SessionTitleCandidates {
     }
 }
 
-pub(super) fn fallback_title_from_user_message(message: &str) -> String {
+pub(super) fn fallback_title_from_user_message(message: &str) -> Option<String> {
     let message = strip_leading_control_wrappers(message);
-    let first_meaningful_line = message.lines().map(str::trim).find(|line| !line.is_empty());
-    truncate(
-        first_meaningful_line.unwrap_or(IMPORTED_SESSION_FALLBACK_TITLE),
-        SESSION_TITLE_MAX_LEN,
-    )
+    message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| truncate(line, SESSION_TITLE_MAX_LEN))
 }
 
 fn strip_leading_control_wrappers(message: &str) -> &str {

@@ -47,7 +47,10 @@ fn strips_nested_repeated_and_multiline_leading_control_wrappers() {
         Fix auth flow\n\
         Additional details";
 
-    assert_eq!(fallback_title_from_user_message(message), "Fix auth flow");
+    assert_eq!(
+        fallback_title_from_user_message(message),
+        Some("Fix auth flow".to_string())
+    );
 }
 
 #[test]
@@ -72,22 +75,22 @@ fn strips_observed_external_agent_control_wrapper_families() {
     ];
 
     for message in cases {
-        assert_eq!(fallback_title_from_user_message(message), "Fix auth flow");
+        assert_eq!(
+            fallback_title_from_user_message(message),
+            Some("Fix auth flow".to_string())
+        );
     }
 }
 
 #[test]
-fn uses_safe_fallback_for_empty_or_control_only_messages() {
-    assert_eq!(
-        fallback_title_from_user_message(""),
-        IMPORTED_SESSION_FALLBACK_TITLE
-    );
+fn returns_no_candidate_for_empty_or_control_only_messages() {
+    assert_eq!(fallback_title_from_user_message(""), None);
     assert_eq!(
         fallback_title_from_user_message(
             "<command-message>review</command-message>\n\
              <system-reminder>context</system-reminder>"
         ),
-        IMPORTED_SESSION_FALLBACK_TITLE
+        None
     );
 }
 
@@ -95,7 +98,7 @@ fn uses_safe_fallback_for_empty_or_control_only_messages() {
 fn uses_first_meaningful_line_from_ordinary_messages() {
     assert_eq!(
         fallback_title_from_user_message("\n  \n  Fix auth flow  \nAdditional details"),
-        "Fix auth flow"
+        Some("Fix auth flow".to_string())
     );
 }
 
@@ -103,18 +106,18 @@ fn uses_first_meaningful_line_from_ordinary_messages() {
 fn preserves_unknown_and_user_authored_angle_bracket_text() {
     assert_eq!(
         fallback_title_from_user_message("<user-note>Keep this text</user-note> Fix auth flow"),
-        "<user-note>Keep this text</user-note> Fix auth flow"
+        Some("<user-note>Keep this text</user-note> Fix auth flow".to_string())
     );
     assert_eq!(
         fallback_title_from_user_message("Explain <system-reminder> tags"),
-        "Explain <system-reminder> tags"
+        Some("Explain <system-reminder> tags".to_string())
     );
 }
 
 #[test]
 fn bounds_fallback_titles_to_120_characters() {
     let message = "x".repeat(121);
-    let title = fallback_title_from_user_message(&message);
+    let title = fallback_title_from_user_message(&message).expect("title");
 
     assert_eq!(title.chars().count(), SESSION_TITLE_MAX_LEN);
     assert_eq!(title, format!("{}...", "x".repeat(117)));

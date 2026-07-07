@@ -1,6 +1,7 @@
 use crate::ConversationMessage;
 use crate::ExternalAgentSessionMigration;
 use crate::MessageRole;
+use crate::title::IMPORTED_SESSION_FALLBACK_TITLE;
 use crate::title::SessionTitleCandidates;
 use crate::title::fallback_title_from_user_message;
 use crate::truncate;
@@ -39,6 +40,7 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     let mut custom_title = None;
     let mut ai_title = None;
     let mut fallback_title = None;
+    let mut saw_user_message = false;
     let mut latest_timestamp = None;
     let mut saw_message = false;
 
@@ -67,8 +69,11 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
             continue;
         };
         saw_message = true;
-        if fallback_title.is_none() && message.role == MessageRole::User {
-            fallback_title = Some(fallback_title_from_user_message(&message.text));
+        if message.role == MessageRole::User {
+            saw_user_message = true;
+            if fallback_title.is_none() {
+                fallback_title = fallback_title_from_user_message(&message.text);
+            }
         }
         if let Some(timestamp) = message.timestamp {
             latest_timestamp =
@@ -93,7 +98,9 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
             title: SessionTitleCandidates {
                 custom_title,
                 ai_title,
-                fallback_title,
+                fallback_title: fallback_title.or_else(|| {
+                    saw_user_message.then(|| IMPORTED_SESSION_FALLBACK_TITLE.to_string())
+                }),
             }
             .select(),
         },
