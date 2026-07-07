@@ -8,7 +8,7 @@ runs:
     # shared build-path contract.
     - name: Configure Cargo target directory
       shell: bash
-      run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/codex-rs/target" >> "$GITHUB_ENV"
+      run: echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/codex-rs/target}" >> "$GITHUB_ENV"
 
     - name: Prefer the Git CLI for Cargo git dependencies
       shell: bash
