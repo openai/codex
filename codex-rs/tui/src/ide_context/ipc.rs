@@ -889,12 +889,16 @@ mod tests {
         active_selection_content: &'static str,
     ) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let request = read_frame(&mut stream, test_deadline()).expect("read ide-context");
-            let request_id = request
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("ide-context request id");
+            let Ok((mut stream, _)) = listener.accept() else {
+                panic!("accept failed");
+            };
+            let request = match read_frame(&mut stream, test_deadline()) {
+                Ok(request) => request,
+                Err(err) => panic!("read ide-context failed: {err}"),
+            };
+            let Some(request_id) = request.get("requestId").and_then(Value::as_str) else {
+                panic!("ide-context request did not include a request id");
+            };
             write_ide_context_response(&mut stream, request_id, active_selection_content);
         })
     }
@@ -912,16 +916,13 @@ mod tests {
     }
 
     fn assert_listener_unused(listener: &std::os::unix::net::UnixListener) {
-        listener
-            .set_nonblocking(true)
-            .expect("set listener nonblocking");
-        assert_eq!(
-            listener
-                .accept()
-                .expect_err("listener should not receive a connection")
-                .kind(),
-            std::io::ErrorKind::WouldBlock
-        );
+        if let Err(err) = listener.set_nonblocking(true) {
+            panic!("set listener nonblocking failed: {err}");
+        }
+        match listener.accept() {
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock),
+            Ok(_) => panic!("listener should not receive a connection"),
+        }
     }
 
     #[test]
