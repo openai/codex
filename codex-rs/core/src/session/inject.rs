@@ -22,7 +22,7 @@ impl Session {
     ) -> Result<(), Vec<ResponseItem>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
-            Some(active_turn) => {
+            Some(active_turn) if active_turn.task.is_some() => {
                 self.input_queue
                     .extend_pending_input_for_turn_state(
                         active_turn.turn_state.as_ref(),
@@ -31,7 +31,7 @@ impl Session {
                     .await;
                 Ok(())
             }
-            None => Err(input),
+            Some(_) | None => Err(input),
         }
     }
 
@@ -42,6 +42,10 @@ impl Session {
     /// start a turn when user/client-triggered work is queued, any task is still
     /// active, or the session is currently in Plan mode. Active Review tasks are
     /// covered by the active-task check because Review turns are not steerable.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "turn startup must remain serialized across its async checks"
+    )]
     pub(crate) async fn try_start_turn_if_idle(
         self: &Arc<Self>,
         input: Vec<ResponseItem>,
@@ -49,6 +53,7 @@ impl Session {
         if input.is_empty() {
             return Ok(());
         }
+        let turn_start = self.turn_start_lock.lock().await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
@@ -83,6 +88,7 @@ impl Session {
 
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
+            drop(turn_start);
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
@@ -95,6 +101,7 @@ impl Session {
             .await;
         if turn_context.collaboration_mode.mode == ModeKind::Plan {
             self.clear_reserved_idle_turn(&turn_state).await;
+            drop(turn_start);
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PlanMode,
@@ -105,6 +112,7 @@ impl Session {
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
+            drop(turn_start);
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
@@ -131,7 +139,7 @@ impl Session {
                 input.into_iter().map(TurnInput::ResponseItem).collect(),
             )
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        self.start_task_locked(turn_context, Vec::new(), RegularTask::new())
             .await;
         Ok(())
     }

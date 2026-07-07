@@ -311,18 +311,23 @@ where
 }
 
 impl Session {
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "task replacement must remain serialized through startup"
+    )]
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
     ) {
-        self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        let _turn_start = self.turn_start_lock.lock().await;
+        self.abort_all_tasks_locked(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task_locked(turn_context, input, task).await;
     }
 
-    pub(crate) async fn start_task<T: SessionTask>(
+    pub(crate) async fn start_task_locked<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
@@ -425,8 +430,10 @@ impl Session {
                 }
                 if !task_cancellation_token.is_cancelled() {
                     // Finish uniformly from the spawn site so all tasks share the same lifecycle.
-                    sess.on_task_finished(Arc::clone(&ctx_for_finish), task_result)
-                        .await;
+                    select! {
+                        _ = task_cancellation_token.cancelled() => {}
+                        _ = sess.on_task_finished(Arc::clone(&ctx_for_finish), task_result) => {}
+                    }
                 }
                 done_clone.notify_waiters();
             }
@@ -456,9 +463,11 @@ impl Session {
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
-    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+    pub(crate) fn maybe_start_turn_for_pending_work(self: &Arc<Self>) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
+                .await;
+        })
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
@@ -466,10 +475,18 @@ impl Session {
     ///
     /// The turn is created only when there is mailbox mail marked with `trigger_turn`, and only
     /// if the session is currently idle.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "pending-work startup must remain serialized across its async checks"
+    )]
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        if !self.input_queue.has_trigger_turn_mailbox_items().await {
+            return;
+        }
+        let _turn_start = self.turn_start_lock.lock().await;
         if !self.input_queue.has_trigger_turn_mailbox_items().await {
             return;
         }
@@ -489,11 +506,24 @@ impl Session {
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        self.start_task_locked(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "abort and optional restart form one serialized transition"
+    )]
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        let turn_start = self.turn_start_lock.lock().await;
+        let restart_pending = self.abort_all_tasks_locked(reason).await;
+        drop(turn_start);
+        if restart_pending {
+            self.maybe_start_turn_for_pending_work().await;
+        }
+    }
+
+    async fn abort_all_tasks_locked(self: &Arc<Self>, reason: TurnAbortReason) -> bool {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -513,21 +543,24 @@ impl Session {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
         }
-        if let Some(active_turn) = active_turn_to_clear {
+        if let Some(active_turn) = active_turn_to_clear.as_ref() {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            self.input_queue.clear_pending(&active_turn).await;
+            self.input_queue.clear_pending(active_turn).await;
         }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
-        }
+        reason == TurnAbortReason::Interrupted && aborted_turn
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "targeted abort must remain serialized through terminal delivery"
+    )]
     pub(crate) async fn abort_turn_if_active(
         self: &Arc<Self>,
         turn_id: &str,
         reason: TurnAbortReason,
     ) -> bool {
+        let turn_start = self.turn_start_lock.lock().await;
         let active_turn = {
             let mut active = self.active_turn.lock().await;
             if active
@@ -557,6 +590,7 @@ impl Session {
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
 
+        drop(turn_start);
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
         }
@@ -564,11 +598,16 @@ impl Session {
         true
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "task completion must remain serialized through terminal delivery"
+    )]
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        let turn_start = self.turn_start_lock.lock().await;
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
             Err(CodexErr::TurnAborted) => (None, Some(TurnAbortReason::Interrupted)),
@@ -797,7 +836,9 @@ impl Session {
                 false
             }
         };
+        drop(turn_start);
         if cleared_active_turn {
+            self.maybe_start_turn_for_pending_work().await;
             self.emit_thread_idle_lifecycle_if_idle().await;
         }
         // Regular items were flushed before this terminal event was appended; buffering

@@ -5526,6 +5526,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         submission_lifecycle: SubmissionLifecycle::default(),
         thread_activity,
         submission_send_lock: Mutex::new(()),
+        turn_start_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -7807,6 +7808,7 @@ where
         submission_lifecycle: SubmissionLifecycle::default(),
         thread_activity,
         submission_send_lock: Mutex::new(()),
+        turn_start_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -10045,6 +10047,88 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
     assert!(session.active_turn.lock().await.is_none());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_retries_trigger_mail_that_arrives_before_active_turn_clears() {
+    struct BlockingTurnStop {
+        blocked: std::sync::atomic::AtomicBool,
+        entered: async_channel::Sender<()>,
+        release: async_channel::Receiver<()>,
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for BlockingTurnStop {
+        fn on_turn_stop<'a>(
+            &'a self,
+            _input: codex_extension_api::TurnStopInput<'a>,
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                if self.blocked.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                self.entered.send(()).await.expect("entered receiver open");
+                self.release.recv().await.expect("release sender open");
+            })
+        }
+    }
+
+    let (mut session, turn_context, events) = make_session_and_context_with_rx().await;
+    let (entered_tx, entered_rx) = async_channel::bounded(1);
+    let (release_tx, release_rx) = async_channel::bounded(1);
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.turn_lifecycle_contributor(Arc::new(BlockingTurnStop {
+        blocked: std::sync::atomic::AtomicBool::new(false),
+        entered: entered_tx,
+        release: release_rx,
+    }));
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .extensions = Arc::new(builder.build());
+    session
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), CompletingTask)
+        .await;
+    entered_rx.recv().await.expect("turn stop should block");
+    assert!(session.turn_start_lock.try_lock().is_err());
+
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "late trigger".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+    let scheduler = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move { session.maybe_start_turn_for_pending_work().await }
+    });
+    release_tx.send(()).await.expect("turn stop should resume");
+    scheduler
+        .await
+        .expect("pending-work scheduler should not panic");
+
+    let next_turn_id = timeout(StdDuration::from_secs(2), async {
+        let mut saw_completed_turn = false;
+        loop {
+            match events.recv().await.expect("event channel open").msg {
+                EventMsg::TurnComplete(event) if event.turn_id == turn_context.sub_id => {
+                    saw_completed_turn = true;
+                }
+                EventMsg::TurnStarted(event) => {
+                    assert!(saw_completed_turn);
+                    return event.turn_id;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("late trigger should start a new turn");
+    assert_ne!(next_turn_id, turn_context.sub_id);
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
 #[tokio::test]
 async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
     struct ThreadIdleRecorder {
@@ -10112,6 +10196,45 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     );
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds session state to pause startup at a deterministic boundary"
+)]
+async fn interrupt_waits_for_idle_turn_start_to_install_task() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let state = sess.state.lock().await;
+    let start = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        async move {
+            sess.try_start_turn_if_idle(vec![user_message("synthetic idle input")])
+                .await
+        }
+    });
+    loop {
+        match sess.turn_start_lock.try_lock() {
+            Ok(turn_start) => drop(turn_start),
+            Err(_) => break,
+        }
+        tokio::task::yield_now().await;
+    }
+
+    let interrupt = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        async move { sess.interrupt_task().await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!interrupt.is_finished());
+
+    drop(state);
+    start
+        .await
+        .expect("idle turn start task should not panic")
+        .expect("idle turn should be accepted");
+    interrupt.await.expect("interrupt task should not panic");
+    assert!(sess.active_turn.lock().await.is_none());
 }
 
 #[tokio::test]
