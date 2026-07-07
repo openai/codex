@@ -228,6 +228,41 @@ fn divider_drag_resizes_only_the_target_panel() {
 }
 
 #[test]
+fn right_rail_resize_is_capped_at_half_the_frame_width() {
+    let mut state = OwnedScreenFrameState::default();
+    let frame_area = area(/*width*/ 144);
+    let initial = state.layout(frame_area, /*has_side*/ false);
+    let divider = initial.summary_divider.expect("summary divider");
+    assert!(state.handle_mouse_primary(MousePrimaryEvent {
+        kind: MousePrimaryEventKind::Press,
+        column: divider.x,
+        row: divider.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(state.handle_mouse_primary(MousePrimaryEvent {
+        kind: MousePrimaryEventKind::Drag,
+        column: frame_area.x,
+        row: divider.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(state.handle_mouse_primary(MousePrimaryEvent {
+        kind: MousePrimaryEventKind::Release,
+        column: frame_area.x,
+        row: divider.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+
+    let resized = state.layout(frame_area, /*has_side*/ false);
+    assert_eq!(resized.summary.expect("summary rail").area.width, 72);
+
+    let narrower = state.layout(area(/*width*/ 120), /*has_side*/ false);
+    assert_eq!(narrower.summary.expect("summary rail").area.width, 60);
+
+    let restored = state.layout(frame_area, /*has_side*/ false);
+    assert_eq!(restored.summary.expect("summary rail").area.width, 72);
+}
+
+#[test]
 fn resizing_auto_panel_keeps_it_visible_at_the_auto_breakpoint() {
     let mut state = OwnedScreenFrameState::default();
     let initial = state.layout(area(/*width*/ 109), /*has_side*/ false);

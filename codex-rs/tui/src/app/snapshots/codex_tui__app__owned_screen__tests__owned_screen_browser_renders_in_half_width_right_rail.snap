@@ -1,0 +1,16 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+expression: terminal.backend()
+---
+"committed response                                                     ┃ Summary | Browser                                                      "
+"                                                                       ┃ [<] [>] [R] Example running                                            "
+"                                                                       ┃ URL https://example.com                                                "
+"                                                                       ┃Codex browser panel                                                     "
+"                                                                       ┃interactive page                                                        "
+"                                                                       ┃ready                                                                   "
+"                                                                       ┃                                                                        "
+"                                                                       ┃                                                                        "
+"                                                                       ┃                                                                        "
+"› draft sentinel                                                       ┃                                                                        "
+"                                                                       ┃                                                                        "
+"  gpt-5.5 default · /tmp/project                                       ┃ Esc hide    click page  take control   /browser close stop             "

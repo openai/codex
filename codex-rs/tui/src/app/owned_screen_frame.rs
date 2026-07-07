@@ -28,8 +28,11 @@ const SIDEBAR_MIN_WIDTH: u16 = 24;
 const SIDEBAR_MAX_WIDTH: u16 = 48;
 const SUMMARY_DEFAULT_WIDTH: u16 = 34;
 const SUMMARY_MIN_WIDTH: u16 = 30;
-const SUMMARY_MAX_WIDTH: u16 = 48;
 const PANEL_SCROLL_ROWS: u16 = 3;
+
+fn right_rail_max_width(frame_width: u16) -> u16 {
+    frame_width / 2
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum OwnedScreenPanelPresentation {
@@ -504,10 +507,12 @@ impl OwnedScreenFrameState {
             OwnedScreenPanel::Sidebar => column
                 .saturating_sub(area.x)
                 .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
-            OwnedScreenPanel::Summary => area
-                .right()
-                .saturating_sub(column.saturating_add(PANEL_DIVIDER_WIDTH))
-                .clamp(SUMMARY_MIN_WIDTH, SUMMARY_MAX_WIDTH),
+            OwnedScreenPanel::Summary => {
+                let max_width = right_rail_max_width(area.width);
+                area.right()
+                    .saturating_sub(column.saturating_add(PANEL_DIVIDER_WIDTH))
+                    .clamp(SUMMARY_MIN_WIDTH.min(max_width), max_width)
+            }
         };
         self.panel_state_mut(panel).width = width;
     }

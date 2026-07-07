@@ -364,6 +364,53 @@ async fn owned_screen_browser_renders_in_wide_right_rail() {
 }
 
 #[tokio::test]
+async fn owned_screen_browser_renders_in_half_width_right_rail() {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "draft sentinel",
+        &["committed response"],
+    );
+    app.owned_screen_frame
+        .select_right_rail_content(OwnedScreenRightRailContent::Browser);
+    let frame_area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 144, /*height*/ 12,
+    );
+    let layout = app
+        .owned_screen_frame
+        .layout(frame_area, /*has_side*/ false);
+    let divider = layout.summary_divider.expect("browser divider");
+    assert!(
+        app.owned_screen_frame
+            .handle_mouse_primary(primary_press(divider.x, divider.y))
+    );
+    assert!(app.owned_screen_frame.handle_mouse_primary(primary_event(
+        MousePrimaryEventKind::Drag,
+        frame_area.x,
+        divider.y,
+    )));
+    assert!(app.owned_screen_frame.handle_mouse_primary(primary_event(
+        MousePrimaryEventKind::Release,
+        frame_area.x,
+        divider.y,
+    )));
+    let browser = browser_view(/*human_control*/ false, Some((1, 2)));
+
+    let terminal = render_frame_app_with_browser(
+        &mut app,
+        frame_area.width,
+        frame_area.height,
+        Some(&browser),
+    );
+
+    assert_snapshot!(
+        "owned_screen_browser_renders_in_half_width_right_rail",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
 async fn owned_screen_browser_preserves_narrow_overlay_chrome() {
     let mut app = app_with_owned_parent().await;
     seed_pane(

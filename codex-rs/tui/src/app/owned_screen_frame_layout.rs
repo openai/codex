@@ -32,6 +32,12 @@ impl OwnedScreenFrameState {
         }
         let hard_center_width = OwnedScreenLayout::minimum_width(has_side);
         let preferred_center_width = PREFERRED_CENTER_WIDTH.max(hard_center_width);
+        let sidebar_width = self.sidebar.width;
+        let summary_width = self.summary.width.min(right_rail_max_width(area.width));
+        let panel_width = |panel| match panel {
+            OwnedScreenPanel::Sidebar => sidebar_width,
+            OwnedScreenPanel::Summary => summary_width,
+        };
         let mut remaining_width = area.width;
         let mut sidebar_docked = false;
         let mut summary_docked = false;
@@ -48,31 +54,31 @@ impl OwnedScreenFrameState {
             if self.preference(panel) != OwnedScreenPanelPreference::Shown {
                 continue;
             }
-            let panel_width = self.panel_state(panel).width + PANEL_DIVIDER_WIDTH;
-            if remaining_width >= hard_center_width.saturating_add(panel_width) {
+            let required_width = panel_width(panel) + PANEL_DIVIDER_WIDTH;
+            if remaining_width >= hard_center_width.saturating_add(required_width) {
                 match panel {
                     OwnedScreenPanel::Sidebar => sidebar_docked = true,
                     OwnedScreenPanel::Summary => summary_docked = true,
                 }
-                remaining_width = remaining_width.saturating_sub(panel_width);
+                remaining_width = remaining_width.saturating_sub(required_width);
             }
         }
         for panel in [OwnedScreenPanel::Sidebar, OwnedScreenPanel::Summary] {
             if self.preference(panel) != OwnedScreenPanelPreference::Auto {
                 continue;
             }
-            let panel_width = self.panel_state(panel).width + PANEL_DIVIDER_WIDTH;
-            if remaining_width >= preferred_center_width.saturating_add(panel_width) {
+            let required_width = panel_width(panel) + PANEL_DIVIDER_WIDTH;
+            if remaining_width >= preferred_center_width.saturating_add(required_width) {
                 match panel {
                     OwnedScreenPanel::Sidebar => sidebar_docked = true,
                     OwnedScreenPanel::Summary => summary_docked = true,
                 }
-                remaining_width = remaining_width.saturating_sub(panel_width);
+                remaining_width = remaining_width.saturating_sub(required_width);
             }
         }
         let mut center = area;
         let (sidebar, sidebar_divider) = if sidebar_docked {
-            let panel_area = Rect::new(center.x, center.y, self.sidebar.width, center.height);
+            let panel_area = Rect::new(center.x, center.y, sidebar_width, center.height);
             let divider = Rect::new(
                 panel_area.right(),
                 center.y,
@@ -82,7 +88,7 @@ impl OwnedScreenFrameState {
             center.x = divider.right();
             center.width = center
                 .width
-                .saturating_sub(self.sidebar.width + PANEL_DIVIDER_WIDTH);
+                .saturating_sub(sidebar_width + PANEL_DIVIDER_WIDTH);
             (
                 Some(OwnedScreenPanelLayout {
                     area: panel_area,
@@ -98,16 +104,15 @@ impl OwnedScreenFrameState {
             let divider = Rect::new(
                 center
                     .right()
-                    .saturating_sub(self.summary.width + PANEL_DIVIDER_WIDTH),
+                    .saturating_sub(summary_width + PANEL_DIVIDER_WIDTH),
                 center.y,
                 PANEL_DIVIDER_WIDTH,
                 center.height,
             );
-            let panel_area =
-                Rect::new(divider.right(), center.y, self.summary.width, center.height);
+            let panel_area = Rect::new(divider.right(), center.y, summary_width, center.height);
             center.width = center
                 .width
-                .saturating_sub(self.summary.width + PANEL_DIVIDER_WIDTH);
+                .saturating_sub(summary_width + PANEL_DIVIDER_WIDTH);
             (
                 Some(OwnedScreenPanelLayout {
                     area: panel_area,
