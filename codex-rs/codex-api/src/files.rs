@@ -37,9 +37,10 @@ pub enum OpenAiFileError {
         size_bytes: u64,
         limit_bytes: u64,
     },
-    #[error("failed to send OpenAI file request to {url}: {source}")]
+    #[error("failed to send OpenAI file request to {url} ({error_class}): {source}")]
     Request {
         url: String,
+        error_class: &'static str,
         #[source]
         source: reqwest::Error,
     },
@@ -107,6 +108,7 @@ pub async fn upload_openai_file(
         .await
         .map_err(|source| OpenAiFileError::Request {
             url: create_url.clone(),
+            error_class: request_error_class(&source),
             source,
         })?;
     let create_status = create_response.status();
@@ -134,6 +136,7 @@ pub async fn upload_openai_file(
         .await
         .map_err(|source| OpenAiFileError::Request {
             url: create_payload.upload_url.clone(),
+            error_class: request_error_class(&source),
             source,
         })?;
     let upload_status = upload_response.status();
@@ -159,6 +162,7 @@ pub async fn upload_openai_file(
             .await
             .map_err(|source| OpenAiFileError::Request {
                 url: finalize_url.clone(),
+                error_class: request_error_class(&source),
                 source,
             })?;
         let finalize_status = finalize_response.status();
@@ -232,6 +236,20 @@ fn build_reqwest_client() -> reqwest::Client {
         tracing::warn!(error = %error, "failed to build OpenAI file upload client");
         reqwest::Client::new()
     })
+}
+
+fn request_error_class(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "unknown"
+    }
 }
 
 #[cfg(test)]
