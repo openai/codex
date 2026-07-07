@@ -96,7 +96,6 @@ mod telemetry;
 
 use telemetry::McpCallMetricOutcome;
 use telemetry::emit_mcp_call_metrics;
-use telemetry::emit_mcp_ui_resource_uri_without_trusted_connector_id_metric;
 use telemetry::mcp_call_metric_outcome;
 use telemetry::record_mcp_call_outcome_span_telemetry;
 
@@ -173,9 +172,10 @@ pub(crate) async fn handle_mcp_tool_call(
         } else {
             "other"
         };
-        emit_mcp_ui_resource_uri_without_trusted_connector_id_metric(
-            turn_context.as_ref(),
-            server_kind,
+        turn_context.session_telemetry.counter(
+            "codex.mcp.ui_resource_uri_without_trusted_connector_id",
+            /*inc*/ 1,
+            &[("server_kind", server_kind)],
         );
     }
     let app_tool_policy = if is_codex_apps_server {

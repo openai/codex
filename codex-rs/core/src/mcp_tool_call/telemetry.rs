@@ -10,8 +10,6 @@ use tracing::Span;
 const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
 const MCP_CALL_DURATION_METRIC: &str = "codex.mcp.call.duration_ms";
 const MCP_CALL_ERROR_COUNT_METRIC: &str = "codex.mcp.call.error";
-const MCP_UI_RESOURCE_URI_WITHOUT_TRUSTED_CONNECTOR_ID_METRIC: &str =
-    "codex.mcp.ui_resource_uri_without_trusted_connector_id";
 // No CallToolResult was received. This includes request setup, transport, timeout, protocol, and
 // JSON-RPC failures; it does not imply that the request never reached the MCP server.
 const MCP_CALL_ERROR_TYPE_MCP_REQUEST: &str = "mcp_request";
@@ -85,17 +83,6 @@ pub(super) fn emit_mcp_call_metrics(
         MCP_CALL_ERROR_COUNT_METRIC,
         /*inc*/ 1,
         &error_tag_refs,
-    );
-}
-
-pub(super) fn emit_mcp_ui_resource_uri_without_trusted_connector_id_metric(
-    turn_context: &TurnContext,
-    server_kind: &'static str,
-) {
-    turn_context.session_telemetry.counter(
-        MCP_UI_RESOURCE_URI_WITHOUT_TRUSTED_CONNECTOR_ID_METRIC,
-        /*inc*/ 1,
-        &[("server_kind", server_kind)],
     );
 }
 
