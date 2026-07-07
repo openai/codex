@@ -1551,6 +1551,9 @@ impl ModelClientSession {
             };
             if warmup {
                 ws_payload.generate = Some(false);
+                // Keep this off prewarm so the first generated v2 request sends the
+                // option instead of treating it as already established by warmup.
+                ws_payload.stream_options = None;
             }
 
             match self
