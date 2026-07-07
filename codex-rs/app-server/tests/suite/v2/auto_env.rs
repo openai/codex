@@ -117,7 +117,7 @@ async fn auto_env_rejects_explicit_environment_config() -> Result<()> {
     assert_eq!(
         err.to_string(),
         format!(
-            "new_with_auto_env cannot be used when {} exists",
+            "automatic environment cannot be used when {} exists",
             codex_home.path().join("environments.toml").display()
         )
     );
