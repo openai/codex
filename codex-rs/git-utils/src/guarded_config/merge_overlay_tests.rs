@@ -181,10 +181,17 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
     }
 
     let custom = BTreeSet::from(["custom.txt".to_string()]);
-    let clean_before = BTreeMap::from([("peer.txt".to_string(), BTreeMap::from([(0, entry(1))]))]);
+    let clean_before = BTreeMap::from([(
+        "peer.txt".to_string(),
+        BTreeMap::from([(0, entry(/*byte*/ 1))]),
+    )]);
     let newly_conflicted = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     assert!(newly_unmerged_noncustom_path(
         &clean_before,
@@ -194,11 +201,19 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
 
     let already_unmerged = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     let changed_unmerged = BTreeMap::from([(
         "peer.txt".to_string(),
-        BTreeMap::from([(1, entry(4)), (2, entry(5)), (3, entry(6))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 4)),
+            (2, entry(/*byte*/ 5)),
+            (3, entry(/*byte*/ 6)),
+        ]),
     )]);
     assert!(!newly_unmerged_noncustom_path(
         &already_unmerged,
@@ -208,7 +223,11 @@ fn exit_one_completion_witness_requires_new_noncustom_unmerged_state() {
 
     let custom_conflict = BTreeMap::from([(
         "custom.txt".to_string(),
-        BTreeMap::from([(1, entry(1)), (2, entry(2)), (3, entry(3))]),
+        BTreeMap::from([
+            (1, entry(/*byte*/ 1)),
+            (2, entry(/*byte*/ 2)),
+            (3, entry(/*byte*/ 3)),
+        ]),
     )]);
     assert!(!newly_unmerged_noncustom_path(
         &IndexStageSnapshot::new(),

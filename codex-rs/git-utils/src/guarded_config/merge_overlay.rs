@@ -759,7 +759,8 @@ impl<'git> GuardedGitConfig<'git> {
                 "merge-policy scratch proof does not match the final apply",
             ));
         }
-        let current_index = self.capture_merge_index_stage_snapshot(&effective_paths, None)?;
+        let current_index =
+            self.capture_merge_index_stage_snapshot(&effective_paths, /*storage*/ None)?;
         if current_index != proof.prospective_index {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,

@@ -359,7 +359,7 @@ impl GitRunner {
         command: GitCommand,
         isolated: &IsolatedGitCommonDir,
     ) -> io::Result<std::process::Output> {
-        self.output_in_isolated_common_dir_with_storage(command, isolated, None)
+        self.output_in_isolated_common_dir_with_storage(command, isolated, /*storage*/ None)
     }
 
     pub(crate) fn output_in_isolated_scratch(

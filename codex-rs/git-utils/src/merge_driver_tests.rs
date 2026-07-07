@@ -572,7 +572,7 @@ fn custom_merge_driver_proof_is_consumed_before_final_spawn() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -580,15 +580,15 @@ fn custom_merge_driver_proof_is_consumed_before_final_spawn() {
         .expect("merge policy");
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("proof");
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect("first final apply");
     assert!(first.status.success());
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("proof must not be reusable");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -621,7 +621,7 @@ fn custom_merge_driver_proof_is_consumed_before_failed_index_revalidation() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -629,20 +629,20 @@ fn custom_merge_driver_proof_is_consumed_before_failed_index_revalidation() {
         .expect("merge policy");
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("proof");
 
     std::fs::write(root.join("file.txt"), "index-raced\n").expect("write raced index entry");
     assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("changed live index must invalidate proof");
     assert_eq!(first.kind(), io::ErrorKind::PermissionDenied);
     assert!(first.to_string().contains("index changed"), "{first}");
 
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("failed revalidation must still consume proof");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
     assert!(
@@ -674,7 +674,7 @@ fn conditional_merge_config_proof_is_consumed_before_failed_index_revalidation()
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     let (_, gate) = config
-        .run_apply_policy_gate(false, patch)
+        .run_apply_policy_gate(/*revert*/ false, patch)
         .expect("policy gate");
     assert!(gate.status.success());
     config
@@ -688,19 +688,19 @@ fn conditional_merge_config_proof_is_consumed_before_failed_index_revalidation()
     );
     let scratch = config.create_three_way_scratch_storage().expect("scratch");
     config
-        .prove_three_way_merge_policy_safety(&scratch, false, patch)
+        .prove_three_way_merge_policy_safety(&scratch, /*revert*/ false, patch)
         .expect("conditional merge-config proof");
 
     std::fs::write(root.join("file.txt"), "index-raced\n").expect("write raced index entry");
     assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
 
     let first = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("changed live index must invalidate proof");
     assert_eq!(first.kind(), io::ErrorKind::PermissionDenied);
     assert!(first.to_string().contains("index changed"), "{first}");
     let second = config
-        .run_three_way_apply(false, patch)
+        .run_three_way_apply(/*revert*/ false, patch)
         .expect_err("failed revalidation must still consume proof");
     assert_eq!(second.kind(), io::ErrorKind::PermissionDenied);
     assert!(
