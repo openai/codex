@@ -104,7 +104,7 @@ async fn app_read_deduplicates_orders_partial_misses_and_reuses_cached_metadata(
 #[tokio::test]
 async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()> {
     let state = BatchServerState::new(json!({
-        "connectors": [connector_response("cached", "Cached", None)]
+        "connectors": [connector_response("cached", "Cached", /*install_url*/ None)]
     }));
     let (server_url, server_handle) = start_batch_server(state.clone()).await?;
     let codex_home = TempDir::new()?;
@@ -116,7 +116,7 @@ async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()>
     assert_eq!(
         read_apps(&mut mcp, vec!["cached"]).await?,
         AppsReadResponse {
-            apps: vec![metadata("cached", "Cached", None)],
+            apps: vec![metadata("cached", "Cached", /*install_url*/ None)],
             missing_app_ids: Vec::new(),
         }
     );
@@ -140,7 +140,7 @@ async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()>
     assert_eq!(
         read_apps(&mut mcp, vec!["cached"]).await?,
         AppsReadResponse {
-            apps: vec![metadata("cached", "Cached", None)],
+            apps: vec![metadata("cached", "Cached", /*install_url*/ None)],
             missing_app_ids: Vec::new(),
         }
     );
