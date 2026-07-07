@@ -2366,9 +2366,13 @@ impl ChatComposer {
                 .map(|(idx, c)| idx + c.len_utf8())
                 .unwrap_or(0);
             let left_fragment = &text[left_fragment_start..safe_cursor];
-            if left_fragment.starts_with(prefix) {
+            if let Some(left_token) = left_fragment.strip_prefix(prefix)
+                && left_token
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| is_mention_name_char(*byte))
+            {
                 let left_range = left_fragment_start..safe_cursor;
-                let left_token = &left_fragment[prefix_len..];
                 if Self::prefixed_token_range_is_editable(textarea, prefix, &left_range, left_token)
                 {
                     return Some((left_range, left_token.to_string()));
@@ -7050,6 +7054,19 @@ mod tests {
                 Some((0..cursor, expected_query.to_string()))
             );
         }
+    }
+
+    #[test]
+    fn current_prefixed_token_keeps_nested_dollar_prefix_in_same_token() {
+        let text = "$HOME/$USER";
+        let mut textarea = TextArea::new();
+        textarea.insert_str(text);
+        textarea.set_cursor(text.find("$USER").expect("nested prefix present"));
+
+        assert_eq!(
+            ChatComposer::current_prefixed_token_range(&textarea, '$', /*allow_empty*/ true),
+            Some((0..text.len(), "HOME/$USER".to_string()))
+        );
     }
 
     #[test]
