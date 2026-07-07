@@ -2252,6 +2252,7 @@ async fn websocket_harness_with_provider_options(
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
 
     WebsocketTestHarness {
