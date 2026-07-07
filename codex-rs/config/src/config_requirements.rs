@@ -1314,14 +1314,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
         }
 
-        if network.is_some()
-            && !windows
-                .as_ref()
-                .is_some_and(|windows| windows.value.allows_only_elevated_sandbox())
-        {
-            return Err(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement);
-        }
-
         let approval_policy = match allowed_approval_policies {
             Some(Sourced {
                 value: policies,
@@ -2819,33 +2811,16 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn managed_network_requires_elevated_only_windows_sandbox() -> Result<()> {
-        for windows_requirements in [
-            "",
+    fn managed_network_parsing_does_not_require_windows_sandbox_policy() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
             r#"
-                [windows]
-                allowed_sandbox_implementations = ["unelevated"]
+                [experimental_network]
+                enabled = false
             "#,
-            r#"
-                [windows]
-                allowed_sandbox_implementations = ["elevated", "unelevated"]
-            "#,
-        ] {
-            let config: ConfigRequirementsToml = from_str(&format!(
-                r#"
-                    [experimental_network]
-                    enabled = false
+        )?;
 
-                    {windows_requirements}
-                "#
-            ))?;
-
-            assert_eq!(
-                ConfigRequirements::try_from(with_unknown_source(config)),
-                Err(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement)
-            );
-        }
-
+        let requirements = ConfigRequirements::try_from(with_unknown_source(config))?;
+        assert!(requirements.network.is_some());
         Ok(())
     }
 
