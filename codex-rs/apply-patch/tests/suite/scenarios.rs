@@ -11,8 +11,11 @@ use tempfile::tempdir;
 
 #[test]
 fn test_apply_patch_scenarios() -> anyhow::Result<()> {
-    let scenarios_dir = find_resource!("tests/fixtures/scenarios")?;
-    for scenario in fs::read_dir(&scenarios_dir)
+    let scenarios_marker = find_resource!("tests/fixtures/scenarios/.gitattributes")?;
+    let scenarios_dir = scenarios_marker
+        .parent()
+        .context("scenario marker should have a parent directory")?;
+    for scenario in fs::read_dir(scenarios_dir)
         .with_context(|| format!("failed to read {}", scenarios_dir.display()))?
     {
         let scenario = scenario?;
