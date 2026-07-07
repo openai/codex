@@ -20,6 +20,20 @@ pub(super) struct LoopbackResponsesServer {
 
 impl LoopbackResponsesServer {
     pub(super) fn start() -> Result<Self> {
+        Self::start_with_responder(|_| {
+            Ok(concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-plugin-analytics\"}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-plugin-analytics\",\"usage\":{\"input_tokens\":0,\"input_tokens_details\":null,\"output_tokens\":0,\"output_tokens_details\":null,\"total_tokens\":0}}}\n\n"
+            )
+            .to_string())
+        })
+    }
+
+    pub(super) fn start_with_responder(
+        mut responder: impl FnMut(&[u8]) -> io::Result<String> + Send + 'static,
+    ) -> Result<Self> {
         let listener =
             TcpListener::bind("127.0.0.1:0").context("bind loopback Responses API server")?;
         listener
@@ -32,7 +46,7 @@ impl LoopbackResponsesServer {
             while !thread_shutdown.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        if let Err(err) = handle_model_connection(stream) {
+                        if let Err(err) = handle_model_connection(stream, &mut responder) {
                             eprintln!("loopback Responses API server error: {err}");
                         }
                     }
@@ -67,7 +81,10 @@ impl Drop for LoopbackResponsesServer {
     }
 }
 
-fn handle_model_connection(mut stream: TcpStream) -> io::Result<()> {
+fn handle_model_connection(
+    mut stream: TcpStream,
+    responder: &mut impl FnMut(&[u8]) -> io::Result<String>,
+) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     let request = read_http_request(&mut stream)?;
@@ -77,13 +94,15 @@ fn handle_model_connection(mut stream: TcpStream) -> io::Result<()> {
         .and_then(|line| std::str::from_utf8(line).ok())
         .unwrap_or_default();
     if request_line.starts_with("POST ") && request_line.contains("/responses ") {
-        let body = concat!(
-            "event: response.created\n",
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-plugin-analytics\"}}\n\n",
-            "event: response.completed\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-plugin-analytics\",\"usage\":{\"input_tokens\":0,\"input_tokens_details\":null,\"output_tokens\":0,\"output_tokens_details\":null,\"total_tokens\":0}}}\n\n"
-        );
-        write_http_response(&mut stream, "200 OK", "text/event-stream", body)
+        let body = responder(&request)?;
+        write_http_response(&mut stream, "200 OK", "text/event-stream", &body)
+    } else if request_line.starts_with("GET ") && request_line.contains("/models") {
+        write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"models":[]}"#,
+        )
     } else {
         write_http_response(
             &mut stream,

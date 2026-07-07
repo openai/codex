@@ -92,6 +92,7 @@ mod plugin_analytics_capture;
 mod plugin_analytics_mutation_smoke;
 mod plugin_analytics_smoke;
 mod request_user_input;
+mod unified_exec_benchmark;
 
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
     // v2 item deltas.
@@ -278,6 +279,22 @@ enum CliCommand {
         #[arg(long, default_value_t = 15)]
         hold_seconds: u64,
     },
+    /// Compare direct and code-mode unified exec using a deterministic local model.
+    #[command(name = "unified-exec-benchmark")]
+    UnifiedExecBenchmark {
+        /// Measured samples per invocation path.
+        #[arg(long, default_value_t = 20)]
+        samples: usize,
+        /// Unmeasured warmup samples per invocation path.
+        #[arg(long, default_value_t = 3)]
+        warmups: usize,
+        /// Duration of the command run by every sample.
+        #[arg(long, default_value_t = 50)]
+        command_duration_ms: u64,
+        /// Existing workspace path used as the turn cwd.
+        #[arg(long, value_name = "path", default_value = ".")]
+        workspace: PathBuf,
+    },
     /// Exercise remote plugin analytics through production app-server RPC paths.
     #[command(name = "plugin-analytics-smoke")]
     PluginAnalyticsSmoke {
@@ -460,6 +477,26 @@ pub async fn run() -> Result<()> {
                 workspace,
                 script,
                 hold_seconds,
+            )
+        }
+        CliCommand::UnifiedExecBenchmark {
+            samples,
+            warmups,
+            command_duration_ms,
+            workspace,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "unified-exec-benchmark")?;
+            if url.is_some() {
+                bail!("unified-exec-benchmark requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("unified-exec-benchmark requires --codex-bin")?;
+            unified_exec_benchmark::run(
+                &codex_bin,
+                &config_overrides,
+                samples,
+                warmups,
+                command_duration_ms,
+                &workspace,
             )
         }
         CliCommand::PluginAnalyticsSmoke {
@@ -1503,6 +1540,7 @@ struct CodexClient {
     unexpected_items_before_helper_done: Vec<ThreadItem>,
     last_turn_status: Option<TurnStatus>,
     last_turn_error_message: Option<String>,
+    quiet: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1592,6 +1630,7 @@ impl CodexClient {
             unexpected_items_before_helper_done: Vec::new(),
             last_turn_status: None,
             last_turn_error_message: None,
+            quiet: false,
         })
     }
 
@@ -1631,6 +1670,7 @@ impl CodexClient {
             unexpected_items_before_helper_done: Vec::new(),
             last_turn_status: None,
             last_turn_error_message: None,
+            quiet: false,
         })
     }
 
@@ -1833,27 +1873,33 @@ impl CodexClient {
 
             match server_notification {
                 ServerNotification::ThreadStarted(payload) => {
-                    if payload.thread.id == thread_id {
+                    if payload.thread.id == thread_id && !self.quiet {
                         println!("< thread/started notification: {:?}", payload.thread);
                     }
                 }
                 ServerNotification::TurnStarted(payload) => {
-                    if payload.turn.id == turn_id {
+                    if payload.turn.id == turn_id && !self.quiet {
                         println!("< turn/started notification: {:?}", payload.turn.status);
                     }
                 }
                 ServerNotification::AgentMessageDelta(delta) => {
-                    print!("{}", delta.delta);
-                    std::io::stdout().flush().ok();
+                    if !self.quiet {
+                        print!("{}", delta.delta);
+                        std::io::stdout().flush().ok();
+                    }
                 }
                 ServerNotification::CommandExecutionOutputDelta(delta) => {
                     self.note_helper_output(&delta.delta);
-                    print!("{}", delta.delta);
-                    std::io::stdout().flush().ok();
+                    if !self.quiet {
+                        print!("{}", delta.delta);
+                        std::io::stdout().flush().ok();
+                    }
                 }
                 ServerNotification::TerminalInteraction(delta) => {
-                    println!("[stdin sent: {}]", delta.stdin);
-                    std::io::stdout().flush().ok();
+                    if !self.quiet {
+                        println!("[stdin sent: {}]", delta.stdin);
+                        std::io::stdout().flush().ok();
+                    }
                 }
                 ServerNotification::ItemStarted(payload) => {
                     if matches!(payload.item, ThreadItem::CommandExecution { .. }) {
@@ -1870,7 +1916,9 @@ impl CodexClient {
                         self.unexpected_items_before_helper_done
                             .push(payload.item.clone());
                     }
-                    println!("\n< item started: {:?}", payload.item);
+                    if !self.quiet {
+                        println!("\n< item started: {:?}", payload.item);
+                    }
                 }
                 ServerNotification::ItemCompleted(payload) => {
                     if let ThreadItem::CommandExecution {
@@ -1885,7 +1933,9 @@ impl CodexClient {
                             self.command_execution_outputs.push(aggregated_output);
                         }
                     }
-                    println!("< item completed: {:?}", payload.item);
+                    if !self.quiet {
+                        println!("< item completed: {:?}", payload.item);
+                    }
                 }
                 ServerNotification::TurnCompleted(payload) => {
                     if payload.turn.id == turn_id {
@@ -1898,20 +1948,26 @@ impl CodexClient {
                             .error
                             .as_ref()
                             .map(|error| error.message.clone());
-                        println!("\n< turn/completed notification: {:?}", payload.turn.status);
-                        if payload.turn.status == TurnStatus::Failed
-                            && let Some(error) = payload.turn.error
-                        {
-                            println!("[turn error] {}", error.message);
+                        if !self.quiet {
+                            println!("\n< turn/completed notification: {:?}", payload.turn.status);
+                            if payload.turn.status == TurnStatus::Failed
+                                && let Some(error) = payload.turn.error
+                            {
+                                println!("[turn error] {}", error.message);
+                            }
                         }
                         break;
                     }
                 }
                 ServerNotification::McpToolCallProgress(payload) => {
-                    println!("< MCP tool progress: {}", payload.message);
+                    if !self.quiet {
+                        println!("< MCP tool progress: {}", payload.message);
+                    }
                 }
                 _ => {
-                    println!("[UNKNOWN SERVER NOTIFICATION] {server_notification:?}");
+                    if !self.quiet {
+                        println!("[UNKNOWN SERVER NOTIFICATION] {server_notification:?}");
+                    }
                 }
             }
         }
@@ -1955,7 +2011,9 @@ impl CodexClient {
         request.trace = current_span_w3c_trace_context();
         let request_json = serde_json::to_string(&request)?;
         let request_pretty = serde_json::to_string_pretty(&request)?;
-        print_multiline_with_prefix("> ", &request_pretty);
+        if !self.quiet {
+            print_multiline_with_prefix("> ", &request_pretty);
+        }
         self.write_payload(&request_json)
     }
 
@@ -2020,7 +2078,9 @@ impl CodexClient {
             let parsed: Value =
                 serde_json::from_str(trimmed).context("response was not valid JSON-RPC")?;
             let pretty = serde_json::to_string_pretty(&parsed)?;
-            print_multiline_with_prefix("< ", &pretty);
+            if !self.quiet {
+                print_multiline_with_prefix("< ", &pretty);
+            }
             let message: JSONRPCMessage = serde_json::from_value(parsed)
                 .context("response was not a valid JSON-RPC message")?;
             return Ok(message);
@@ -2180,7 +2240,9 @@ impl CodexClient {
     fn write_jsonrpc_message(&mut self, message: JSONRPCMessage) -> Result<()> {
         let payload = serde_json::to_string(&message)?;
         let pretty = serde_json::to_string_pretty(&message)?;
-        print_multiline_with_prefix("> ", &pretty);
+        if !self.quiet {
+            print_multiline_with_prefix("> ", &pretty);
+        }
         self.write_payload(&payload)
     }
 
