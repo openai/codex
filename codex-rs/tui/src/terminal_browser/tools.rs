@@ -16,9 +16,9 @@ pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
         description: "Control the browser rendered inside the terminal. Use these tools when the user asks for the terminal browser; do not substitute shell text browsers."
             .to_string(),
         tools: vec![
-            tool(
+            eager_tool(
                 "open",
-                "Open a URL in the terminal browser. The browser panel is watch-only; Codex controls the page.",
+                "Open a URL in the browser panel rendered inside the terminal. Use this tool whenever the user asks for the terminal browser or browser tab; do not substitute web search. An ephemeral profile is active by default, and the user can click the panel to take control.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -114,7 +114,7 @@ pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
             ),
             tool(
                 "profile",
-                "List profiles or request a user-approved create, select, ephemeral, or forget operation.",
+                "List profiles or request a user-approved create, select, ephemeral, or forget operation. Profile changes are not required before opening a URL; an ephemeral profile is active by default.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -243,11 +243,33 @@ fn tool(
     description: &str,
     input_schema: serde_json::Value,
 ) -> DynamicToolNamespaceTool {
+    dynamic_tool(name, description, input_schema, /*defer_loading*/ true)
+}
+
+fn eager_tool(
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+) -> DynamicToolNamespaceTool {
+    dynamic_tool(
+        name,
+        description,
+        input_schema,
+        /*defer_loading*/ false,
+    )
+}
+
+fn dynamic_tool(
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+    defer_loading: bool,
+) -> DynamicToolNamespaceTool {
     DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
         name: name.to_string(),
         description: description.to_string(),
         input_schema,
-        defer_loading: true,
+        defer_loading,
     })
 }
 

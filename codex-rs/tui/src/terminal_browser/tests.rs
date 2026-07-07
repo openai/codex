@@ -158,7 +158,7 @@ fn cropped_wide_glyph_is_replaced_with_a_blank_cell() {
 }
 
 #[test]
-fn dynamic_tools_are_namespaced_and_deferred() {
+fn terminal_browser_open_is_eager_and_other_dynamic_tools_are_deferred() {
     let specs = dynamic_tool_specs();
     let [DynamicToolSpec::Namespace(namespace)] = specs.as_slice() else {
         panic!("expected one terminal-browser namespace");
@@ -189,7 +189,14 @@ fn dynamic_tools_are_namespaced_and_deferred() {
             "close",
         ]
     );
-    assert!(tools.iter().all(|spec| spec.defer_loading));
+    assert!(
+        !tools[0].defer_loading,
+        "browser open must be visible immediately"
+    );
+    assert!(
+        tools[1..].iter().all(|spec| spec.defer_loading),
+        "follow-up browser tools should remain deferred"
+    );
     for tool_name in ["click", "fill"] {
         let node_id_pattern = tools
             .iter()
