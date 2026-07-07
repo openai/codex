@@ -3,7 +3,7 @@
 //!
 //! These tests intentionally run through `custom_ca_probe` and
 //! `build_reqwest_client_for_subprocess_tests` instead of calling the helper in-process. The
-//! detailed explanation of what "hermetic" means here lives in `codex_client::custom_ca`; these
+//! detailed explanation of what "hermetic" means here lives in `codex_http_client::custom_ca`; these
 //! tests add the process-level half of that contract by scrubbing inherited CA environment
 //! variables before each subprocess launch. Most assertions here cover CA file selection, PEM
 //! parsing, and user-facing errors. The HTTPS probes go further and perform real POSTs against

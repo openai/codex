@@ -1,3 +1,5 @@
+//! Windows proxy parsing tests.
+
 use super::*;
 
 #[test]

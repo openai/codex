@@ -1,7 +1,7 @@
 use bytes::Bytes;
+use http::HeaderMap;
+use http::HeaderValue;
 use http::Method;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -121,7 +121,7 @@ impl Request {
             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
         );
         let trace_bytes = if self.compression != RequestCompression::None
-            && tracing::enabled!(target: "codex_client::transport", tracing::Level::TRACE)
+            && tracing::enabled!(target: "codex_http_client::transport", tracing::Level::TRACE)
         {
             match self.body.as_ref() {
                 Some(RequestBody::Json(body)) => Some(Bytes::from(

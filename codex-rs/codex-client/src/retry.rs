@@ -1,5 +1,5 @@
-use crate::error::TransportError;
-use crate::request::Request;
+use codex_http_client::Request;
+use codex_http_client::TransportError;
 use rand::Rng;
 use std::future::Future;
 use std::time::Duration;

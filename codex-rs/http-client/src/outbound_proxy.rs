@@ -1,4 +1,4 @@
-//! Conservative outbound proxy selection for resolver-aware clients.
+//! Conservative outbound proxy selection for resolver-aware HTTP clients.
 //!
 //! When enabled, platform system discovery is tried first, explicit environment
 //! proxies are the fallback, and the final fallback is a direct connection.

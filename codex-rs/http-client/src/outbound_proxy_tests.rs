@@ -1,3 +1,5 @@
+//! Shared outbound proxy policy tests.
+
 use super::*;
 use pretty_assertions::assert_eq;
 use std::io::Read;

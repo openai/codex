@@ -14,47 +14,47 @@ use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Clone, Debug)]
-pub struct CodexHttpClient {
+pub struct HttpClient {
     inner: reqwest::Client,
 }
 
-impl CodexHttpClient {
+impl HttpClient {
     pub fn new(inner: reqwest::Client) -> Self {
         Self { inner }
     }
 
-    pub fn get<U>(&self, url: U) -> CodexRequestBuilder
+    pub fn get<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::GET, url)
     }
 
-    pub fn post<U>(&self, url: U) -> CodexRequestBuilder
+    pub fn post<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::POST, url)
     }
 
-    pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
+    pub fn request<U>(&self, method: Method, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         let url_str = url.as_str().to_string();
-        CodexRequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
+        RequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
     }
 }
 
 #[must_use = "requests are not sent unless `send` is awaited"]
 #[derive(Debug)]
-pub struct CodexRequestBuilder {
+pub struct RequestBuilder {
     builder: reqwest::RequestBuilder,
     method: Method,
     url: String,
 }
 
-impl CodexRequestBuilder {
+impl RequestBuilder {
     fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
         Self {
             builder,
