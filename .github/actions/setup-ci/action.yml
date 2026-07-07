@@ -44,8 +44,8 @@ runs:
           echo "BAZEL_REPOSITORY_CACHE=$bazel_repository_cache"
           echo "BAZEL_REPO_CONTENTS_CACHE=$bazel_repo_contents_cache"
           echo "CARGO_TARGET_DIR=$cargo_target_dir"
-          echo "TMP=$tmp"
           echo "TEMP=$tmp"
+          echo "TMP=$tmp"
         } >> "$GITHUB_ENV"
 
     - name: Prefer the Git CLI for Cargo git dependencies
