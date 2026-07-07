@@ -24,9 +24,7 @@ use super::OAuthPersistorInner;
 use super::StoredOAuthTokens;
 use super::WrappedOAuthTokenResponse;
 use super::compute_expires_at_millis;
-use super::load_oauth_tokens_from_store;
 use super::refresh_lock::RefreshCredentialLock;
-use super::save_to_resolved_store;
 use super::token_needs_refresh;
 
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
@@ -111,11 +109,10 @@ impl OAuthPersistor {
         // Stay on the lifecycle-pinned store. A failure is surfaced rather than falling back and
         // possibly replaying an older rotating refresh token from the other store.
         debug!("rereading authoritative MCP OAuth credentials");
-        let latest = load_oauth_tokens_from_store(
+        let latest = self.inner.credential_store.load(
             keyring_store,
             &self.inner.server_name,
             &self.inner.url,
-            self.inner.credential_store,
         )?;
 
         // The pre-lock snapshot is only a hint. This locked reread is authoritative, so adopt a
@@ -229,7 +226,11 @@ impl OAuthPersistor {
         // TODO: Add a bounded persistence retry only if telemetry shows this is common; never
         // silently switch stores or continue with an unpersisted credential.
         debug!("persisting refreshed MCP OAuth credentials to the resolved store");
-        if let Err(error) = save_to_resolved_store(keyring_store, &self.inner, &refreshed) {
+        if let Err(error) =
+            self.inner
+                .credential_store
+                .save(keyring_store, &self.inner.server_name, &refreshed)
+        {
             warn!(
                 error = %error,
                 "failed to persist refreshed MCP OAuth credentials; returning the error and restoring the previous in-process credentials"
