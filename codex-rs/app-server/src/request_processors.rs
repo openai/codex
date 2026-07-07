@@ -619,6 +619,7 @@ use self::thread_resume_redaction::*;
 use self::thread_summary::*;
 use self::thread_teardown::PendingThreadUnloadStartResult;
 pub(crate) use self::thread_teardown::PendingThreadUnloads;
+use self::thread_teardown::start_thread_teardown;
 use self::thread_teardown::wait_for_thread_unload;
 
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;

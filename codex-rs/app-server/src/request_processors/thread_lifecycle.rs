@@ -120,10 +120,6 @@ impl UnloadingState {
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "idle unload admission holds both lifecycle guards through its final rechecks"
-)]
 async fn try_start_idle_thread_unload<F>(
     unloading_state: &mut UnloadingState,
     thread_list_state_permit: Arc<Semaphore>,
@@ -139,10 +135,6 @@ where
     let Ok(permit) = thread_list_state_permit.acquire_owned().await else {
         return None;
     };
-    let admission = pending_thread_unloads.lock_admission().await;
-    if pending_thread_unloads.contains(conversation_id) {
-        return None;
-    }
     if !unloading_state.should_unload_now() {
         return None;
     }
@@ -160,7 +152,6 @@ where
         return None;
     }
     let start = pending_thread_unloads.try_start(conversation_id, teardown);
-    drop(admission);
     drop(permit);
     Some(start)
 }
@@ -176,15 +167,11 @@ pub(super) enum ThreadShutdownResult {
 }
 
 pub(super) enum EnsureConversationListenerResult {
-    Attached,
+    Attached(Arc<CodexThread>),
     ConnectionClosed,
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "listener subscription must be serialized against pending unloads"
-)]
-pub(super) async fn ensure_conversation_listener(
+pub(super) async fn ensure_conversation_listener_under_permit(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     connection_id: ConnectionId,
@@ -202,32 +189,25 @@ pub(super) async fn ensure_conversation_listener(
             )));
         }
     };
-    let thread_state = {
-        let _admission = listener_task_context
-            .pending_thread_unloads
-            .lock_admission()
-            .await;
-        if listener_task_context
-            .pending_thread_unloads
-            .contains(conversation_id)
-        {
-            return Err(invalid_request(format!(
-                "thread {conversation_id} is closing; retry after the thread is closed"
-            )));
-        }
-        let Some(thread_state) = listener_task_context
-            .thread_state_manager
-            .try_ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
-            .await
-        else {
-            return Ok(EnsureConversationListenerResult::ConnectionClosed);
-        };
-        thread_state
+    if listener_task_context
+        .pending_thread_unloads
+        .contains(conversation_id)
+    {
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
+    }
+    let Some(thread_state) = listener_task_context
+        .thread_state_manager
+        .try_ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
+        .await
+    else {
+        return Ok(EnsureConversationListenerResult::ConnectionClosed);
     };
     if let Err(error) = ensure_listener_task_running(
         listener_task_context.clone(),
         conversation_id,
-        conversation,
+        Arc::clone(&conversation),
         Arc::clone(&thread_state),
     )
     .await
@@ -242,7 +222,40 @@ pub(super) async fn ensure_conversation_listener(
             .await;
         return Err(error);
     }
-    Ok(EnsureConversationListenerResult::Attached)
+    Ok(EnsureConversationListenerResult::Attached(conversation))
+}
+
+pub(super) async fn ensure_conversation_listener_serialized(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    connection_id: ConnectionId,
+    raw_events_enabled: bool,
+) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    loop {
+        let permit = listener_task_context
+            .thread_list_state_permit
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to acquire thread list state permit: {err}"))
+            })?;
+        let pending = listener_task_context
+            .pending_thread_unloads
+            .subscribe(conversation_id);
+        if let Some(pending) = pending {
+            drop(permit);
+            wait_for_thread_unload(pending).await;
+            continue;
+        }
+        return ensure_conversation_listener_under_permit(
+            listener_task_context,
+            conversation_id,
+            connection_id,
+            raw_events_enabled,
+        )
+        .await;
+    }
 }
 
 pub(super) fn log_listener_attach_result(
@@ -252,7 +265,7 @@ pub(super) fn log_listener_attach_result(
     thread_kind: &'static str,
 ) {
     match result {
-        Ok(EnsureConversationListenerResult::Attached) => {}
+        Ok(EnsureConversationListenerResult::Attached(_)) => {}
         Ok(EnsureConversationListenerResult::ConnectionClosed) => {
             tracing::debug!(
                 thread_id = %thread_id,
@@ -271,7 +284,7 @@ pub(super) fn log_listener_attach_result(
 
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "listener registration must be serialized against pending unloads"
+    reason = "listener registration holds current thread state through the exact registry swap"
 )]
 pub(super) async fn ensure_listener_task_running(
     listener_task_context: ListenerTaskContext,
@@ -315,7 +328,6 @@ pub(super) async fn ensure_listener_task_running(
         ..
     } = listener_task_context;
 
-    let pending_thread_unloads_guard = pending_thread_unloads.lock_admission().await;
     if pending_thread_unloads.contains(conversation_id) {
         return Err(invalid_request(format!(
             "thread {conversation_id} is closing; retry after the thread is closed"
@@ -371,7 +383,6 @@ pub(super) async fn ensure_listener_task_running(
                         &thread_state,
                         &thread_watch_manager,
                         &outgoing_for_task,
-                        &pending_thread_unloads,
                         listener_command,
                     )
                     .await;
@@ -490,7 +501,6 @@ pub(super) async fn ensure_listener_task_running(
         let _ = thread_state_guard.clear_listener();
     }
     drop(thread_state_guard);
-    drop(pending_thread_unloads_guard);
     match registration {
         ThreadListenerRegistration::Registered(retired) => {
             if let Some(retired) = retired {
@@ -569,7 +579,6 @@ pub(super) async fn handle_thread_listener_command(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &PendingThreadUnloads,
     listener_command: ThreadListenerCommand,
 ) {
     match listener_command {
@@ -581,7 +590,6 @@ pub(super) async fn handle_thread_listener_command(
                 thread_state,
                 thread_watch_manager,
                 outgoing,
-                pending_thread_unloads,
                 *resume_request,
             )
             .await;
@@ -633,7 +641,6 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &PendingThreadUnloads,
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let active_turn = {
@@ -699,23 +706,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         if let Some(initial_turns_page) = initial_turns_page.as_mut() {
             redact_thread_resume_payloads(&mut initial_turns_page.data);
         }
-    }
-
-    let unload_pending = {
-        let _admission = pending_thread_unloads.lock_admission().await;
-        pending_thread_unloads.contains(conversation_id)
-    };
-    if unload_pending {
-        outgoing
-            .send_error(
-                request_id,
-                invalid_request(format!(
-                    "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
-                )),
-            )
-            .await;
-        let _ = resume_handled_tx.send(ConnectionReservationAction::Cancel);
-        return;
     }
 
     let config_snapshot = pending.config_snapshot;

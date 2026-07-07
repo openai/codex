@@ -778,6 +778,20 @@ impl ThreadRequestProcessor {
             })
     }
 
+    pub(super) async fn acquire_thread_list_state_permit_after_unload(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
+        loop {
+            let permit = self.acquire_thread_list_state_permit().await?;
+            let Some(pending) = self.pending_thread_unloads.subscribe(thread_id) else {
+                return Ok(permit);
+            };
+            drop(permit);
+            wait_for_thread_unload(pending).await;
+        }
+    }
+
     async fn set_app_server_client_info(
         thread: &CodexThread,
         app_server_client_name: Option<String>,
@@ -797,14 +811,27 @@ impl ThreadRequestProcessor {
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
-    async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
+    fn start_finalize_thread_teardown_under_permit(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<bool>> {
+        let processor = self.clone();
+        start_thread_teardown(self.pending_thread_unloads.clone(), thread_id, async move {
+            processor.finalize_thread_teardown_owner(thread_id).await
+        })
+    }
+
+    async fn finalize_thread_teardown_owner(&self, thread_id: ThreadId) {
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
-        let _ = self
+        if let Some(listener) = self
             .thread_state_manager
             .remove_thread_state(thread_id)
-            .await;
+            .await
+        {
+            listener.wait_until_closed().await;
+        }
         self.thread_watch_manager
             .remove_thread(&thread_id.to_string())
             .await;
@@ -817,9 +844,16 @@ impl ThreadRequestProcessor {
     ) -> Result<ThreadUnsubscribeResponse, JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let thread_list_state_permit = self
+            .acquire_thread_list_state_permit_after_unload(thread_id)
+            .await?;
 
         if self.thread_manager.get_thread(thread_id).await.is_err() {
-            self.finalize_thread_teardown(thread_id).await;
+            let completed = self.start_finalize_thread_teardown_under_permit(thread_id);
+            drop(thread_list_state_permit);
+            if let Some(completed) = completed {
+                wait_for_thread_unload(completed).await;
+            }
             return Ok(ThreadUnsubscribeResponse {
                 status: ThreadUnsubscribeStatus::NotLoaded,
             });
@@ -858,7 +892,7 @@ impl ThreadRequestProcessor {
                 }
             }
         }
-        self.finalize_thread_teardown(thread_id).await;
+        self.finalize_thread_teardown_owner(thread_id).await;
     }
 
     fn listener_task_context(&self) -> ListenerTaskContext {
@@ -881,7 +915,22 @@ impl ThreadRequestProcessor {
         connection_id: ConnectionId,
         raw_events_enabled: bool,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
-        super::thread_lifecycle::ensure_conversation_listener(
+        super::thread_lifecycle::ensure_conversation_listener_serialized(
+            self.listener_task_context(),
+            conversation_id,
+            connection_id,
+            raw_events_enabled,
+        )
+        .await
+    }
+
+    async fn ensure_conversation_listener_under_permit(
+        &self,
+        conversation_id: ThreadId,
+        connection_id: ConnectionId,
+        raw_events_enabled: bool,
+    ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+        super::thread_lifecycle::ensure_conversation_listener_under_permit(
             self.listener_task_context(),
             conversation_id,
             connection_id,
@@ -1260,7 +1309,7 @@ impl ThreadRequestProcessor {
 
         // Auto-attach a thread listener when starting a thread.
         log_listener_attach_result(
-            super::thread_lifecycle::ensure_conversation_listener(
+            super::thread_lifecycle::ensure_conversation_listener_serialized(
                 listener_task_context.clone(),
                 thread_id,
                 request_id.connection_id,
@@ -2591,13 +2640,24 @@ impl ThreadRequestProcessor {
             .thread_state_manager
             .remove_connection(connection_id)
             .await;
+        let Ok(thread_list_state_permit) = self.thread_list_state_permit.acquire().await else {
+            return;
+        };
 
+        let mut pending_cleanups = Vec::new();
         for thread_id in thread_ids {
             if self.thread_manager.get_thread(thread_id).await.is_err() {
                 // Reconcile stale app-server bookkeeping when the thread has already been
                 // removed from the core manager.
-                self.finalize_thread_teardown(thread_id).await;
+                if let Some(completed) = self.start_finalize_thread_teardown_under_permit(thread_id)
+                {
+                    pending_cleanups.push(completed);
+                }
             }
+        }
+        drop(thread_list_state_permit);
+        for completed in pending_cleanups {
+            wait_for_thread_unload(completed).await;
         }
     }
 
@@ -2611,6 +2671,16 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
+        let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                warn!(
+                    "failed to serialize automatic listener attachment for thread {thread_id}: {}",
+                    error.message
+                );
+                return;
+            }
+        };
         let mut raw_events_enabled = false;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
@@ -2634,8 +2704,12 @@ impl ThreadRequestProcessor {
 
         for connection_id in connection_ids {
             log_listener_attach_result(
-                self.ensure_conversation_listener(thread_id, connection_id, raw_events_enabled)
-                    .await,
+                self.ensure_conversation_listener_under_permit(
+                    thread_id,
+                    connection_id,
+                    raw_events_enabled,
+                )
+                .await,
                 thread_id,
                 connection_id,
                 "thread",
@@ -2651,24 +2725,6 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id) {
-            let unload_pending = {
-                let _admission = self.pending_thread_unloads.lock_admission().await;
-                self.pending_thread_unloads.contains(thread_id)
-            };
-            if unload_pending {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        invalid_request(format!(
-                            "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-                        )),
-                    )
-                    .await;
-                return Ok(());
-            }
-        }
-
         if params.sandbox.is_some() && params.permissions.is_some() {
             self.outgoing
                 .send_error(
@@ -2681,7 +2737,45 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
+        let admission_thread_id = if params.history.is_some() {
+            ThreadId::from_string(&params.thread_id).ok()
+        } else if params.path.is_some() {
+            match self
+                .read_stored_thread_for_resume(
+                    &params.thread_id,
+                    params.path.as_ref(),
+                    /*include_history*/ false,
+                )
+                .await
+            {
+                Ok(stored_thread) => Some(stored_thread.thread_id),
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return Ok(());
+                }
+            }
+        } else {
+            match ThreadId::from_string(&params.thread_id) {
+                Ok(thread_id) => Some(thread_id),
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            invalid_request(format!("invalid session id: {err}")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+            }
+        };
+        let permit_result = match admission_thread_id {
+            Some(thread_id) => {
+                self.acquire_thread_list_state_permit_after_unload(thread_id)
+                    .await
+            }
+            None => self.acquire_thread_list_state_permit().await,
+        };
+        let thread_list_state_permit = match permit_result {
             Ok(permit) => permit,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2841,7 +2935,7 @@ impl ThreadRequestProcessor {
                 };
                 // Auto-attach a thread listener when resuming a thread.
                 log_listener_attach_result(
-                    self.ensure_conversation_listener(
+                    self.ensure_conversation_listener_under_permit(
                         thread_id,
                         request_id.connection_id,
                         /*raw_events_enabled*/ false,
@@ -3084,7 +3178,8 @@ impl ThreadRequestProcessor {
                     match wait_for_thread_shutdown(&existing_thread).await {
                         ThreadShutdownResult::Complete => {
                             self.thread_manager.remove_thread(&existing_thread_id).await;
-                            self.finalize_thread_teardown(existing_thread_id).await;
+                            self.finalize_thread_teardown_owner(existing_thread_id)
+                                .await;
                             // Shutdown can flush newer rollout items, so reload the
                             // stored thread before starting the replacement session.
                             return Ok(RunningThreadResumeResult::NotRunning(None));

@@ -11,7 +11,6 @@ pub(crate) struct PendingThreadUnloads {
 
 #[derive(Default)]
 struct PendingThreadUnloadsInner {
-    admission: Mutex<()>,
     registry: StdMutex<PendingThreadUnloadRegistry>,
     tasks: TaskTracker,
 }
@@ -64,10 +63,6 @@ impl Drop for PendingThreadUnloadOwner {
 }
 
 impl PendingThreadUnloads {
-    pub(super) async fn lock_admission(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.inner.admission.lock().await
-    }
-
     fn lock_registry(&self) -> std::sync::MutexGuard<'_, PendingThreadUnloadRegistry> {
         self.inner
             .registry
@@ -77,6 +72,13 @@ impl PendingThreadUnloads {
 
     pub(super) fn contains(&self, thread_id: ThreadId) -> bool {
         self.lock_registry().entries.contains_key(&thread_id)
+    }
+
+    pub(super) fn subscribe(&self, thread_id: ThreadId) -> Option<watch::Receiver<bool>> {
+        self.lock_registry()
+            .entries
+            .get(&thread_id)
+            .map(watch::Sender::subscribe)
     }
 
     pub(super) fn try_claim(&self, thread_id: ThreadId) -> PendingThreadUnloadClaimResult {
@@ -161,6 +163,21 @@ pub(super) async fn wait_for_thread_unload(mut completed: watch::Receiver<bool>)
         if completed.changed().await.is_err() {
             break;
         }
+    }
+}
+
+pub(super) fn start_thread_teardown<F>(
+    pending: PendingThreadUnloads,
+    thread_id: ThreadId,
+    teardown: F,
+) -> Option<watch::Receiver<bool>>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    match pending.try_start(thread_id, teardown) {
+        PendingThreadUnloadStartResult::Started(completed)
+        | PendingThreadUnloadStartResult::Pending(completed) => Some(completed),
+        PendingThreadUnloadStartResult::Closing => None,
     }
 }
 

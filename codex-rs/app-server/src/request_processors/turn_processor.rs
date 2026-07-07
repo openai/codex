@@ -960,9 +960,10 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         thread_id: &str,
     ) -> Result<Option<(ThreadId, Arc<CodexThread>)>, JSONRPCErrorError> {
-        let (thread_id, thread) = self.load_thread(thread_id).await?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        match self
+        let thread = match self
             .ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
@@ -970,12 +971,12 @@ impl TurnRequestProcessor {
             )
             .await
         {
-            Ok(EnsureConversationListenerResult::Attached) => {}
+            Ok(EnsureConversationListenerResult::Attached(thread)) => thread,
             Ok(EnsureConversationListenerResult::ConnectionClosed) => {
                 return Ok(None);
             }
             Err(error) => return Err(error),
-        }
+        };
 
         if !thread.enabled(Feature::RealtimeConversation) {
             return Err(invalid_request(format!(
@@ -1428,7 +1429,7 @@ impl TurnRequestProcessor {
         connection_id: ConnectionId,
         raw_events_enabled: bool,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
-        super::thread_lifecycle::ensure_conversation_listener(
+        super::thread_lifecycle::ensure_conversation_listener_serialized(
             self.listener_task_context(),
             conversation_id,
             connection_id,
