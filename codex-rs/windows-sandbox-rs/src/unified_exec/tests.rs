@@ -469,6 +469,8 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
         for directory in [&workspace, &temp_root, &tmp_root, &outside_root] {
             fs::create_dir_all(directory).expect("create legacy delete test directory");
         }
+        let protected_git_dir = workspace.join(".git");
+        fs::create_dir(&protected_git_dir).expect("create protected .git directory");
 
         let workspace_file = workspace.join("workspace-delete.txt");
         let temp_file = temp_root.join("temp-delete.txt");
@@ -488,6 +490,7 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 "del /f /q \"%TEMP_DELETE%\"\r\n",
                 "del /f /q \"%TMP_DELETE%\"\r\n",
                 "del /f /q \"%OUTSIDE_DELETE%\"\r\n",
+                "rmdir \"%PROTECTED_GIT_DIR%\"\r\n",
                 "exit /b 0\r\n",
             ),
         )
@@ -511,6 +514,10 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
             (
                 "OUTSIDE_DELETE".to_string(),
                 outside_file.to_string_lossy().into_owned(),
+            ),
+            (
+                "PROTECTED_GIT_DIR".to_string(),
+                protected_git_dir.to_string_lossy().into_owned(),
             ),
         ]);
 
@@ -548,8 +555,9 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 temp_file.exists(),
                 tmp_file.exists(),
                 fs::read_to_string(&outside_file).ok(),
+                protected_git_dir.is_dir(),
             ),
-            (0, false, false, false, Some("outside".to_string())),
+            (0, false, false, false, Some("outside".to_string()), true),
             "stdout={stdout:?}\n{}",
             sandbox_log(codex_home.path())
         );

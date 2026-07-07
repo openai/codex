@@ -826,8 +826,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         )?;
     }
 
-    let write_mask =
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    let write_mask = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
     let mut grant_tasks: Vec<(PathBuf, String)> = Vec::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
