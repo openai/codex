@@ -708,6 +708,12 @@ impl TestCodexBuilder {
         } else {
             load_default_config_for_test(home).await
         };
+        // Core tests run without an installed sibling code-mode host binary. Tests that exercise
+        // the process host opt in explicitly after this default test-harness override.
+        config
+            .features
+            .disable(Feature::CodeModeHost)
+            .expect("test config should allow disabling the code-mode host");
         config.cwd = cwd_override;
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
