@@ -10,6 +10,10 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
 export type ThreadStartResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, /**
+ * Whether this request changed the active project from having no explicit
+ * trust level to trusted.
+ */
+projectTrustEstablished: boolean, /**
  * Environment-native paths to instruction source files currently loaded for this thread.
  */
 instructionSources: Array<LegacyAppPathString>, approvalPolicy: AskForApproval, /**

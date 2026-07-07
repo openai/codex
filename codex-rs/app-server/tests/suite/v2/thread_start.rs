@@ -1286,11 +1286,16 @@ model_reasoning_effort = "high"
             ..Default::default()
         })
         .await?;
-    timeout(
+    let first_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
     )
     .await??;
+    let ThreadStartResponse {
+        project_trust_established,
+        ..
+    } = to_response::<ThreadStartResponse>(first_response)?;
+    assert!(project_trust_established);
 
     let second_request = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -1305,11 +1310,13 @@ model_reasoning_effort = "high"
     .await??;
     let ThreadStartResponse {
         approval_policy,
+        project_trust_established,
         reasoning_effort,
         ..
     } = to_response::<ThreadStartResponse>(second_response)?;
 
     assert_eq!(approval_policy, AskForApproval::OnRequest);
+    assert!(!project_trust_established);
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;

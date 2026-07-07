@@ -17436,6 +17436,11 @@
         "modelProvider": {
           "type": "string"
         },
+        "projectTrustEstablished": {
+          "default": false,
+          "description": "Whether this request changed the active project from having no explicit trust level to trusted.",
+          "type": "boolean"
+        },
         "reasoningEffort": {
           "anyOf": [
             {

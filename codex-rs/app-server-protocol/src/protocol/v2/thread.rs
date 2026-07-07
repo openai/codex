@@ -173,6 +173,10 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
+    /// Whether this request changed the active project from having no explicit
+    /// trust level to trusted.
+    #[serde(default)]
+    pub project_trust_established: bool,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
