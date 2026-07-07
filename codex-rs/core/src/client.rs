@@ -62,10 +62,13 @@ use codex_api::auth_header_telemetry;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::OutboundProxyConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
+use codex_login::default_client::build_default_reqwest_client_for_route;
 use codex_login::default_client::build_reqwest_client;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
@@ -248,6 +251,7 @@ pub struct ModelClient {
     state: Arc<ModelClientState>,
     agent_identity_policy: AgentIdentityAuthPolicy,
     prompt_cache_key_override: Option<String>,
+    outbound_proxy_config: Option<OutboundProxyConfig>,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -439,7 +443,16 @@ impl ModelClient {
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
+            outbound_proxy_config: None,
         }
+    }
+
+    pub(crate) fn with_outbound_proxy_config(
+        mut self,
+        outbound_proxy_config: Option<OutboundProxyConfig>,
+    ) -> Self {
+        self.outbound_proxy_config = outbound_proxy_config;
+        self
     }
 
     pub(crate) fn with_prompt_cache_key_override(
@@ -532,7 +545,8 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let client_setup = self.current_client_setup().await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport =
+            self.build_responses_transport(&client_setup.api_provider, RESPONSES_COMPACT_ENDPOINT)?;
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -936,6 +950,21 @@ impl ModelClient {
             api_auth: resolved_auth.auth,
             agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
         })
+    }
+
+    fn build_responses_transport(
+        &self,
+        api_provider: &ApiProvider,
+        endpoint: &str,
+    ) -> Result<ReqwestTransport> {
+        let request_url = api_provider.url_for_path(endpoint);
+        let client = build_default_reqwest_client_for_route(
+            &request_url,
+            ClientRouteClass::Api,
+            self.outbound_proxy_config.as_ref(),
+        )
+        .map_err(std::io::Error::from)?;
+        Ok(ReqwestTransport::new(client))
     }
 
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
@@ -1372,7 +1401,9 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = self
+                .client
+                .build_responses_transport(&client_setup.api_provider, RESPONSES_ENDPOINT)?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),

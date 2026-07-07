@@ -3,6 +3,8 @@ use super::CompactConversationRequestSettings;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::Prompt;
+#[cfg(target_os = "linux")]
+use super::RESPONSES_ENDPOINT;
 use super::UnauthorizedRecoveryExecution;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
@@ -56,6 +58,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::pin::Pin;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -81,6 +85,10 @@ use wiremock::matchers::path;
 
 const TEST_CHATGPT_ID_TOKEN: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzNDUiLCJ1c2VyX2lkIjoidXNlci0xMjM0NSIsImNoYXRncHRfcGxhbl90eXBlIjoicHJvIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjb3VudC0xMjMifX0.c2ln";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+#[cfg(target_os = "linux")]
+const RESPONSES_PROXY_TEST_CHILD_ENV: &str = "CODEX_RESPONSES_PROXY_TEST_CHILD";
+#[cfg(target_os = "linux")]
+const RESPONSES_PROXY_TEST_CHILD_RAN: &str = "responses proxy child ran";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     test_model_client_with_thread_id(ThreadId::new(), session_source)
@@ -105,6 +113,48 @@ fn test_model_client_with_thread_id(
         /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     )
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn responses_transport_uses_enabled_outbound_proxy_policy() {
+    if std::env::var_os(RESPONSES_PROXY_TEST_CHILD_ENV).is_none() {
+        let test_name = "client::tests::responses_transport_uses_enabled_outbound_proxy_policy";
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", test_name, "--nocapture"])
+            .env(RESPONSES_PROXY_TEST_CHILD_ENV, "1")
+            .env("HTTP_PROXY", "://invalid")
+            .env_remove("http_proxy")
+            .output()
+            .expect("proxy-policy subprocess should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "proxy-policy subprocess failed\nstdout:\n{}\nstderr:\n{stderr}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+        assert!(
+            stderr.contains(RESPONSES_PROXY_TEST_CHILD_RAN),
+            "proxy-policy subprocess did not execute the expected test\nstderr:\n{stderr}"
+        );
+        return;
+    }
+
+    eprintln!("{RESPONSES_PROXY_TEST_CHILD_RAN}");
+    let api_provider =
+        create_oss_provider_with_base_url("http://responses-api.invalid/v1", WireApi::Responses)
+            .to_api_provider(/*auth_mode*/ None)
+            .expect("test API provider should resolve");
+    let client = test_model_client(SessionSource::Cli).with_outbound_proxy_config(Some(
+        codex_http_client::OutboundProxyConfig::respect_system_proxy(),
+    ));
+
+    let error = match client.build_responses_transport(&api_provider, RESPONSES_ENDPOINT) {
+        Err(codex_protocol::error::CodexErr::Io(error)) => error,
+        Err(error) => panic!("expected an IO error, got {error:?}"),
+        Ok(_) => panic!("expected invalid enabled proxy configuration"),
+    };
+    assert!(error.to_string().contains("selected for api"));
 }
 
 #[tokio::test]

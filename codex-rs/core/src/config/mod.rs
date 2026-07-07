@@ -70,6 +70,7 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_http_client::OutboundProxyConfig;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
@@ -1479,6 +1480,11 @@ impl Config {
     pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
         self.respect_system_proxy
             .then(AuthRouteConfig::respect_system_proxy)
+    }
+
+    pub(crate) fn outbound_proxy_config(&self) -> Option<OutboundProxyConfig> {
+        self.respect_system_proxy
+            .then(OutboundProxyConfig::respect_system_proxy)
     }
 
     /// Build the plugin-manager input from the effective config.

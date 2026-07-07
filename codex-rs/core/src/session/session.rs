@@ -1113,6 +1113,7 @@ impl Session {
                     /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
                     attestation_provider,
                 )
+                .with_outbound_proxy_config(config.outbound_proxy_config())
                 .with_prompt_cache_key_override(
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
