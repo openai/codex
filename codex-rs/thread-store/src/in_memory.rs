@@ -431,6 +431,15 @@ mod tests {
                 changes.recv().await.expect("delete change"),
             ]
         );
+
+        store
+            .archive_thread(ArchiveThreadParams { thread_id })
+            .await
+            .expect_err("deleted thread should not archive");
+        assert!(matches!(
+            changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 }
 
@@ -828,7 +837,10 @@ impl ThreadStore for InMemoryThreadStore {
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
         let thread_id = params.thread_id;
         Box::pin(async move {
-            self.state.lock().await.calls.archive_thread += 1;
+            let mut state = self.state.lock().await;
+            state.calls.archive_thread += 1;
+            stored_thread_from_state(&state, thread_id, /*include_history*/ false)?;
+            drop(state);
             self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
             Ok(())
         })

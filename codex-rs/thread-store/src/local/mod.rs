@@ -18,6 +18,7 @@ use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -117,6 +118,26 @@ impl LocalThreadStore {
 
     fn publish_catalog_change(&self, change: ThreadCatalogChange) {
         let _ = self.catalog_changes_tx.send(change);
+    }
+
+    async fn track_catalog_visibility<T>(
+        &self,
+        thread_id: ThreadId,
+        operation: impl Future<Output = ThreadStoreResult<T>>,
+    ) -> ThreadStoreResult<T> {
+        let rollout_path = live_writer::rollout_path(self, thread_id).await?;
+        let was_visible = codex_rollout::existing_rollout_path(&rollout_path)
+            .await
+            .is_some();
+        let result = operation.await?;
+        if !was_visible
+            && codex_rollout::existing_rollout_path(&rollout_path)
+                .await
+                .is_some()
+        {
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+        }
+        Ok(result)
     }
 
     /// Return the state DB handle used by local rollout writers.
@@ -264,23 +285,26 @@ impl ThreadStore for LocalThreadStore {
     }
 
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::append_items(self, params).await })
+        let thread_id = params.thread_id;
+        Box::pin(self.track_catalog_visibility(thread_id, live_writer::append_items(self, params)))
     }
 
     fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move {
-            live_writer::persist_thread(self, thread_id).await?;
-            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
-            Ok(())
-        })
+        Box::pin(
+            self.track_catalog_visibility(thread_id, live_writer::persist_thread(self, thread_id)),
+        )
     }
 
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::flush_thread(self, thread_id).await })
+        Box::pin(
+            self.track_catalog_visibility(thread_id, live_writer::flush_thread(self, thread_id)),
+        )
     }
 
     fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::shutdown_thread(self, thread_id).await })
+        Box::pin(
+            self.track_catalog_visibility(thread_id, live_writer::shutdown_thread(self, thread_id)),
+        )
     }
 
     fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
@@ -413,14 +437,14 @@ mod tests {
             })
             .await
             .expect("append live item");
+        assert_eq!(
+            catalog_changes.recv().await.expect("creation change"),
+            ThreadCatalogChange::Upsert { thread_id }
+        );
         store
             .persist_thread(thread_id)
             .await
             .expect("persist live thread");
-        assert_eq!(
-            catalog_changes.recv().await.expect("persist change"),
-            ThreadCatalogChange::Upsert { thread_id }
-        );
         store
             .flush_thread(thread_id)
             .await
@@ -432,6 +456,10 @@ mod tests {
             .shutdown_thread(thread_id)
             .await
             .expect("shutdown live thread");
+        assert!(matches!(
+            catalog_changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
         let err = store
             .append_items(AppendThreadItemsParams {
                 thread_id,
@@ -614,6 +642,7 @@ mod tests {
         .await
         .expect("state db should initialize");
         let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let mut catalog_changes = store.subscribe_catalog_changes();
         let thread_id = ThreadId::default();
         let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
             .await
@@ -624,6 +653,10 @@ mod tests {
             .expect("live rollout path");
 
         live_thread.shutdown().await.expect("shutdown thread");
+        assert!(matches!(
+            catalog_changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
 
         assert!(
             !tokio::fs::try_exists(rollout_path.as_path())
@@ -690,6 +723,7 @@ mod tests {
         .await
         .expect("state db should initialize");
         let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let mut catalog_changes = store.subscribe_catalog_changes();
         let thread_id = ThreadId::default();
         let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
             .await
@@ -709,6 +743,10 @@ mod tests {
             .await
             .expect("append metadata-only item");
         live_thread.shutdown().await.expect("shutdown thread");
+        assert_eq!(
+            catalog_changes.recv().await.expect("creation change"),
+            ThreadCatalogChange::Upsert { thread_id }
+        );
 
         assert!(
             tokio::fs::try_exists(rollout_path.as_path())
