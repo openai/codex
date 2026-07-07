@@ -348,6 +348,9 @@ pub struct ManagedNetworkSandboxContext {
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
+    /// Effective proxy settings for an exec-server that must start its own local listeners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_config: Option<crate::RemoteNetworkProxyConfig>,
 }
 
 /// Environment-specific managed-network settings prepared for one command launch.
@@ -727,6 +730,7 @@ impl NetworkProxy {
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
                 allow_local_binding: runtime_settings.allow_local_binding,
+                proxy_config: None,
             },
         }
     }
@@ -1216,6 +1220,7 @@ mod tests {
                 ManagedNetworkSandboxContext {
                     loopback_ports: expected_ports,
                     allow_local_binding: false,
+                    proxy_config: None,
                 }
             );
         }

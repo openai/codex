@@ -1,12 +1,18 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::time::Duration;
 
-#[cfg(target_os = "macos")]
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyConfig;
 #[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 
 use super::prepare_exec_request;
 use crate::ExecParams;
@@ -17,8 +23,8 @@ use crate::FileSystemSandboxContext;
 use crate::ProcessId;
 
 #[cfg(unix)]
-#[test]
-fn sandbox_request_wraps_native_argv_on_executor() {
+#[tokio::test]
+async fn sandbox_request_wraps_native_argv_on_executor() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
         .try_into()
@@ -50,6 +56,7 @@ fn sandbox_request_wraps_native_argv_on_executor() {
     };
 
     let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
+        .await
         .expect("prepare sandboxed request");
 
     assert_ne!(prepared.command, params.argv);
@@ -82,8 +89,8 @@ fn sandbox_request_wraps_native_argv_on_executor() {
 }
 
 #[cfg(target_os = "macos")]
-#[test]
-fn sandbox_request_allows_prepared_managed_proxy_port() {
+#[tokio::test]
+async fn sandbox_request_allows_prepared_managed_proxy_port() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
         .try_into()
@@ -110,10 +117,12 @@ fn sandbox_request_allows_prepared_managed_proxy_port() {
         managed_network: Some(ManagedNetworkSandboxContext {
             loopback_ports: vec![43123],
             allow_local_binding: false,
+            proxy_config: None,
         }),
     };
 
     let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
+        .await
         .expect("prepare managed-network sandbox request");
     let policy = prepared
         .command
@@ -124,8 +133,8 @@ fn sandbox_request_allows_prepared_managed_proxy_port() {
     assert!(policy.contains("(allow network-outbound (remote ip \"localhost:43123\"))"));
 }
 
-#[test]
-fn native_request_preserves_native_launch_fields() {
+#[tokio::test]
+async fn native_request_preserves_native_launch_fields() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
         .try_into()
@@ -147,10 +156,78 @@ fn native_request_preserves_native_launch_fields() {
     };
 
     let prepared = prepare_exec_request(&params, env.clone(), /*runtime_paths*/ None)
+        .await
         .expect("prepare native request");
 
     assert_eq!(prepared.command, params.argv);
     assert_eq!(prepared.cwd, cwd);
     assert_eq!(prepared.env, env);
     assert_eq!(prepared.arg0, params.arg0);
+}
+
+#[tokio::test]
+async fn remote_proxy_config_starts_executor_local_proxy() {
+    let cwd: AbsolutePathBuf = std::env::current_dir()
+        .expect("current directory")
+        .try_into()
+        .expect("absolute cwd");
+    let mut config = NetworkProxyConfig::default();
+    config.network.enabled = true;
+    config
+        .network
+        .set_allowed_domains(vec!["allowed.example".to_string()]);
+    let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&config)
+        .expect("supported remote proxy config");
+    let params = ExecParams {
+        process_id: ProcessId::from("process-remote-proxy"),
+        argv: vec!["echo".to_string(), "hello".to_string()],
+        cwd: PathUri::from_abs_path(&cwd),
+        env_policy: None,
+        env: HashMap::new(),
+        tty: false,
+        pipe_stdin: false,
+        arg0: None,
+        sandbox: None,
+        enforce_managed_network: false,
+        managed_network: Some(ManagedNetworkSandboxContext {
+            loopback_ports: Vec::new(),
+            allow_local_binding: false,
+            proxy_config: Some(proxy_config),
+        }),
+    };
+    let stale_proxy = "http://127.0.0.1:9".to_string();
+    let env = HashMap::from([("HTTP_PROXY".to_string(), stale_proxy.clone())]);
+
+    let prepared = prepare_exec_request(&params, env, /*runtime_paths*/ None)
+        .await
+        .expect("prepare request with executor-local proxy");
+
+    let http_proxy = prepared.env.get("HTTP_PROXY").expect("HTTP proxy env");
+    assert_ne!(http_proxy, &stale_proxy);
+    assert!(http_proxy.starts_with("http://127.0.0.1:"));
+    let proxy_addr: SocketAddr = http_proxy
+        .strip_prefix("http://")
+        .expect("HTTP proxy scheme")
+        .parse()
+        .expect("HTTP proxy address");
+    let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+        .await
+        .expect("connect to executor proxy");
+    stream
+        .write_all(b"CONNECT blocked.example:443 HTTP/1.1\r\nHost: blocked.example:443\r\n\r\n")
+        .await
+        .expect("write CONNECT request");
+    let mut response = [0_u8; 256];
+    let response_len = timeout(Duration::from_secs(2), stream.read(&mut response))
+        .await
+        .expect("proxy response timeout")
+        .expect("read proxy response");
+    assert!(String::from_utf8_lossy(&response[..response_len]).starts_with("HTTP/1.1 403"));
+
+    prepared
+        .network_proxy_handle
+        .expect("running executor proxy")
+        .shutdown()
+        .await
+        .expect("shut down executor proxy");
 }

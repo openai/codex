@@ -598,6 +598,7 @@ mod tests {
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
+                proxy_config: None,
             }),
         };
 

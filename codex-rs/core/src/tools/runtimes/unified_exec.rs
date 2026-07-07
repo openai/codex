@@ -42,6 +42,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -324,6 +325,26 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         ));
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         let (env, managed_network_context) = match managed_network {
+            Some(network) if environment_is_remote => {
+                let config = network.current_cfg().await.map_err(|err| {
+                    ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                        "failed to read effective network proxy config: {err}"
+                    ))))
+                })?;
+                let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&config)
+                    .map_err(|err| {
+                        ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
+                    })?;
+                let allow_local_binding = proxy_config.allow_local_binding;
+                (
+                    env,
+                    Some(codex_network_proxy::ManagedNetworkSandboxContext {
+                        loopback_ports: Vec::new(),
+                        allow_local_binding,
+                        proxy_config: Some(proxy_config),
+                    }),
+                )
+            }
             Some(network) => {
                 let prepared = network
                     .prepare_for_optional_environment(

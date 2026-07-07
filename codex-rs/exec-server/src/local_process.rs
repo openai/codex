@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::NetworkProxyHandle;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -97,6 +98,7 @@ struct RunningProcess {
     termination_requested: bool,
     sandbox: SandboxType,
     sandbox_denied: bool,
+    network_proxy_handle: Option<NetworkProxyHandle>,
 }
 
 /// Bounded cache of stdin write ids that have already been accepted for one process.
@@ -235,7 +237,7 @@ impl LocalProcess {
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
         let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref()).await?;
         let (program, args) = prepared
             .command
             .split_first()
@@ -338,6 +340,7 @@ impl LocalProcess {
                     termination_requested: false,
                     sandbox: prepared.sandbox,
                     sandbox_denied: false,
+                    network_proxy_handle: prepared.network_proxy_handle,
                 })),
             );
         }
@@ -823,7 +826,7 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    let sandboxed = {
+    let (sandboxed, network_proxy_handle) = {
         let mut processes = inner.processes.lock().await;
         match processes.get_mut(&process_id) {
             Some(ProcessEntry::Running(process)) => {
@@ -837,11 +840,16 @@ async fn watch_exit(
                         "error"
                     });
                 }
-                sandboxed
+                (sandboxed, process.network_proxy_handle.take())
             }
-            Some(ProcessEntry::Starting(_)) | None => false,
+            Some(ProcessEntry::Starting(_)) | None => (false, None),
         }
     };
+    if let Some(network_proxy_handle) = network_proxy_handle
+        && let Err(err) = network_proxy_handle.shutdown().await
+    {
+        tracing::warn!("failed to shut down executor network proxy: {err}");
+    }
     if sandboxed {
         let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
     }
@@ -1310,6 +1318,7 @@ mod tests {
                 termination_requested: false,
                 sandbox: SandboxType::None,
                 sandbox_denied: false,
+                network_proxy_handle: None,
             })),
         );
         assert!(previous.is_none());

@@ -187,6 +187,26 @@ pub trait ConfigReloader: Send + Sync {
 
 pub type ConfigReloaderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+#[derive(Clone)]
+struct StaticConfigReloader {
+    state: ConfigState,
+}
+
+impl ConfigReloader for StaticConfigReloader {
+    fn source_label(&self) -> String {
+        "static config state".to_string()
+    }
+
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        let state = self.state.clone();
+        Box::pin(async move { Ok(state) })
+    }
+}
+
 pub trait BlockedRequestObserver: Send + Sync + 'static {
     fn on_blocked_request(&self, request: BlockedRequest) -> BlockedRequestObserverFuture<'_>;
 }
@@ -257,6 +277,15 @@ impl Clone for NetworkProxyState {
 }
 
 impl NetworkProxyState {
+    /// Builds immutable runtime state from an already-computed effective configuration.
+    pub fn from_static_config(config: NetworkProxyConfig) -> Result<Self> {
+        let state = build_config_state(config, NetworkProxyConstraints::default())?;
+        Ok(Self::with_reloader(
+            state.clone(),
+            Arc::new(StaticConfigReloader { state }),
+        ))
+    }
+
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
         Self::with_reloader_and_audit_metadata(
             state,
