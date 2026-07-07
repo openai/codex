@@ -4,6 +4,10 @@ use std::sync::Arc;
 use codex_analytics::PluginInstallRequestSource;
 use codex_analytics::PluginInstallRequested;
 use codex_analytics::PluginInstallRequestedPlugin;
+use codex_analytics::PluginInstallSuggestionOutcome;
+use codex_analytics::PluginInstallSuggestionOutcomeTool;
+use codex_analytics::PluginInstallSuggestionResponseAction;
+use codex_analytics::PluginInstallSuggestionToolType;
 use codex_analytics::build_track_events_context;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
@@ -180,23 +184,24 @@ impl RequestPluginInstallHandler {
         let tool_type = tool.tool_type();
 
         let suggestion_id = format!("request_plugin_install_{call_id}");
+        let source = match self.presentation {
+            ToolSuggestPresentation::ListTool => PluginInstallRequestSource::LegacyDiscovery,
+            ToolSuggestPresentation::RecommendationContext => {
+                PluginInstallRequestSource::EndpointRecommendation
+            }
+        };
+        let tracking = build_track_events_context(
+            turn.model_info.slug.clone(),
+            session.thread_id.to_string(),
+            turn.sub_id.clone(),
+            turn.originator.clone(),
+        );
         if let DiscoverableTool::Plugin(plugin) = &tool {
-            let source = match self.presentation {
-                ToolSuggestPresentation::ListTool => PluginInstallRequestSource::LegacyDiscovery,
-                ToolSuggestPresentation::RecommendationContext => {
-                    PluginInstallRequestSource::EndpointRecommendation
-                }
-            };
             session
                 .services
                 .analytics_events_client
                 .track_plugin_install_requested(
-                    build_track_events_context(
-                        turn.model_info.slug.clone(),
-                        session.thread_id.to_string(),
-                        turn.sub_id.clone(),
-                        turn.originator.clone(),
-                    ),
+                    tracking.clone(),
                     PluginInstallRequested {
                         suggestion_id: suggestion_id.clone(),
                         plugins: vec![PluginInstallRequestedPlugin {
@@ -210,7 +215,7 @@ impl RequestPluginInstallHandler {
                 );
         }
 
-        let request_id = RequestId::String(suggestion_id.into());
+        let request_id = RequestId::String(suggestion_id.clone().into());
         let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
             .request_mcp_server_elicitation(
@@ -243,24 +248,64 @@ impl RequestPluginInstallHandler {
         }
 
         if elicitation.sent {
-            let tool_type = match tool_type {
-                DiscoverableToolType::Connector => "connector",
-                DiscoverableToolType::Plugin => "plugin",
+            let (outcome_tool_type, tool_type_name) = match tool_type {
+                DiscoverableToolType::Connector => {
+                    (PluginInstallSuggestionToolType::Connector, "connector")
+                }
+                DiscoverableToolType::Plugin => (PluginInstallSuggestionToolType::Plugin, "plugin"),
             };
-            let response_action = match response.as_ref().map(|response| &response.action) {
-                Some(ElicitationAction::Accept) => "accept",
-                Some(ElicitationAction::Decline) => "decline",
-                Some(ElicitationAction::Cancel) => "cancel",
-                None => "unavailable",
+            let (response_action, response_action_name) =
+                match response.as_ref().map(|response| &response.action) {
+                    Some(ElicitationAction::Accept) => {
+                        (PluginInstallSuggestionResponseAction::Accept, "accept")
+                    }
+                    Some(ElicitationAction::Decline) => {
+                        (PluginInstallSuggestionResponseAction::Decline, "decline")
+                    }
+                    Some(ElicitationAction::Cancel) => {
+                        (PluginInstallSuggestionResponseAction::Cancel, "cancel")
+                    }
+                    None => (
+                        PluginInstallSuggestionResponseAction::Unavailable,
+                        "unavailable",
+                    ),
+                };
+            let (remote_plugin_id, connector_ids) = match &tool {
+                DiscoverableTool::Connector(connector) => (None, vec![connector.id.clone()]),
+                DiscoverableTool::Plugin(plugin) => (
+                    plugin.remote_plugin_id.clone(),
+                    plugin.app_connector_ids.clone(),
+                ),
             };
             turn.session_telemetry.record_plugin_install_suggestion(
-                tool_type,
+                tool_type_name,
                 tool.id(),
                 tool.name(),
-                response_action,
+                response_action_name,
                 user_confirmed,
                 completed,
             );
+            session
+                .services
+                .analytics_events_client
+                .track_plugin_install_suggestion_outcome(
+                    tracking,
+                    PluginInstallSuggestionOutcome {
+                        suggestion_id,
+                        source,
+                        tools: vec![PluginInstallSuggestionOutcomeTool {
+                            tool_type: outcome_tool_type,
+                            tool_id: tool.id().to_string(),
+                            tool_name: tool.name().to_string(),
+                            remote_plugin_id,
+                            connector_ids,
+                            selected: user_confirmed,
+                        }],
+                        response_action,
+                        user_confirmed,
+                        completed,
+                    },
+                );
         }
 
         let content = serde_json::to_string(&RequestPluginInstallResult {
