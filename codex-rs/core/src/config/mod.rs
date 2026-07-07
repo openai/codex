@@ -615,7 +615,7 @@ fn validate_windows_sandbox_network_proxy_compatibility_for_platform(
 ) -> std::io::Result<()> {
     if is_windows
         && network_proxy_configured
-        && windows_sandbox_level == WindowsSandboxLevel::RestrictedToken
+        && windows_sandbox_level != WindowsSandboxLevel::Elevated
     {
         return Err(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox.into());
     }

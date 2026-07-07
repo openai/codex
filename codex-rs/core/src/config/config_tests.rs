@@ -173,25 +173,29 @@ fn windows_network_proxy_requires_elevated_only_sandbox_requirement() {
 
 #[test]
 fn windows_network_proxy_requires_elevated_sandbox() {
-    let err = validate_windows_sandbox_network_proxy_compatibility_for_platform(
-        /*is_windows*/ true,
+    for windows_sandbox_level in [
+        WindowsSandboxLevel::Disabled,
         WindowsSandboxLevel::RestrictedToken,
-        /*network_proxy_configured*/ true,
-    )
-    .expect_err("unelevated Windows sandbox should reject configured network proxy");
+    ] {
+        let err = validate_windows_sandbox_network_proxy_compatibility_for_platform(
+            /*is_windows*/ true,
+            windows_sandbox_level,
+            /*network_proxy_configured*/ true,
+        )
+        .expect_err("non-elevated Windows sandbox should reject configured network proxy");
 
-    assert!(matches!(
-        err.get_ref()
-            .and_then(|source| source.downcast_ref::<ConstraintError>()),
-        Some(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox)
-    ));
+        assert!(matches!(
+            err.get_ref()
+                .and_then(|source| source.downcast_ref::<ConstraintError>()),
+            Some(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox)
+        ));
+    }
 }
 
 #[test]
 fn windows_network_proxy_compatibility_allows_valid_combinations() -> std::io::Result<()> {
     for (windows_sandbox_level, network_proxy_configured) in [
         (WindowsSandboxLevel::Disabled, false),
-        (WindowsSandboxLevel::Disabled, true),
         (WindowsSandboxLevel::RestrictedToken, false),
         (WindowsSandboxLevel::Elevated, false),
         (WindowsSandboxLevel::Elevated, true),
