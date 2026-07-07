@@ -92,6 +92,52 @@ fn request(root: &Path, patch: &str) -> ApplyGitRequest {
     }
 }
 
+#[test]
+fn reverse_preflight_refuses_the_same_divergent_staged_blob_without_mutation() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), b"old\n").expect("base file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    std::fs::write(root.join("file.txt"), b"staged\n").expect("staged file");
+    run_success(root, &["add", "file.txt"]);
+    std::fs::write(root.join("file.txt"), b"new\n").expect("reverse worktree");
+    let patch = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+    let index_before = std::fs::read(root.join(".git/index")).expect("read index");
+    let worktree_before = std::fs::read(root.join("file.txt")).expect("read worktree");
+
+    let mut preflight = request(root, patch);
+    preflight.preflight = true;
+    let preflight_error = apply_git_patch(&preflight).expect_err("preflight must refuse");
+    assert_eq!(preflight_error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        preflight_error
+            .to_string()
+            .contains("would replace existing staged data"),
+        "{preflight_error}"
+    );
+    assert_eq!(
+        std::fs::read(root.join(".git/index")).expect("index after preflight"),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read(root.join("file.txt")).expect("worktree after preflight"),
+        worktree_before
+    );
+
+    let apply_error = apply_git_patch(&request(root, patch)).expect_err("apply must refuse");
+    assert_eq!(apply_error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(apply_error.to_string(), preflight_error.to_string());
+    assert_eq!(
+        std::fs::read(root.join(".git/index")).expect("index after apply"),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read(root.join("file.txt")).expect("worktree after apply"),
+        worktree_before
+    );
+}
+
 fn topology_fixture(topology: Topology) -> (tempfile::TempDir, String) {
     let repo = init_repo();
     let root = repo.path();

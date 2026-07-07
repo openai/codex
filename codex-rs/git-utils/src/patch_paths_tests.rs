@@ -1,9 +1,8 @@
 use super::*;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
-use crate::apply::safe_git_config_parts;
 use crate::exact_staging::StagePathsResult;
-use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::exact_staging::prepare_index_exact_paths_for_reverse_apply;
 use crate::exact_staging::update_index_exact_paths_standalone;
 use crate::guarded_config::config_source_authorization_count;
 use crate::guarded_config::reset_config_source_authorization_count;
@@ -84,8 +83,8 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
 }
 
 fn best_effort_paths(diff: &str) -> Vec<String> {
-    let repo = init_repo();
-    extract_paths_from_patch_from_cwd(diff, repo.path())
+    let cwd = tempfile::tempdir().expect("non-repository cwd");
+    extract_paths_from_patch_from_cwd(diff, cwd.path())
 }
 
 #[cfg(unix)]
@@ -540,7 +539,13 @@ fn standalone_stage_paths_rejects_actual_cwd_reparented_into_linked_worktree() {
             } else {
                 "changed before Git launch"
             };
-            assert!(error.to_string().contains(expected), "{mode}: {error}");
+            let message = error.to_string();
+            let accepted_earlier_route_refusal = mode == "prespawn"
+                && message.contains("no longer resolves within the selected worktree");
+            assert!(
+                message.contains(expected) || accepted_earlier_route_refusal,
+                "{mode}: {error}"
+            );
         }
     }
     drop(replacement.borrow_mut().take());
@@ -610,6 +615,31 @@ fn effective_paths_cover_supported_patch_headers() {
     let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
         .expect("parse NUL-delimited rename paths");
     assert_eq!(nul_rename_paths, vec!["new name.txt".to_string()]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn best_effort_parser_returns_empty_for_process_relative_primary_config() {
+    const TEST_NAME: &str =
+        "patch_paths::tests::best_effort_parser_returns_empty_for_process_relative_primary_config";
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                (
+                    "GIT_CONFIG_GLOBAL",
+                    OsStr::new("/proc/self/cwd/codex-process-relative.gitconfig"),
+                ),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+        );
+        return;
+    }
+
+    assert_eq!(
+        extract_paths_from_patch(&new_file_diff("safe.txt")),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -1012,50 +1042,14 @@ fn exact_stage(root: &Path, paths: &[&str], content_filter_paths: &[&str]) -> St
     .expect("run exact staging primitive")
 }
 
-fn stage_effective_paths(
-    git: &GitRunner,
-    root: &Path,
-    paths: &[String],
-    legacy_config_args: &[String],
-) -> io::Result<()> {
-    let _ = legacy_config_args;
+fn stage_effective_paths(git: &GitRunner, root: &Path, paths: &[String]) -> io::Result<()> {
     let canonical_root = std::fs::canonicalize(root)?;
     let mut config = GuardedGitConfig::authorize(git, &canonical_root, Vec::new())?;
     stage_effective_paths_standalone(&mut config, paths)
 }
 
 #[test]
-fn composed_staging_preserves_eligible_path_when_ignored_peer_is_refused() {
-    let repo = init_repo();
-    let root = repo.path();
-    std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("write ignore rule");
-    assert_eq!(run(root, &["git", "add", ".gitignore"]).0, 0);
-    assert_eq!(run(root, &["git", "commit", "-m", "ignore rule"]).0, 0);
-    std::fs::write(root.join("ignored.txt"), "ignored\n").expect("write ignored file");
-    std::fs::write(root.join("ordinary.txt"), "ordinary\n").expect("write ordinary file");
-    let paths = vec!["ignored.txt".to_string(), "ordinary.txt".to_string()];
-
-    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
-    let mut config =
-        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
-    config
-        .authorize_filter_paths(&paths)
-        .expect("apply filter snapshot");
-    let result = update_index_exact_paths_from_apply(&mut config, &paths, &paths)
-        .expect("ignored peer does not suppress eligible pre-staging");
-
-    assert_eq!(result.exit_code, 0, "{result:?}");
-    assert!(result.stderr.contains("ignored.txt"), "{result:?}");
-    assert_eq!(
-        run(root, &["git", "diff", "--cached", "--name-only"]).1,
-        "ordinary.txt\n"
-    );
-    assert!(index_entry(root, "ignored.txt").is_empty());
-}
-
-#[test]
-fn composed_staging_preserves_eligible_sparse_path_and_skips_excluded_peer() {
+fn reverse_staging_refuses_sparse_excluded_peer_before_eligible_mutation() {
     let repo = init_repo();
     let root = repo.path();
     std::fs::create_dir_all(root.join("inside")).expect("create included directory");
@@ -1077,57 +1071,6 @@ fn composed_staging_preserves_eligible_sparse_path_and_skips_excluded_peer() {
         "inside/eligible.txt".to_string(),
         "outside/base.txt".to_string(),
     ];
-
-    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
-    let mut config =
-        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
-    config
-        .authorize_filter_paths(&paths)
-        .expect("apply filter snapshot");
-    stage_effective_paths_from_apply(&mut config, &paths)
-        .expect("sparse-excluded peer does not suppress eligible pre-staging");
-
-    assert_eq!(
-        run(root, &["git", "diff", "--cached", "--name-only"]).1,
-        "inside/eligible.txt\n"
-    );
-    assert!(
-        run(root, &["git", "diff", "--cached", "--", "outside/base.txt"])
-            .1
-            .is_empty(),
-        "sparse-excluded tracked path must retain its prior index entry"
-    );
-}
-
-#[test]
-fn composed_staging_non_sparse_skip_worktree_refusal_remains_atomic() {
-    let repo = init_repo();
-    let root = repo.path();
-    std::fs::write(root.join("eligible.txt"), "base eligible\n").expect("write eligible base");
-    std::fs::write(root.join("skipped.txt"), "base skipped\n").expect("write skipped base");
-    assert_eq!(
-        run(root, &["git", "add", "eligible.txt", "skipped.txt"]).0,
-        0
-    );
-    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
-    assert_eq!(
-        run(
-            root,
-            &[
-                "git",
-                "update-index",
-                "--skip-worktree",
-                "--",
-                "skipped.txt"
-            ]
-        )
-        .0,
-        0
-    );
-    std::fs::write(root.join("eligible.txt"), "changed eligible\n").expect("modify eligible path");
-    std::fs::write(root.join("skipped.txt"), "changed skipped\n").expect("modify skipped path");
-    let paths = vec!["eligible.txt".to_string(), "skipped.txt".to_string()];
     let before = git_index_bytes(root);
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
@@ -1137,37 +1080,45 @@ fn composed_staging_non_sparse_skip_worktree_refusal_remains_atomic() {
     config
         .authorize_filter_paths(&paths)
         .expect("apply filter snapshot");
-    let result = update_index_exact_paths_from_apply(&mut config, &paths, &paths)
-        .expect("policy refusal is a staging result");
+    let error = prepare_index_exact_paths_for_reverse_apply(&mut config, &paths, &paths)
+        .err()
+        .expect("sparse-excluded peer must refuse the whole reverse staging plan");
 
-    assert_ne!(result.exit_code, 0);
-    assert!(result.stderr.contains("skip-worktree"), "{result:?}");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("sparse-checkout"), "{error}");
     assert_eq!(git_index_bytes(root), before);
+    assert!(
+        run(root, &["git", "diff", "--cached", "--", "outside/base.txt"])
+            .1
+            .is_empty(),
+        "sparse-excluded tracked path must retain its prior index entry"
+    );
 }
 
 #[test]
-fn composed_staging_late_filter_refusal_precedes_eligible_index_mutation() {
+fn reverse_staging_late_filter_refusal_precedes_eligible_index_mutation() {
     let repo = init_repo();
     let root = repo.path();
-    std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("write ignore rule");
     std::fs::write(root.join(".gitattributes"), "ordinary.txt filter=fresh\n")
         .expect("write attributes");
     std::fs::write(root.join("ordinary.txt"), "base\n").expect("write ordinary base");
+    std::fs::write(root.join("peer.txt"), "base\n").expect("write peer base");
     assert_eq!(
         run(
             root,
-            &["git", "add", ".gitignore", ".gitattributes", "ordinary.txt"]
+            &["git", "add", ".gitattributes", "ordinary.txt", "peer.txt"]
         )
         .0,
         0
     );
     assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
     std::fs::write(root.join("ordinary.txt"), "changed\n").expect("modify ordinary path");
-    std::fs::write(root.join("ignored.txt"), "ignored\n").expect("write ignored path");
-    let paths = vec!["ignored.txt".to_string(), "ordinary.txt".to_string()];
+    std::fs::write(root.join("peer.txt"), "changed\n").expect("modify peer path");
+    let paths = vec!["ordinary.txt".to_string(), "peer.txt".to_string()];
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
     let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    reset_filter_policy_counts();
     let mut config =
         GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
     config
@@ -1188,9 +1139,12 @@ fn composed_staging_late_filter_refusal_precedes_eligible_index_mutation() {
     );
     let before = git_index_bytes(root);
 
-    let error = stage_effective_paths_from_apply(&mut config, &paths)
-        .expect_err("fresh selected filter must refuse before staging eligible paths");
+    let error = prepare_index_exact_paths_for_reverse_apply(&mut config, &paths, &paths)
+        .err()
+        .expect("fresh selected filter must refuse before staging eligible paths");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("filter"), "{error}");
+    assert_eq!(filter_policy_read_count(), 2);
     assert_eq!(git_index_bytes(root), before);
     assert_ne!(
         run(root, &["git", "config", "--get", "codex.stage-filter-ran"]).0,
@@ -1231,7 +1185,7 @@ fn standalone_stage_paths_uses_one_source_authorization_and_one_filter_read() {
 }
 
 #[test]
-fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
+fn reverse_staging_freshly_observes_a_new_clean_driver_and_attribute() {
     if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
         let config_dir = tempfile::tempdir().expect("config tempdir");
         let global_config = config_dir.path().join("global.gitconfig");
@@ -1239,7 +1193,7 @@ fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
         std::fs::write(&global_config, "").expect("empty global config");
         std::fs::write(&system_config, "").expect("empty system config");
         run_isolated_test(
-            "patch_paths::tests::composed_staging_freshly_observes_a_new_clean_driver_and_attribute",
+            "patch_paths::tests::reverse_staging_freshly_observes_a_new_clean_driver_and_attribute",
             &[
                 ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
                 ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
@@ -1281,12 +1235,13 @@ fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
     std::fs::write(root.join(".gitattributes"), "file.txt filter=fresh\n")
         .expect("select fresh filter");
 
-    let error = update_index_exact_paths_from_apply(
+    let error = prepare_index_exact_paths_for_reverse_apply(
         &mut config,
         &["file.txt".to_string()],
         &["file.txt".to_string()],
     )
-    .expect_err("fresh clean driver must refuse");
+    .err()
+    .expect("fresh clean driver must refuse");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     assert_eq!(config_source_authorization_count(), 1);
     assert_eq!(filter_policy_read_count(), 2);
@@ -1299,7 +1254,7 @@ fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
 }
 
 #[test]
-fn composed_staging_required_read_ignores_the_apply_overlay_and_is_fresh() {
+fn reverse_staging_required_read_ignores_the_apply_overlay_and_is_fresh() {
     let repo = init_repo();
     let root = repo.path();
     std::fs::write(root.join("file.txt"), "base\n").expect("write base file");
@@ -1337,12 +1292,13 @@ fn composed_staging_required_read_ignores_the_apply_overlay_and_is_fresh() {
         0
     );
 
-    let error = update_index_exact_paths_from_apply(
+    let error = prepare_index_exact_paths_for_reverse_apply(
         &mut config,
         &["file.txt".to_string()],
         &["file.txt".to_string()],
     )
-    .expect_err("fresh required=true must refuse");
+    .err()
+    .expect("fresh required=true must refuse");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     assert_eq!(config_source_authorization_count(), 1);
     assert_eq!(filter_policy_read_count(), 2);
@@ -1355,7 +1311,7 @@ fn composed_staging_required_read_ignores_the_apply_overlay_and_is_fresh() {
 }
 
 #[test]
-fn composed_exact_staging_refuses_requested_and_mapped_paths_outside_apply_universe() {
+fn reverse_exact_staging_refuses_requested_and_mapped_paths_outside_apply_universe() {
     let requested_repo = init_repo();
     let requested_root = requested_repo.path();
     let requested_git = GitRunner::for_cwd_io(requested_root).expect("trusted Git");
@@ -1368,12 +1324,13 @@ fn composed_exact_staging_refuses_requested_and_mapped_paths_outside_apply_unive
     requested_config
         .authorize_filter_paths(&["allowed.txt".to_string()])
         .expect("apply snapshot");
-    let requested_error = update_index_exact_paths_from_apply(
+    let requested_error = prepare_index_exact_paths_for_reverse_apply(
         &mut requested_config,
         &["allowed.txt".to_string(), "outside.txt".to_string()],
         &["outside.txt".to_string()],
     )
-    .expect_err("requested off-universe path must refuse");
+    .err()
+    .expect("requested off-universe path must refuse");
     assert_eq!(requested_error.kind(), io::ErrorKind::PermissionDenied);
 
     let mapped_repo = init_repo();
@@ -1396,17 +1353,18 @@ fn composed_exact_staging_refuses_requested_and_mapped_paths_outside_apply_unive
     mapped_config
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("narrow apply snapshot");
-    let mapped_error = update_index_exact_paths_from_apply(
+    let mapped_error = prepare_index_exact_paths_for_reverse_apply(
         &mut mapped_config,
         &["File.txt".to_string(), "file.txt".to_string()],
         &["file.txt".to_string()],
     )
-    .expect_err("mapped off-universe path must refuse");
+    .err()
+    .expect("mapped off-universe path must refuse");
     assert_eq!(mapped_error.kind(), io::ErrorKind::PermissionDenied);
 }
 
 #[test]
-fn composed_exact_staging_refuses_zero_or_two_prior_snapshots_even_when_empty() {
+fn reverse_exact_staging_refuses_zero_or_two_prior_snapshots_even_when_empty() {
     let repo = init_repo();
     let root = repo.path();
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
@@ -1414,8 +1372,9 @@ fn composed_exact_staging_refuses_zero_or_two_prior_snapshots_even_when_empty() 
 
     let mut zero =
         GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
-    let error = update_index_exact_paths_from_apply(&mut zero, &[], &[])
-        .expect_err("zero snapshots must refuse");
+    let error = prepare_index_exact_paths_for_reverse_apply(&mut zero, &[], &[])
+        .err()
+        .expect("zero snapshots must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 
     let mut two =
@@ -1423,8 +1382,9 @@ fn composed_exact_staging_refuses_zero_or_two_prior_snapshots_even_when_empty() 
     two.authorize_filter_paths(&[]).expect("apply snapshot");
     two.authorize_git_add_filter_paths(&[])
         .expect("Git-add snapshot");
-    let error = update_index_exact_paths_from_apply(&mut two, &[], &[])
-        .expect_err("two snapshots must refuse");
+    let error = prepare_index_exact_paths_for_reverse_apply(&mut two, &[], &[])
+        .err()
+        .expect("two snapshots must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
@@ -1774,7 +1734,6 @@ fn ignored_untracked_path_returns_nonzero_without_partial_staging() {
         &git,
         root,
         &["ignored.txt".to_string(), "ordinary.txt".to_string()],
-        &safe_git_config_parts(),
     )
     .expect("public staging remains best effort for ignored paths");
     assert!(
@@ -1897,13 +1856,8 @@ fn exact_staging_refuses_skip_and_assume_unchanged_without_mutation() {
     assert_eq!(git_index_bytes(root), before);
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    stage_effective_paths(
-        &git,
-        root,
-        &["existing.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect("public staging remains best effort for skip-worktree paths");
+    stage_effective_paths(&git, root, &["existing.txt".to_string()])
+        .expect("public staging remains best effort for skip-worktree paths");
     assert_eq!(git_index_bytes(root), before);
 
     assert_eq!(
@@ -2635,13 +2589,8 @@ fn staging_rejects_global_lfs_filter_without_running_it() {
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
         let git = GitRunner::for_cwd_io(&root).expect("trusted Git");
-        let error = stage_effective_paths(
-            &git,
-            &root,
-            &["file.txt".to_string()],
-            &safe_git_config_parts(),
-        )
-        .expect_err("reject global Git LFS filter");
+        let error = stage_effective_paths(&git, &root, &["file.txt".to_string()])
+            .expect_err("reject global Git LFS filter");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         return;
     }
@@ -2706,25 +2655,15 @@ fn staging_rejects_selected_process_but_allows_smudge_only_filter() {
     let process_repo = init_repo_with_selected_filter("filter.selected.process");
     let process_root = process_repo.path();
     let process_git = GitRunner::for_cwd_io(process_root).expect("trusted Git");
-    let error = stage_effective_paths(
-        &process_git,
-        process_root,
-        &["file.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect_err("reject selected process filter");
+    let error = stage_effective_paths(&process_git, process_root, &["file.txt".to_string()])
+        .expect_err("reject selected process filter");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 
     let smudge_repo = init_repo_with_selected_filter("filter.selected.smudge");
     let smudge_root = smudge_repo.path();
     let smudge_git = GitRunner::for_cwd_io(smudge_root).expect("trusted Git");
-    stage_effective_paths(
-        &smudge_git,
-        smudge_root,
-        &["file.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect("smudge-only filters do not run during staging");
+    stage_effective_paths(&smudge_git, smudge_root, &["file.txt".to_string()])
+        .expect("smudge-only filters do not run during staging");
     let (code, staged, stderr) = run(smudge_root, &["git", "diff", "--cached", "--name-only"]);
     assert_eq!(code, 0, "read staged paths: {stderr}");
     assert_eq!(staged, "file.txt\n");
@@ -2766,13 +2705,8 @@ fn staging_neutralizes_off_path_racy_filters_without_changing_their_index_entry(
         std::fs::write(guarded_root.join("target.txt"), "new target\n")
             .expect("modify guarded target");
         let git = GitRunner::for_cwd_io(guarded_root).expect("trusted Git");
-        stage_effective_paths(
-            &git,
-            guarded_root,
-            &["target.txt".to_string()],
-            &safe_git_config_parts(),
-        )
-        .expect("stage with off-path filters neutralized");
+        stage_effective_paths(&git, guarded_root, &["target.txt".to_string()])
+            .expect("stage with off-path filters neutralized");
 
         assert!(
             !guarded.marker.exists(),
@@ -2818,8 +2752,7 @@ fn staging_allows_selected_symlink_while_neutralizing_off_path_filters() {
         let outside_before = index_entry(root, "outside.txt");
 
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        stage_effective_paths(&git, root, &["link".to_string()], &safe_git_config_parts())
-            .expect("stage selected symlink");
+        stage_effective_paths(&git, root, &["link".to_string()]).expect("stage selected symlink");
 
         assert!(
             !fixture.marker.exists(),
@@ -2887,12 +2820,7 @@ fn staging_allows_optional_smudge_only_but_refuses_required_or_malformed_smudge(
             .expect("modify selected target");
         let before = git_index_bytes(root);
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        let result = stage_effective_paths(
-            &git,
-            root,
-            &["selected.txt".to_string()],
-            &safe_git_config_parts(),
-        );
+        let result = stage_effective_paths(&git, root, &["selected.txt".to_string()]);
 
         assert!(
             !fixture.marker.exists(),
@@ -2959,13 +2887,8 @@ fn optional_smudge_target_does_not_mask_a_later_clean_target() {
     let before = git_index_bytes(root);
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let error = stage_effective_paths(
-        &git,
-        root,
-        &["a.txt".to_string(), "z.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect_err("reject the selected clean target after optional smudge");
+    let error = stage_effective_paths(&git, root, &["a.txt".to_string(), "z.txt".to_string()])
+        .expect_err("reject the selected clean target after optional smudge");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     assert_eq!(git_index_bytes(root), before);
 }
@@ -3008,7 +2931,6 @@ fn staging_filter_probe_uses_only_existing_non_directory_leaves() {
             "deleted.txt".to_string(),
             "kept.txt".to_string(),
         ],
-        &safe_git_config_parts(),
     )
     .expect("probe only the surviving staging leaf");
 
@@ -3052,7 +2974,6 @@ fn staging_skips_filter_probe_when_no_leaf_will_be_staged() {
         &git,
         root,
         &["missing.txt".to_string(), "deleted.txt".to_string()],
-        &safe_git_config_parts(),
     )
     .expect("skip staging when every effective leaf is absent");
 

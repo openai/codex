@@ -33,6 +33,15 @@ ts-rs = { workspace = true, features = [
 ] }
 walkdir = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 

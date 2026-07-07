@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::git_config::GitConfigEntry;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
@@ -5,6 +6,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
 
+#[cfg(test)]
 pub(crate) fn parse_merge_attributes(
     output: &[u8],
     expected_paths: &[String],
@@ -52,34 +54,66 @@ pub(crate) fn parse_merge_attributes(
     Ok(attributes)
 }
 
+#[cfg(test)]
 pub(crate) fn untrusted_driver_selection(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<String, String>,
 ) -> io::Result<Option<(String, String)>> {
-    let mut drivers = BTreeMap::new();
+    let mut driver_names = BTreeSet::new();
     for entry in entries.values() {
-        if entry.key == "merge.default" {
-            continue;
+        if let Some(name) = merge_driver_subsection(&entry.key)? {
+            driver_names.insert(name.to_string());
         }
-        let name = entry
-            .key
-            .strip_prefix("merge.")
-            .and_then(|key| key.strip_suffix(".driver"))
-            .ok_or_else(|| invalid_config_entry("malformed merge driver key"))?;
-        drivers.insert(name.to_string(), entry.value.as_str());
     }
-
     let default = entries
         .get("merge.default")
         .map(|entry| entry.value.as_str());
+    Ok(
+        untrusted_driver_selections(&driver_names, default, attributes)
+            .into_iter()
+            .next()
+            .map(|(path, driver)| (driver, path)),
+    )
+}
+
+/// Return every path whose effective merge selection names a configured user
+/// driver namespace. Git creates that namespace for any subsection key, even
+/// when `.driver` is missing or explicitly empty; those cases fail or attempt
+/// an empty command rather than falling back to built-in text. The complete
+/// set is required by the scratch classifier so every selected namespace is
+/// quarantined.
+pub(crate) fn untrusted_driver_selections(
+    driver_names: &BTreeSet<String>,
+    default: Option<&str>,
+    attributes: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut selected = BTreeMap::new();
     for (path, attribute) in attributes {
         for name in candidate_driver_names(attribute, default) {
-            if drivers.get(name).is_some_and(|value| !value.is_empty()) {
-                return Ok(Some((name.to_string(), path.clone())));
+            if driver_names.contains(name) {
+                selected.insert(path.clone(), name.to_string());
+                break;
             }
         }
     }
-    Ok(None)
+    selected
+}
+
+/// Parse the user-driver subsection using Git 2.54's last-dot behavior.
+/// Empty and dotted subsection names are valid; only `merge.default` has no
+/// user-driver subsection in the fixed query.
+pub(crate) fn merge_driver_subsection(key: &str) -> io::Result<Option<&str>> {
+    if key == "merge.default" {
+        return Ok(None);
+    }
+    let (name, final_key) = key
+        .strip_prefix("merge.")
+        .and_then(|key| key.rsplit_once('.'))
+        .ok_or_else(|| invalid_config_entry("malformed merge driver key"))?;
+    if final_key.is_empty() {
+        return Err(invalid_config_entry("empty merge driver configuration key"));
+    }
+    Ok(Some(name))
 }
 
 fn candidate_driver_names<'a>(attribute: &'a str, default: Option<&'a str>) -> BTreeSet<&'a str> {
@@ -92,6 +126,7 @@ fn candidate_driver_names<'a>(attribute: &'a str, default: Option<&'a str>) -> B
     names
 }
 
+#[cfg(test)]
 fn invalid_attribute_output(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }

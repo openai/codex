@@ -26,6 +26,31 @@ use super::resolve_repository_metadata;
 
 mod policy;
 
+fn open_active_worktree_identity(path: &Path) -> io::Result<Handle> {
+    #[cfg(windows)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+
+        // Deliberately omit FILE_SHARE_DELETE so the repository root cannot
+        // be renamed or replaced between validation and the guarded child.
+        let directory = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?;
+        Handle::from_file(directory)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Handle::from_path(path)
+    }
+}
+
 /// Repository and filesystem authority retained for the lifetime of one
 /// trusted Git runner.
 #[derive(Debug)]
@@ -60,7 +85,7 @@ impl RepositoryAuthority {
         let worktree_root = crate::get_git_repo_root(&canonical_cwd)
             .and_then(|root| std::fs::canonicalize(root).ok())
             .unwrap_or_else(|| canonical_cwd.clone());
-        let active_worktree_identity = Handle::from_path(&worktree_root)
+        let active_worktree_identity = open_active_worktree_identity(&worktree_root)
             .map_err(|error| invalid_metadata(&worktree_root, error))?;
         let mut authority = Self {
             active_worktree_root: worktree_root.clone(),
@@ -208,7 +233,7 @@ impl RepositoryAuthority {
             .or_else(|| roots.first())
             .cloned()
             .unwrap_or_default();
-        let active_worktree_identity = Handle::from_path(&active_worktree_root).ok();
+        let active_worktree_identity = open_active_worktree_identity(&active_worktree_root).ok();
         Ok(Self {
             active_worktree_root,
             active_worktree_identity,

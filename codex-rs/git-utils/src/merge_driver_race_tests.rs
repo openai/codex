@@ -406,6 +406,44 @@ fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
 }
 
 #[test]
+fn post_probe_worktree_attribute_change_preserves_probed_union_semantics() {
+    if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
+        run_isolated_test(
+            "merge_driver::race_tests::post_probe_worktree_attribute_change_preserves_probed_union_semantics",
+        );
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    let patch = build_conflicting_patch(root, "target.txt merge=union\n");
+    let trace = trace_path();
+    std::fs::write(&trace, "").expect("clear fixture trace");
+    let watcher_trace = trace.clone();
+    let attributes = root.join(".gitattributes");
+    let watcher = thread::spawn(move || {
+        let observed = wait_for_merge_attribute_probe(&watcher_trace);
+        if observed {
+            std::fs::write(attributes, "target.txt -merge\n")
+                .expect("replace union with binary merge semantics");
+            record_trace_mutation(&watcher_trace);
+        }
+        observed
+    });
+
+    let result = apply_git_patch(&request(root, patch, /*revert*/ false))
+        .expect("run frozen union three-way apply");
+    assert!(watcher.join().expect("attribute watcher"));
+
+    assert_mutation_happened_between_probe_and_three_way(&trace);
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    let contents = read_file_normalized(&root.join("target.txt"));
+    assert!(contents.contains("ours\n"), "{contents}");
+    assert!(contents.contains("theirs\n"), "{contents}");
+    assert!(!contents.contains("<<<<<<<"), "{contents}");
+}
+
+#[test]
 fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
         run_isolated_test(
@@ -466,13 +504,20 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
             observed
         });
 
-        let result = apply_git_patch(&request(root, patch, /*revert*/ false))
-            .expect("run isolated three-way apply");
+        let outcome = apply_git_patch(&request(root, patch, /*revert*/ false));
         assert!(watcher.join().expect("namespace watcher"), "{race:?}");
 
         assert_mutation_happened_between_probe_and_three_way(&trace);
-        assert_ne!(result.exit_code, 0, "{race:?}");
-        assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+        if matches!(race, DriverNamespaceRace::KnownEmpty) {
+            let error = outcome.expect_err(
+                "an explicit empty driver is a selected namespace and must refuse when reachable",
+            );
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}");
+        } else {
+            let result = outcome.expect("run isolated three-way apply");
+            assert_ne!(result.exit_code, 0, "{race:?}");
+            assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+        }
         assert!(!configured_marker_exists(root, "codex.oldmergeran"));
         assert!(!configured_marker_exists(root, "codex.newmergeran"));
     }

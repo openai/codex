@@ -5,6 +5,84 @@ use std::path::Path;
 
 use crate::git_command::GitRunner;
 
+pub(crate) fn parse_git_boolean(value: &[u8]) -> Option<bool> {
+    parse_git_boolean_with_minimum(value, i128::from(i32::MIN))
+}
+
+/// Parse the Git boolean grammar while excluding numeric `INT_MIN`.
+///
+/// Older supported Git releases reject that one signed endpoint after unit
+/// expansion, so environment gates that must succeed across versions use this
+/// conservative variant. The accepted spellings otherwise share one parser.
+pub(crate) fn parse_git_boolean_symmetric_i32(value: &[u8]) -> Option<bool> {
+    parse_git_boolean_with_minimum(value, -i128::from(i32::MAX))
+}
+
+fn parse_git_boolean_with_minimum(value: &[u8], minimum: i128) -> Option<bool> {
+    if value.eq_ignore_ascii_case(b"true")
+        || value.eq_ignore_ascii_case(b"yes")
+        || value.eq_ignore_ascii_case(b"on")
+    {
+        return Some(true);
+    }
+    if value.is_empty()
+        || value.eq_ignore_ascii_case(b"false")
+        || value.eq_ignore_ascii_case(b"no")
+        || value.eq_ignore_ascii_case(b"off")
+    {
+        return Some(false);
+    }
+
+    // Git parses the remaining boolean spellings through `git_parse_int`: C
+    // base-0 syntax, an optional binary-unit suffix, and signed `int` bounds.
+    let value = std::str::from_utf8(value)
+        .ok()?
+        .trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let (negative, unsigned) = match value.as_bytes().first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        Some(_) => (false, value),
+        None => return None,
+    };
+    let (base, unsigned) = if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
+        (16, &unsigned[2..])
+    } else if unsigned.starts_with('0') {
+        (8, unsigned)
+    } else {
+        (10, unsigned)
+    };
+    let digit_count = unsigned
+        .bytes()
+        .take_while(|byte| match base {
+            8 => matches!(byte, b'0'..=b'7'),
+            10 => byte.is_ascii_digit(),
+            16 => byte.is_ascii_hexdigit(),
+            _ => false,
+        })
+        .count();
+    if digit_count == 0 {
+        return None;
+    }
+    let (digits, suffix) = unsigned.split_at(digit_count);
+    let factor = if suffix.is_empty() {
+        1_i128
+    } else if suffix.eq_ignore_ascii_case("k") {
+        1024
+    } else if suffix.eq_ignore_ascii_case("m") {
+        1024 * 1024
+    } else if suffix.eq_ignore_ascii_case("g") {
+        1024 * 1024 * 1024
+    } else {
+        return None;
+    };
+    let magnitude = i128::from_str_radix(digits, base).ok()?;
+    let signed = if negative { -magnitude } else { magnitude };
+    let value = signed.checked_mul(factor)?;
+    (minimum..=i128::from(i32::MAX))
+        .contains(&value)
+        .then_some(value != 0)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GitConfigScope {
     Unknown,
@@ -21,6 +99,58 @@ pub(crate) struct GitConfigEntry {
     pub(crate) origin: GitConfigOrigin,
     pub(crate) key: String,
     pub(crate) value: String,
+}
+
+/// A value emitted by `git config --null --show-names`.
+///
+/// Git deliberately omits the key/value delimiter for an implicit Boolean
+/// (`key`) and retains it for an explicit empty value (`key =`). Keep that
+/// distinction available to bounded fixed policy readers without widening
+/// acceptance in ordinary config consumers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GitConfigValue {
+    Implicit,
+    Explicit(String),
+}
+
+/// One ordered record from the fixed merge-policy config query.
+///
+/// This deliberately exposes typed implicit-vs-explicit presence only for
+/// merge policy. Existing executable- and path-valued config readers retain
+/// their strict rejection of implicit values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MergeConfigRecord {
+    pub(crate) key: String,
+    pub(crate) value: GitConfigValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GitConfigValueEntry {
+    scope: GitConfigScope,
+    origin: GitConfigOrigin,
+    key: String,
+    value: GitConfigValue,
+}
+
+impl TryFrom<GitConfigValueEntry> for GitConfigEntry {
+    type Error = io::Error;
+
+    fn try_from(entry: GitConfigValueEntry) -> Result<Self, Self::Error> {
+        let value = match entry.value {
+            GitConfigValue::Explicit(value) => value,
+            GitConfigValue::Implicit => {
+                return Err(invalid_config_output(
+                    "Git config record has no key/value separator",
+                ));
+            }
+        };
+        Ok(Self {
+            scope: entry.scope,
+            origin: entry.origin,
+            key: entry.key,
+            value,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +170,13 @@ pub(crate) fn parse_effective_config(
 }
 
 pub(crate) fn parse_config_entries(output: &[u8]) -> io::Result<Vec<GitConfigEntry>> {
+    parse_config_value_entries(output)?
+        .into_iter()
+        .map(GitConfigEntry::try_from)
+        .collect()
+}
+
+fn parse_config_value_entries(output: &[u8]) -> io::Result<Vec<GitConfigValueEntry>> {
     if output.is_empty() {
         return Ok(Vec::new());
     }
@@ -56,19 +193,15 @@ pub(crate) fn parse_config_entries(output: &[u8]) -> io::Result<Vec<GitConfigEnt
         let scope = parse_scope(record[0])?;
         let origin = parse_config_origin(record[1])?;
         let entry = parse_utf8_field(record[2], "config key/value")?;
-        let Some((key, value)) = entry.split_once('\n') else {
-            return Err(invalid_config_output(
-                "Git config record has no key/value separator",
-            ));
-        };
+        let (key, value) = parse_config_value(entry);
         if key.is_empty() {
             return Err(invalid_config_output("empty Git config key"));
         }
-        let entry = GitConfigEntry {
+        let entry = GitConfigValueEntry {
             scope,
             origin,
             key: key.to_string(),
-            value: value.to_string(),
+            value,
         };
         entries.push(entry);
     }
@@ -77,19 +210,17 @@ pub(crate) fn parse_config_entries(output: &[u8]) -> io::Result<Vec<GitConfigEnt
 
 /// Parse the `--show-origin` form used by Git versions that predate
 /// `config --show-scope`. The record order still reflects effective config
-/// precedence, which is what helper selection relies on. Scope is retained as
-/// best-effort metadata only; command-line entries remain distinguishable.
-#[cfg(test)]
-pub(crate) fn parse_effective_config_with_origins(
-    output: &[u8],
-) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    Ok(parse_config_entries_with_origins(output)?
+/// precedence, so duplicate include directives remain ordered. Scope is
+/// retained as best-effort metadata only; command-line entries remain
+/// distinguishable.
+pub(crate) fn parse_config_entries_with_origins(output: &[u8]) -> io::Result<Vec<GitConfigEntry>> {
+    parse_config_value_entries_with_origins(output)?
         .into_iter()
-        .map(|entry| (entry.key.clone(), entry))
-        .collect())
+        .map(GitConfigEntry::try_from)
+        .collect()
 }
 
-pub(crate) fn parse_config_entries_with_origins(output: &[u8]) -> io::Result<Vec<GitConfigEntry>> {
+fn parse_config_value_entries_with_origins(output: &[u8]) -> io::Result<Vec<GitConfigValueEntry>> {
     if output.is_empty() {
         return Ok(Vec::new());
     }
@@ -105,11 +236,7 @@ pub(crate) fn parse_config_entries_with_origins(output: &[u8]) -> io::Result<Vec
     for record in fields.chunks_exact(2) {
         let origin = parse_config_origin(record[0])?;
         let entry = parse_utf8_field(record[1], "config key/value")?;
-        let Some((key, value)) = entry.split_once('\n') else {
-            return Err(invalid_config_output(
-                "Git config record has no key/value separator",
-            ));
-        };
+        let (key, value) = parse_config_value(entry);
         if key.is_empty() {
             return Err(invalid_config_output("empty Git config key"));
         }
@@ -120,14 +247,31 @@ pub(crate) fn parse_config_entries_with_origins(output: &[u8]) -> io::Result<Vec
             // emitted precedence order, not on this informational label.
             GitConfigScope::Local
         };
-        entries.push(GitConfigEntry {
+        entries.push(GitConfigValueEntry {
             scope,
             origin,
             key: key.to_string(),
-            value: value.to_string(),
+            value,
         });
     }
     Ok(entries)
+}
+
+fn parse_config_value(entry: &str) -> (&str, GitConfigValue) {
+    match entry.split_once('\n') {
+        Some((key, value)) => (key, GitConfigValue::Explicit(value.to_string())),
+        None => (entry, GitConfigValue::Implicit),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn parse_effective_config_with_origins(
+    output: &[u8],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(parse_config_entries_with_origins(output)?
+        .into_iter()
+        .map(|entry| (entry.key.clone(), entry))
+        .collect())
 }
 
 pub(crate) fn read_effective_config_entries_with_fallback(
@@ -146,6 +290,68 @@ pub(crate) fn read_effective_config_entries_with_fallback(
         /*follow_includes*/ true,
         /*config_file*/ None,
     )
+}
+
+/// Read the one effective scalar whose implicit form has defined semantics.
+///
+/// Existing config readers continue to reject implicit values through
+/// [`GitConfigEntry::try_from`]. Keeping this query fixed prevents a caller
+/// from using the permissive parser for executable or path-valued config.
+pub(crate) fn read_effective_shared_repository_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+) -> io::Result<Option<GitConfigValue>> {
+    const PATTERN: &str = r"^core\.sharedrepository$";
+    let entries = read_config_value_entries_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        PATTERN,
+        "shared repository",
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )?;
+    let mut effective = None;
+    for entry in entries {
+        if entry.key != "core.sharedrepository" {
+            return Err(invalid_config_output(
+                "unexpected key in shared-repository config output",
+            ));
+        }
+        effective = Some(entry.value);
+    }
+    Ok(effective)
+}
+
+/// Read the complete ordered merge-driver namespace inventory.
+///
+/// Git 2.54 creates a user-driver namespace for any key with a subsection,
+/// including an empty or dotted subsection. A top-level `merge.*` scalar has
+/// no subsection and is ignored, except for the separately handled
+/// `merge.default`. Keep the query fixed so permissive typed values cannot be
+/// requested for unrelated executable or path config.
+pub(crate) fn read_merge_config_records_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+) -> io::Result<Vec<MergeConfigRecord>> {
+    const PATTERN: &str = r"^(merge\.default|merge\..*\..+)$";
+    Ok(read_config_value_entries_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        PATTERN,
+        "merge",
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )?
+    .into_iter()
+    .map(|entry| MergeConfigRecord {
+        key: entry.key,
+        value: entry.value,
+    })
+    .collect())
 }
 
 pub(crate) fn read_config_entries_without_includes(
@@ -176,6 +382,29 @@ fn read_config_entries_with_fallback(
     follow_includes: bool,
     config_file: Option<&Path>,
 ) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_value_entries_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        follow_includes,
+        config_file,
+    )?
+    .into_iter()
+    .map(GitConfigEntry::try_from)
+    .collect()
+}
+
+fn read_config_value_entries_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigValueEntry>> {
     let scoped = run_effective_config_query(
         git,
         cwd,
@@ -190,7 +419,7 @@ fn read_config_entries_with_fallback(
         .code()
         .is_some_and(|code| code == 0 || code == 1)
     {
-        return parse_config_entries(&scoped.stdout);
+        return parse_config_value_entries(&scoped.stdout);
     }
 
     let legacy = run_effective_config_query(
@@ -213,7 +442,7 @@ fn read_config_entries_with_fallback(
             String::from_utf8_lossy(&legacy.stderr).trim()
         )));
     }
-    parse_config_entries_with_origins(&legacy.stdout)
+    parse_config_value_entries_with_origins(&legacy.stdout)
 }
 
 pub(crate) fn read_effective_config_with_fallback(

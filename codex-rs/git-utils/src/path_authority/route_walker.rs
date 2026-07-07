@@ -107,6 +107,82 @@ fn symlink_route_hops(path: &Path) -> io::Result<Vec<SymlinkRouteHop>> {
     Ok(hops)
 }
 
+/// Detect Linux procfs routes whose target can differ in a later Git process.
+///
+/// Existing procfs-hosted symlinks are process-dependent, and missing procfs
+/// descendants can materialize when the Git child's PID or descriptors exist.
+pub(super) fn route_contains_process_relative_procfs_path(path: &Path) -> io::Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let hops = symlink_route_hops(path)?;
+        for hop in &hops {
+            if symlink_is_on_procfs(&hop.entry)? {
+                return Ok(true);
+            }
+        }
+        if missing_descendant_is_below_procfs(path)? {
+            return Ok(true);
+        }
+        for hop in hops {
+            if missing_descendant_is_below_procfs(&hop.target)?
+                || missing_descendant_is_below_procfs(&hop.projected)?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
+    Ok(false)
+}
+
+#[cfg(target_os = "linux")]
+fn symlink_is_on_procfs(path: &Path) -> io::Result<bool> {
+    filesystem_is_procfs(
+        path,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn missing_descendant_is_below_procfs(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => return Ok(false),
+        Err(error) if is_missing_path_error(&error) => {}
+        Err(error) => return Err(error),
+    }
+    for ancestor in path.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => match filesystem_is_procfs(
+                ancestor,
+                rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
+            ) {
+                Ok(is_procfs) => return Ok(is_procfs),
+                Err(error) if is_missing_path_error(&error) => {}
+                Err(error) => return Err(error),
+            },
+            Err(error) if is_missing_path_error(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(invalid_data("authority path has no existing ancestor"))
+}
+
+#[cfg(target_os = "linux")]
+fn filesystem_is_procfs(path: &Path, flags: rustix::fs::OFlags) -> io::Result<bool> {
+    let fd = rustix::fs::open(path, flags, rustix::fs::Mode::empty()).map_err(io::Error::from)?;
+    let filesystem = rustix::fs::fstatfs(&fd).map_err(io::Error::from)?;
+    Ok(filesystem.f_type == rustix::fs::PROC_SUPER_MAGIC)
+}
+
+#[cfg(target_os = "linux")]
+fn is_missing_path_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
+}
+
 fn collect_symlink_route_hops(
     path: &Path,
     depth: usize,

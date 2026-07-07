@@ -40,9 +40,14 @@ fn snapshot_binds_present_empty_and_absent_fixed_and_indexed_values() {
         snapshot.value("GIT_CONFIG_PARAMETERS"),
         Some(OsStr::new("'safe.parameter'='present'"))
     );
+    assert_eq!(snapshot.value("GIT_CONFIG_COUNT"), Some(OsStr::new("2")));
     assert_eq!(
         snapshot.value("GIT_CONFIG_KEY_0"),
         Some(OsStr::new("safe.one"))
+    );
+    assert_eq!(
+        snapshot.value("GIT_CONFIG_VALUE_0"),
+        Some(OsStr::new("present"))
     );
     assert_eq!(snapshot.value("GIT_CONFIG_VALUE_1"), None);
 
@@ -78,6 +83,39 @@ fn snapshot_rejects_malformed_or_unbounded_command_config_count() {
         .expect_err("reject count");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
+}
+
+#[test]
+fn snapshot_treats_empty_command_config_count_as_zero() {
+    let values = BTreeMap::from([
+        (OsString::from("GIT_CONFIG_COUNT"), OsString::from("")),
+        (
+            OsString::from("GIT_CONFIG_KEY_0"),
+            OsString::from("untrusted.key"),
+        ),
+        (
+            OsString::from("GIT_CONFIG_VALUE_0"),
+            OsString::from("untrusted-value"),
+        ),
+    ]);
+    let snapshot = GitConfigEnvironmentSnapshot::capture_from(|name| values.get(name).cloned())
+        .expect("capture empty count");
+
+    assert_eq!(snapshot.value("GIT_CONFIG_COUNT"), Some(OsStr::new("")));
+    assert_eq!(snapshot.value("GIT_CONFIG_KEY_0"), None);
+    assert_eq!(snapshot.value("GIT_CONFIG_VALUE_0"), None);
+
+    let mut command = Command::new("git");
+    command.env("GIT_CONFIG_COUNT", "1");
+    snapshot.apply_to(&mut command);
+    let child_environment = command
+        .get_envs()
+        .map(|(name, value)| (name.to_owned(), value.map(OsStr::to_owned)))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        child_environment.get(OsStr::new("GIT_CONFIG_COUNT")),
+        Some(&Some(OsString::from("")))
+    );
 }
 
 #[cfg(unix)]

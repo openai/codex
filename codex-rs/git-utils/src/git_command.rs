@@ -53,9 +53,54 @@ pub(crate) struct IsolatedGitCommonDir {
     root: tempfile::TempDir,
 }
 
+/// Operation-owned writable state for a nonmutating merge-classification
+/// probe. The active index is copied here, generated blobs are written only
+/// to this object directory, and the real object database is attached as one
+/// read-only, authority-derived alternate by `GitRunner`.
+pub(crate) struct IsolatedGitStorage {
+    root: tempfile::TempDir,
+}
+
+impl IsolatedGitStorage {
+    fn index_path(&self) -> PathBuf {
+        self.root.path().join("index")
+    }
+
+    fn objects_path(&self) -> PathBuf {
+        self.root.path().join("objects")
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        let index = self.index_path();
+        let metadata = std::fs::symlink_metadata(&index)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("isolated Git scratch index changed at {}", index.display()),
+            ));
+        }
+        let objects = self.objects_path();
+        let metadata = std::fs::symlink_metadata(&objects)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "isolated Git scratch object directory changed at {}",
+                    objects.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl IsolatedGitCommonDir {
     pub(crate) fn config_path(&self) -> PathBuf {
         self.root.path().join("config")
+    }
+
+    pub(crate) fn attributes_path(&self) -> PathBuf {
+        self.root.path().join("info/attributes")
     }
 
     fn system_config_path(&self) -> PathBuf {
@@ -204,6 +249,42 @@ impl GitRunner {
         self.config_environment.value(name)
     }
 
+    /// Read repository-format keys from the authority-bound common config.
+    /// The common-directory identity remains pinned through the fixed
+    /// `--file --no-includes` child and is revalidated after it exits.
+    pub(crate) fn read_active_common_config_without_includes(
+        &self,
+        pattern: &str,
+        show_scope: bool,
+    ) -> io::Result<(std::process::Output, PathBuf)> {
+        self.authority.revalidate_active_repository_metadata()?;
+        let common_dir = self.authority.active_common_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git common config is unavailable",
+            )
+        })?;
+        let pinned_common = git_child_directory(common_dir, "active Git common directory")?;
+        let config_path = pinned_common.join("config");
+        // The absolute --file selector needs no repository cwd. Avoiding one
+        // also prevents Git setup from interpreting unrelated repository
+        // config before the fixed, no-includes query runs.
+        let mut command = self.command();
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(["config", "--file"])
+            .arg(&config_path)
+            .args(["--null", "--show-origin", "--no-includes"]);
+        if show_scope {
+            command.arg("--show-scope");
+        }
+        command.args(["--get-regexp", pattern]);
+        let output = self.output(command)?;
+        self.authority.revalidate_active_repository_metadata()?;
+        let _post_read_identity = pinned_common.revalidate()?;
+        Ok((output, config_path))
+    }
+
     pub(crate) fn create_isolated_common_dir(&self) -> io::Result<IsolatedGitCommonDir> {
         let root = tempfile::tempdir()?;
         self.authority
@@ -227,6 +308,44 @@ impl GitRunner {
         Ok(isolated)
     }
 
+    pub(crate) fn create_isolated_git_storage(&self) -> io::Result<IsolatedGitStorage> {
+        self.revalidate_active_repository_metadata()?;
+        let canonical_git_dir = self.authority.active_git_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git directory is unavailable for scratch index creation",
+            )
+        })?;
+        let git_dir = git_child_directory(canonical_git_dir, "active Git directory")?;
+        let canonical_common_dir = self.authority.active_common_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git common directory is unavailable for scratch index creation",
+            )
+        })?;
+        let common_dir = git_child_directory(canonical_common_dir, "active Git common directory")?;
+        let source_index = git_dir.join("index");
+        let root = tempfile::tempdir()?;
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(
+                root.path(),
+                "owned isolated Git scratch storage",
+            )?;
+        std::fs::create_dir(root.path().join("objects"))?;
+        copy_regular_file_without_follow(&source_index, &root.path().join("index"))?;
+        // A copied split index resolves its content-addressed base beside the
+        // active per-worktree index, not in a distinct common directory. Copy
+        // only well-formed names from that authoritative Git directory; Git
+        // will still verify the base object ID from the link extension.
+        copy_shared_indexes(git_dir.as_path(), root.path())?;
+        self.revalidate_active_repository_metadata()?;
+        let _post_copy_identity = git_dir.revalidate()?;
+        let _post_copy_common_identity = common_dir.revalidate()?;
+        let storage = IsolatedGitStorage { root };
+        storage.validate()?;
+        Ok(storage)
+    }
+
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
         self.revalidate_active_repository_metadata()?;
         isolate_git_command_environment(&mut command.inner);
@@ -237,11 +356,32 @@ impl GitRunner {
 
     pub(crate) fn output_in_isolated_common_dir(
         &self,
+        command: GitCommand,
+        isolated: &IsolatedGitCommonDir,
+    ) -> io::Result<std::process::Output> {
+        self.output_in_isolated_common_dir_with_storage(command, isolated, None)
+    }
+
+    pub(crate) fn output_in_isolated_scratch(
+        &self,
+        command: GitCommand,
+        isolated: &IsolatedGitCommonDir,
+        storage: &IsolatedGitStorage,
+    ) -> io::Result<std::process::Output> {
+        self.output_in_isolated_common_dir_with_storage(command, isolated, Some(storage))
+    }
+
+    fn output_in_isolated_common_dir_with_storage(
+        &self,
         mut command: GitCommand,
         isolated: &IsolatedGitCommonDir,
+        storage: Option<&IsolatedGitStorage>,
     ) -> io::Result<std::process::Output> {
         self.revalidate_active_repository_metadata()?;
         isolated.validate()?;
+        if let Some(storage) = storage {
+            storage.validate()?;
+        }
         self.authority
             .ensure_config_source_is_not_worktree_controlled(
                 isolated.root.path(),
@@ -278,8 +418,23 @@ impl GitRunner {
         let isolated_root_base = isolated.root.path().to_path_buf();
         let isolated_root =
             git_child_directory(&isolated_root_base, "owned isolated Git common directory")?;
-        let index_file = git_dir.join("index");
-        let object_directory = common_dir.join("objects");
+        let real_object_directory = common_dir.join("objects");
+        let index_file = storage
+            .map(IsolatedGitStorage::index_path)
+            .unwrap_or_else(|| git_dir.join("index"));
+        let object_directory = storage
+            .map(IsolatedGitStorage::objects_path)
+            .unwrap_or_else(|| real_object_directory.clone());
+        let alternate_object_directories = storage
+            .map(|_| {
+                std::env::join_paths([&real_object_directory]).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("cannot encode isolated Git object alternate: {error}"),
+                    )
+                })
+            })
+            .transpose()?;
         let system_config = isolated_root.join("system.gitconfig");
         let global_config = isolated_root.join("global.gitconfig");
         let home = isolated_root.join("home");
@@ -299,6 +454,11 @@ impl GitRunner {
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", &xdg_config_home);
+        if let Some(alternates) = alternate_object_directories {
+            command
+                .inner
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternates);
+        }
         #[cfg(windows)]
         command
             .inner
@@ -310,6 +470,7 @@ impl GitRunner {
         self.output_after_isolated_child_validation(
             &mut command.inner,
             isolated,
+            storage,
             [&git_dir, &common_dir, &worktree, &isolated_root],
         )
     }
@@ -318,10 +479,14 @@ impl GitRunner {
         &self,
         command: &mut Command,
         isolated: &IsolatedGitCommonDir,
+        storage: Option<&IsolatedGitStorage>,
         child_directories: [&GitChildDirectory; 4],
     ) -> io::Result<std::process::Output> {
         self.revalidate_active_repository_metadata()?;
         isolated.validate()?;
+        if let Some(storage) = storage {
+            storage.validate()?;
+        }
         let _child_directory_validations = child_directories
             .into_iter()
             .map(GitChildDirectory::revalidate)
@@ -355,6 +520,71 @@ impl GitRunner {
     }
 }
 
+fn copy_shared_indexes(source_dir: &Path, destination_dir: &Path) -> io::Result<()> {
+    for entry in std::fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Some(suffix) = name.strip_prefix("sharedindex.") else {
+            continue;
+        };
+        if !matches!(suffix.len(), 40 | 64)
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            continue;
+        }
+        copy_regular_file_without_follow(&entry.path(), &destination_dir.join(name))?;
+    }
+    Ok(())
+}
+
+fn copy_regular_file_without_follow(source: &Path, destination: &Path) -> io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+
+        // Keep the opened index entry from being deleted/replaced while its
+        // bytes are copied, and open a reparse point itself so it can be
+        // rejected rather than followed.
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut input = options.open(source).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("active Git index is unavailable for scratch classification: {error}"),
+        )
+    })?;
+    let metadata = input.metadata()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "active Git index is not a regular file",
+        ));
+    }
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    std::io::copy(&mut input, &mut output)?;
+    Ok(())
+}
+
 struct GitChildDirectory {
     child_path: PathBuf,
     #[cfg(windows)]
@@ -372,6 +602,25 @@ struct GitChildDirectoryValidation {
     _canonical_identity: Handle,
     #[cfg(windows)]
     _child_identity: Handle,
+}
+
+#[cfg(windows)]
+fn open_git_child_directory_identity(path: &Path) -> io::Result<Handle> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+
+    // Keep the selected directory entry pinned until the Git child exits.
+    // Deliberately omit FILE_SHARE_DELETE so it cannot be renamed or replaced
+    // between final identity validation and process creation.
+    let directory = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    Handle::from_file(directory)
 }
 
 impl GitChildDirectory {
@@ -397,8 +646,8 @@ impl GitChildDirectory {
                 format!("{description} is not an existing directory"),
             ));
         }
-        let canonical_identity = Handle::from_path(&canonical_path)?;
-        let child_identity = Handle::from_path(&child_path)?;
+        let canonical_identity = open_git_child_directory_identity(&canonical_path)?;
+        let child_identity = open_git_child_directory_identity(&child_path)?;
         if canonical_identity != child_identity {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -424,8 +673,8 @@ impl GitChildDirectory {
                 format!("{} is no longer an existing directory", self.description),
             ));
         }
-        let canonical_identity = Handle::from_path(&self.canonical_path)?;
-        let child_identity = Handle::from_path(&self.child_path)?;
+        let canonical_identity = open_git_child_directory_identity(&self.canonical_path)?;
+        let child_identity = open_git_child_directory_identity(&self.child_path)?;
         if canonical_identity != self.canonical_identity
             || child_identity != self.child_identity
             || canonical_identity != child_identity

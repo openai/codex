@@ -7,7 +7,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::apply::write_temp_patch;
-use crate::exact_staging::update_index_exact_paths_from_apply;
 use crate::exact_staging::update_index_exact_paths_standalone;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
@@ -15,6 +14,11 @@ use crate::guarded_config::GuardedGitConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PatchPathInventory {
+    /// Requested-orientation destination records in patch order. Unlike
+    /// `primary_paths`, duplicates are retained so security-sensitive merge
+    /// classification can reject a later record that would hide an earlier
+    /// low-level merge result for the same path.
+    pub(crate) primary_records: Vec<String>,
     pub(crate) primary_paths: Vec<String>,
     pub(crate) effective_paths: Vec<String>,
 }
@@ -36,14 +40,16 @@ pub(crate) fn extract_patch_path_inventory_guarded(
             "forward and reverse patch parsing returned different path counts",
         ));
     }
-    let primary_paths = primary_paths
+    let primary_records = primary_paths
         .into_iter()
         .map(validate_patch_path)
-        .collect::<io::Result<BTreeSet<_>>>()?;
-    let opposite_paths = opposite_paths
+        .collect::<io::Result<Vec<_>>>()?;
+    let opposite_records = opposite_paths
         .into_iter()
         .map(validate_patch_path)
-        .collect::<io::Result<BTreeSet<_>>>()?;
+        .collect::<io::Result<Vec<_>>>()?;
+    let primary_paths = primary_records.iter().cloned().collect::<BTreeSet<_>>();
+    let opposite_paths = opposite_records.into_iter().collect::<BTreeSet<_>>();
     let effective_paths = primary_paths
         .iter()
         .cloned()
@@ -56,6 +62,7 @@ pub(crate) fn extract_patch_path_inventory_guarded(
         ));
     }
     Ok(PatchPathInventory {
+        primary_records,
         primary_paths: primary_paths.into_iter().collect(),
         effective_paths: effective_paths.into_iter().collect(),
     })
@@ -106,15 +113,9 @@ fn git_apply_numstat_paths_guarded(
     patch_path: &Path,
     revert: bool,
 ) -> io::Result<Vec<String>> {
-    let mut command = config.apply_command()?;
     #[cfg(test)]
     run_stage_paths_hook(StagePathsHookPoint::PreSpawn);
-    command.args(["--numstat", "-z"]);
-    if revert {
-        command.arg("-R");
-    }
-    command.arg("--").arg(patch_path);
-    let output = command.output()?;
+    let output = config.run_apply_numstat_path_inventory(revert, patch_path)?;
     if !output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -145,10 +146,11 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
     let paths = (|| -> io::Result<Vec<String>> {
         let git = GitRunner::for_cwd_io(cwd)?;
         let requested_cwd = std::fs::canonicalize(cwd)?;
-        let git_root = crate::get_git_repo_root(&requested_cwd)
-            .ok_or_else(|| io::Error::other("not a Git repository"))?;
-        let git_root = std::fs::canonicalize(git_root)?;
-        let config = GuardedGitConfig::authorize(&git, &git_root, Vec::new())?;
+        let authorized_cwd = crate::get_git_repo_root(&requested_cwd)
+            .map(std::fs::canonicalize)
+            .transpose()?
+            .unwrap_or(requested_cwd);
+        let config = GuardedGitConfig::authorize(&git, &authorized_cwd, Vec::new())?;
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ false)
     })()
     .unwrap_or_default();
@@ -348,18 +350,6 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ true)?;
     let _guard = tmpdir;
     stage_effective_paths_standalone(&mut config, &paths)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn stage_effective_paths_from_apply(
-    config: &mut GuardedGitConfig<'_>,
-    paths: &[String],
-) -> io::Result<()> {
-    let (existing, content_filter_paths) = classify_exact_staging_leaves(config, paths)?;
-    let _result = update_index_exact_paths_from_apply(config, &existing, &content_filter_paths)?;
-    // Preserve the public helper's historical best-effort treatment of a
-    // non-zero staging command. Security and probe failures still propagate.
-    Ok(())
 }
 
 fn stage_effective_paths_standalone(

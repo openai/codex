@@ -289,6 +289,92 @@ fn git_config_path(path: &Path) -> String {
     format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[test]
+fn isolated_storage_uses_linked_worktree_shared_index_over_common_decoy() {
+    let fixture = tempdir_for_native_git();
+    let main = fixture.path().join("main");
+    let linked = fixture.path().join("linked");
+    std::fs::create_dir_all(&main).expect("create main worktree");
+    run_git(&main, &["init", "-q"]);
+    run_git(&main, &["config", "user.email", "codex@example.com"]);
+    run_git(&main, &["config", "user.name", "Codex"]);
+    std::fs::write(main.join("tracked.txt"), "tracked\n").expect("write tracked file");
+    run_git(&main, &["add", "tracked.txt"]);
+    run_git(&main, &["commit", "-m", "base"]);
+    run_git(
+        &main,
+        &["worktree", "add", "-b", "linked", path_text(&linked)],
+    );
+    run_git(&linked, &["update-index", "--split-index"]);
+
+    let git_dir = PathBuf::from(run_git_stdout(
+        &linked,
+        &["rev-parse", "--absolute-git-dir"],
+    ));
+    let common_dir = PathBuf::from(run_git_stdout(&linked, &["rev-parse", "--git-common-dir"]));
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        linked.join(common_dir)
+    };
+    let common_dir = std::fs::canonicalize(common_dir).expect("canonical common directory");
+    assert_ne!(
+        git_dir, common_dir,
+        "fixture must use distinct Git directories"
+    );
+
+    let shared_name = std::fs::read_dir(&git_dir)
+        .expect("read per-worktree Git directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .find(|name| {
+            let Some(name) = name.to_str() else {
+                return false;
+            };
+            let Some(suffix) = name.strip_prefix("sharedindex.") else {
+                return false;
+            };
+            matches!(suffix.len(), 40 | 64)
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+        .expect("linked worktree split-index base");
+    let active_shared = git_dir.join(&shared_name);
+    let active_bytes = std::fs::read(&active_shared).expect("read active shared index");
+    let common_decoy = common_dir.join(&shared_name);
+    std::fs::write(&common_decoy, b"stale common shared-index decoy")
+        .expect("write stale common decoy");
+
+    let runner = GitRunner::for_cwd(&linked).expect("runner");
+    let storage = runner
+        .create_isolated_git_storage()
+        .expect("copy authoritative split index");
+    assert_eq!(
+        std::fs::read(storage.root.path().join(&shared_name)).expect("read scratch shared index"),
+        active_bytes,
+        "distinct common-directory decoy must not replace the active per-worktree base"
+    );
+
+    let isolated = runner
+        .create_isolated_common_dir()
+        .expect("isolated common directory");
+    let mut command = runner.command_for_cwd(&linked).expect("ls-files command");
+    command.args(["ls-files", "--stage", "--", "tracked.txt"]);
+    let output = runner
+        .output_in_isolated_scratch(command, &isolated, &storage)
+        .expect("read copied split index");
+    assert!(
+        output.status.success(),
+        "copied split index must resolve its active base: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\ttracked.txt"),
+        "copied index did not retain tracked entry"
+    );
+}
+
 struct OverlappingRegisteredRoute {
     main: PathBuf,
     nested: PathBuf,
@@ -434,6 +520,39 @@ fn config_source_authority_preserves_and_rejects_a_worktree_crossing_spelling() 
         error.to_string().contains(&raw.display().to_string()),
         "{error}"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn config_source_authority_rejects_direct_and_aliased_procfs_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let alias = fixture.path().join("config-alias");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    symlink("/proc/self/cwd", &alias).expect("create procfs alias");
+    let authority = config_authority_for_root(&root);
+
+    for path in [
+        PathBuf::from("/proc/self/cwd/config"),
+        PathBuf::from("/proc/thread-self/cwd/config"),
+        PathBuf::from("/proc/self/fd/1048575/config"),
+        PathBuf::from("/proc/4294967295/cwd/config"),
+        alias.join("config"),
+    ] {
+        let error = authority
+            .ensure_config_source_is_not_worktree_controlled(&path, "test config")
+            .expect_err("process-relative config source");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert!(error.to_string().contains("process-relative"), "{error}");
+        assert!(error.to_string().contains("test config"), "{error}");
+        assert!(
+            error.to_string().contains(&path.display().to_string()),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -1455,6 +1574,65 @@ fn git_child_directory_simplifies_canonical_path_without_changing_identity() {
 
 #[cfg(windows)]
 #[test]
+fn git_child_directory_pins_git_paths_against_rename_and_replacement() {
+    const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
+
+    let fixture = tempfile::tempdir().expect("fixture");
+    let git_dir_path = fixture.path().join("git-dir");
+    let common_dir_path = fixture.path().join("common-dir");
+    std::fs::create_dir_all(&git_dir_path).expect("create Git directory");
+    std::fs::create_dir_all(&common_dir_path).expect("create common directory");
+
+    let canonical_git_dir = std::fs::canonicalize(&git_dir_path).expect("canonical Git directory");
+    let canonical_common_dir =
+        std::fs::canonicalize(&common_dir_path).expect("canonical common directory");
+    let git_dir =
+        git_child_directory(&canonical_git_dir, "active Git directory").expect("pin Git directory");
+    let common_dir = git_child_directory(&canonical_common_dir, "active Git common directory")
+        .expect("pin common directory");
+    assert_ne!(
+        git_dir.as_path(),
+        canonical_git_dir,
+        "test must exercise the simplified Git-compatible spelling"
+    );
+
+    let moved_git_dir = fixture.path().join("git-dir-moved");
+    let error = std::fs::rename(&canonical_git_dir, &moved_git_dir)
+        .expect_err("canonical Git directory pin must block rename");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    let error = std::fs::remove_dir(&canonical_common_dir)
+        .expect_err("common directory pin must block replacement");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    let moved_child_spelling = fixture.path().join("git-dir-child-spelling-moved");
+    let error = std::fs::rename(git_dir.as_path(), &moved_child_spelling)
+        .expect_err("simplified Git-compatible spelling pin must block rename");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+
+    drop(git_dir);
+    std::fs::rename(&canonical_git_dir, &moved_git_dir)
+        .expect("released Git directory pins must allow rename");
+    drop(common_dir);
+    std::fs::remove_dir(&canonical_common_dir)
+        .expect("released common directory pins must allow removal");
+    std::fs::create_dir(&common_dir_path).expect("replace released common directory");
+}
+
+#[cfg(windows)]
+#[test]
 fn isolated_child_final_validation_rejects_retargeted_spelling_before_spawn() {
     let fixture = tempfile::tempdir().expect("fixture");
     let repo = fixture.path().join("repo");
@@ -1474,6 +1652,29 @@ fn isolated_child_final_validation_rejects_retargeted_spelling_before_spawn() {
         "test Git child directory",
     )
     .expect("initial child identity");
+    // Keep identity snapshots that permit deletion, then release the guarded
+    // handles so this test can still exercise the defense-in-depth final
+    // revalidation after a child spelling has actually been retargeted.
+    let canonical_identity =
+        same_file::Handle::from_path(&child.canonical_path).expect("canonical identity snapshot");
+    let child_identity =
+        same_file::Handle::from_path(&child.child_path).expect("child identity snapshot");
+    let GitChildDirectory {
+        child_path,
+        canonical_path,
+        canonical_identity: pinned_canonical_identity,
+        child_identity: pinned_child_identity,
+        description,
+    } = child;
+    drop(pinned_canonical_identity);
+    drop(pinned_child_identity);
+    let child = GitChildDirectory {
+        child_path,
+        canonical_path,
+        canonical_identity,
+        child_identity,
+        description,
+    };
     let runner = GitRunner::for_cwd(&repo).expect("runner");
     let isolated = runner
         .create_isolated_common_dir()
@@ -1492,6 +1693,7 @@ fn isolated_child_final_validation_rejects_retargeted_spelling_before_spawn() {
         .output_after_isolated_child_validation(
             &mut command.inner,
             &isolated,
+            None,
             [&child, &child, &child, &child],
         )
         .expect_err("retargeted child spelling must fail closed");
@@ -1661,6 +1863,73 @@ fn active_commondir_route_is_revalidated_before_every_child() {
         !sentinel.exists(),
         "Git child executed after commondir retarget"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn active_worktree_identity_is_revalidated_before_every_child() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    let moved_root = fixture.path().join("repo-moved");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let runner = GitRunner::for_cwd(&root).expect("runner for original repository");
+    let sentinel = fixture.path().join("git-child-ran");
+    let mut command = runner
+        .command_for_cwd(&root)
+        .expect("command for original repository");
+    command
+        .args(["config", "--file"])
+        .arg(&sentinel)
+        .args(["probe.value", "ran"]);
+
+    std::fs::rename(&root, &moved_root).expect("move original repository");
+    std::fs::create_dir_all(&root).expect("create replacement repository");
+    run_git(&root, &["init", "-q"]);
+    assert!(moved_root.join(".git").is_dir());
+    assert!(root.join(".git").is_dir());
+
+    let error = runner
+        .output(command)
+        .expect_err("same-path repository replacement must block Git child");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("guarded Git repository identity changed before Git launch"),
+        "{error}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "Git child executed after same-path repository replacement"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn active_worktree_identity_pins_repository_for_runner_lifetime() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    let moved_root = fixture.path().join("repo-moved");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let runner = GitRunner::for_cwd(&root).expect("runner for original repository");
+
+    let error = std::fs::rename(&root, &moved_root)
+        .expect_err("live repository identity handle must block replacement");
+    const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
+    assert_eq!(
+        error.raw_os_error(),
+        Some(WINDOWS_ERROR_SHARING_VIOLATION),
+        "{error}"
+    );
+    assert!(root.join(".git").is_dir());
+    assert!(!moved_root.exists());
+
+    drop(runner);
+    std::fs::rename(&root, &moved_root).expect("released identity handle must allow move");
+    assert!(!root.exists());
+    assert!(moved_root.join(".git").is_dir());
 }
 
 #[cfg(unix)]
