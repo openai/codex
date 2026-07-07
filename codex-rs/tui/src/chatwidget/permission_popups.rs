@@ -244,6 +244,19 @@ impl ChatWidget {
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
+        if approvals_reviewer == ApprovalsReviewer::AutoReview {
+            return vec![Box::new(move |tx| {
+                tx.send(AppEvent::ApplyAutoReviewPreset {
+                    selection: AutoReviewPresetSelection {
+                        approval_policy: approval,
+                        profile_update: profile_update.clone(),
+                        display_label: label.clone(),
+                    },
+                    network_choice: ManagedNetworkChoice::Detect,
+                });
+            })];
+        }
+
         vec![Box::new(move |tx| {
             let (permission_profile, active_permission_profile) = match &profile_update {
                 PermissionPresetProfileUpdate::Preserve => (None, None),
@@ -282,11 +295,66 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
-                    format!("Permissions updated to {label}"),
+                    match profile_update {
+                        PermissionPresetProfileUpdate::Preserve => {
+                            format!("Review mode updated to {label}")
+                        }
+                        PermissionPresetProfileUpdate::Replace { .. } => {
+                            format!("Permissions updated to {label}")
+                        }
+                    },
                     /*hint*/ None,
                 ),
             )));
         })]
+    }
+
+    pub(crate) fn open_managed_network_restore_confirmation(
+        &mut self,
+        selection: AutoReviewPresetSelection,
+    ) {
+        let restore_selection = selection.clone();
+        let keep_selection = selection;
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Enable managed network access?".to_string()),
+            subtitle: Some(
+                "Your user config disables the managed network required by the terminal browser."
+                    .to_string(),
+            ),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: "Restore managed network access".to_string(),
+                    description: Some(
+                        "Remove the user override and inherit the managed network policy"
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ApplyAutoReviewPreset {
+                            selection: restore_selection.clone(),
+                            network_choice: ManagedNetworkChoice::RestoreManaged,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Keep network disabled".to_string(),
+                    description: Some(
+                        "Use Auto Review without enabling the terminal browser".to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ApplyAutoReviewPreset {
+                            selection: keep_selection.clone(),
+                            network_choice: ManagedNetworkChoice::KeepRestricted,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
     }
 
     pub(super) fn permission_profile_selection_actions(

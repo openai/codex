@@ -90,6 +90,22 @@ async fn approvals_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn terminal_browser_managed_network_restore_confirmation_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.open_managed_network_restore_confirmation(AutoReviewPresetSelection {
+        approval_policy: AskForApproval::OnRequest,
+        profile_update: PermissionPresetProfileUpdate::Preserve,
+        display_label: "Approve for me".to_string(),
+    });
+
+    assert_chatwidget_snapshot!(
+        "terminal_browser_managed_network_restore_confirmation",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}
+
+#[tokio::test]
 async fn profile_permissions_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
@@ -745,7 +761,7 @@ async fn approvals_popup_navigation_skips_disabled() {
 }
 
 #[tokio::test]
-async fn permissions_selection_emits_history_cell_when_selection_changes() {
+async fn permissions_auto_review_selection_defers_history_until_app_transition() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -758,16 +774,18 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected one permissions selection history cell"
-    );
-    let rendered = lines_to_single_string(&cells[0]);
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        rendered.contains("Permissions updated to"),
-        "expected permissions selection history message, got: {rendered}"
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::ApplyAutoReviewPreset { .. })),
+        "expected app-owned Auto Review transition: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::InsertHistoryCell(_))),
+        "history must wait until the app applies and persists Auto Review: {events:?}"
     );
 }
 
@@ -868,8 +886,8 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     );
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Permissions updated to"),
-        "expected permissions update history message, got: {rendered}"
+        rendered.contains("Review mode updated to Ask for approval"),
+        "expected reviewer-only history message, got: {rendered}"
     );
 }
 
@@ -1106,39 +1124,26 @@ async fn terminal_browser_auto_review_preserves_network_enabled_workspace_profil
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let op = std::iter::from_fn(|| rx.try_recv().ok())
+    let (selection, network_choice) = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
-            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
+            AppEvent::ApplyAutoReviewPreset {
+                selection,
+                network_choice,
+            } => Some((selection, network_choice)),
             _ => None,
         })
-        .expect("expected OverrideTurnContext op");
-
-    assert_eq!(
-        op,
-        Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        }
-    );
+        .expect("expected app-owned Auto Review transition");
+    assert_eq!(selection.approval_policy, AskForApproval::OnRequest);
+    assert!(matches!(
+        selection.profile_update,
+        PermissionPresetProfileUpdate::Preserve
+    ));
+    assert_eq!(selection.display_label, "Approve for me");
+    assert_eq!(network_choice, ManagedNetworkChoice::Detect);
 
     assert_eq!(
         chat.config.permissions.permission_profile(),
         &permission_profile
-    );
-    assert!(
-        std::iter::from_fn(|| rx.try_recv().ok())
-            .all(|event| !matches!(event, AppEvent::UpdateActivePermissionProfile(_))),
-        "reviewer-only changes must not replace the effective workspace profile"
     );
 }
 

@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Enable managed network access?
+  Your user config disables the managed network required by the terminal browser.
+
+› 1. Restore managed network access  Remove the user override and inherit the managed network
+                                     policy
+  2. Keep network disabled           Use Auto Review without enabling the terminal browser
+
+  Press enter to confirm or esc to go back

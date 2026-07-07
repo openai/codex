@@ -258,9 +258,12 @@ fn normalize_thread_name(name: &str) -> Option<String> {
 }
 
 use crate::app_event::AppEvent;
+use crate::app_event::AutoReviewPresetSelection;
 use crate::app_event::ConversationOrigin;
 use crate::app_event::ExitMode;
+use crate::app_event::ManagedNetworkChoice;
 use crate::app_event::PaneSlot;
+use crate::app_event::PermissionPresetProfileUpdate;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
@@ -479,15 +482,6 @@ const AUTO_REVIEW_DESCRIPTION: &str = "Only ask for actions detected as potentia
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 const MAX_AGENT_COPY_HISTORY: usize = 32;
-
-#[derive(Clone)]
-enum PermissionPresetProfileUpdate {
-    Preserve,
-    Replace {
-        permission_profile: PermissionProfile,
-        active_permission_profile: ActivePermissionProfile,
-    },
-}
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {

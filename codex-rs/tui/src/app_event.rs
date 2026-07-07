@@ -54,6 +54,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::history_cell::HistoryCell;
@@ -1010,6 +1011,12 @@ pub(crate) enum AppEvent {
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
 
+    /// Apply the Auto Review preset after resolving any managed-network override.
+    ApplyAutoReviewPreset {
+        selection: AutoReviewPresetSelection,
+        network_choice: ManagedNetworkChoice,
+    },
+
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
@@ -1250,6 +1257,32 @@ pub(crate) struct PermissionProfileSelection {
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub display_label: String,
+}
+
+/// Permission-profile portion of an Auto Review preset transition.
+#[derive(Debug, Clone)]
+pub(crate) enum PermissionPresetProfileUpdate {
+    Preserve,
+    Replace {
+        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
+    },
+}
+
+/// Complete Auto Review selection passed from the permissions popup to the app layer.
+#[derive(Debug, Clone)]
+pub(crate) struct AutoReviewPresetSelection {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) profile_update: PermissionPresetProfileUpdate,
+    pub(crate) display_label: String,
+}
+
+/// How an Auto Review transition should handle a user network override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedNetworkChoice {
+    Detect,
+    RestoreManaged,
+    KeepRestricted,
 }
 
 /// The exit strategy requested by the UI layer.

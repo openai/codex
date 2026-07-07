@@ -174,12 +174,27 @@ pub(crate) async fn read_effective_config(
     request_handle: AppServerRequestHandle,
     cwd: String,
 ) -> Result<ConfigReadResponse> {
+    read_effective_config_with_layer_option(request_handle, cwd, /*include_layers*/ false).await
+}
+
+pub(crate) async fn read_effective_config_with_layers(
+    request_handle: AppServerRequestHandle,
+    cwd: String,
+) -> Result<ConfigReadResponse> {
+    read_effective_config_with_layer_option(request_handle, cwd, /*include_layers*/ true).await
+}
+
+async fn read_effective_config_with_layer_option(
+    request_handle: AppServerRequestHandle,
+    cwd: String,
+    include_layers: bool,
+) -> Result<ConfigReadResponse> {
     let request_id = RequestId::String(format!("tui-config-read-{}", Uuid::new_v4()));
     request_handle
         .request_typed(ClientRequest::ConfigRead {
             request_id,
             params: ConfigReadParams {
-                include_layers: false,
+                include_layers,
                 cwd: Some(cwd),
             },
         })

@@ -2014,6 +2014,13 @@ impl App {
                         .add_error_message(format!("Failed to save approvals reviewer: {err}"));
                 }
             }
+            AppEvent::ApplyAutoReviewPreset {
+                selection,
+                network_choice,
+            } => {
+                self.apply_auto_review_preset(app_server, selection, network_choice)
+                    .await;
+            }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(app_server, updates).await;
             }
