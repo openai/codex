@@ -1,3 +1,5 @@
+//! Windows system proxy resolution through WinHTTP.
+
 use std::ffi::c_void;
 use std::ptr;
 
