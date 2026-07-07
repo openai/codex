@@ -624,17 +624,24 @@ impl ThreadManager {
             }
         }
 
-        for descendant_id in self
-            .agent_control()
-            .list_live_agent_subtree_thread_ids(thread_id)
-            .await?
-        {
+        for descendant_id in self.in_memory_agent_subtree_thread_ids(thread_id) {
             if seen_thread_ids.insert(descendant_id) {
                 subtree_thread_ids.push(descendant_id);
             }
         }
 
         Ok(subtree_thread_ids)
+    }
+
+    /// List `thread_id` plus descendants registered in the in-memory activity graph.
+    pub fn in_memory_agent_subtree_thread_ids(&self, thread_id: ThreadId) -> Vec<ThreadId> {
+        let mut thread_ids = vec![thread_id];
+        thread_ids.extend(
+            self.state
+                .thread_activity_gate
+                .descendant_thread_ids(thread_id),
+        );
+        thread_ids
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
@@ -1065,6 +1072,7 @@ impl ThreadManager {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state), /*rollout_budget*/ None)
     }

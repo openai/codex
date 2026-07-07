@@ -2768,6 +2768,7 @@ async fn list_agent_subtree_thread_ids_finds_live_descendants_of_unloaded_root()
         .expect("grandchild spawn should succeed");
 
     manager.remove_thread(&parent_thread_id).await;
+    manager.remove_thread(&child_thread_id).await;
 
     let mut subtree_thread_ids = manager
         .list_agent_subtree_thread_ids(parent_thread_id)

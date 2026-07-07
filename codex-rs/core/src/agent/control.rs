@@ -352,15 +352,6 @@ impl AgentControl {
             .ok_or(CodexErr::ThreadNotFound(agent_id))
     }
 
-    pub(crate) async fn list_live_agent_subtree_thread_ids(
-        &self,
-        agent_id: ThreadId,
-    ) -> CodexResult<Vec<ThreadId>> {
-        let mut thread_ids = vec![agent_id];
-        thread_ids.extend(self.live_thread_spawn_descendants(agent_id).await?);
-        Ok(thread_ids)
-    }
-
     pub(crate) async fn get_agent_config_snapshot(
         &self,
         agent_id: ThreadId,

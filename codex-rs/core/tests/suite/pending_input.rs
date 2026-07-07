@@ -192,7 +192,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
         .expect("steer user input");
 }
 
-async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
+async fn submit_agent_mail(codex: &CodexThread, text: &str, trigger_turn: bool) {
     codex
         .submit(Op::InterAgentCommunication {
             communication: InterAgentCommunication::new(
@@ -200,7 +200,7 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
                 AgentPath::root(),
                 Vec::new(),
                 text.to_string(),
-                /*trigger_turn*/ false,
+                trigger_turn,
             ),
         })
         .await
@@ -213,6 +213,10 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
     })
     .await;
+}
+
+async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
+    submit_agent_mail(codex, text, /*trigger_turn*/ false).await;
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
@@ -593,6 +597,64 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     assert!(second_texts.iter().any(|text| text == "first prompt"));
     assert!(second_texts.iter().any(|text| text == "second prompt"));
 
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_turn_mail_starts_after_the_current_turn_completes() {
+    let (gate_first_completed_tx, gate_first_completed_rx) = oneshot::channel();
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_message_item_added("msg-1", "")),
+        chunk(ev_output_text_delta("first answer")),
+        chunk(ev_message_item_done("msg-1", "first answer")),
+        gated_chunk(gate_first_completed_rx, vec![ev_completed("resp-1")]),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let codex = build_codex(&server).await;
+
+    submit_user_input(&codex, "first prompt").await;
+    wait_for_agent_message(&codex, "first answer").await;
+    submit_agent_mail(&codex, "queued trigger", /*trigger_turn*/ true).await;
+    gate_first_completed_tx
+        .send(())
+        .expect("first response gate should be open");
+
+    let mut completed_turn_id = None;
+    let started = wait_for_event(&codex, |event| match event {
+        EventMsg::TurnComplete(event) => {
+            completed_turn_id = Some(event.turn_id.clone());
+            false
+        }
+        EventMsg::TurnStarted(_) => completed_turn_id.is_some(),
+        _ => false,
+    })
+    .await;
+    let EventMsg::TurnStarted(started) = started else {
+        unreachable!("wait predicate only accepts turn/started events");
+    };
+    let first_turn_id = completed_turn_id.expect("current turn should complete first");
+    let second_turn_id = started.turn_id;
+    assert_ne!(first_turn_id, second_turn_id);
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse follow-up request");
+    let queued_message_is_visible = second["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|item| {
+            item["type"] == "agent_message"
+                && item["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|content| content["text"] == "queued trigger")
+        });
+    assert!(queued_message_is_visible);
     server.shutdown().await;
 }
 

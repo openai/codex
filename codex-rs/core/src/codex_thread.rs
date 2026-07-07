@@ -9,6 +9,7 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -81,6 +82,33 @@ pub struct ThreadConfigSnapshot {
     pub originator: String,
 }
 
+/// Runtime configuration captured only while a thread is eligible for idle resume handling.
+pub struct IdleResumeSnapshot {
+    pub thread_config_snapshot: ThreadConfigSnapshot,
+    pub original_config: Arc<crate::config::Config>,
+}
+
+/// Synchronous decision made while an idle thread is reserved against new work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdleResumeDecision {
+    /// Keep using the existing thread.
+    Reuse,
+    /// Shut down the existing thread before replacing it.
+    Shutdown,
+}
+
+/// Result of atomically resolving whether an existing thread can be reused.
+pub enum IdleResumeOutcome {
+    /// Work is active or queued, so the caller should rejoin or retry later.
+    Active,
+    /// The reserved thread can be reused with this captured configuration.
+    Reused(Box<IdleResumeSnapshot>),
+    /// This call committed a shutdown submission.
+    ShutdownCommitted,
+    /// Another call already committed shutdown for the thread.
+    ShutdownPending,
+}
+
 /// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
 /// idle turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +156,20 @@ impl ThreadConfigSnapshot {
 
     pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
         &self.environments.environments
+    }
+
+    /// Checks the default-mode fields that must match before reusing an idle thread.
+    pub fn matches_default_resume_mode_and_environments(
+        &self,
+        desired_environments: &[TurnEnvironmentSelection],
+    ) -> bool {
+        self.collaboration_mode.mode == ModeKind::Default
+            && self
+                .collaboration_mode
+                .settings
+                .developer_instructions
+                .is_none()
+            && self.environments.environments == desired_environments
     }
 
     pub fn sandbox_policy(&self) -> SandboxPolicy {
@@ -213,6 +255,22 @@ impl CodexThread {
 
     pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
         self.codex.try_shutdown_if_idle().await
+    }
+
+    /// Atomically decides whether an idle thread should be reused or shut down.
+    ///
+    /// `decide` runs synchronously while submission delivery is blocked. It must be fast and must
+    /// not re-enter this thread.
+    pub async fn resolve_idle_resume<F>(&self, decide: F) -> CodexResult<IdleResumeOutcome>
+    where
+        F: FnOnce(&IdleResumeSnapshot) -> IdleResumeDecision + Send,
+    {
+        self.codex.resolve_idle_resume(decide).await
+    }
+
+    /// Returns the immutable source assigned when the thread was created.
+    pub fn session_source(&self) -> &SessionSource {
+        &self.session_source
     }
 
     /// Wait until the underlying session loop has terminated.

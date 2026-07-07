@@ -1611,6 +1611,45 @@ disabled_tools = [
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds session state to pause refresh after it reserves activity"
+)]
+async fn refresh_runtime_config_blocks_idle_resume_until_the_config_swap_finishes() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let original_config = session.get_config().await;
+    let next_config = (*original_config).clone();
+    let state = session.state.lock().await;
+    let refresh = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move { session.refresh_runtime_config(next_config).await }
+    });
+
+    timeout(StdDuration::from_secs(2), async {
+        while let Ok(guard) = session.submission_send_lock.try_lock() {
+            drop(guard);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("refresh should acquire the submission barrier");
+    assert!(session.submission_send_lock.try_lock().is_err());
+    assert!(session.try_claim_idle_shutdown().await.is_none());
+
+    drop(state);
+    refresh.await.expect("config refresh should not panic");
+
+    let refreshed_config = session.get_config().await;
+    assert!(!Arc::ptr_eq(&refreshed_config, &original_config));
+    let idle = session
+        .try_claim_idle_shutdown()
+        .await
+        .expect("completed refresh should leave the session idle");
+    drop(idle);
+}
+
 #[test]
 fn collect_explicit_app_ids_from_skill_items_includes_linked_mentions() {
     let connectors = vec![make_connector("calendar", "Calendar")];
@@ -5655,6 +5694,7 @@ async fn make_session_with_config_and_rx(
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
+    session.thread_activity.mark_initialized();
 
     Ok((session, rx_event))
 }
@@ -10304,6 +10344,104 @@ async fn idle_shutdown_claim_waits_for_submissions_and_blocks_automatic_turns() 
     assert_eq!(vec![item], err.into_input());
     assert!(sess.active_turn.lock().await.is_none());
     drop(shutdown);
+}
+
+#[tokio::test]
+async fn idle_resume_resolution_is_atomic_with_pending_activity() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let mut codex = Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::clone(&session),
+        session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::Canonical,
+    };
+
+    let pending = session
+        .try_reserve_activity()
+        .expect("open session should reserve activity");
+    let outcome = codex
+        .resolve_idle_resume(|_| panic!("active resolution must not call the decider"))
+        .await
+        .expect("active resolution should succeed");
+    assert!(matches!(outcome, IdleResumeOutcome::Active));
+    drop(pending);
+
+    codex.submission_transport = SubmissionTransport::ForwardingProxy;
+    let proxy_result = codex
+        .resolve_idle_resume(|_| panic!("proxy resolution must not call the decider"))
+        .await;
+    let Err(proxy_error) = proxy_result else {
+        panic!("forwarding proxies should reject idle resolution");
+    };
+    assert!(matches!(proxy_error, CodexErr::InvalidRequest(_)));
+    codex.submission_transport = SubmissionTransport::Canonical;
+
+    let expected_config = session.get_config().await;
+    let outcome = codex
+        .resolve_idle_resume(|snapshot| {
+            assert!(session.submission_send_lock.try_lock().is_err());
+            let expected_environments = snapshot
+                .thread_config_snapshot
+                .environment_selections()
+                .to_vec();
+            assert!(
+                snapshot
+                    .thread_config_snapshot
+                    .matches_default_resume_mode_and_environments(&expected_environments)
+            );
+            let mut non_default = snapshot.thread_config_snapshot.clone();
+            non_default.collaboration_mode.mode = ModeKind::Plan;
+            assert!(
+                !non_default.matches_default_resume_mode_and_environments(&expected_environments)
+            );
+            let mut developer_override = snapshot.thread_config_snapshot.clone();
+            developer_override
+                .collaboration_mode
+                .settings
+                .developer_instructions = Some("override".to_string());
+            assert!(
+                !developer_override
+                    .matches_default_resume_mode_and_environments(&expected_environments)
+            );
+            let unexpected_environment = TurnEnvironmentSelection {
+                environment_id: "unexpected".to_string(),
+                cwd: PathUri::from_abs_path(snapshot.thread_config_snapshot.cwd()),
+            };
+            assert!(
+                !snapshot
+                    .thread_config_snapshot
+                    .matches_default_resume_mode_and_environments(&[unexpected_environment])
+            );
+            IdleResumeDecision::Reuse
+        })
+        .await
+        .expect("idle reuse resolution should succeed");
+    let IdleResumeOutcome::Reused(snapshot) = outcome else {
+        panic!("idle thread should be reusable");
+    };
+    assert!(Arc::ptr_eq(&snapshot.original_config, &expected_config));
+    assert!(session.try_reserve_activity().is_some());
+
+    let outcome = codex
+        .resolve_idle_resume(|_| IdleResumeDecision::Shutdown)
+        .await
+        .expect("idle shutdown resolution should succeed");
+    assert!(matches!(outcome, IdleResumeOutcome::ShutdownCommitted));
+    assert_eq!(
+        rx_sub.recv().await.expect("shutdown submission").op,
+        Op::Shutdown
+    );
+    let pending = codex
+        .resolve_idle_resume(|_| panic!("pending shutdown must not call the decider"))
+        .await
+        .expect("pending shutdown resolution should succeed");
+    assert!(matches!(pending, IdleResumeOutcome::ShutdownPending));
 }
 
 #[tokio::test]

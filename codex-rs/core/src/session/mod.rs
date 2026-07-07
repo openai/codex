@@ -175,6 +175,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::client::ModelClient;
+use crate::codex_thread::IdleResumeDecision;
+use crate::codex_thread::IdleResumeOutcome;
+use crate::codex_thread::IdleResumeSnapshot;
 use crate::codex_thread::ThreadConfigSnapshot;
 #[cfg(test)]
 use crate::compact::collect_user_messages;
@@ -814,11 +817,25 @@ impl Codex {
     /// Atomically submits shutdown only when no work is active, queued, or
     /// being dispatched. Once claimed, new submissions and automatic idle work
     /// are rejected so shutdown cannot race a newly starting turn.
+    pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
+        match self
+            .resolve_idle_resume(|_| IdleResumeDecision::Shutdown)
+            .await?
+        {
+            IdleResumeOutcome::Active => Ok(false),
+            IdleResumeOutcome::ShutdownCommitted | IdleResumeOutcome::ShutdownPending => Ok(true),
+            IdleResumeOutcome::Reused(_) => unreachable!("shutdown decision cannot reuse thread"),
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "the send lock serializes the idle claim with submission delivery"
+        reason = "the send lock and idle reservation make the reuse decision atomic with submission delivery"
     )]
-    pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
+    pub(crate) async fn resolve_idle_resume<F>(&self, decide: F) -> CodexResult<IdleResumeOutcome>
+    where
+        F: FnOnce(&IdleResumeSnapshot) -> IdleResumeDecision + Send,
+    {
         if self.submission_transport == SubmissionTransport::ForwardingProxy {
             return Err(CodexErr::InvalidRequest(
                 "idle shutdown is unavailable through a forwarding proxy".to_string(),
@@ -826,26 +843,43 @@ impl Codex {
         }
         let _send_guard = self.session.submission_send_lock.lock().await;
         if self.session.submission_lifecycle.is_closing() {
-            return Ok(true);
+            return Ok(IdleResumeOutcome::ShutdownPending);
         }
         let Some(mut reservation) = self.session.try_claim_idle_shutdown().await else {
-            return Ok(false);
+            return Ok(IdleResumeOutcome::Active);
         };
-        if !reservation.prepare_idle_shutdown_delivery() {
-            return Ok(false);
-        }
-        let sub = Submission {
-            id: new_submission_id(),
-            op: Op::Shutdown,
-            client_user_message_id: None,
-            trace: current_span_w3c_trace_context(),
+        let snapshot = {
+            let state = self.session.state.lock().await;
+            IdleResumeSnapshot {
+                thread_config_snapshot: state.session_configuration.thread_config_snapshot(),
+                original_config: Arc::clone(
+                    &state.session_configuration.original_config_do_not_use,
+                ),
+            }
         };
-        if self.tx_sub.send(sub).await.is_err() {
-            reservation.release_after_failed_delivery();
-            return Err(CodexErr::InternalAgentDied);
+        match decide(&snapshot) {
+            IdleResumeDecision::Reuse => {
+                drop(reservation);
+                Ok(IdleResumeOutcome::Reused(Box::new(snapshot)))
+            }
+            IdleResumeDecision::Shutdown => {
+                if !reservation.prepare_idle_shutdown_delivery() {
+                    return Ok(IdleResumeOutcome::Active);
+                }
+                let sub = Submission {
+                    id: new_submission_id(),
+                    op: Op::Shutdown,
+                    client_user_message_id: None,
+                    trace: current_span_w3c_trace_context(),
+                };
+                if self.tx_sub.send(sub).await.is_err() {
+                    reservation.release_after_failed_delivery();
+                    return Err(CodexErr::InternalAgentDied);
+                }
+                reservation.commit();
+                Ok(IdleResumeOutcome::ShutdownCommitted)
+            }
         }
-        reservation.commit();
-        Ok(true)
     }
 
     /// Persist a thread-level memory mode update for the active session.
@@ -1668,12 +1702,20 @@ impl Session {
         state.session_configuration.provider.clone()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the send lock serializes the config swap and the activity reservation covers the full refresh"
+    )]
     pub(crate) async fn refresh_runtime_config(&self, next_config: Config) {
         // Refresh only the user layer from the incoming snapshot. Preserve thread-local
         // layers such as request/session overrides that were present when this session
         // was created.
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, config) = {
+        let (reservation, previous_config, new_config, config) = {
+            let _send_guard = self.submission_send_lock.lock().await;
+            let Some(reservation) = self.try_reserve_activity() else {
+                return;
+            };
             let mut state = self.state.lock().await;
             let previous_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
@@ -1687,7 +1729,7 @@ impl Session {
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             let new_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
-            (previous_config, new_config, config)
+            (reservation, previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_service.clear_cache();
@@ -1709,6 +1751,8 @@ impl Session {
         ) {
             self.services.hooks.store(Arc::new(hooks));
         }
+        drop(state);
+        drop(reservation);
     }
 
     fn emit_config_changed_contributors(
