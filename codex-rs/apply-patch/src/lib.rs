@@ -5,6 +5,7 @@ mod standalone_executable;
 mod streaming_parser;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
@@ -57,6 +58,10 @@ pub enum ApplyPatchError {
         "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
     )]
     ImplicitInvocation,
+    /// A patch had multiple hunks for a single source path, which cannot be
+    /// represented faithfully in the approval payload.
+    #[error("patch contains multiple hunks for the same file: {0}")]
+    DuplicateFilePath(String),
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -320,6 +325,13 @@ pub async fn apply_hunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    if let Err(error) = ensure_unique_hunk_paths(hunks, cwd) {
+        writeln!(stderr, "{error}")
+            .map_err(ApplyPatchError::from)
+            .map_err(ApplyPatchFailure::without_delta)?;
+        return Err(ApplyPatchFailure::without_delta(error));
+    }
+
     let mut delta = AppliedPatchDelta::empty();
     match apply_hunks_to_files(hunks, cwd, fs, sandbox, &mut delta).await {
         Ok(affected_paths) => {
@@ -344,6 +356,22 @@ pub async fn apply_hunks(
             Err(ApplyPatchFailure::new(error, delta))
         }
     }
+}
+
+pub(crate) fn ensure_unique_hunk_paths(
+    hunks: &[Hunk],
+    cwd: &PathUri,
+) -> Result<(), ApplyPatchError> {
+    let mut seen = HashSet::new();
+    for hunk in hunks {
+        let path = hunk.resolve_path(cwd)?;
+        if !seen.insert(path.clone()) {
+            return Err(ApplyPatchError::DuplicateFilePath(
+                path.inferred_native_path_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Applies each parsed patch hunk to the filesystem.
@@ -932,6 +960,52 @@ mod tests {
         assert_eq!(stderr_str, "");
         let contents = fs::read_to_string(path).unwrap();
         assert_eq!(contents, "ab\ncd\n");
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_rejects_duplicate_hunk_paths_before_writing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        fs::write(&path, "first\nsecond\n").unwrap();
+        let patch = wrap_patch(
+            r#"*** Update File: source.txt
+@@
+-first
++FIRST
+*** Update File: source.txt
+@@
+-second
++SECOND"#,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        let expected_error = ApplyPatchError::DuplicateFilePath(path.display().to_string());
+        assert_eq!(
+            result
+                .expect_err("duplicate paths should be rejected")
+                .into_parts(),
+            (expected_error, AppliedPatchDelta::empty())
+        );
+        assert_eq!(String::from_utf8(stdout).unwrap(), "");
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!(
+                "patch contains multiple hunks for the same file: {}\n",
+                path.display()
+            )
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "first\nsecond\n");
     }
 
     #[tokio::test]
