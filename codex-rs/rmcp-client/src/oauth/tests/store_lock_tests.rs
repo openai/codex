@@ -31,13 +31,14 @@ use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::fallback_file_path;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::load_oauth_tokens_from_keyring;
-use crate::oauth::load_oauth_tokens_from_keyring_with_fallback_to_file;
+use crate::oauth::resolve_oauth_tokens;
 use crate::oauth::save_oauth_tokens_to_file;
 use crate::oauth::save_oauth_tokens_to_file_with_lock_held;
 use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
 use crate::oauth::test_support::TempCodexHome;
+use codex_config::types::OAuthCredentialsStoreMode;
 
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
 
@@ -216,11 +217,12 @@ fn auto_load_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
 
     let lock_dir = env.path().join("mcp-oauth-locks");
     std::fs::create_dir(lock_dir.join("secrets-store.lock"))?;
-    let error = load_oauth_tokens_from_keyring_with_fallback_to_file(
+    let error = resolve_oauth_tokens(
         &keyring_store,
-        AuthKeyringBackendKind::Secrets,
         &tokens.server_name,
         &tokens.url,
+        OAuthCredentialsStoreMode::Auto,
+        AuthKeyringBackendKind::Secrets,
     )
     .expect_err("aggregate-store lock failure must abort Auto resolution");
 
