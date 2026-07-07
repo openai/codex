@@ -1195,6 +1195,7 @@ impl SessionTelemetry {
             ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
             ResponseEvent::ToolCallInputDelta { .. } => "tool_input_delta".into(),
             ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
+            ResponseEvent::ReasoningSummaryDone { .. } => "reasoning_summary_done".into(),
             ResponseEvent::ReasoningContentDelta { .. } => "reasoning_content_delta".into(),
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {
                 "reasoning_summary_part_added".into()

@@ -334,6 +334,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         }
         ResponseEvent::OutputTextDelta(_)
         | ResponseEvent::ReasoningSummaryDelta { .. }
+        | ResponseEvent::ReasoningSummaryDone { .. }
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created
         | ResponseEvent::ServerModel(_)
