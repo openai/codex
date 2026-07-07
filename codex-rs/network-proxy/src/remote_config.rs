@@ -15,6 +15,7 @@ use crate::NetworkUnixSocketPermissions;
 /// cross the exec-server boundary accidentally.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RemoteNetworkProxyConfig {
     pub enabled: bool,
     pub enable_socks5: bool,
