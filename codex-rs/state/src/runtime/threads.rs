@@ -687,6 +687,26 @@ WHERE id = ?
         Ok(result.rows_affected() > 0)
     }
 
+    /// Replace product recency exactly for historical import and repair paths.
+    pub async fn set_thread_recency_at(
+        &self,
+        thread_id: ThreadId,
+        recency_at: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let recency_at_seconds = datetime_to_epoch_seconds(recency_at);
+        let recency_at_millis = datetime_to_epoch_millis(recency_at);
+        self.thread_recency_at_millis
+            .fetch_max(recency_at_millis, Ordering::Relaxed);
+        let result =
+            sqlx::query("UPDATE threads SET recency_at = ?, recency_at_ms = ? WHERE id = ?")
+                .bind(recency_at_seconds)
+                .bind(recency_at_millis)
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Allocate a persisted `updated_at` value for thread-list cursor ordering.
     ///
     /// We keep a process-local high-water mark so hot rollout writes can get unique,

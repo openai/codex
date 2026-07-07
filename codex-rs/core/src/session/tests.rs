@@ -4082,6 +4082,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
                 } else {
                     ThreadMemoryMode::Disabled
                 },
+                historical_timestamps: None,
             },
         },
     )
@@ -6974,6 +6975,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
                 } else {
                     ThreadMemoryMode::Disabled
                 },
+                historical_timestamps: None,
             },
         },
     )
@@ -7051,6 +7053,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() {
                 } else {
                     ThreadMemoryMode::Disabled
                 },
+                historical_timestamps: None,
             },
         },
     )
@@ -9360,6 +9363,7 @@ async fn attach_in_memory_thread_store(
                 } else {
                     ThreadMemoryMode::Disabled
                 },
+                historical_timestamps: None,
             },
         },
     )

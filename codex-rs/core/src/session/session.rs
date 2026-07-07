@@ -614,6 +614,7 @@ impl Session {
                                 } else {
                                     ThreadMemoryMode::Disabled
                                 },
+                                historical_timestamps: None,
                             },
                         };
                         LiveThread::create(Arc::clone(&thread_store), params).await?
@@ -632,6 +633,7 @@ impl Session {
                                 } else {
                                     ThreadMemoryMode::Disabled
                                 },
+                                historical_timestamps: None,
                             },
                         };
                         LiveThread::resume(Arc::clone(&thread_store), params).await?

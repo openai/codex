@@ -41,6 +41,14 @@ pub(crate) fn load_session_for_import_with_content_sha256(
         .find(|message| message.role == MessageRole::User)
         .map(|message| summarize_for_label(&message.text));
     let title = parsed.source_title.or_else(|| first_user_message.clone());
+    let created_at = messages
+        .iter()
+        .filter_map(|message| message.timestamp)
+        .min();
+    let updated_at = messages
+        .iter()
+        .filter_map(|message| message.timestamp)
+        .max();
     let rollout_items = rollout_items_from_messages(messages);
     if rollout_items.is_empty() {
         return Ok(None);
@@ -50,6 +58,9 @@ pub(crate) fn load_session_for_import_with_content_sha256(
             cwd,
             title,
             first_user_message,
+            source_session_id: parsed.source_session_id,
+            created_at,
+            updated_at,
             rollout_items,
         },
         parsed.content_sha256,
@@ -62,16 +73,23 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
     let mut response_item_bytes = 0i64;
     let mut last_model_visible_tokens = 0i64;
     let mut user_turn_count = 0usize;
-    let completed_at = messages.last().and_then(|message| message.timestamp);
+    let mut current_turn_started_at = None;
+    let mut current_turn_completed_at = None;
 
     for message in messages {
         match message.role {
             MessageRole::User => {
                 if let Some(turn_id) = current_turn.take() {
-                    items.push(turn_complete_item(turn_id, /*completed_at*/ None));
+                    items.push(turn_complete_item(
+                        turn_id,
+                        current_turn_started_at,
+                        current_turn_completed_at,
+                    ));
                 }
                 user_turn_count += 1;
                 let turn_id = format!("external-import-turn-{user_turn_count}");
+                current_turn_started_at = message.timestamp;
+                current_turn_completed_at = message.timestamp;
                 items.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
                     TurnStartedEvent {
                         turn_id: turn_id.clone(),
@@ -96,6 +114,12 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
                 if current_turn.is_none() {
                     continue;
                 }
+                if let Some(timestamp) = message.timestamp {
+                    current_turn_completed_at = Some(
+                        current_turn_completed_at
+                            .map_or(timestamp, |completed_at| completed_at.max(timestamp)),
+                    );
+                }
                 response_item_bytes =
                     response_item_bytes.saturating_add(message_byte_count(&message));
                 last_model_visible_tokens = approx_tokens_from_byte_count_i64(response_item_bytes);
@@ -114,7 +138,11 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
     if let Some(turn_id) = current_turn {
         items.push(external_session_imported_marker_item());
         items.push(token_count_item(last_model_visible_tokens));
-        items.push(turn_complete_item(turn_id, completed_at));
+        items.push(turn_complete_item(
+            turn_id,
+            current_turn_started_at,
+            current_turn_completed_at,
+        ));
     }
 
     items
@@ -164,12 +192,21 @@ fn token_count_item(last_model_visible_tokens: i64) -> RolloutItem {
     }))
 }
 
-fn turn_complete_item(turn_id: String, completed_at: Option<i64>) -> RolloutItem {
+fn turn_complete_item(
+    turn_id: String,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+) -> RolloutItem {
+    let duration_ms = started_at
+        .zip(completed_at)
+        .and_then(|(started_at, completed_at)| completed_at.checked_sub(started_at))
+        .filter(|duration| *duration >= 0)
+        .and_then(|duration| duration.checked_mul(1_000));
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id,
         last_agent_message: None,
         completed_at,
-        duration_ms: None,
+        duration_ms,
         time_to_first_token_ms: None,
     }))
 }
@@ -215,6 +252,78 @@ mod tests {
                 phase: None,
                 memory_citation: None,
             }
+        );
+    }
+
+    #[test]
+    fn preserves_source_session_and_turn_timing() {
+        let root = TempDir::new().expect("tempdir");
+        let project_root = root.path().join("repo");
+        std::fs::create_dir_all(&project_root).expect("project root");
+        let path = root.path().join("session.jsonl");
+        let first_started_at = "2026-06-03T12:00:00Z";
+        let first_completed_at = "2026-06-03T12:00:05Z";
+        let second_started_at = "2026-06-03T12:01:00Z";
+        let second_completed_at = "2026-06-03T12:01:09Z";
+        std::fs::write(
+            &path,
+            jsonl(&[
+                record_at("user", "first request", &project_root, first_started_at),
+                record_at(
+                    "assistant",
+                    "first answer",
+                    &project_root,
+                    first_completed_at,
+                ),
+                record_at("user", "second request", &project_root, second_started_at),
+                record_at(
+                    "assistant",
+                    "second answer",
+                    &project_root,
+                    second_completed_at,
+                ),
+            ]),
+        )
+        .expect("session");
+
+        let imported = load_session_for_import(&path)
+            .expect("load")
+            .expect("session");
+        let turns = build_turns_from_rollout_items(&imported.rollout_items);
+        let first_started_at = chrono::DateTime::parse_from_rfc3339(first_started_at)
+            .expect("first started at")
+            .timestamp();
+        let first_completed_at = chrono::DateTime::parse_from_rfc3339(first_completed_at)
+            .expect("first completed at")
+            .timestamp();
+        let second_started_at = chrono::DateTime::parse_from_rfc3339(second_started_at)
+            .expect("second started at")
+            .timestamp();
+        let second_completed_at = chrono::DateTime::parse_from_rfc3339(second_completed_at)
+            .expect("second completed at")
+            .timestamp();
+
+        assert_eq!(
+            (imported.created_at, imported.updated_at),
+            (Some(first_started_at), Some(second_completed_at))
+        );
+        assert_eq!(
+            turns
+                .iter()
+                .map(|turn| (turn.started_at, turn.completed_at, turn.duration_ms))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    Some(first_started_at),
+                    Some(first_completed_at),
+                    Some(5_000)
+                ),
+                (
+                    Some(second_started_at),
+                    Some(second_completed_at),
+                    Some(9_000),
+                ),
+            ]
         );
     }
 
@@ -407,6 +516,10 @@ mod tests {
 
     fn record(role: &str, text: &str, cwd: &Path) -> JsonValue {
         let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        record_at(role, text, cwd, &timestamp)
+    }
+
+    fn record_at(role: &str, text: &str, cwd: &Path, timestamp: &str) -> JsonValue {
         serde_json::json!({
             "type": role,
             "cwd": cwd,

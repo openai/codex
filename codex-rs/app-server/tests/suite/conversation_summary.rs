@@ -143,6 +143,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
+                historical_timestamps: None,
             },
         })
         .await?;

@@ -137,6 +137,7 @@ mod tests {
                         cwd: None,
                         model_provider: "test-provider".to_string(),
                         memory_mode: ThreadMemoryMode::Enabled,
+                        historical_timestamps: None,
                     },
                 })
                 .await
@@ -337,6 +338,7 @@ mod tests {
             cwd: None,
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
+            historical_timestamps: None,
         }
     }
 
@@ -777,7 +779,12 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.updated_at)
             .unwrap_or_else(Utc::now),
         recency_at: metadata
-            .and_then(|metadata| metadata.advance_recency_at.or(metadata.updated_at))
+            .and_then(|metadata| {
+                metadata
+                    .recency_at
+                    .or(metadata.advance_recency_at)
+                    .or(metadata.updated_at)
+            })
             .unwrap_or_else(Utc::now),
         archived_at: None,
         cwd: metadata

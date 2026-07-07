@@ -58,6 +58,16 @@ pub struct ThreadPersistenceMetadata {
     pub model_provider: String,
     /// Memory mode associated with the live thread.
     pub memory_mode: MemoryMode,
+    /// Original timestamps to retain when materializing imported history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub historical_timestamps: Option<HistoricalThreadTimestamps>,
+}
+
+/// Original timestamps for a thread imported from another agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoricalThreadTimestamps {
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Extra configuration fields for a thread.
@@ -548,6 +558,8 @@ pub struct ThreadMetadataPatch {
     pub created_at: Option<DateTime<Utc>>,
     /// Last update timestamp for this metadata observation.
     pub updated_at: Option<DateTime<Utc>>,
+    /// Replacement product-recency timestamp when historical chronology must be restored.
+    pub recency_at: Option<DateTime<Utc>>,
     /// Advance product recency to at least this timestamp.
     pub advance_recency_at: Option<DateTime<Utc>>,
     /// Session source.
@@ -632,8 +644,16 @@ impl ThreadMetadataPatch {
         if next.updated_at.is_some() {
             self.updated_at = next.updated_at;
         }
-        if next.advance_recency_at.is_some() {
-            self.advance_recency_at = next.advance_recency_at;
+        match (next.recency_at, next.advance_recency_at) {
+            (Some(recency_at), _) => {
+                self.recency_at = Some(recency_at);
+                self.advance_recency_at = None;
+            }
+            (None, Some(advance_recency_at)) => {
+                self.recency_at = None;
+                self.advance_recency_at = Some(advance_recency_at);
+            }
+            (None, None) => {}
         }
         if next.source.is_some() {
             self.source = next.source;
@@ -688,6 +708,7 @@ impl ThreadMetadataPatch {
             && self.reasoning_effort.is_none()
             && self.created_at.is_none()
             && self.updated_at.is_none()
+            && self.recency_at.is_none()
             && self.advance_recency_at.is_none()
             && self.source.is_none()
             && self.thread_source.is_none()
@@ -850,6 +871,35 @@ mod tests {
                 branch: Some(Some("feature".to_string())),
                 origin_url: Some(None),
             })
+        );
+    }
+
+    #[test]
+    fn thread_metadata_patch_merge_uses_latest_recency_operation() {
+        let historical_recency =
+            DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("historical recency");
+        let live_recency = DateTime::<Utc>::from_timestamp(1_800_000_000, 0).expect("live recency");
+        let mut current = ThreadMetadataPatch {
+            advance_recency_at: Some(live_recency),
+            ..Default::default()
+        };
+
+        current.merge(ThreadMetadataPatch {
+            recency_at: Some(historical_recency),
+            ..Default::default()
+        });
+        assert_eq!(
+            (current.recency_at, current.advance_recency_at),
+            (Some(historical_recency), None)
+        );
+
+        current.merge(ThreadMetadataPatch {
+            advance_recency_at: Some(live_recency),
+            ..Default::default()
+        });
+        assert_eq!(
+            (current.recency_at, current.advance_recency_at),
+            (None, Some(live_recency))
         );
     }
 

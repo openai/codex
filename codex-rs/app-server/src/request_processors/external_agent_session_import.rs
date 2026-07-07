@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::DateTime;
 use chrono::Utc;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
@@ -20,11 +22,13 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::CreateThreadParams;
+use codex_thread_store::HistoricalThreadTimestamps;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::UpdateThreadMetadataParams;
 use futures::StreamExt;
+use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 
 use crate::config::external_agent_config::ExternalAgentConfigImportItemResult;
@@ -37,6 +41,7 @@ const SESSION_IMPORT_CONCURRENCY: usize = 5;
 pub(super) struct ExternalAgentSessionImporter {
     codex_home: PathBuf,
     permits: Arc<Semaphore>,
+    reserved_source_identities: Arc<Mutex<HashSet<String>>>,
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
     config_manager: ConfigManager,
@@ -54,6 +59,7 @@ impl ExternalAgentSessionImporter {
         Self {
             codex_home,
             permits: Arc::new(Semaphore::new(1)),
+            reserved_source_identities: Arc::new(Mutex::new(HashSet::new())),
             thread_manager,
             thread_store,
             config_manager,
@@ -134,16 +140,38 @@ impl ExternalAgentSessionImporter {
         else {
             return Ok(None);
         };
-        let imported_thread_id =
-            self.persist_session(pending_import.session)
-                .await
-                .map_err(|message| SessionImportFailure {
-                    source_path: pending_import.source_path.clone(),
+        let source_identity = pending_import
+            .session
+            .source_session_id
+            .as_ref()
+            .map(|session_id| format!("session:{session_id}"))
+            .unwrap_or_else(|| format!("path:{}", pending_import.source_path.display()));
+        if !self
+            .reserved_source_identities
+            .lock()
+            .await
+            .insert(source_identity.clone())
+        {
+            return Ok(None);
+        }
+        let source_session_id = pending_import.session.source_session_id.clone();
+        let imported_thread_id = match self.persist_session(pending_import.session).await {
+            Ok(imported_thread_id) => imported_thread_id,
+            Err(message) => {
+                self.reserved_source_identities
+                    .lock()
+                    .await
+                    .remove(&source_identity);
+                return Err(SessionImportFailure {
+                    source_path: pending_import.source_path,
                     message,
                     stage: "session_persist",
-                })?;
+                });
+            }
+        };
         Ok(Some(CompletedExternalAgentSessionImport {
             source_path: pending_import.source_path,
+            source_session_id,
             source_content_sha256: pending_import.source_content_sha256,
             imported_thread_id,
         }))
@@ -168,6 +196,9 @@ impl ExternalAgentSessionImporter {
             cwd,
             title,
             first_user_message,
+            source_session_id: _,
+            created_at,
+            updated_at,
             mut rollout_items,
         } = session;
         let config = self
@@ -204,6 +235,12 @@ impl ExternalAgentSessionImporter {
             ThreadMemoryMode::Disabled
         };
         let now = Utc::now();
+        let created_at = created_at
+            .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+            .unwrap_or(now);
+        let updated_at = updated_at
+            .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+            .unwrap_or(created_at);
         let create_params = CreateThreadParams {
             session_id: thread_id.into(),
             thread_id,
@@ -228,6 +265,10 @@ impl ExternalAgentSessionImporter {
                 cwd: Some(cwd.clone()),
                 model_provider: model_provider.clone(),
                 memory_mode,
+                historical_timestamps: Some(HistoricalThreadTimestamps {
+                    created_at,
+                    updated_at,
+                }),
             },
         };
         rollout_items.retain(is_persisted_rollout_item);
@@ -238,8 +279,9 @@ impl ExternalAgentSessionImporter {
             title,
             preview: first_user_message.clone(),
             model_provider: Some(model_provider),
-            created_at: Some(now),
-            updated_at: Some(now),
+            created_at: Some(created_at),
+            updated_at: Some(updated_at),
+            recency_at: Some(updated_at),
             source: Some(source.clone()),
             thread_source: Some(None),
             agent_nickname: Some(source.get_nickname()),
@@ -270,14 +312,6 @@ impl ExternalAgentSessionImporter {
         }
 
         self.thread_store
-            .update_thread_metadata(UpdateThreadMetadataParams {
-                thread_id,
-                patch: metadata,
-                include_archived: false,
-            })
-            .await
-            .map_err(|err| format!("failed to update imported session: {err}"))?;
-        self.thread_store
             .persist_thread(thread_id)
             .await
             .map_err(|err| format!("failed to persist imported session: {err}"))?;
@@ -285,6 +319,14 @@ impl ExternalAgentSessionImporter {
             .shutdown_thread(thread_id)
             .await
             .map_err(|err| format!("failed to shutdown imported session: {err}"))?;
+        self.thread_store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: metadata,
+                include_archived: false,
+            })
+            .await
+            .map_err(|err| format!("failed to update imported session: {err}"))?;
         Ok(thread_id)
     }
 }

@@ -574,6 +574,7 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
         /*meta*/ None,
         home.path().to_path_buf(),
         rollout_path.clone(),
+        /*updated_at*/ None,
     );
     state.add_items(vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
         AgentMessageEvent {

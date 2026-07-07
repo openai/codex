@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use chrono::DateTime;
 use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -96,11 +98,19 @@ pub enum RolloutRecorderParams {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         multi_agent_version: Option<MultiAgentVersion>,
         history_mode: ThreadHistoryMode,
-        initial_window_id: Option<String>,
+        initial_window_id: Box<Option<String>>,
+        historical_timestamps: Option<Box<HistoricalRolloutTimestamps>>,
     },
     Resume {
         path: PathBuf,
     },
+}
+
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct HistoricalRolloutTimestamps {
+    created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
 }
 
 enum RolloutCmd {
@@ -189,7 +199,8 @@ impl RolloutRecorderParams {
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
-            initial_window_id: None,
+            initial_window_id: Box::default(),
+            historical_timestamps: None,
         }
     }
 
@@ -244,7 +255,33 @@ impl RolloutRecorderParams {
             ..
         } = &mut self
         {
-            *window_id = Some(initial_window_id);
+            **window_id = Some(initial_window_id);
+        }
+        self
+    }
+
+    pub fn with_created_at(mut self, created_at: DateTime<Utc>) -> Self {
+        if let Self::Create {
+            historical_timestamps,
+            ..
+        } = &mut self
+        {
+            historical_timestamps
+                .get_or_insert_with(Default::default)
+                .created_at = Some(created_at);
+        }
+        self
+    }
+
+    pub fn with_updated_at(mut self, updated_at: DateTime<Utc>) -> Self {
+        if let Self::Create {
+            historical_timestamps,
+            ..
+        } = &mut self
+        {
+            historical_timestamps
+                .get_or_insert_with(Default::default)
+                .updated_at = Some(updated_at);
         }
         self
     }
@@ -751,7 +788,7 @@ impl RolloutRecorder {
         config: &impl RolloutConfigView,
         params: RolloutRecorderParams,
     ) -> std::io::Result<Self> {
-        let (file, deferred_log_file_info, rollout_path, meta) = match params {
+        let (file, deferred_log_file_info, rollout_path, meta, updated_at) = match params {
             RolloutRecorderParams::Create {
                 session_id,
                 conversation_id,
@@ -766,8 +803,16 @@ impl RolloutRecorder {
                 multi_agent_version,
                 history_mode,
                 initial_window_id,
+                historical_timestamps,
             } => {
-                let log_file_info = precompute_log_file_info(config, conversation_id)?;
+                let historical_timestamps = historical_timestamps
+                    .map(|timestamps| *timestamps)
+                    .unwrap_or_default();
+                let log_file_info = precompute_log_file_info(
+                    config,
+                    conversation_id,
+                    historical_timestamps.created_at,
+                )?;
                 let path = log_file_info.path.clone();
                 let thread_id = log_file_info.conversation_id;
                 let started_at = log_file_info.timestamp;
@@ -805,10 +850,16 @@ impl RolloutRecorder {
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
                     history_mode,
                     multi_agent_version,
-                    context_window: initial_window_id.map(SessionContextWindow::new),
+                    context_window: (*initial_window_id).map(SessionContextWindow::new),
                 };
 
-                (None, Some(log_file_info), path, Some(session_meta))
+                (
+                    None,
+                    Some(log_file_info),
+                    path,
+                    Some(session_meta),
+                    historical_timestamps.updated_at,
+                )
             }
             RolloutRecorderParams::Resume { path } => {
                 let path = compression::materialize_rollout_for_append(path.as_path()).await?;
@@ -821,6 +872,7 @@ impl RolloutRecorder {
                     ),
                     None,
                     path,
+                    None,
                     None,
                 )
             }
@@ -847,6 +899,7 @@ impl RolloutRecorder {
                 meta,
                 cwd,
                 rollout_path_for_spawn.clone(),
+                updated_at,
             )
             .await;
             if let Err(err) = result {
@@ -1498,10 +1551,14 @@ struct LogFileInfo {
 fn precompute_log_file_info(
     config: &impl RolloutConfigView,
     conversation_id: ThreadId,
+    created_at: Option<DateTime<Utc>>,
 ) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD path.
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let timestamp = match created_at {
+        Some(created_at) => OffsetDateTime::from(std::time::SystemTime::from(created_at)),
+        None => OffsetDateTime::now_local()
+            .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?,
+    };
     let mut dir = config.codex_home().to_path_buf();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
@@ -1554,6 +1611,7 @@ struct RolloutWriterState {
     meta: Option<SessionMeta>,
     cwd: PathBuf,
     rollout_path: PathBuf,
+    updated_at: Option<DateTime<Utc>>,
     last_logged_error: Option<String>,
 }
 
@@ -1564,6 +1622,7 @@ impl RolloutWriterState {
         meta: Option<SessionMeta>,
         cwd: PathBuf,
         rollout_path: PathBuf,
+        updated_at: Option<DateTime<Utc>>,
     ) -> Self {
         Self {
             writer: file.map(|file| JsonlWriter { file }),
@@ -1572,6 +1631,7 @@ impl RolloutWriterState {
             meta,
             cwd,
             rollout_path,
+            updated_at,
             last_logged_error: None,
         }
     }
@@ -1604,7 +1664,14 @@ impl RolloutWriterState {
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
-        self.write_pending_with_recovery("shutdown").await
+        self.write_pending_with_recovery("shutdown").await?;
+        if let Some(updated_at) = self.updated_at {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(self.rollout_path.as_path())?
+                .set_times(std::fs::FileTimes::new().set_modified(updated_at.into()))?;
+        }
+        Ok(())
     }
 
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
@@ -1722,8 +1789,16 @@ async fn rollout_writer(
     meta: Option<SessionMeta>,
     cwd: PathBuf,
     rollout_path: PathBuf,
+    updated_at: Option<DateTime<Utc>>,
 ) -> std::io::Result<()> {
-    let mut state = RolloutWriterState::new(file, deferred_log_file_info, meta, cwd, rollout_path);
+    let mut state = RolloutWriterState::new(
+        file,
+        deferred_log_file_info,
+        meta,
+        cwd,
+        rollout_path,
+        updated_at,
+    );
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {

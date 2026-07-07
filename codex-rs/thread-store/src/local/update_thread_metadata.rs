@@ -221,6 +221,7 @@ async fn apply_metadata_update(
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
             let advance_recency_at = patch.advance_recency_at;
+            let recency_at = patch.recency_at;
             if existing.is_none() && rollout_path.is_none() {
                 let resolved = resolve_rollout_path(store, thread_id, include_archived).await?;
                 rollout_path_archived = resolved.archived;
@@ -274,7 +275,11 @@ async fn apply_metadata_update(
             if let Some(updated_at) = patch.updated_at {
                 metadata.updated_at = updated_at;
             }
-            if existing.is_none()
+            if let Some(recency_at) = recency_at {
+                metadata.recency_at = recency_at;
+            }
+            if recency_at.is_none()
+                && existing.is_none()
                 && let Some(recency_at) = advance_recency_at
             {
                 metadata.recency_at = recency_at;
@@ -329,7 +334,25 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
-            if existing.is_some()
+            if let Some(recency_at) = recency_at {
+                let replaced = state_db
+                    .set_thread_recency_at(thread_id, recency_at)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!(
+                            "failed to replace thread recency_at for {thread_id}: {err}"
+                        ),
+                    })?;
+                if !replaced {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "thread metadata disappeared before replacing recency_at for {thread_id}"
+                        ),
+                    });
+                }
+            }
+            if recency_at.is_none()
+                && existing.is_some()
                 && let Some(recency_at) = advance_recency_at
             {
                 state_db
@@ -409,6 +432,9 @@ async fn metadata_for_missing_sqlite_row(
     builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
     builder.cli_version = patch.cli_version.clone();
     let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
+    if let Some(recency_at) = patch.recency_at {
+        metadata.recency_at = recency_at;
+    }
     if rollout_path_archived {
         metadata.archived_at = Some(metadata.updated_at);
     }
@@ -486,6 +512,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.model.is_some()
         || patch.reasoning_effort.is_some()
         || patch.created_at.is_some()
+        || patch.recency_at.is_some()
         || patch.source.is_some()
         || patch.thread_source.is_some()
         || patch.agent_nickname.is_some()
@@ -1822,6 +1849,7 @@ mod tests {
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
+            historical_timestamps: None,
         }
     }
 

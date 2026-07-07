@@ -20,12 +20,14 @@ const EXTERNAL_AGENT_TOOL_RESULT_TAG: &str = "external_agent_tool_result";
 
 pub struct SessionSummary {
     pub latest_timestamp: i64,
+    pub source_session_id: Option<String>,
     pub migration: ExternalAgentSessionMigration,
 }
 
 pub(super) struct ParsedSessionImport {
     pub cwd: Option<PathBuf>,
     pub source_title: Option<String>,
+    pub source_session_id: Option<String>,
     pub messages: Vec<ConversationMessage>,
     pub content_sha256: String,
 }
@@ -37,6 +39,7 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     let mut custom_title = None;
     let mut ai_title = None;
     let mut title = None;
+    let mut source_session_id = None;
     let mut latest_timestamp = None;
     let mut saw_message = false;
 
@@ -49,6 +52,9 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         let Ok(mut record) = serde_json::from_str::<JsonValue>(trimmed) else {
             continue;
         };
+        if source_session_id.is_none() {
+            source_session_id = source_session_id_from_record(&record).map(str::to_string);
+        }
         if cwd.is_none() {
             cwd = record
                 .get("cwd")
@@ -85,6 +91,7 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     };
     Ok(Some(SessionSummary {
         latest_timestamp,
+        source_session_id,
         migration: ExternalAgentSessionMigration {
             path: path.to_path_buf(),
             cwd,
@@ -99,6 +106,7 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
     let mut cwd = None;
     let mut custom_title = None;
     let mut ai_title = None;
+    let mut source_session_id = None;
     let mut messages = Vec::new();
     let mut line = String::new();
     let mut hasher = Sha256::new();
@@ -115,6 +123,9 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
         let Ok(mut record) = serde_json::from_str::<JsonValue>(trimmed) else {
             continue;
         };
+        if source_session_id.is_none() {
+            source_session_id = source_session_id_from_record(&record).map(str::to_string);
+        }
         if cwd.is_none() {
             cwd = record
                 .get("cwd")
@@ -134,6 +145,7 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
     Ok(ParsedSessionImport {
         cwd,
         source_title: custom_title.or(ai_title),
+        source_session_id,
         messages,
         content_sha256: format!("{:x}", hasher.finalize()),
     })
@@ -145,6 +157,14 @@ fn custom_title_from_record(record: &JsonValue) -> Option<&str> {
 
 fn ai_title_from_record(record: &JsonValue) -> Option<&str> {
     title_from_record(record, "ai-title", "aiTitle")
+}
+
+fn source_session_id_from_record(record: &JsonValue) -> Option<&str> {
+    record
+        .get("sessionId")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
 }
 
 fn title_from_record<'a>(record: &'a JsonValue, record_type: &str, field: &str) -> Option<&'a str> {
@@ -351,6 +371,7 @@ mod tests {
             serde_json::json!({
                 "type": "user",
                 "cwd": root.path(),
+                "sessionId": "source-session-id",
                 "timestamp": "2026-06-03T12:00:00Z",
                 "message": { "content": "first request" },
             })
@@ -374,6 +395,10 @@ mod tests {
 
         assert_eq!(parsed.cwd.as_deref(), Some(root.path()));
         assert_eq!(parsed.source_title.as_deref(), Some("custom title"));
+        assert_eq!(
+            parsed.source_session_id.as_deref(),
+            Some("source-session-id")
+        );
         assert_eq!(parsed.messages.len(), 1);
         assert_eq!(parsed.messages[0].text, "first request");
         assert_eq!(

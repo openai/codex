@@ -361,6 +361,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.model.is_some()
         || update.reasoning_effort.is_some()
         || update.created_at.is_some()
+        || update.recency_at.is_some()
         || update.advance_recency_at.is_some()
         || update.source.is_some()
         || update.thread_source.is_some()
@@ -569,6 +570,7 @@ mod tests {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
+                historical_timestamps: None,
             },
         }
     }
