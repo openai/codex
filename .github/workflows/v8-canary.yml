@@ -314,9 +314,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2022
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
-          - runner: windows-2022
+          - runner: windows-2025
             target: aarch64-pc-windows-msvc
 
     steps:
