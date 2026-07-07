@@ -49,6 +49,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             terminal_browser_owner_thread_id: None,
             terminal_browser_generation: 0,
             terminal_browser_reopenable: HashMap::new(),
+            terminal_browser_pending_open: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,

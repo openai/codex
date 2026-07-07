@@ -2018,8 +2018,21 @@ impl App {
                 selection,
                 network_choice,
             } => {
-                self.apply_auto_review_preset(app_server, selection, network_choice)
-                    .await;
+                let pending_terminal_browser_open = self.has_pending_terminal_browser_open();
+                let restore_managed_network =
+                    network_choice == ManagedNetworkChoice::RestoreManaged;
+                if pending_terminal_browser_open && !restore_managed_network {
+                    self.resolve_pending_terminal_browser_open(/*allow*/ false)
+                        .await;
+                } else {
+                    let applied = self
+                        .apply_auto_review_preset(app_server, selection, network_choice)
+                        .await;
+                    if pending_terminal_browser_open {
+                        self.resolve_pending_terminal_browser_open(/*allow*/ applied)
+                            .await;
+                    }
+                }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(app_server, updates).await;

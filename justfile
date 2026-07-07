@@ -109,7 +109,7 @@ test-terminal-browser-panel *args:
 test-terminal-browser-routing *args:
     just test \
         -p codex-tui \
-        -E 'package(codex-tui) & test(/terminal_browser_(auto_review|managed_network|detects_user_network|open_is_eager)|permissions_auto_review_selection_defers/)' \
+        -E 'package(codex-tui) & test(/terminal_browser_(auto_review|control_click|managed_network|detects_user_network|open_is_eager|restricted_open)|permissions_auto_review_selection_defers/)' \
         "$@"
 
 # Run from the repository root so scripts that resolve paths from `cwd` see

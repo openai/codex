@@ -546,6 +546,8 @@ pub(crate) struct App {
     pub(crate) terminal_browser_generation: u64,
     /// Closed runtimes retained by conversation so explicit reopen preserves profile selection.
     terminal_browser_reopenable: HashMap<ThreadId, terminal_browser::ReopenableTerminalBrowser>,
+    /// One browser open held while the user decides whether to restore managed network access.
+    terminal_browser_pending_open: Option<terminal_browser::PendingTerminalBrowserOpen>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     pub(crate) enhanced_keys_supported: bool,
@@ -1067,6 +1069,7 @@ See the Codex keymap documentation for supported actions and examples."
             terminal_browser_owner_thread_id: None,
             terminal_browser_generation: 0,
             terminal_browser_reopenable: HashMap::new(),
+            terminal_browser_pending_open: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
@@ -1364,6 +1367,16 @@ See the Codex keymap documentation for supported actions and examples."
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::MousePrimary(mouse_event) => {
+                    if Self::terminal_browser_control_click_returns_to_app(
+                        mouse_event,
+                        browser_viewport,
+                    ) && let Some(target) = self.active_terminal_browser_control_target()
+                    {
+                        self.end_terminal_browser_control(target);
+                        tui.set_raw_mouse_events(/*raw_mouse_events*/ false);
+                        self.handle_owned_screen_mouse_primary(tui, mouse_event);
+                        return Ok(AppRunControl::Continue);
+                    }
                     self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport)
                         .await;
                     return Ok(AppRunControl::Continue);

@@ -6,6 +6,8 @@
 
 use super::*;
 
+const MANAGED_NETWORK_RESTORE_VIEW_ID: &str = "managed-network-restore";
+
 impl ChatWidget {
     /// Open the permissions popup.
     pub(crate) fn open_approvals_popup(&mut self) {
@@ -314,8 +316,10 @@ impl ChatWidget {
         selection: AutoReviewPresetSelection,
     ) {
         let restore_selection = selection.clone();
-        let keep_selection = selection;
+        let keep_selection = selection.clone();
+        let cancel_selection = selection;
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MANAGED_NETWORK_RESTORE_VIEW_ID),
             title: Some("Enable managed network access?".to_string()),
             subtitle: Some(
                 "Your user config disables the managed network required by the terminal browser."
@@ -353,8 +357,19 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
+            on_cancel: Some(Box::new(move |tx: &_| {
+                tx.send(AppEvent::ApplyAutoReviewPreset {
+                    selection: cancel_selection.clone(),
+                    network_choice: ManagedNetworkChoice::KeepRestricted,
+                });
+            })),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn dismiss_managed_network_restore_confirmation(&mut self) {
+        self.bottom_pane
+            .dismiss_view_by_id(MANAGED_NETWORK_RESTORE_VIEW_ID);
     }
 
     pub(super) fn permission_profile_selection_actions(

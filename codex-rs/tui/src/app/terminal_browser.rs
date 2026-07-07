@@ -5,12 +5,14 @@
 
 use std::sync::Arc;
 
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_terminal_browser::BrowserLaunchContext;
 use codex_terminal_browser::BrowserMouseInput;
 use codex_terminal_browser::BrowserNetworkPolicy;
 use codex_terminal_browser::BrowserStatus;
+use codex_terminal_browser::BrowserToolOutput;
 use codex_terminal_browser::BrowserView;
 use codex_terminal_browser::TerminalBrowser;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,8 +33,10 @@ use crate::terminal_browser::TerminalBrowserNetworkAvailability;
 use crate::terminal_browser::browser_key_input;
 use crate::terminal_browser::browser_mouse_input;
 use crate::terminal_browser::browser_mouse_route;
+use crate::terminal_browser::dynamic_tool_response;
 use crate::terminal_browser::profile_approval_view_params;
 use crate::tui::MousePrimaryEvent;
+use crate::tui::MousePrimaryEventKind;
 
 pub(super) struct ReopenableTerminalBrowser {
     browser: Arc<TerminalBrowser>,
@@ -45,6 +49,12 @@ pub(super) struct TerminalBrowserControlClick {
     inputs: [BrowserMouseInput; 2],
 }
 
+pub(super) struct PendingTerminalBrowserOpen {
+    request_id: AppServerRequestId,
+    session_key: String,
+    arguments: serde_json::Value,
+}
+
 impl ReopenableTerminalBrowser {
     pub(super) fn terminate(&self) {
         self.browser.terminate();
@@ -52,6 +62,103 @@ impl ReopenableTerminalBrowser {
 }
 
 impl App {
+    pub(super) fn defer_terminal_browser_open(
+        &mut self,
+        request_id: AppServerRequestId,
+        session_key: String,
+        arguments: serde_json::Value,
+    ) -> bool {
+        if self.terminal_browser_pending_open.is_some() {
+            return false;
+        }
+        self.terminal_browser_pending_open = Some(PendingTerminalBrowserOpen {
+            request_id,
+            session_key,
+            arguments,
+        });
+        true
+    }
+
+    pub(super) fn has_pending_terminal_browser_open(&self) -> bool {
+        self.terminal_browser_pending_open.is_some()
+    }
+
+    pub(super) fn discard_pending_terminal_browser_open(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> bool {
+        let matches_request = self
+            .terminal_browser_pending_open
+            .as_ref()
+            .is_some_and(|pending| &pending.request_id == request_id);
+        if matches_request {
+            self.terminal_browser_pending_open = None;
+        }
+        matches_request
+    }
+
+    fn complete_terminal_browser_open(
+        &self,
+        request_id: AppServerRequestId,
+        result: anyhow::Result<BrowserToolOutput>,
+    ) {
+        self.app_event_tx
+            .unscoped()
+            .send(AppEvent::TerminalBrowserToolCompleted {
+                request_id,
+                response: dynamic_tool_response(result),
+                profile_approval: None,
+            });
+    }
+
+    pub(super) async fn resolve_pending_terminal_browser_open(&mut self, allow: bool) {
+        let Some(pending) = self.terminal_browser_pending_open.take() else {
+            return;
+        };
+        let PendingTerminalBrowserOpen {
+            request_id,
+            session_key,
+            arguments,
+        } = pending;
+        if !allow {
+            self.complete_terminal_browser_open(
+                request_id,
+                Err(anyhow::anyhow!(
+                    "terminal browser network access remains disabled by the active permission profile"
+                )),
+            );
+            return;
+        }
+        if !self.terminal_browser_request_matches_active_thread(&session_key) {
+            self.complete_terminal_browser_open(
+                request_id,
+                Err(anyhow::anyhow!(
+                    "terminal browser permission policy only allows the active TUI thread"
+                )),
+            );
+            return;
+        }
+        let Some(browser) = self.terminal_browser_for_active_request().await else {
+            self.complete_terminal_browser_open(
+                request_id,
+                Err(anyhow::anyhow!(
+                    "terminal browser permission policy disables this TUI session"
+                )),
+            );
+            return;
+        };
+        let app_event_tx = self.app_event_tx.unscoped();
+        tokio::spawn(async move {
+            let response =
+                dynamic_tool_response(browser.execute(&session_key, "open", arguments).await);
+            app_event_tx.send(AppEvent::TerminalBrowserToolCompleted {
+                request_id,
+                response,
+                profile_approval: None,
+            });
+        });
+    }
+
     fn terminal_browser_network_availability(&self) -> TerminalBrowserNetworkAvailability {
         TerminalBrowserNetworkAvailability::from_config_and_runtime(
             self.chat_widget.config_ref(),
@@ -210,6 +317,8 @@ impl App {
 
     pub(super) fn terminal_browser_human_control_active(&self) -> bool {
         self.has_owned_screen()
+            && self.owned_screen_frame.focus()
+                == super::owned_screen_frame::OwnedScreenFrameFocus::Summary
             && self.owned_screen_frame.right_rail_content() == OwnedScreenRightRailContent::Browser
             && self
                 .owned_screen_frame
@@ -218,6 +327,14 @@ impl App {
             && self
                 .terminal_browser_for_current_thread()
                 .is_some_and(|browser| browser.is_human_control_active())
+    }
+
+    pub(super) fn terminal_browser_control_click_returns_to_app(
+        event: MousePrimaryEvent,
+        viewport: Option<Rect>,
+    ) -> bool {
+        event.kind == MousePrimaryEventKind::Press
+            && viewport.is_none_or(|viewport| !viewport.contains((event.column, event.row).into()))
     }
 
     pub(super) fn sync_terminal_browser_panel(&mut self) -> bool {

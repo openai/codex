@@ -30,12 +30,54 @@ fn user_network_restriction_overrides_managed_enabled(response: &ConfigReadRespo
 }
 
 impl App {
+    pub(super) fn current_auto_review_selection(&self) -> Option<AutoReviewPresetSelection> {
+        (self.config.approvals_reviewer == ApprovalsReviewer::AutoReview).then(|| {
+            AutoReviewPresetSelection {
+                approval_policy: AskForApproval::from(
+                    self.config.permissions.approval_policy.value(),
+                ),
+                profile_update: PermissionPresetProfileUpdate::Preserve,
+                display_label: "Approve for me".to_string(),
+            }
+        })
+    }
+
+    pub(super) async fn managed_network_restore_available(
+        &self,
+        app_server: &AppServerSession,
+    ) -> bool {
+        if self
+            .config
+            .permissions
+            .network_sandbox_policy()
+            .is_enabled()
+        {
+            return false;
+        }
+        let cwd = self.chat_widget.config_ref().cwd.display().to_string();
+        match crate::config_update::read_effective_config_with_layers(
+            app_server.request_handle(),
+            cwd,
+        )
+        .await
+        {
+            Ok(response) => user_network_restriction_overrides_managed_enabled(&response),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to inspect managed network config for terminal browser"
+                );
+                false
+            }
+        }
+    }
+
     pub(super) async fn apply_auto_review_preset(
         &mut self,
         app_server: &mut AppServerSession,
         selection: AutoReviewPresetSelection,
         network_choice: ManagedNetworkChoice,
-    ) {
+    ) -> bool {
         let terminal_browser_enabled = self.config.features.enabled(Feature::TerminalBrowser);
         let network_is_restricted = !self
             .config
@@ -45,25 +87,11 @@ impl App {
         if network_choice == ManagedNetworkChoice::Detect
             && terminal_browser_enabled
             && network_is_restricted
+            && self.managed_network_restore_available(app_server).await
         {
-            let cwd = self.chat_widget.config_ref().cwd.display().to_string();
-            match crate::config_update::read_effective_config_with_layers(
-                app_server.request_handle(),
-                cwd,
-            )
-            .await
-            {
-                Ok(response) if user_network_restriction_overrides_managed_enabled(&response) => {
-                    self.chat_widget
-                        .open_managed_network_restore_confirmation(selection);
-                    return;
-                }
-                Ok(_) => {}
-                Err(err) => tracing::warn!(
-                    error = %err,
-                    "failed to inspect managed network config before enabling Auto Review"
-                ),
-            }
+            self.chat_widget
+                .open_managed_network_restore_confirmation(selection);
+            return false;
         }
 
         let restore_managed_network = network_choice == ManagedNetworkChoice::RestoreManaged;
@@ -74,7 +102,7 @@ impl App {
             "Failed to enable Approve for me",
             "failed to set Auto Review approval policy",
         ) {
-            return;
+            return false;
         }
         next_config.approvals_reviewer = ApprovalsReviewer::AutoReview;
 
@@ -95,7 +123,7 @@ impl App {
                 "Failed to update Auto Review permissions: {}",
                 crate::config_update::format_config_error(&err)
             ));
-            return;
+            return false;
         }
 
         if restore_managed_network {
@@ -112,7 +140,7 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Managed network access was restored on disk, but the current session could not refresh it: {err}"
                     ));
-                    return;
+                    return false;
                 }
             };
             if !self.try_set_approval_policy_on_config(
@@ -121,7 +149,7 @@ impl App {
                 "Failed to enable Approve for me",
                 "failed to restore Auto Review approval policy",
             ) {
-                return;
+                return false;
             }
             next_config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         }
@@ -136,7 +164,7 @@ impl App {
                     "The user network override was removed, but managed network access is still disabled."
                         .to_string(),
                 );
-                return;
+                return false;
             }
             (
                 Some(next_config.permissions.permission_profile().clone()),
@@ -168,7 +196,7 @@ impl App {
             tracing::warn!(error = %err, "failed to apply Auto Review permission profile");
             self.chat_widget
                 .add_error_message(format!("Failed to enable Approve for me: {err}"));
-            return;
+            return false;
         }
 
         let permission_network = next_config.permissions.network.clone();
@@ -191,7 +219,7 @@ impl App {
             tracing::warn!(error = %err, "failed to apply Auto Review profile to chat config");
             self.chat_widget
                 .add_error_message(format!("Failed to enable Approve for me: {err}"));
-            return;
+            return false;
         }
         self.chat_widget.set_permission_network(permission_network);
         if permission_profile.is_some() {
@@ -246,6 +274,7 @@ impl App {
         });
         self.chat_widget.add_info_message(message, hint);
         self.chat_widget.submit_initial_user_message_if_pending();
+        true
     }
 }
 

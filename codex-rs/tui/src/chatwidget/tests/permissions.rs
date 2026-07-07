@@ -91,7 +91,7 @@ async fn approvals_selection_popup_snapshot() {
 
 #[tokio::test]
 async fn terminal_browser_managed_network_restore_confirmation_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.open_managed_network_restore_confirmation(AutoReviewPresetSelection {
         approval_policy: AskForApproval::OnRequest,
@@ -103,6 +103,15 @@ async fn terminal_browser_managed_network_restore_confirmation_snapshot() {
         "terminal_browser_managed_network_restore_confirmation",
         render_bottom_popup(&chat, /*width*/ 100)
     );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ApplyAutoReviewPreset {
+            network_choice: ManagedNetworkChoice::KeepRestricted,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]

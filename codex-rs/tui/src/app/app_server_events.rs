@@ -70,8 +70,15 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
+                let terminal_browser_open_resolved =
+                    self.discard_pending_terminal_browser_open(&notification.request_id);
                 match ThreadId::from_string(&notification.thread_id) {
                     Ok(thread_id) => {
+                        if terminal_browser_open_resolved
+                            && let Some(pane) = self.chat_widget.by_thread_id_mut(thread_id)
+                        {
+                            pane.dismiss_managed_network_restore_confirmation();
+                        }
                         if let Some(request) = self
                             .pending_app_server_requests
                             .resolve_notification(thread_id, &notification.request_id)
@@ -246,6 +253,31 @@ impl App {
                         ))),
                         profile_approval: None,
                     });
+                return;
+            }
+            if params.tool == "open"
+                && let Some(selection) = self.current_auto_review_selection()
+                && self
+                    .managed_network_restore_available(app_server_client)
+                    .await
+            {
+                if !self.defer_terminal_browser_open(
+                    request_id.clone(),
+                    params.thread_id.clone(),
+                    params.arguments.clone(),
+                ) {
+                    self.app_event_tx
+                        .send(AppEvent::TerminalBrowserToolCompleted {
+                            request_id: request_id.clone(),
+                            response: dynamic_tool_response(Err(anyhow::anyhow!(
+                                "browser_busy: another terminal browser open is waiting for permission"
+                            ))),
+                            profile_approval: None,
+                        });
+                    return;
+                }
+                self.chat_widget
+                    .open_managed_network_restore_confirmation(selection);
                 return;
             }
             let Some(browser) = self.terminal_browser_for_active_request().await else {

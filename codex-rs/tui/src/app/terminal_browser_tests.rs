@@ -16,8 +16,13 @@ use codex_config::LoaderOverrides;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use color_eyre::eyre::Result;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
+use ratatui::layout::Rect;
 use std::time::Duration;
+
+use crate::tui::MousePrimaryEvent;
+use crate::tui::MousePrimaryEventKind;
 
 #[test]
 fn terminal_browser_requests_require_the_displayed_thread() {
@@ -35,6 +40,38 @@ fn terminal_browser_requests_require_the_displayed_thread() {
     assert!(!terminal_browser_request_matches_thread(
         /*active_thread_id*/ None,
         &displayed.to_string(),
+    ));
+}
+
+#[test]
+fn terminal_browser_control_click_outside_viewport_returns_to_app() {
+    let viewport = Rect::new(
+        /*x*/ 100, /*y*/ 1, /*width*/ 40, /*height*/ 20,
+    );
+    let outside_press = MousePrimaryEvent {
+        kind: MousePrimaryEventKind::Press,
+        column: 50,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    assert!(App::terminal_browser_control_click_returns_to_app(
+        outside_press,
+        Some(viewport),
+    ));
+    assert!(!App::terminal_browser_control_click_returns_to_app(
+        MousePrimaryEvent {
+            column: 110,
+            ..outside_press
+        },
+        Some(viewport),
+    ));
+    assert!(!App::terminal_browser_control_click_returns_to_app(
+        MousePrimaryEvent {
+            kind: MousePrimaryEventKind::Release,
+            ..outside_press
+        },
+        Some(viewport),
     ));
 }
 
