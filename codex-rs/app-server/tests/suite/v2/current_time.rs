@@ -40,7 +40,10 @@ async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<(
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let thread_request_id = app_server

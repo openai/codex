@@ -291,7 +291,11 @@ impl RealtimeE2eHarness {
             sandbox,
         )?;
 
-        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build()
+            .await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -657,7 +661,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -949,7 +956,10 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -1048,7 +1058,10 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -1158,7 +1171,11 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1230,7 +1247,10 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -1334,7 +1354,10 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -2690,7 +2713,10 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -2759,7 +2785,10 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp

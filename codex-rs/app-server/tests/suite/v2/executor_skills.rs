@@ -81,7 +81,11 @@ stream_max_retries = 0
         ),
     )?;
 
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server

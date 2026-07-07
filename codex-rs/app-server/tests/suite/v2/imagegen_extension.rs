@@ -87,8 +87,12 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
 
@@ -185,8 +189,12 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
         ChatGptAuthFixture::new("access-chatgpt"),
         AuthCredentialsStoreMode::File,
     )?;
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
 
@@ -306,8 +314,12 @@ async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
     timeout(
@@ -369,8 +381,12 @@ generatedImage(result);
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
     timeout(
@@ -449,8 +465,12 @@ async fn run_image_edit_test(
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_turn(&mut mcp, input).await?;
     timeout(
