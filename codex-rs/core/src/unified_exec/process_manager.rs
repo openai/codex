@@ -117,9 +117,19 @@ fn exec_env_policy_from_shell_policy(
         .iter()
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
-    exclude.push(CODEX_PERMISSION_PROFILE_ENV_VAR.to_string());
+    exclude.extend([
+        CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+        codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+    ]);
     let mut r#set = policy.r#set.clone();
-    r#set.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_PERMISSION_PROFILE_ENV_VAR));
+    r#set.retain(|key, _| {
+        ![
+            CODEX_PERMISSION_PROFILE_ENV_VAR,
+            codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
+        ]
+        .iter()
+        .any(|runtime_key| key.eq_ignore_ascii_case(runtime_key))
+    });
     codex_exec_server::ExecEnvPolicy {
         inherit: policy.inherit.clone(),
         ignore_default_excludes: policy.ignore_default_excludes,
@@ -140,8 +150,11 @@ fn env_overlay_for_exec_server(
     request_env
         .iter()
         .filter(|(key, value)| {
-            key.as_str() == CODEX_PERMISSION_PROFILE_ENV_VAR
-                || local_policy_env.get(*key) != Some(*value)
+            matches!(
+                key.as_str(),
+                CODEX_PERMISSION_PROFILE_ENV_VAR
+                    | codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR
+            ) || local_policy_env.get(*key) != Some(*value)
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()

@@ -46,6 +46,10 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
             CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
             "current-profile".to_string(),
         ),
+        (
+            codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+            "1".to_string(),
+        ),
     ]);
     let request_env = HashMap::from([
         ("HOME".to_string(), "/client-home".to_string()),
@@ -55,6 +59,10 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
         (
             CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
             "current-profile".to_string(),
+        ),
+        (
+            codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+            "1".to_string(),
         ),
         (
             "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
@@ -72,6 +80,10 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
                 "current-profile".to_string(),
             ),
             (
+                codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+                "1".to_string(),
+            ),
+            (
                 "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
                 "1".to_string()
             ),
@@ -80,12 +92,16 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 }
 
 #[test]
-fn exec_env_policy_excludes_runtime_permission_profile() {
+fn exec_env_policy_excludes_runtime_apply_patch_and_permission_profile_vars() {
     let policy = ShellEnvironmentPolicy {
         r#set: HashMap::from([
             (
                 "codex_permission_profile".to_string(),
                 "stale-profile".to_string(),
+            ),
+            (
+                "codex_apply_patch_preserve_line_endings".to_string(),
+                "1".to_string(),
             ),
             ("KEEP".to_string(), "value".to_string()),
         ]),
@@ -97,7 +113,10 @@ fn exec_env_policy_excludes_runtime_permission_profile() {
         codex_exec_server::ExecEnvPolicy {
             inherit: policy.inherit,
             ignore_default_excludes: policy.ignore_default_excludes,
-            exclude: vec![CODEX_PERMISSION_PROFILE_ENV_VAR.to_string()],
+            exclude: vec![
+                CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+                codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+            ],
             r#set: HashMap::from([("KEEP".to_string(), "value".to_string())]),
             include_only: Vec::new(),
         }
