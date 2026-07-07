@@ -53,6 +53,8 @@ const HARNESS_KEY_AUTHORIZATION: &str = "harness-key-authorization";
 const REGISTRY_TOKEN: &str = "registry-token";
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+type DroppedRelayData = Arc<Mutex<Option<(u32, Vec<u8>)>>>;
+
 #[derive(Debug)]
 struct StaticRegistryAuthProvider;
 
@@ -70,7 +72,7 @@ fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
+async fn remote_environment_retries_dropped_encrypted_frames() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let rendezvous_url = format!("ws://{}", listener.local_addr()?);
     let registry = MockServer::start().await;
@@ -131,10 +133,14 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         tokio::spawn(async move { ExecServerClient::connect_noise_rendezvous(client_args).await });
     let harness_websocket = accept_websocket(&listener, "harness").await?;
     let captured_frames = Arc::new(Mutex::new(Vec::new()));
+    let dropped_harness_data = Arc::new(Mutex::new(None));
+    let dropped_environment_data = Arc::new(Mutex::new(None));
     let relay_task = tokio::spawn(proxy_relay_frames(
         environment_websocket,
         harness_websocket,
         Arc::clone(&captured_frames),
+        Arc::clone(&dropped_harness_data),
+        Arc::clone(&dropped_environment_data),
     ));
     let client = timeout(TEST_TIMEOUT, client_task)
         .await
@@ -178,6 +184,12 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     );
 
     assert_relay_data_is_encrypted(&captured_frames)?;
+    assert_dropped_ciphertext_was_retried(&captured_frames, "harness", &dropped_harness_data)?;
+    assert_dropped_ciphertext_was_retried(
+        &captured_frames,
+        "environment",
+        &dropped_environment_data,
+    )?;
 
     drop(client);
     relay_task.abort();
@@ -218,6 +230,8 @@ async fn proxy_relay_frames(
     mut environment: WebSocketStream<TcpStream>,
     mut harness: WebSocketStream<TcpStream>,
     captured_frames: Arc<Mutex<Vec<Vec<u8>>>>,
+    dropped_harness_data: DroppedRelayData,
+    dropped_environment_data: DroppedRelayData,
 ) -> Result<()> {
     loop {
         tokio::select! {
@@ -227,6 +241,9 @@ async fn proxy_relay_frames(
                 };
                 let message = message?;
                 capture_binary_frame(&captured_frames, &message);
+                if drop_first_data(&dropped_environment_data, &message)? {
+                    continue;
+                }
                 harness.send(message).await?;
             }
             message = harness.next() => {
@@ -235,11 +252,32 @@ async fn proxy_relay_frames(
                 };
                 let message = message?;
                 capture_binary_frame(&captured_frames, &message);
+                if drop_first_data(&dropped_harness_data, &message)? {
+                    continue;
+                }
                 environment.send(message).await?;
             }
         }
     }
     Ok(())
+}
+
+fn drop_first_data(dropped_data: &DroppedRelayData, message: &Message) -> Result<bool> {
+    let Message::Binary(bytes) = message else {
+        return Ok(false);
+    };
+    let frame = RelayMessageFrame::decode(bytes.as_ref())?;
+    let Some(relay_message_frame::Body::Data(data)) = frame.body else {
+        return Ok(false);
+    };
+    let mut dropped_data = dropped_data
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if dropped_data.is_some() {
+        return Ok(false);
+    }
+    *dropped_data = Some((data.seq, data.payload));
+    Ok(true)
 }
 
 fn capture_binary_frame(captured_frames: &Mutex<Vec<Vec<u8>>>, message: &Message) {
@@ -270,6 +308,35 @@ fn assert_relay_data_is_encrypted(captured_frames: &Mutex<Vec<Vec<u8>>>) -> Resu
     assert!(
         data_frames >= 4,
         "expected encrypted request and response frames"
+    );
+    Ok(())
+}
+
+fn assert_dropped_ciphertext_was_retried(
+    captured_frames: &Mutex<Vec<Vec<u8>>>,
+    direction: &str,
+    dropped_data: &DroppedRelayData,
+) -> Result<()> {
+    let dropped_data = dropped_data
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .with_context(|| format!("fake rendezvous should drop one {direction} data frame"))?;
+    let captured_frames = captured_frames
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let matching_frames = captured_frames
+        .iter()
+        .filter_map(|encoded| RelayMessageFrame::decode(encoded.as_slice()).ok())
+        .filter_map(|frame| match frame.body {
+            Some(relay_message_frame::Body::Data(data)) => Some(data),
+            _ => None,
+        })
+        .filter(|data| data.seq == dropped_data.0 && data.payload == dropped_data.1)
+        .count();
+    assert!(
+        matching_frames >= 2,
+        "expected dropped {direction} ciphertext to be retried without re-encryption"
     );
     Ok(())
 }

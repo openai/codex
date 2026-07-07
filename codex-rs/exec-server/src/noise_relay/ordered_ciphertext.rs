@@ -2,19 +2,36 @@ use std::collections::BTreeMap;
 
 use crate::ExecServerError;
 
-const MAX_REORDER_DISTANCE: u32 = 64;
-const MAX_PENDING_BYTES: usize = 1024 * 1024;
+// A receive window of 32 includes the next expected sequence itself, so only
+// 31 later records can wait behind one gap.
+const MAX_REORDER_DISTANCE: u32 = 31;
+const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 
 /// Reorders relay records before they reach Noise's implicit receive nonce.
 /// The window is bounded, and each sequence number is released at most once.
-#[derive(Default)]
 pub(crate) struct OrderedCiphertextFrames {
     next_seq: u32,
     pending: BTreeMap<u32, Vec<u8>>,
     pending_bytes: usize,
 }
 
+impl Default for OrderedCiphertextFrames {
+    fn default() -> Self {
+        Self {
+            // Reliable Noise streams reserve zero as the initial cumulative ack.
+            next_seq: 1,
+            pending: BTreeMap::new(),
+            pending_bytes: 0,
+        }
+    }
+}
+
 impl OrderedCiphertextFrames {
+    /// Highest contiguous sequence released for decryption.
+    pub(crate) fn cumulative_ack(&self) -> u32 {
+        self.next_seq - 1
+    }
+
     /// Accept one relay record and return the newly contiguous ciphertext run.
     ///
     /// Returns nothing for duplicates or while a gap remains. Closing a gap also
@@ -24,6 +41,11 @@ impl OrderedCiphertextFrames {
         seq: u32,
         payload: Vec<u8>,
     ) -> Result<Vec<Vec<u8>>, ExecServerError> {
+        if seq == 0 {
+            return Err(ExecServerError::Protocol(
+                "Noise reliable data sequence zero is reserved".to_string(),
+            ));
+        }
         // Keep the first ciphertext for a sequence. Later copies are duplicates.
         if seq < self.next_seq || self.pending.contains_key(&seq) {
             return Ok(Vec::new());

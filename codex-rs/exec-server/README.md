@@ -60,8 +60,8 @@ identity plus endpoint-owned reliability metadata:
 version
 stream_id
 body              // handshake | data | ack_frame | resume | reset | heartbeat
-ack               // highest contiguous peer segment seq received
-ack_bits          // bitset for peer segment seqs after ack
+ack               // highest contiguous peer segment seq received; 0 means none
+ack_bits          // reserved in v1; must be 0
 seq               // data only: segment sequence number
 segment_index     // data only: 0-based index within message
 segment_count     // data only: number of segments in message
@@ -74,12 +74,17 @@ reason            // reset only: reset reason
 environment websocket. The harness generates a UUIDv4 `stream_id`; the environment
 demuxes frames by `stream_id` and runs an independent `ConnectionProcessor` per
 stream.
+After a Noise session ends, do not reuse its `stream_id` on the same physical
+relay connection; delayed cached ciphertext may still be draining.
 
 Use segment-level sequence numbers for reliability:
 
 ```text
-seq = 0, 1, 2, 3, ...
+seq = 1, 2, 3, 4, ...
 ```
+
+Sequence zero is reserved so `ack = 0` unambiguously means that no segment has
+been received contiguously yet.
 
 Use contiguous segment sequence ranges to identify and stitch a segmented
 application message:
@@ -94,15 +99,17 @@ segment_count = 1
 unsplit messages, `message_start_seq == seq`, `segment_index == 0`, and
 `segment_count == 1`.
 
-Use cumulative `ack` plus fixed-size `ack_bits` instead of variable ack ranges:
+V1 uses cumulative `ack` and reserves `ack_bits` for a later selective-ack
+extension:
 
 ```text
-ack = highest contiguous received segment seq
-bit i in ack_bits acknowledges seq = ack + 1 + i
+ack = 0 when no segment has been received contiguously
+ack = highest contiguous received segment seq otherwise
+ack_bits = 0
 ```
 
-Send `ack` and `ack_bits` redundantly on every outbound frame. Acks are not
-themselves acked. Acks, retries, duplicate suppression, segmentation, and
+Send `ack` and zero `ack_bits` redundantly on every outbound frame. Acks are
+not themselves acked. Acks, retries, duplicate suppression, segmentation, and
 reassembly are endpoint responsibilities; rendezvous only routes relay frames
 by `stream_id`.
 

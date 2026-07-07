@@ -6,7 +6,11 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing::warn;
@@ -22,18 +26,23 @@ use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
 use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
-use crate::noise_relay::take_next_sequence;
+use crate::noise_relay::reliable_stream::MAX_UNACKED_BYTES;
+use crate::noise_relay::reliable_stream::MAX_UNACKED_SEGMENTS;
+use crate::noise_relay::reliable_stream::ReliableSender;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::server::ConnectionProcessor;
 use crate::telemetry::ConnectionTransport;
 
+const RELIABLE_RETRY_SCAN_INTERVAL: Duration = Duration::from_millis(50);
+const MAX_RELIABLE_CIPHERTEXT_BYTES: usize = MAX_UNACKED_BYTES / MAX_UNACKED_SEGMENTS;
+
 /// Identifies one completed virtual-stream instance.
 ///
-/// Stream IDs are supplied by the untrusted relay peer and may be reused. The
-/// instance ID prevents a delayed writer notification from removing a newer
-/// stream that happens to use the same routing ID.
+/// Stream IDs are supplied by the untrusted relay peer. The instance ID lets
+/// the environment verify that a delayed writer notification still belongs to
+/// the active stream before retiring its routing ID.
 pub(crate) struct ClosedNoiseVirtualStream {
     pub(crate) stream_id: String,
     pub(crate) instance_id: u64,
@@ -48,6 +57,10 @@ pub(crate) struct NoiseVirtualStream {
     incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
     disconnected_tx: watch::Sender<bool>,
     transport: Arc<Mutex<NoiseTransport>>,
+    reliable_sender: Arc<Mutex<ReliableSender>>,
+    inbound_ack: Arc<AtomicU32>,
+    pending_ack: Arc<Mutex<Option<u32>>>,
+    writer_wakeup: Arc<Notify>,
     inbound_ciphertexts: OrderedCiphertextFrames,
     inbound_decoder: JsonRpcMessageDecoder,
     pub(crate) instance_id: u64,
@@ -59,6 +72,19 @@ impl NoiseVirtualStream {
         let _ = self
             .incoming_tx
             .try_send(JsonRpcConnectionEvent::Disconnected { reason });
+    }
+
+    /// Apply ack metadata from one post-handshake peer frame and wake the
+    /// writer if the cumulative prefix opened send-window capacity.
+    pub(crate) fn process_peer_ack(&self, ack: u32, ack_bits: u32) -> Result<(), ExecServerError> {
+        let mut reliable_sender = self
+            .reliable_sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reliable_sender.process_peer_ack(ack, ack_bits)?;
+        drop(reliable_sender);
+        self.writer_wakeup.notify_one();
+        Ok(())
     }
 
     /// Reorder and decrypt one inbound record, then queue complete JSON-RPC messages.
@@ -84,6 +110,13 @@ impl NoiseVirtualStream {
                     })?;
             }
         }
+        let ack = self.inbound_ciphertexts.cumulative_ack();
+        self.inbound_ack.store(ack, Ordering::Relaxed);
+        *self
+            .pending_ack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ack);
+        self.writer_wakeup.notify_one();
         Ok(())
     }
 }
@@ -104,50 +137,150 @@ pub(crate) fn spawn_noise_virtual_stream(
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let transport = Arc::new(Mutex::new(transport));
+    let reliable_sender = Arc::new(Mutex::new(ReliableSender::default()));
+    let inbound_ack = Arc::new(AtomicU32::new(0));
+    let pending_ack = Arc::new(Mutex::new(None));
+    let writer_wakeup = Arc::new(Notify::new());
     let writer_transport = Arc::clone(&transport);
+    let writer_reliable_sender = Arc::clone(&reliable_sender);
+    let writer_inbound_ack = Arc::clone(&inbound_ack);
+    let writer_pending_ack = Arc::clone(&pending_ack);
+    let writer_wakeup_task = Arc::clone(&writer_wakeup);
+    let writer_physical_outgoing_tx = physical_outgoing_tx;
     let processor_stream_id = stream_id.clone();
     let processor_closed_stream_tx = closed_stream_tx.clone();
     let writer_stream_id = stream_id;
     let writer_task = tokio::spawn(async move {
-        let mut next_seq = 0u32;
-        'writer: while let Some(message) = json_outgoing_rx.recv().await {
-            // Each chunk becomes one Noise record and consumes one nonce.
-            let framed = match frame_jsonrpc_message(&message) {
-                Ok(framed) => framed,
-                Err(error) => {
-                    warn!("failed to frame Noise virtual stream JSON-RPC payload: {error}");
-                    break;
+        let mut pending_outbound: Option<(Vec<u8>, usize)> = None;
+        let mut retry_tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + RELIABLE_RETRY_SCAN_INTERVAL,
+            RELIABLE_RETRY_SCAN_INTERVAL,
+        );
+        retry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        'writer: loop {
+            let can_send_pending = pending_outbound.is_some()
+                && writer_reliable_sender
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .can_admit_ciphertext(MAX_RELIABLE_CIPHERTEXT_BYTES);
+            let has_pending_ack = writer_pending_ack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+            tokio::select! {
+                maybe_message = json_outgoing_rx.recv(), if pending_outbound.is_none() => {
+                    let Some(message) = maybe_message else {
+                        break;
+                    };
+                    pending_outbound = Some(match frame_jsonrpc_message(&message) {
+                        Ok(framed) => (framed, 0),
+                        Err(error) => {
+                            warn!("failed to frame Noise virtual stream JSON-RPC payload: {error}");
+                            break;
+                        }
+                    });
                 }
-            };
-            for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
-                let seq = match take_next_sequence(&mut next_seq) {
-                    Ok(seq) => seq,
-                    Err(error) => {
-                        warn!("Noise virtual stream sequence exhausted: {error}");
+                _ = std::future::ready(()), if can_send_pending => {
+                    let (ciphertext, next_offset, message_complete) = {
+                        let Some((framed, offset)) = pending_outbound.as_ref() else {
+                            continue;
+                        };
+                        let next_offset = (*offset + NOISE_RECORD_PLAINTEXT_LEN).min(framed.len());
+                        let ciphertext = {
+                            let mut transport = writer_transport
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            transport.encrypt(&framed[*offset..next_offset])
+                        };
+                        let ciphertext = match ciphertext {
+                            Ok(ciphertext) => ciphertext,
+                            Err(error) => {
+                                warn!("failed to encrypt Noise virtual stream payload: {error}");
+                                break 'writer;
+                            }
+                        };
+                        if ciphertext.len() > MAX_RELIABLE_CIPHERTEXT_BYTES {
+                            warn!("Noise virtual stream ciphertext exceeds reliable record budget");
+                            break 'writer;
+                        }
+                        (ciphertext, next_offset, next_offset == framed.len())
+                    };
+                    let (outbound, ack) = {
+                        let mut reliable_sender = writer_reliable_sender
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let outbound = match reliable_sender
+                            .admit_ciphertext(ciphertext, tokio::time::Instant::now())
+                        {
+                            Ok(outbound) => outbound,
+                            Err(error) => {
+                                warn!("failed to admit Noise reliable ciphertext: {error}");
+                                break 'writer;
+                            }
+                        };
+                        (outbound, writer_inbound_ack.load(Ordering::Relaxed))
+                    };
+                    let frame = RelayMessageFrame::reliable_data(
+                        writer_stream_id.clone(),
+                        ack,
+                        outbound.seq,
+                        outbound.payload,
+                    );
+                    if writer_physical_outgoing_tx
+                        .send(encode_relay_message_frame(&frame))
+                        .await
+                        .is_err()
+                    {
                         break 'writer;
                     }
-                };
-                let ciphertext = {
-                    let mut transport = writer_transport
+                    if message_complete {
+                        pending_outbound = None;
+                    } else if let Some((_framed, offset)) = pending_outbound.as_mut() {
+                        *offset = next_offset;
+                    }
+                }
+                _ = retry_tick.tick() => {
+                    let (retry, ack) = {
+                        let mut reliable_sender = writer_reliable_sender
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let retry = reliable_sender.next_retry_due(tokio::time::Instant::now());
+                        (retry, writer_inbound_ack.load(Ordering::Relaxed))
+                    };
+                    if let Some(outbound) = retry {
+                        let frame = RelayMessageFrame::reliable_data(
+                            writer_stream_id.clone(),
+                            ack,
+                            outbound.seq,
+                            outbound.payload,
+                        );
+                        if writer_physical_outgoing_tx
+                            .send(encode_relay_message_frame(&frame))
+                            .await
+                            .is_err()
+                        {
+                            break 'writer;
+                        }
+                    }
+                }
+                _ = std::future::ready(()), if has_pending_ack => {
+                    let ack = writer_pending_ack
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    transport.encrypt(plaintext_record)
-                };
-                let ciphertext = match ciphertext {
-                    Ok(ciphertext) => ciphertext,
-                    Err(error) => {
-                        warn!("failed to encrypt Noise virtual stream payload: {error}");
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    let Some(ack) = ack else {
+                        continue;
+                    };
+                    let frame = RelayMessageFrame::ack(writer_stream_id.clone(), ack);
+                    if writer_physical_outgoing_tx
+                        .send(encode_relay_message_frame(&frame))
+                        .await
+                        .is_err()
+                    {
                         break 'writer;
                     }
-                };
-                let frame = RelayMessageFrame::data(writer_stream_id.clone(), seq, ciphertext);
-                if physical_outgoing_tx
-                    .send(encode_relay_message_frame(&frame))
-                    .await
-                    .is_err()
-                {
-                    break 'writer;
                 }
+                _ = writer_wakeup_task.notified() => {}
             }
         }
 
@@ -158,7 +291,7 @@ pub(crate) fn spawn_noise_virtual_stream(
         };
         let reset =
             RelayMessageFrame::reset(writer_stream_id, NOISE_RELAY_RESET_REASON.to_string());
-        let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
+        let _ = writer_physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
         let _ = closed_stream_tx.send(closed_stream).await;
     });
 
@@ -185,6 +318,10 @@ pub(crate) fn spawn_noise_virtual_stream(
         incoming_tx,
         disconnected_tx,
         transport,
+        reliable_sender,
+        inbound_ack,
+        pending_ack,
+        writer_wakeup,
         inbound_ciphertexts: OrderedCiphertextFrames::default(),
         inbound_decoder: JsonRpcMessageDecoder::default(),
         instance_id,

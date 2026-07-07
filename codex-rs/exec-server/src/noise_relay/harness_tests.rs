@@ -10,7 +10,9 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCRequest;
+use codex_exec_server_protocol::JSONRPCResponse;
 use codex_exec_server_protocol::RequestId;
+use futures::FutureExt;
 use futures::Sink;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -26,14 +28,17 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::*;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::noise_channel::NoiseTransport;
 use crate::noise_channel::PendingResponderHandshake;
+use crate::noise_relay::reliable_stream::RESEND_AFTER;
 
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
 
 #[tokio::test(start_paused = true)]
 async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
-    let (connection, mut control, mut outbound_rx) = connected_controlled_harness().await?;
+    let (connection, mut control, mut outbound_rx, _stream_id, _transport) =
+        connected_controlled_harness().await?;
 
     connection
         .outgoing_tx
@@ -51,7 +56,7 @@ async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
     tokio::time::advance(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
     control.grant_writes(/*count*/ 1);
     let first_data = read_outbound_data(&mut outbound_rx).await?;
-    assert_eq!(first_data.seq, 0);
+    assert_eq!(first_data.seq, 1);
 
     control.wait_for_blocked_write(/*expected*/ 2).await?;
     control.grant_writes(/*count*/ 1);
@@ -67,7 +72,7 @@ async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
     tokio::time::advance(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
     control.grant_writes(/*count*/ 1);
     let second_data = read_outbound_data(&mut outbound_rx).await?;
-    assert_eq!(second_data.seq, 1);
+    assert_eq!(second_data.seq, 2);
 
     control.wait_for_blocked_write(/*expected*/ 4).await?;
     control.grant_writes(/*count*/ 1);
@@ -82,9 +87,100 @@ async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(start_paused = true)]
+async fn dropped_data_is_retried_with_identical_ciphertext_until_cumulative_ack() -> Result<()> {
+    let (connection, control, mut outbound_rx, stream_id, _transport) =
+        connected_controlled_harness_with_write_permits(/*write_permits*/ 64).await?;
+
+    connection
+        .outgoing_tx
+        .send(JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(1),
+            method: "retry".to_string(),
+            params: None,
+            trace: None,
+        }))
+        .await?;
+
+    let first_data = read_outbound_data_with_pongs(&mut outbound_rx, &control).await?;
+    assert_eq!(first_data.seq, 1);
+
+    tokio::time::advance(RESEND_AFTER + RELIABLE_RETRY_SCAN_INTERVAL).await;
+    let retry_data = read_outbound_data_with_pongs(&mut outbound_rx, &control).await?;
+    assert_eq!(retry_data, first_data);
+    drain_outbound_control(&mut outbound_rx, &control).await?;
+
+    control.send_inbound(Message::Binary(
+        encode_relay_message_frame(&RelayMessageFrame::ack(stream_id, /*ack*/ 1)).into(),
+    ))?;
+    tokio::task::yield_now().await;
+    drain_outbound_control(&mut outbound_rx, &control).await?;
+    tokio::time::advance(RESEND_AFTER + RELIABLE_RETRY_SCAN_INTERVAL).await;
+    drain_outbound_control(&mut outbound_rx, &control).await?;
+
+    for task in &connection.task_handles {
+        task.abort();
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queued_pong_is_drained_before_deferred_ack_write() -> Result<()> {
+    let (connection, mut control, mut outbound_rx, stream_id, mut executor_transport) =
+        connected_controlled_harness().await?;
+
+    control.wait_for_blocked_write(/*expected*/ 1).await?;
+    control.grant_writes(/*count*/ 1);
+    let Message::Ping(ping_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
+        .await?
+        .context("harness closed before sending keepalive")?
+    else {
+        anyhow::bail!("expected keepalive ping");
+    };
+    let reads_before_deadline = control.inbound_reads();
+
+    let framed = frame_jsonrpc_message(&JSONRPCMessage::Response(JSONRPCResponse {
+        id: RequestId::Integer(1),
+        result: serde_json::Value::Null,
+    }))?;
+    let ciphertext = executor_transport.encrypt(&framed[..1])?;
+    let data =
+        RelayMessageFrame::reliable_data(stream_id, /*ack*/ 0, /*seq*/ 1, ciphertext);
+    control.send_inbound(Message::Binary(encode_relay_message_frame(&data).into()))?;
+    control.send_inbound(Message::Pong(ping_payload))?;
+
+    // Hold the current-thread runtime until the Pong deadline passes so Data
+    // and Pong are both already queued when the grace drain starts.
+    std::thread::sleep(WEBSOCKET_PONG_TIMEOUT + Duration::from_millis(10));
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+        if control.inbound_reads() - reads_before_deadline == 2 {
+            break;
+        }
+    }
+
+    assert_eq!(control.inbound_reads() - reads_before_deadline, 2);
+    assert!(!*connection.disconnected_rx.borrow());
+    control.grant_writes(/*count*/ 1);
+    let Message::Binary(ack_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
+        .await?
+        .context("harness closed before sending deferred ack")?
+    else {
+        anyhow::bail!("expected deferred ack frame");
+    };
+    let ack = decode_relay_message_frame(ack_payload.as_ref())?;
+    assert_eq!(ack.validate()?, RelayFrameBodyKind::Ack);
+    assert_eq!(ack.ack, 1);
+    for task in &connection.task_handles {
+        task.abort();
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn post_deadline_drain_stops_before_frame_33() -> Result<()> {
-    let (mut connection, mut control, mut outbound_rx) = connected_controlled_harness().await?;
+    let (mut connection, mut control, mut outbound_rx, _stream_id, _transport) =
+        connected_controlled_harness().await?;
 
     control.wait_for_blocked_write(/*expected*/ 1).await?;
     control.grant_writes(/*count*/ 1);
@@ -141,15 +237,6 @@ async fn pong_keeps_harness_alive_until_peer_stops_responding() -> Result<()> {
         },
     );
 
-    let resume_message = timeout(Duration::from_secs(1), executor_websocket.next())
-        .await?
-        .context("harness closed before sending resume")??;
-    let Message::Binary(resume_payload) = resume_message else {
-        anyhow::bail!("expected resume frame, got {resume_message:?}");
-    };
-    let resume = decode_relay_message_frame(resume_payload.as_ref())?;
-    assert_eq!(resume.validate()?, RelayFrameBodyKind::Resume);
-
     let handshake_message = timeout(Duration::from_secs(1), executor_websocket.next())
         .await?
         .context("harness closed before sending handshake")??;
@@ -157,7 +244,7 @@ async fn pong_keeps_harness_alive_until_peer_stops_responding() -> Result<()> {
         anyhow::bail!("expected handshake frame, got {handshake_message:?}");
     };
     let handshake = decode_relay_message_frame(handshake_payload.as_ref())?;
-    assert_eq!(handshake.stream_id, resume.stream_id);
+    assert_eq!(handshake.validate()?, RelayFrameBodyKind::Handshake);
     let stream_id = handshake.stream_id.clone();
     let prologue =
         noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id.as_str());
@@ -251,12 +338,68 @@ async fn read_outbound_data(
     frame.into_data().map_err(anyhow::Error::from)
 }
 
+async fn read_outbound_data_with_pongs(
+    outbound_rx: &mut futures_mpsc::UnboundedReceiver<Message>,
+    control: &ControlledWebSocketHandle,
+) -> Result<RelayData> {
+    loop {
+        let message = timeout(Duration::from_secs(1), outbound_rx.next())
+            .await?
+            .context("harness closed before sending data")?;
+        match message {
+            Message::Binary(payload) => {
+                let frame = decode_relay_message_frame(payload.as_ref())?;
+                assert_eq!(frame.validate()?, RelayFrameBodyKind::Data);
+                return frame.into_data().map_err(anyhow::Error::from);
+            }
+            Message::Ping(payload) => control.send_inbound(Message::Pong(payload))?,
+            Message::Pong(_) | Message::Frame(_) => {}
+            message => anyhow::bail!("expected relay data frame, got {message:?}"),
+        }
+    }
+}
+
+async fn drain_outbound_control(
+    outbound_rx: &mut futures_mpsc::UnboundedReceiver<Message>,
+    control: &ControlledWebSocketHandle,
+) -> Result<()> {
+    for _ in 0..3 {
+        tokio::task::yield_now().await;
+        while let Some(message) = outbound_rx.next().now_or_never().flatten() {
+            match message {
+                Message::Ping(payload) => control.send_inbound(Message::Pong(payload))?,
+                Message::Binary(payload) => {
+                    let frame = decode_relay_message_frame(payload.as_ref())?;
+                    assert_ne!(frame.validate()?, RelayFrameBodyKind::Data);
+                }
+                Message::Pong(_) | Message::Frame(_) => {}
+                message => anyhow::bail!("unexpected outbound message after ack: {message:?}"),
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn connected_controlled_harness() -> Result<(
     JsonRpcConnection,
     ControlledWebSocketHandle,
     futures_mpsc::UnboundedReceiver<Message>,
+    String,
+    NoiseTransport,
 )> {
-    let (websocket, control, mut outbound_rx) = ControlledWebSocket::new(/*write_permits*/ 2);
+    connected_controlled_harness_with_write_permits(/*write_permits*/ 1).await
+}
+
+async fn connected_controlled_harness_with_write_permits(
+    write_permits: usize,
+) -> Result<(
+    JsonRpcConnection,
+    ControlledWebSocketHandle,
+    futures_mpsc::UnboundedReceiver<Message>,
+    String,
+    NoiseTransport,
+)> {
+    let (websocket, control, mut outbound_rx) = ControlledWebSocket::new(write_permits);
     let executor_identity = NoiseChannelIdentity::generate()?;
     let connection = noise_harness_connection_from_websocket(
         websocket,
@@ -270,13 +413,6 @@ async fn connected_controlled_harness() -> Result<(
         },
     );
 
-    let Message::Binary(resume_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
-        .await?
-        .context("harness closed before sending resume")?
-    else {
-        anyhow::bail!("expected resume frame");
-    };
-    let resume = decode_relay_message_frame(resume_payload.as_ref())?;
     let Message::Binary(handshake_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
         .await?
         .context("harness closed before sending handshake")?
@@ -284,8 +420,8 @@ async fn connected_controlled_harness() -> Result<(
         anyhow::bail!("expected handshake frame");
     };
     let handshake = decode_relay_message_frame(handshake_payload.as_ref())?;
+    assert_eq!(handshake.validate()?, RelayFrameBodyKind::Handshake);
     let stream_id = handshake.stream_id.clone();
-    assert_eq!(stream_id, resume.stream_id);
     let prologue =
         noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id.as_str());
     let pending = PendingResponderHandshake::read_request(
@@ -293,11 +429,12 @@ async fn connected_controlled_harness() -> Result<(
         &prologue,
         &handshake.into_handshake_payload()?,
     )?;
-    let (_transport, response) = pending.complete()?;
+    let (transport, response) = pending.complete()?;
     control.send_inbound(Message::Binary(
-        encode_relay_message_frame(&RelayMessageFrame::handshake(stream_id, response)).into(),
+        encode_relay_message_frame(&RelayMessageFrame::handshake(stream_id.clone(), response))
+            .into(),
     ))?;
-    Ok((connection, control, outbound_rx))
+    Ok((connection, control, outbound_rx, stream_id, transport))
 }
 
 struct ControlledWebSocket {

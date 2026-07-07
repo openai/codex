@@ -6,6 +6,8 @@
 //! normal `JsonRpcConnection`. Outbound JSON-RPC is framed and split into Noise
 //! records; inbound records are reordered before decryption and reassembly.
 
+use std::time::Duration;
+
 use futures::FutureExt;
 use futures::Sink;
 use futures::SinkExt;
@@ -35,7 +37,9 @@ use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
 use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
-use crate::noise_relay::take_next_sequence;
+use crate::noise_relay::reliable_stream::MAX_UNACKED_BYTES;
+use crate::noise_relay::reliable_stream::MAX_UNACKED_SEGMENTS;
+use crate::noise_relay::reliable_stream::ReliableSender;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
@@ -65,6 +69,12 @@ pub(crate) struct NoiseHarnessConnectionArgs {
 const NOISE_RELAY_RESET_DISCONNECT_REASON: &str = "Noise relay stream reset";
 // Give a Pong already queued behind data a bounded chance to reach the reader.
 const MAX_FRAMES_DRAINED_AFTER_PONG_DEADLINE: usize = 32;
+// Poll frequently enough that 500ms resend deadlines do not wait for another
+// application or websocket event, while still bounding retry wakeups.
+const RELIABLE_RETRY_SCAN_INTERVAL: Duration = Duration::from_millis(50);
+// The current Noise plaintext record cap plus transport overhead fits under one
+// 64KiB slot. Check this conservative slot before consuming another send nonce.
+const MAX_RELIABLE_CIPHERTEXT_BYTES: usize = MAX_UNACKED_BYTES / MAX_UNACKED_SEGMENTS;
 
 /// Adapt one harness rendezvous websocket into an authenticated JSON-RPC connection.
 ///
@@ -124,21 +134,16 @@ where
             }
         };
 
-        // Resume claims the stream ID at rendezvous; Handshake carries the
-        // opaque first IK message. No JSON-RPC data is sent before the
-        // responder proves possession of the pinned static key.
-        let resume = RelayMessageFrame::resume(stream_id.clone());
+        // Handshake carries the opaque first IK message. New logical streams do
+        // not claim resume state before the responder proves possession of the
+        // pinned static key.
         let handshake = RelayMessageFrame::handshake(stream_id.clone(), request);
         if websocket
-            .send(Message::Binary(encode_relay_message_frame(&resume).into()))
+            .send(Message::Binary(
+                encode_relay_message_frame(&handshake).into(),
+            ))
             .await
             .is_err()
-            || websocket
-                .send(Message::Binary(
-                    encode_relay_message_frame(&handshake).into(),
-                ))
-                .await
-                .is_err()
         {
             let _ = disconnected_tx.send(true);
             return;
@@ -261,7 +266,7 @@ where
         // transport record. Outbound records are encrypted once; inbound
         // records are reordered and deduplicated before decryption.
         let mut websocket = websocket.peekable();
-        let mut next_outbound_seq = 0u32;
+        let mut reliable_sender = ReliableSender::default();
         let mut inbound_ciphertexts = OrderedCiphertextFrames::default();
         let mut inbound_decoder = JsonRpcMessageDecoder::default();
         let mut keepalive = tokio::time::interval_at(
@@ -269,6 +274,11 @@ where
             WEBSOCKET_KEEPALIVE_INTERVAL,
         );
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut retry_tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + RELIABLE_RETRY_SCAN_INTERVAL,
+            RELIABLE_RETRY_SCAN_INTERVAL,
+        );
+        retry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut pong_watchdog = WebSocketPongWatchdog::new(WEBSOCKET_PONG_TIMEOUT);
         let pong_deadline = tokio::time::sleep(WEBSOCKET_PONG_TIMEOUT);
         tokio::pin!(pong_deadline);
@@ -276,9 +286,12 @@ where
         // creates a scheduling point for keepalive and inbound control frames
         // without splitting the WebSocket reader and writer.
         let mut pending_outbound: Option<(Vec<u8>, usize)> = None;
+        let mut pending_ack = None;
         let mut force_incoming = false;
         let mut frames_drained_after_pong_deadline = 0usize;
         'relay: loop {
+            let can_send_pending = pending_outbound.is_some()
+                && reliable_sender.can_admit_ciphertext(MAX_RELIABLE_CIPHERTEXT_BYTES);
             // Consume a due tick before the always-ready record arm below can win
             // another select iteration and postpone the keepalive.
             if pong_watchdog.deadline().is_none()
@@ -327,10 +340,10 @@ where
             }
 
             // While a Pong is outstanding, drain already-queued inbound traffic
-            // before the next fragment so a queued Pong cannot sit behind writes.
+            // before any write so a queued Pong cannot sit behind fragments,
+            // retries, or standalone acknowledgements.
             if !force_incoming
                 && pong_watchdog.deadline().is_some()
-                && pending_outbound.is_some()
                 && std::pin::Pin::new(&mut websocket)
                     .peek()
                     .now_or_never()
@@ -352,14 +365,7 @@ where
                         }
                     });
                 }
-                _ = std::future::ready(()), if pending_outbound.is_some() && !force_incoming && !pong_deadline_expired => {
-                    let seq = match take_next_sequence(&mut next_outbound_seq) {
-                        Ok(seq) => seq,
-                        Err(error) => {
-                            warn!("Noise relay sequence exhausted: {error}");
-                            break 'relay;
-                        }
-                    };
+                _ = std::future::ready(()), if can_send_pending && !force_incoming && !pong_deadline_expired => {
                     let (ciphertext, next_offset, message_complete) = {
                         let Some((framed, offset)) = pending_outbound.as_ref() else {
                             continue;
@@ -372,9 +378,27 @@ where
                                 break 'relay;
                             }
                         };
+                        if ciphertext.len() > MAX_RELIABLE_CIPHERTEXT_BYTES {
+                            warn!("Noise relay ciphertext exceeds reliable record budget");
+                            break 'relay;
+                        }
                         (ciphertext, next_offset, next_offset == framed.len())
                     };
-                    let frame = RelayMessageFrame::data(stream_id.clone(), seq, ciphertext);
+                    let outbound = match reliable_sender
+                        .admit_ciphertext(ciphertext, tokio::time::Instant::now())
+                    {
+                        Ok(outbound) => outbound,
+                        Err(error) => {
+                            warn!("failed to admit Noise reliable ciphertext: {error}");
+                            break 'relay;
+                        }
+                    };
+                    let frame = RelayMessageFrame::reliable_data(
+                        stream_id.clone(),
+                        inbound_ciphertexts.cumulative_ack(),
+                        outbound.seq,
+                        outbound.payload,
+                    );
                     // A Pong can arrive after the readiness check while this write owns the
                     // combined sink and stream. A single bounded record can therefore hit the
                     // deadline and disconnect with that Pong queued. Treat that as write
@@ -393,6 +417,42 @@ where
                         pending_outbound = None;
                     } else if let Some((_framed, offset)) = pending_outbound.as_mut() {
                         *offset = next_offset;
+                    }
+                }
+                _ = retry_tick.tick(), if !force_incoming && !pong_deadline_expired => {
+                    if let Some(outbound) = reliable_sender.next_retry_due(tokio::time::Instant::now()) {
+                        let frame = RelayMessageFrame::reliable_data(
+                            stream_id.clone(),
+                            inbound_ciphertexts.cumulative_ack(),
+                            outbound.seq,
+                            outbound.payload,
+                        );
+                        if let Err(error) = send_websocket_message(
+                            &mut websocket,
+                            Message::Binary(encode_relay_message_frame(&frame).into()),
+                            pong_watchdog.write_deadline(tokio::time::Instant::now()),
+                        )
+                        .await
+                        {
+                            warn!("failed to retry Noise relay websocket frame: {error}");
+                            break 'relay;
+                        }
+                    }
+                }
+                _ = std::future::ready(()), if pending_ack.is_some() && !force_incoming && !pong_deadline_expired => {
+                    let Some(ack) = pending_ack.take() else {
+                        continue;
+                    };
+                    let frame = RelayMessageFrame::ack(stream_id.clone(), ack);
+                    if let Err(error) = send_websocket_message(
+                        &mut websocket,
+                        Message::Binary(encode_relay_message_frame(&frame).into()),
+                        pong_watchdog.write_deadline(tokio::time::Instant::now()),
+                    )
+                    .await
+                    {
+                        warn!("failed to write Noise relay ack: {error}");
+                        break 'relay;
                     }
                 }
                 _ = &mut pong_deadline, if pong_watchdog.deadline().is_some() && !force_incoming => {
@@ -437,8 +497,22 @@ where
                             if frame.stream_id != stream_id {
                                 continue;
                             }
-                            match frame.validate() {
-                                Ok(RelayFrameBodyKind::Data) => {
+                            let kind = match frame.validate() {
+                                Ok(kind) => kind,
+                                Err(error) => {
+                                    send_malformed(&incoming_tx, error.to_string());
+                                    break;
+                                }
+                            };
+                            if !matches!(kind, RelayFrameBodyKind::Handshake)
+                                && let Err(error) =
+                                    reliable_sender.process_peer_ack(frame.ack, frame.ack_bits)
+                                {
+                                    send_malformed(&incoming_tx, error.to_string());
+                                    break;
+                                }
+                            match kind {
+                                RelayFrameBodyKind::Data => {
                                     let data = match frame.into_data() {
                                         Ok(data) => data,
                                         Err(error) => {
@@ -462,8 +536,9 @@ where
                                         send_malformed(&incoming_tx, error.to_string());
                                         break;
                                     }
+                                    pending_ack = Some(inbound_ciphertexts.cumulative_ack());
                                 }
-                                Ok(RelayFrameBodyKind::Reset) => {
+                                RelayFrameBodyKind::Reset => {
                                     let _ = incoming_tx.try_send(
                                         JsonRpcConnectionEvent::Disconnected {
                                             reason: Some(
@@ -473,12 +548,10 @@ where
                                     );
                                     break;
                                 }
-                                Ok(
-                                    RelayFrameBodyKind::Ack
-                                    | RelayFrameBodyKind::Resume
-                                    | RelayFrameBodyKind::Heartbeat,
-                                ) => {}
-                                Ok(RelayFrameBodyKind::Handshake) | Err(_) => {
+                                RelayFrameBodyKind::Ack
+                                | RelayFrameBodyKind::Resume
+                                | RelayFrameBodyKind::Heartbeat => {}
+                                RelayFrameBodyKind::Handshake => {
                                     send_malformed(
                                         &incoming_tx,
                                         "Noise relay received invalid post-handshake frame".to_string(),
