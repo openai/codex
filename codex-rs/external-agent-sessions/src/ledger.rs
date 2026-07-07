@@ -23,6 +23,8 @@ pub(super) struct ImportedExternalAgentSessionLedger {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ImportedExternalAgentSessionRecord {
     source_path: PathBuf,
+    #[serde(default)]
+    source_session_id: Option<String>,
     content_sha256: String,
     imported_thread_id: ThreadId,
     imported_at: i64,
@@ -33,6 +35,7 @@ struct ImportedExternalAgentSessionRecord {
 #[derive(Debug, PartialEq, Eq)]
 pub struct CompletedExternalAgentSessionImport {
     pub source_path: PathBuf,
+    pub source_session_id: Option<String>,
     pub source_content_sha256: String,
     pub imported_thread_id: ThreadId,
 }
@@ -46,8 +49,9 @@ pub(super) struct ImportedSourceState {
 pub fn has_current_session_been_imported(
     codex_home: &Path,
     source_path: &Path,
+    source_session_id: Option<&str>,
 ) -> io::Result<bool> {
-    load_import_ledger(codex_home)?.contains_current_source(source_path)
+    load_import_ledger(codex_home)?.contains_source_identity(source_path, source_session_id)
 }
 
 #[cfg(test)]
@@ -62,6 +66,7 @@ pub(crate) fn record_imported_session(
         vec![CompletedExternalAgentSessionImport {
             source_content_sha256: session_content_sha256(&source_path)?,
             source_path,
+            source_session_id: None,
             imported_thread_id,
         }],
     )
@@ -79,10 +84,18 @@ pub fn record_completed_session_imports(
     for import in imports {
         let source_modified_at = session_modified_at(&import.source_path).ok().flatten();
         if let Some(index) = ledger.records.iter().rposition(|record| {
-            record.source_path == import.source_path
-                && record.content_sha256 == import.source_content_sha256
+            record_matches_source_identity(
+                record,
+                &import.source_path,
+                import.source_session_id.as_deref(),
+            )
         }) {
             let mut record = ledger.records.remove(index);
+            record.source_path = import.source_path;
+            if import.source_session_id.is_some() {
+                record.source_session_id = import.source_session_id;
+            }
+            record.content_sha256 = import.source_content_sha256;
             record.imported_thread_id = import.imported_thread_id;
             record.imported_at = imported_at;
             record.source_modified_at = source_modified_at.or(record.source_modified_at);
@@ -91,6 +104,7 @@ pub fn record_completed_session_imports(
         }
         ledger.records.push(ImportedExternalAgentSessionRecord {
             source_path: import.source_path,
+            source_session_id: import.source_session_id,
             content_sha256: import.source_content_sha256,
             imported_thread_id: import.imported_thread_id,
             imported_at,
@@ -115,49 +129,62 @@ impl ImportedExternalAgentSessionLedger {
         states
     }
 
-    pub(super) fn contains_current_source(&self, source_path: &Path) -> io::Result<bool> {
+    pub(super) fn contains_source_identity(
+        &self,
+        source_path: &Path,
+        source_session_id: Option<&str>,
+    ) -> io::Result<bool> {
         if self.records.is_empty() {
             return Ok(false);
         }
         let source_path = canonical_source_path(source_path)?;
-        if !self
+        Ok(self
             .records
             .iter()
-            .any(|record| record.source_path == source_path)
-        {
-            return Ok(false);
-        }
-        let content_sha256 = session_content_sha256(&source_path)?;
-        Ok(self.records.iter().any(|record| {
-            record.source_path == source_path && record.content_sha256 == content_sha256
-        }))
+            .any(|record| record_matches_source_identity(record, &source_path, source_session_id)))
     }
 
     pub(super) fn refresh_current_source(
         &mut self,
         source_path: &Path,
+        source_session_id: Option<&str>,
         source_modified_at: i64,
     ) -> io::Result<bool> {
         let source_path = canonical_source_path(source_path)?;
-        if !self
-            .records
-            .iter()
-            .any(|record| record.source_path == source_path)
-        {
-            return Ok(false);
-        }
-        let content_sha256 = session_content_sha256(&source_path)?;
         let Some(index) = self.records.iter().rposition(|record| {
-            record.source_path == source_path && record.content_sha256 == content_sha256
+            record_matches_source_identity(record, &source_path, source_session_id)
         }) else {
             return Ok(false);
         };
+        let content_sha256 = session_content_sha256(&source_path)?;
         let mut record = self.records.remove(index);
+        record.source_path = source_path;
+        if let Some(source_session_id) = source_session_id {
+            record.source_session_id = Some(source_session_id.to_string());
+        }
+        record.content_sha256 = content_sha256;
         record.imported_at = now_unix_seconds();
         record.source_modified_at = Some(source_modified_at);
         self.records.push(record);
         Ok(true)
     }
+}
+
+fn record_matches_source_identity(
+    record: &ImportedExternalAgentSessionRecord,
+    source_path: &Path,
+    source_session_id: Option<&str>,
+) -> bool {
+    record.source_path == source_path
+        || source_session_id.is_some_and(|source_session_id| {
+            record.source_session_id.as_deref() == Some(source_session_id)
+                || record.source_session_id.is_none()
+                    && record
+                        .source_path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        == Some(source_session_id)
+        })
 }
 
 pub(super) fn load_import_ledger(

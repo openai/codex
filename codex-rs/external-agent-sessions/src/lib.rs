@@ -32,6 +32,9 @@ pub struct ImportedExternalAgentSession {
     pub cwd: PathBuf,
     pub title: Option<String>,
     pub first_user_message: Option<String>,
+    pub source_session_id: Option<String>,
+    pub created_at: Option<i64>,
+    pub updated_at: Option<i64>,
     pub rollout_items: Vec<RolloutItem>,
 }
 
@@ -46,15 +49,19 @@ pub fn prepare_validated_session_import(
     codex_home: &Path,
     session: ExternalAgentSessionMigration,
 ) -> io::Result<Option<PendingSessionImport>> {
-    let has_been_imported = has_current_session_been_imported(codex_home, &session.path)?;
-    if has_been_imported {
-        return Ok(None);
-    }
     let Some((source_path, imported_session, source_content_sha256)) =
         load_importable_session(&session.path)?
     else {
         return Ok(None);
     };
+    let has_been_imported = has_current_session_been_imported(
+        codex_home,
+        &source_path,
+        imported_session.source_session_id.as_deref(),
+    )?;
+    if has_been_imported {
+        return Ok(None);
+    }
     Ok(Some(PendingSessionImport {
         source_path,
         source_content_sha256,
@@ -127,9 +134,31 @@ mod tests {
         let root = TempDir::new().expect("tempdir");
         let codex_home = root.path().join("codex-home");
         let source_path = root.path().join("session.jsonl");
-        std::fs::write(&source_path, "{}\n").expect("session");
+        let source_record = serde_json::json!({
+            "type": "user",
+            "cwd": root.path(),
+            "sessionId": "source-session-id",
+            "timestamp": "2026-06-03T12:00:00Z",
+            "message": { "content": "first request" },
+        });
+        std::fs::write(&source_path, source_record.to_string()).expect("session");
         ledger::record_imported_session(&codex_home, &source_path, ThreadId::new())
             .expect("record import");
+        std::fs::write(
+            &source_path,
+            format!(
+                "{}\n{}",
+                source_record,
+                serde_json::json!({
+                    "type": "assistant",
+                    "cwd": root.path(),
+                    "sessionId": "source-session-id",
+                    "timestamp": "2026-06-03T12:00:05Z",
+                    "message": { "content": "first answer" },
+                })
+            ),
+        )
+        .expect("updated session");
 
         let pending =
             prepare_validated_session_import(&codex_home, session_migration(&source_path))
@@ -156,6 +185,7 @@ mod tests {
         let contents = serde_json::json!({
             "type": "user",
             "cwd": root.path(),
+            "sessionId": "source-session-id",
             "timestamp": "2026-06-03T12:00:00Z",
             "message": { "content": "first request" },
         })
@@ -170,6 +200,10 @@ mod tests {
         assert_eq!(
             pending.source_content_sha256,
             format!("{:x}", Sha256::digest(contents))
+        );
+        assert_eq!(
+            pending.session.source_session_id.as_deref(),
+            Some("source-session-id")
         );
     }
 

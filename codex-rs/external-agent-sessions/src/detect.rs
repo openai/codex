@@ -84,7 +84,14 @@ pub fn detect_recent_sessions(
     let mut migrations = Vec::new();
     let mut ledger_changed = false;
     for (modified_at, path) in file_candidates {
-        match ledger.refresh_current_source(&path, modified_at.0) {
+        let Ok(Some(summary)) = summarize_session(&path) else {
+            continue;
+        };
+        match ledger.refresh_current_source(
+            &path,
+            summary.source_session_id.as_deref(),
+            modified_at.0,
+        ) {
             Ok(false) => {}
             Ok(true) => {
                 ledger_changed = true;
@@ -92,9 +99,6 @@ pub fn detect_recent_sessions(
             }
             Err(_) => continue,
         }
-        let Ok(Some(summary)) = summarize_session(&path) else {
-            continue;
-        };
         let migration = summary.migration;
         if !migration.cwd.is_dir() {
             continue;
@@ -323,7 +327,7 @@ mod tests {
 
         let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
 
-        assert_eq!(sessions, vec![oldest_session.clone()]);
+        assert_eq!(sessions, vec![oldest_session]);
         for session in sessions {
             record_imported_session(root.path(), &session.path, ThreadId::new())
                 .expect("record import");
@@ -347,17 +351,11 @@ mod tests {
             );
         }
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
-
-        assert_eq!(sessions, expected);
-        for session in sessions {
-            record_imported_session(root.path(), &session.path, ThreadId::new())
-                .expect("record import");
-        }
-
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
-
-        assert_eq!(sessions, vec![oldest_session]);
+        assert!(
+            detect_recent_sessions(&external_agent_home, root.path())
+                .expect("detect")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -383,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn redetects_sessions_when_source_contents_change_after_import() {
+    fn skips_imported_sessions_when_source_contents_change() {
         let root = TempDir::new().expect("tempdir");
         let external_agent_home = root.path().join(".external");
         let project_root = root.path().join("repo");
@@ -405,14 +403,10 @@ mod tests {
         )
         .expect("update session");
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
-        assert_eq!(
-            sessions,
-            vec![ExternalAgentSessionMigration {
-                path: session_path,
-                cwd: project_root,
-                title: Some("hello there".to_string()),
-            }]
+        assert!(
+            detect_recent_sessions(&external_agent_home, root.path())
+                .expect("detect")
+                .is_empty()
         );
     }
 

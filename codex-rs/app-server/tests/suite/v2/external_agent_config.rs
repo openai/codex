@@ -612,7 +612,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
-    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let source_created_at = "2026-06-03T12:00:00Z";
+    let source_updated_at = "2026-06-03T12:00:05Z";
     let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
@@ -623,14 +624,14 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             serde_json::json!({
                 "type": "user",
                 "cwd": &project_root,
-                "timestamp": &recent_timestamp,
+                "timestamp": source_created_at,
                 "message": { "content": "first request" },
             })
             .to_string(),
             serde_json::json!({
                 "type": "assistant",
                 "cwd": &project_root,
-                "timestamp": &recent_timestamp,
+                "timestamp": source_updated_at,
                 "message": { "content": "first answer" },
             })
             .to_string(),
@@ -745,6 +746,40 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     assert_eq!(imported_thread_id, thread.id.to_string());
     assert_eq!(thread.preview, "first request");
     assert_eq!(thread.name.as_deref(), Some("source session title"));
+    let source_created_at = chrono::DateTime::parse_from_rfc3339(source_created_at)?.timestamp();
+    let source_updated_at = chrono::DateTime::parse_from_rfc3339(source_updated_at)?.timestamp();
+    let rollout_path = codex_rollout::find_thread_path_by_id_str(
+        codex_home.path(),
+        &imported_thread_id,
+        /*state_db_ctx*/ None,
+    )
+    .await?
+    .expect("imported rollout path");
+    assert_eq!(
+        rollout_path.strip_prefix(codex_home.path())?,
+        PathBuf::from(format!(
+            "sessions/2026/06/03/rollout-2026-06-03T12-00-00-{imported_thread_id}.jsonl"
+        ))
+    );
+    assert_eq!(
+        chrono::DateTime::<chrono::Utc>::from(std::fs::metadata(&rollout_path)?.modified()?)
+            .timestamp(),
+        source_updated_at
+    );
+    assert_eq!(
+        (
+            thread.created_at,
+            thread.updated_at,
+            thread.recency_at,
+            thread.cwd.as_path(),
+        ),
+        (
+            source_created_at,
+            source_updated_at,
+            Some(source_updated_at),
+            project_root.as_path(),
+        )
+    );
 
     let request_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -759,6 +794,18 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
     assert_eq!(response.thread.turns.len(), 1);
+    assert_eq!(
+        (
+            response.thread.turns[0].started_at,
+            response.thread.turns[0].completed_at,
+            response.thread.turns[0].duration_ms,
+        ),
+        (
+            Some(source_created_at),
+            Some(source_updated_at),
+            Some(5_000),
+        )
+    );
     let items = &response.thread.turns[0].items;
     assert_eq!(items.len(), 3);
     assert_eq!(

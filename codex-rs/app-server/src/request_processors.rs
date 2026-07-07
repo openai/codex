@@ -504,6 +504,7 @@ mod config_processor;
 mod environment_processor;
 mod external_agent_config_processor;
 mod external_agent_session_import;
+mod external_agent_session_rollout;
 mod feedback_doctor_report;
 mod feedback_processor;
 mod fs_processor;
