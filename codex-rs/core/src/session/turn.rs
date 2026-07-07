@@ -261,6 +261,10 @@ pub(crate) async fn run_turn(
                 .config
                 .features
                 .enabled(Feature::DeferredExecutor)
+                || turn_context
+                    .config
+                    .features
+                    .enabled(Feature::AppsRuntimeStateRefactor)
             {
                 world_state = sess
                     .record_step_world_state_if_changed(&world_state, step_context.as_ref())
@@ -549,13 +553,7 @@ async fn build_skills_and_plugins(
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match step_context
-            .mcp
-            .manager_arc()
-            .list_all_tools()
-            .or_cancel(cancellation_token)
-            .await
-        {
+        match step_context.mcp_tools().or_cancel(cancellation_token).await {
             Ok(mcp_tools) => mcp_tools,
             Err(_) if turn_context.apps_enabled() => return None,
             Err(_) => Vec::new(),
@@ -1182,8 +1180,8 @@ pub(crate) async fn built_tools(
     let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
+    let all_mcp_tools = step_context
+        .mcp_tools()
         .or_cancel(cancellation_token)
         .await?;
     let loaded_plugins = sess

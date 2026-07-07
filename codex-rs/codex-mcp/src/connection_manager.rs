@@ -122,6 +122,12 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
+#[derive(Clone, Copy)]
+enum CodexAppsToolSource<'a> {
+    Live,
+    Captured(Option<&'a ConnectorRuntimeSnapshot>),
+}
+
 impl McpConnectionManager {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
@@ -493,8 +499,49 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        self.list_all_tools_from_source(CodexAppsToolSource::Live)
+            .await
+    }
+
+    /// Returns model-visible tools using a request-captured connector runtime.
+    ///
+    /// The captured snapshot replaces only the host-owned `codex_apps` tool
+    /// source. `None` represents a captured empty connector runtime, while all
+    /// other MCP servers continue to read their live clients.
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
+    pub async fn list_all_tools_with_connector_runtime_snapshot(
+        &self,
+        snapshot: Option<&ConnectorRuntimeSnapshot>,
+    ) -> Vec<ToolInfo> {
+        self.list_all_tools_from_source(CodexAppsToolSource::Captured(snapshot))
+            .await
+    }
+
+    /// Returns the snapshot owned by this connection manager's `codex_apps`
+    /// client context.
+    pub fn connector_runtime_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+        self.clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .and_then(AsyncManagedClient::connector_runtime_snapshot)
+    }
+
+    async fn list_all_tools_from_source(
+        &self,
+        codex_apps_source: CodexAppsToolSource<'_>,
+    ) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
+            if managed_client.is_codex_apps_mcp_server
+                && let CodexAppsToolSource::Captured(snapshot) = codex_apps_source
+            {
+                tools.extend(
+                    managed_client
+                        .listed_tools_from_connector_runtime_snapshot(snapshot)
+                        .into_iter()
+                        .map(|tool| self.with_server_metadata(tool)),
+                );
+                continue;
+            }
             managed_client.reconnect_failed_startup().await;
             let has_cached_tools = managed_client.has_cached_tools();
             let startup_complete = managed_client

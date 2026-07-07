@@ -32,6 +32,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::config::CurrentTimeReminderConfig;
+use crate::session::step_context::ConnectorRuntimeCapture;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -689,6 +690,7 @@ async fn environment_tools_follow_the_step_context() {
         environments,
         Vec::new(),
         crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+        ConnectorRuntimeCapture::LegacyLive,
         /*loaded_agents_md*/ None,
     ));
 

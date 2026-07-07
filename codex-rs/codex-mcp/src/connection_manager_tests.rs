@@ -28,6 +28,8 @@ use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::EnvironmentManager;
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
@@ -48,6 +50,7 @@ use std::collections::HashSet;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::time::SystemTime;
 use tempfile::tempdir;
 use tokio::io::DuplexStream;
 
@@ -93,6 +96,13 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
         description: None,
         icons: None,
         website_url: None,
+    }
+}
+
+fn create_test_connector_runtime_snapshot(tools: Vec<ToolInfo>) -> ConnectorRuntimeSnapshot {
+    ConnectorRuntimeSnapshot {
+        tools,
+        refreshed_at: SystemTime::now(),
     }
 }
 
@@ -848,6 +858,235 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
         .expect("tool from shared cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn captured_connector_runtime_substitutes_apps_and_keeps_custom_mcp_live() {
+    let mut apps_client = create_ready_async_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "live_app_tool",
+    )])
+    .await;
+    apps_client.is_codex_apps_mcp_server = true;
+    let custom_client =
+        create_ready_async_managed_client(vec![create_test_tool("custom", "live_custom_tool")])
+            .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), apps_client);
+    manager.clients.insert("custom".to_string(), custom_client);
+
+    let snapshot = create_test_connector_runtime_snapshot(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "captured_app_tool",
+    )]);
+    let tools = manager
+        .list_all_tools_with_connector_runtime_snapshot(Some(&snapshot))
+        .await;
+
+    assert_eq!(
+        model_tool_names(&tools),
+        HashSet::from([
+            ToolName::namespaced("mcp__codex_apps", "captured_app_tool"),
+            ToolName::namespaced("mcp__custom", "live_custom_tool"),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn captured_empty_connector_runtime_skips_pending_apps_but_keeps_custom_mcp_live() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let apps_client = AsyncManagedClient {
+        client: pending_client,
+        is_codex_apps_mcp_server: true,
+        cached_server_info: None,
+        codex_apps_tools_cache_context: None,
+        tool_filter: ToolFilter::default(),
+        startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        startup_reconnect: None,
+        tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        cancel_token: CancellationToken::new(),
+    };
+    let custom_client =
+        create_ready_async_managed_client(vec![create_test_tool("custom", "live_custom_tool")])
+            .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), apps_client);
+    manager.clients.insert("custom".to_string(), custom_client);
+
+    let tools = tokio::time::timeout(
+        Duration::from_millis(10),
+        manager.list_all_tools_with_connector_runtime_snapshot(/*snapshot*/ None),
+    )
+    .await
+    .expect("captured empty connector runtime should not wait for apps startup");
+
+    assert_eq!(
+        model_tool_names(&tools),
+        HashSet::from([ToolName::namespaced("mcp__custom", "live_custom_tool")])
+    );
+}
+
+#[tokio::test]
+async fn captured_connector_runtime_applies_filter_provenance_and_name_normalization() {
+    let config = crate::mcp::McpConfig {
+        chatgpt_base_url: "https://chatgpt.com".to_string(),
+        apps_mcp_product_sku: None,
+        codex_home: PathBuf::new(),
+        mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
+        auth_keyring_backend_kind: AuthKeyringBackendKind::default(),
+        mcp_oauth_callback_port: None,
+        mcp_oauth_callback_url: None,
+        skill_mcp_dependency_install_enabled: true,
+        approval_policy: Constrained::allow_any(AskForApproval::OnRequest),
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+        apps_enabled: true,
+        prefix_mcp_tool_names: true,
+        client_elicitation_capability: ElicitationCapability::default(),
+        mcp_server_catalog: crate::ResolvedMcpCatalog::default(),
+        connector_snapshot: codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+            &[PluginCapabilitySummary {
+                config_name: "test-plugin-id".to_string(),
+                display_name: "test-plugin".to_string(),
+                app_connector_ids: vec![AppConnectorId("connector_test".to_string())],
+                ..PluginCapabilitySummary::default()
+            }],
+        ),
+    };
+    let provenance = Arc::new(crate::mcp::tool_plugin_provenance(&config));
+    let mut apps_client = create_ready_async_managed_client(Vec::new()).await;
+    apps_client.is_codex_apps_mcp_server = true;
+    apps_client.tool_filter = ToolFilter {
+        enabled: Some(HashSet::from(["allowed-tool".to_string()])),
+        disabled: HashSet::new(),
+    };
+    apps_client.tool_plugin_provenance = Arc::clone(&provenance);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.tool_plugin_provenance = provenance;
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), apps_client);
+    let mut allowed = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "allowed-tool");
+    allowed.connector_id = Some("connector_test".to_string());
+    let snapshot = create_test_connector_runtime_snapshot(vec![
+        allowed,
+        create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "filtered-tool"),
+    ]);
+
+    let tools = manager
+        .list_all_tools_with_connector_runtime_snapshot(Some(&snapshot))
+        .await;
+
+    assert_eq!(tools.len(), 1);
+    let tool = &tools[0];
+    assert_eq!(
+        tool.canonical_tool_name(),
+        ToolName::namespaced("mcp__codex_apps", "allowed_tool")
+    );
+    assert_eq!(tool.callable_name, "allowed_tool");
+    assert_eq!(tool.tool.name.as_ref(), "allowed-tool");
+    assert_eq!(tool.plugin_display_names, vec!["test-plugin"]);
+    assert_eq!(
+        tool.tool.description.as_deref(),
+        Some("Test tool: allowed-tool. This tool is part of plugin `test-plugin`.")
+    );
+}
+
+#[tokio::test]
+async fn captured_connector_runtime_is_stable_until_its_context_is_discarded() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    context.store_current_tools_for_test(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "captured_tool",
+    )]);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: futures::future::pending().boxed().shared(),
+            is_codex_apps_mcp_server: true,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: Some(context.clone()),
+            tool_filter: ToolFilter::default(),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_reconnect: None,
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let snapshot = manager
+        .connector_runtime_snapshot()
+        .expect("manager-owned snapshot");
+
+    context.store_current_tools_for_test(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "newer_tool",
+    )]);
+    let tools = manager
+        .list_all_tools_with_connector_runtime_snapshot(Some(&snapshot))
+        .await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["captured_tool"]
+    );
+
+    let _replacement_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    assert!(manager.connector_runtime_snapshot().is_none());
+    let tools = manager
+        .list_all_tools_with_connector_runtime_snapshot(Some(&snapshot))
+        .await;
+
+    assert!(tools.is_empty());
 }
 
 #[tokio::test]

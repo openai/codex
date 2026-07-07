@@ -431,6 +431,9 @@
                 }
               ]
             },
+            "apps_runtime_state_refactor": {
+              "type": "boolean"
+            },
             "auth_elicitation": {
               "type": "boolean"
             },
@@ -4802,6 +4805,9 @@
               "type": "object"
             }
           ]
+        },
+        "apps_runtime_state_refactor": {
+          "type": "boolean"
         },
         "auth_elicitation": {
           "type": "boolean"
