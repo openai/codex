@@ -41,11 +41,12 @@ impl RequestUserInputHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             call_id,
             payload,
             ..
         } = invocation;
+        let turn = std::sync::Arc::clone(&step_context.turn);
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -62,7 +63,7 @@ impl RequestUserInputHandler {
             ));
         }
 
-        let mode = session.collaboration_mode().await.mode;
+        let mode = step_context.model.collaboration_mode.mode;
         if let Some(message) = request_user_input_unavailable_message(mode, &self.available_modes) {
             return Err(FunctionCallError::RespondToModel(message));
         }

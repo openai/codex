@@ -22,8 +22,8 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn::built_tools;
-use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -76,16 +76,18 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context_seed: StepContextSeed,
 ) -> CodexResult<()> {
     // Standalone compaction is its own request boundary, so it captures a fresh step.
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    let step_context = sess.capture_step_context(&step_context_seed).await;
+    let turn_context = &step_context_seed.turn;
+    let model_context = &step_context_seed.model;
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-        model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+        model_context_window: model_context.model_context_window(),
+        collaboration_mode_kind: model_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
@@ -130,7 +132,7 @@ async fn run_remote_compact_task_inner(
         phase,
     )
     .await;
-    let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
+    let pre_compact_outcome = run_pre_compact_hooks(sess, step_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
         PreCompactHookOutcome::Stopped => {
@@ -158,7 +160,7 @@ async fn run_remote_compact_task_inner(
     let status = compaction_status_from_result(&result);
     let codex_error = result.as_ref().err();
     if result.is_ok() {
-        let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
+        let post_compact_outcome = run_post_compact_hooks(sess, step_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
             attempt
                 .track(sess.as_ref(), status, codex_error, analytics_details)
@@ -196,7 +198,7 @@ async fn run_remote_compact_task_inner_impl(
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
         turn_context.sub_id.as_str(),
         context_compaction_item.id.as_str(),
-        turn_context.model_info.slug.as_str(),
+        step_context.model.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
@@ -208,7 +210,7 @@ async fn run_remote_compact_task_inner_impl(
     let (rewritten_outputs, estimated_deleted_tokens) =
         trim_function_call_history_to_fit_context_window(
             &mut history,
-            turn_context.as_ref(),
+            step_context.as_ref(),
             &base_instructions,
         );
     if rewritten_outputs > 0 {
@@ -231,7 +233,7 @@ async fn run_remote_compact_task_inner_impl(
     }
 
     let trace_input_history = history.raw_items().to_vec();
-    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let prompt_input = history.for_prompt(&step_context.model.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
         step_context.as_ref(),
@@ -243,7 +245,7 @@ async fn run_remote_compact_task_inner_impl(
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        parallel_tool_calls: step_context.model.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: None,
         output_schema_strict: true,
@@ -256,7 +258,7 @@ async fn run_remote_compact_task_inner_impl(
         CodexResponsesRequestKind::Compaction(compaction_metadata),
     );
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": turn_context.model_info.slug.as_str(),
+        "model": step_context.model.model_info.slug.as_str(),
         "instructions": prompt.base_instructions.text.as_str(),
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
@@ -272,7 +274,7 @@ async fn run_remote_compact_task_inner_impl(
     };
     let compaction_output_result = run_remote_compaction_request_v2(
         sess,
-        turn_context,
+        step_context,
         client_session,
         &prompt,
         &responses_metadata,
@@ -300,7 +302,7 @@ async fn run_remote_compact_task_inner_impl(
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
-        turn_context.as_ref(),
+        step_context.as_ref(),
         compacted_history,
         &initial_context_injection,
     )
@@ -309,7 +311,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(turn_context.to_turn_context_item())
+            Some(step_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {
@@ -332,9 +334,10 @@ async fn run_remote_compact_task_inner_impl(
         compacted_item,
     )
     .await;
-    sess.recompute_token_usage(turn_context).await;
+    sess.recompute_token_usage(turn_context, step_context.model.as_ref())
+        .await;
 
-    sess.emit_turn_item_completed(turn_context, compaction_item)
+    sess.emit_turn_item_completed(turn_context, step_context.model.as_ref(), compaction_item)
         .await;
     Ok(())
 }
@@ -346,11 +349,13 @@ struct RemoteCompactionV2Output {
 
 async fn run_remote_compaction_request_v2(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
 ) -> CodexResult<RemoteCompactionV2Output> {
+    let turn_context = step_context.turn.as_ref();
+    let model_context = step_context.model.as_ref();
     let max_retries = turn_context
         .provider
         .info()
@@ -361,11 +366,11 @@ async fn run_remote_compaction_request_v2(
         let result = match client_session
             .stream(
                 prompt,
-                &turn_context.model_info,
-                &turn_context.session_telemetry,
-                turn_context.reasoning_effort.clone(),
-                turn_context.reasoning_summary,
-                turn_context.config.service_tier.clone(),
+                &model_context.model_info,
+                &model_context.session_telemetry,
+                model_context.reasoning_effort(),
+                model_context.reasoning_summary,
+                model_context.service_tier.clone(),
                 responses_metadata,
                 &InferenceTraceContext::disabled(),
             )
@@ -386,6 +391,7 @@ async fn run_remote_compaction_request_v2(
                     client_session,
                     sess,
                     turn_context,
+                    model_context,
                     ResponsesStreamRequest::RemoteCompactionV2,
                 )
                 .await?;

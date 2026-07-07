@@ -206,11 +206,12 @@ impl Session {
     )]
     pub async fn request_mcp_server_elicitation(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         server_name: String,
         request_id: RequestId,
         request: ElicitationRequest,
     ) -> McpServerElicitationOutcome {
+        let turn_context = step_context.turn.as_ref();
         if self
             .services
             .latest_mcp_runtime()
@@ -268,7 +269,8 @@ impl Session {
             .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         if let Some(plugin_install_telemetry) = plugin_install_telemetry {
-            turn_context
+            step_context
+                .model
                 .session_telemetry
                 .record_plugin_install_elicitation_sent(
                     plugin_install_telemetry.tool_type.as_str(),
@@ -588,19 +590,19 @@ async fn review_guardian_mcp_elicitation(
     session: Arc<Session>,
     request: ElicitationReviewRequest,
 ) -> anyhow::Result<Option<ElicitationResponse>> {
-    let Some((turn_context, _cancellation_token)) =
+    let Some((step_context_seed, _cancellation_token)) =
         session.active_turn_context_and_cancellation_token().await
     else {
         return Ok(None);
     };
 
     let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
-        turn_context.config.as_ref(),
+        step_context_seed.turn.config.as_ref(),
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );
     if !crate::guardian::routes_approval_to_guardian_with_reviewer(
-        turn_context.as_ref(),
+        step_context_seed.turn.as_ref(),
         approvals_reviewer,
     ) {
         return Ok(None);
@@ -623,7 +625,7 @@ async fn review_guardian_mcp_elicitation(
     let review_id = crate::guardian::new_guardian_review_id();
     let decision = crate::guardian::review_approval_request(
         &session,
-        &turn_context,
+        &step_context_seed,
         review_id.clone(),
         guardian_request,
         /*retry_reason*/ None,

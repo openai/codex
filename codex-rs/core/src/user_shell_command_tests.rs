@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::ContextualUserFragment;
 use crate::context::UserShellCommand;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::tests::make_session_and_context;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::ContentItem;
@@ -26,7 +27,8 @@ async fn formats_basic_record() {
         timed_out: false,
     };
     let (_, turn_context) = make_session_and_context().await;
-    let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
+    let model = StepModelContext::for_test(&turn_context);
+    let item = user_shell_command_record_item("echo hi", &exec_output, &model);
     let ResponseItem::Message { content, .. } = item else {
         panic!("expected message");
     };
@@ -50,7 +52,8 @@ async fn uses_aggregated_output_over_streams() {
         timed_out: false,
     };
     let (_, turn_context) = make_session_and_context().await;
-    let record = format_user_shell_command_record("false", &exec_output, &turn_context);
+    let model = StepModelContext::for_test(&turn_context);
+    let record = format_user_shell_command_record("false", &exec_output, &model);
     assert_eq!(
         record,
         "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"

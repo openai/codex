@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ModelInfo;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
@@ -181,7 +182,11 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     });
 
     let fragments = extension
-        .contribute_thread_context(&ExtensionData::new("session"), &thread_store)
+        .contribute_thread_context(
+            &ExtensionData::new("session"),
+            &thread_store,
+            &test_model_info(),
+        )
         .await;
 
     assert_eq!(fragments.len(), 1);
@@ -191,6 +196,26 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
             .text()
             .contains("Remember repository-specific implementation preferences.")
     );
+}
+
+fn test_model_info() -> ModelInfo {
+    serde_json::from_value(serde_json::json!({
+        "slug": "test-model",
+        "display_name": "Test Model",
+        "supported_reasoning_levels": [],
+        "shell_type": "default",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 0,
+        "service_tiers": [],
+        "base_instructions": "",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "truncation_policy": { "mode": "bytes", "limit": 10_000 },
+        "supports_parallel_tool_calls": false,
+        "experimental_supported_tools": []
+    }))
+    .expect("test model metadata should deserialize")
 }
 
 #[tokio::test]

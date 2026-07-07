@@ -65,7 +65,7 @@ impl CodeModeWaitHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             tool_name,
             payload,
             ..
@@ -76,7 +76,10 @@ impl CodeModeWaitHandler {
                 if tool_name.namespace.is_none() && tool_name.name.as_str() == WAIT_TOOL_NAME =>
             {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
-                let exec = ExecContext { session, turn };
+                let exec = ExecContext {
+                    session,
+                    step_context,
+                };
                 let started_at = std::time::Instant::now();
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
                 let wait_response = if args.terminate {
@@ -111,7 +114,7 @@ impl CodeModeWaitHandler {
                         .services
                         .rollout_thread_trace
                         .code_cell_trace_context(
-                            exec.turn.sub_id.as_str(),
+                            exec.step_context.turn.sub_id.as_str(),
                             runtime_cell_id.as_str(),
                         )
                         .record_ended(response);

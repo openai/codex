@@ -224,11 +224,8 @@ impl ToolRouter {
             payload,
         } = call;
 
-        // Keep the legacy ToolInvocation.turn field tied to the same request state until handlers migrate.
-        let turn = Arc::clone(&step_context.turn);
         let invocation = ToolInvocation {
             session,
-            turn,
             step_context,
             cancellation_token,
             tracker,

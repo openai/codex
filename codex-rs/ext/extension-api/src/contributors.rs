@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
@@ -78,11 +79,13 @@ pub trait ContextContributor: Send + Sync {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        model_info: &'a ModelInfo,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(async move {
             let _self = self;
             let _session_store = session_store;
             let _thread_store = thread_store;
+            let _model_info = model_info;
             Vec::new()
         })
     }
@@ -204,6 +207,7 @@ pub trait TurnInputContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
+        model_info: &'a ModelInfo,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,

@@ -1,5 +1,7 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
@@ -19,7 +21,6 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use tracing::instrument;
 
 #[derive(Clone, Debug)]
@@ -105,11 +106,7 @@ pub struct TurnContext {
     pub(crate) realtime_active: bool,
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
-    pub(crate) model_info: ModelInfo,
-    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
-    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
-    pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
@@ -123,7 +120,6 @@ pub struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
@@ -139,8 +135,6 @@ pub struct TurnContext {
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) terminal_error: Arc<Mutex<Option<String>>>,
-    pub(crate) server_model_warning_emitted: AtomicBool,
-    pub(crate) model_verification_emitted: AtomicBool,
 }
 
 enum TurnMultiAgentRuntime {
@@ -169,31 +163,6 @@ impl TurnContext {
         )
     }
 
-    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        if self.model_info.supports_reasoning_summaries {
-            self.reasoning_effort
-                .clone()
-                .or_else(|| self.model_info.default_reasoning_level.clone())
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
-        self.effective_reasoning_effort()
-            .map(|effort| effort.to_string())
-            .unwrap_or_else(|| "default".to_string())
-    }
-
-    pub(crate) fn model_context_window(&self) -> Option<i64> {
-        let effective_context_window_percent = self.model_info.effective_context_window_percent;
-        self.model_info
-            .resolved_context_window()
-            .map(|context_window| {
-                context_window.saturating_mul(effective_context_window_percent) / 100
-            })
-    }
-
     pub(crate) fn apps_enabled(&self) -> bool {
         let uses_codex_backend = self
             .auth_manager
@@ -203,97 +172,6 @@ impl TurnContext {
             .features
             .apps_enabled_for_auth(uses_codex_backend)
             && self.config.orchestrator_mcp_enabled
-    }
-
-    pub(crate) async fn with_model(
-        &self,
-        model: String,
-        models_manager: &SharedModelsManager,
-    ) -> Self {
-        let mut config = (*self.config).clone();
-        config.model = Some(model.clone());
-        let model_info = models_manager
-            .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
-        let supported_reasoning_levels = model_info
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort.clone())
-            .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort.clone()
-        {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
-            } else {
-                supported_reasoning_levels
-                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .cloned()
-                    .or_else(|| model_info.default_reasoning_level.clone())
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .cloned()
-                .or_else(|| model_info.default_reasoning_level.clone())
-        };
-        config.model_reasoning_effort = reasoning_effort.clone();
-
-        let collaboration_mode = self.collaboration_mode.with_updates(
-            Some(model.clone()),
-            Some(reasoning_effort.clone()),
-            /*developer_instructions*/ None,
-        );
-        let available_models = models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
-            .await;
-
-        Self {
-            sub_id: self.sub_id.clone(),
-            trace_id: self.trace_id.clone(),
-            realtime_active: self.realtime_active,
-            config: Arc::new(config),
-            auth_manager: self.auth_manager.clone(),
-            model_info: model_info.clone(),
-            session_telemetry: self
-                .session_telemetry
-                .clone()
-                .with_model(model.as_str(), model_info.slug.as_str()),
-            provider: self.provider.clone(),
-            reasoning_effort,
-            reasoning_summary: self.reasoning_summary,
-            session_source: self.session_source.clone(),
-            parent_thread_id: self.parent_thread_id,
-            originator: self.originator.clone(),
-            environments: self.environments.clone(),
-            #[allow(deprecated)]
-            cwd: self.cwd.clone(),
-            current_date: self.current_date.clone(),
-            timezone: self.timezone.clone(),
-            app_server_client_name: self.app_server_client_name.clone(),
-            developer_instructions: self.developer_instructions.clone(),
-            collaboration_mode,
-            multi_agent_version: self.multi_agent_version,
-            personality: self.personality,
-            approval_policy: self.approval_policy.clone(),
-            permission_profile: self.permission_profile.clone(),
-            network: self.network.clone(),
-            windows_sandbox_level: self.windows_sandbox_level,
-            available_models,
-            unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
-            final_output_json_schema: self.final_output_json_schema.clone(),
-            dynamic_tools: self.dynamic_tools.clone(),
-            turn_metadata_state: self.turn_metadata_state.clone(),
-            extension_data: Arc::clone(&self.extension_data),
-            turn_skills: self.turn_skills.clone(),
-            turn_timing_state: Arc::clone(&self.turn_timing_state),
-            terminal_error: Arc::clone(&self.terminal_error),
-            server_model_warning_emitted: AtomicBool::new(
-                self.server_model_warning_emitted.load(Ordering::Relaxed),
-            ),
-            model_verification_emitted: AtomicBool::new(
-                self.model_verification_emitted.load(Ordering::Relaxed),
-            ),
-        }
     }
 
     pub(crate) fn file_system_sandbox_context(
@@ -334,7 +212,7 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    pub(super) fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -350,34 +228,7 @@ impl TurnContext {
             .then_some(file_system_sandbox_policy)
     }
 
-    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let workspace_roots = self.config.effective_workspace_roots();
-        #[allow(deprecated)]
-        let cwd = self.cwd.clone();
-        TurnContextItem {
-            turn_id: Some(self.sub_id.clone()),
-            cwd,
-            workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
-            current_date: self.current_date.clone(),
-            timezone: self.timezone.clone(),
-            approval_policy: self.approval_policy.value(),
-            sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.permission_profile()),
-            network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
-            model: self.model_info.slug.clone(),
-            comp_hash: self.model_info.comp_hash.clone(),
-            personality: self.personality,
-            collaboration_mode: Some(self.collaboration_mode.clone()),
-            multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
-            realtime_active: Some(self.realtime_active),
-            effort: self.reasoning_effort.clone(),
-            summary: ReasoningSummaryConfig::Auto,
-        }
-    }
-
-    fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
+    pub(super) fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
         let network = self
             .config
             .config_layer_stack
@@ -484,8 +335,7 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
-    ) -> TurnContext {
-        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+    ) -> (TurnContext, StepModelContext) {
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
@@ -496,7 +346,6 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
-        let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
             codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
@@ -505,9 +354,8 @@ impl Session {
             main_execve_wrapper_exe,
         );
 
-        let mut per_turn_config = per_turn_config;
-        per_turn_config.service_tier = get_service_tier(
-            per_turn_config.service_tier,
+        let service_tier = get_service_tier(
+            per_turn_config.service_tier.clone(),
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
@@ -528,17 +376,13 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(skills_snapshot.clone());
-        TurnContext {
+        let turn_context = TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
             realtime_active: false,
             config: per_turn_config,
             auth_manager: auth_manager_for_context,
-            model_info,
-            session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
-            reasoning_effort,
-            reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
@@ -549,7 +393,6 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
@@ -565,16 +408,24 @@ impl Session {
             turn_skills: TurnSkillsContext::new(skills_snapshot),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             terminal_error: Arc::new(Mutex::new(None)),
+        };
+        let model_context = StepModelContext {
+            model_info,
+            collaboration_mode: session_configuration.collaboration_mode.clone(),
+            reasoning_summary,
+            service_tier,
+            session_telemetry,
             server_model_warning_emitted: AtomicBool::new(false),
             model_verification_emitted: AtomicBool::new(false),
-        }
+        };
+        (turn_context, model_context)
     }
 
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
-    ) -> CodexResult<Arc<TurnContext>> {
+    ) -> CodexResult<StepContextSeed> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -644,7 +495,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-    ) -> Arc<TurnContext> {
+    ) -> StepContextSeed {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
@@ -658,7 +509,7 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
-    ) -> Arc<TurnContext> {
+    ) -> StepContextSeed {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
@@ -675,7 +526,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
-    ) -> Arc<TurnContext> {
+    ) -> StepContextSeed {
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
@@ -701,10 +552,6 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        self.services
-            .thread_extension_data
-            .insert(model_info.clone());
-
         let multi_agent_version = match multi_agent_runtime {
             TurnMultiAgentRuntime::ResolveAndStore => {
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
@@ -734,7 +581,7 @@ impl Session {
             .skills_service
             .snapshot_for_config(&skills_input, fs)
             .await;
-        let mut turn_context: TurnContext = Self::make_turn_context(
+        let (mut turn_context, model_context) = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
@@ -776,17 +623,19 @@ impl Session {
         {
             turn_context.turn_metadata_state.spawn_git_enrichment_task();
         }
-        turn_context
+        StepContextSeed::new(turn_context, Arc::new(model_context))
     }
 
-    pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {
-        if tc.model_info.used_fallback_model_metadata {
+    pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, seed: &StepContextSeed) {
+        let turn = seed.turn.as_ref();
+        let model = seed.model.as_ref();
+        if model.model_info.used_fallback_model_metadata {
             self.send_event(
-                tc,
+                turn,
                 EventMsg::Warning(WarningEvent {
                     message: format!(
                         "Model metadata for `{}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
-                        tc.model_info.slug
+                        model.model_info.slug
                     ),
                 }),
             )
@@ -794,19 +643,19 @@ impl Session {
         }
 
         if let Some(message) =
-            unsupported_code_mode_warning(&tc.model_info, tc.config.features.get())
+            unsupported_code_mode_warning(&model.model_info, turn.config.features.get())
         {
-            self.send_event(tc, EventMsg::Warning(WarningEvent { message }))
+            self.send_event(turn, EventMsg::Warning(WarningEvent { message }))
                 .await;
         }
     }
 
-    pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
+    pub(crate) async fn new_default_turn(&self) -> StepContextSeed {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
     }
 
-    pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+    pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> StepContextSeed {
         let session_configuration = self.default_turn_configuration().await;
         self.new_turn_from_configuration(
             sub_id,
@@ -819,7 +668,7 @@ impl Session {
     pub(crate) async fn new_startup_prewarm_turn_with_sub_id(
         &self,
         sub_id: String,
-    ) -> Arc<TurnContext> {
+    ) -> StepContextSeed {
         let session_configuration = self.default_turn_configuration().await;
         self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
             .await

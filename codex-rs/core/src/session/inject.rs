@@ -1,6 +1,6 @@
 use super::input_queue::TurnInput;
 use super::session::Session;
-use super::turn_context::TurnContext;
+use super::step_context::StepContextSeed;
 use crate::codex_thread::TryStartTurnIfIdleError;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::state::ActiveTurn;
@@ -83,10 +83,10 @@ impl Session {
             ));
         }
 
-        let turn_context = self
+        let step_context_seed = self
             .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
-        if turn_context.collaboration_mode.mode == ModeKind::Plan {
+        if step_context_seed.model.collaboration_mode.mode == ModeKind::Plan {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
@@ -94,7 +94,7 @@ impl Session {
                 input,
             ));
         }
-        self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
+        self.maybe_emit_model_warnings_for_turn(&step_context_seed)
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
@@ -124,7 +124,7 @@ impl Session {
                 input.into_iter().map(TurnInput::ResponseItem).collect(),
             )
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        self.start_task(step_context_seed, Vec::new(), RegularTask::new())
             .await;
         Ok(())
     }
@@ -143,19 +143,20 @@ impl Session {
     pub(crate) async fn inject_no_new_turn(
         &self,
         items: Vec<ResponseItem>,
-        current_turn_context: Option<&TurnContext>,
+        current_step_context_seed: Option<&StepContextSeed>,
     ) {
         let Err(items) = self.inject_if_running(items).await else {
             return;
         };
-        let default_turn_context;
-        let turn_context = match current_turn_context {
-            Some(turn_context) => turn_context,
+        let default_step_context_seed;
+        let step_context_seed = match current_step_context_seed {
+            Some(step_context_seed) => step_context_seed,
             None => {
-                default_turn_context = self.new_default_turn().await;
-                default_turn_context.as_ref()
+                default_step_context_seed = self.new_default_turn().await;
+                &default_step_context_seed
             }
         };
-        self.record_conversation_items(turn_context, &items).await;
+        self.record_conversation_items_for_seed(step_context_seed, &items)
+            .await;
     }
 }

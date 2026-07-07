@@ -7,6 +7,9 @@ use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
@@ -111,6 +114,7 @@ impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
+        _model_info: &'a codex_protocol::openai_models::ModelInfo,
     ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::PromptFragment>> {
         Box::pin(async move {
             if thread_store
@@ -283,10 +287,15 @@ async fn guardian_test_session_and_turn_with_base_url(
     (Arc::new(session), Arc::new(turn))
 }
 
+fn guardian_step_context_seed(turn: &Arc<TurnContext>) -> StepContextSeed {
+    StepContextSeed::new(Arc::clone(turn), Arc::new(StepModelContext::for_test(turn)))
+}
+
 async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
+    let step_context = StepContext::for_test(Arc::clone(turn));
     session
         .record_conversation_items(
-            turn.as_ref(),
+            step_context.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -520,7 +529,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     seed_guardian_parent_history(&session, &turn).await;
     session
         .record_conversation_items(
-            turn.as_ref(),
+            StepContext::for_test(Arc::clone(&turn)).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -678,7 +687,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
         .await;
     session
         .record_conversation_items(
-            turn.as_ref(),
+            StepContext::for_test(Arc::clone(&turn)).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1150,7 +1159,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
 
     let decision = review_approval_request_with_cancel(
         &session,
-        &turn,
+        &guardian_step_context_seed(&turn),
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
@@ -1442,11 +1451,12 @@ async fn guardian_request_model_for_auto_review(
     )
     .await;
 
-    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, turn) = guardian_test_session_and_turn(&server).await;
+    let mut model_context = StepModelContext::for_test(&turn);
     match catalog {
         GuardianTestCatalog::Bundled => {}
         GuardianTestCatalog::ParentOnly => {
-            let parent_model = turn.model_info.clone();
+            let parent_model = model_context.model_info.clone();
             let auth_manager = Arc::clone(&session.services.auth_manager);
             let models_manager = StaticModelsManager::new(
                 Some(auth_manager),
@@ -1460,17 +1470,14 @@ async fn guardian_request_model_for_auto_review(
                 .models_manager = Arc::new(models_manager);
         }
     }
-    Arc::get_mut(&mut turn)
-        .expect("turn should be unique")
-        .model_info
-        .auto_review_model_override = auto_review_model_override;
-    let parent_model = turn.model_info.slug.clone();
+    model_context.model_info.auto_review_model_override = auto_review_model_override;
+    let parent_model = model_context.model_info.slug.clone();
     let preferred_model = turn.provider.approval_review_preferred_model().to_string();
     seed_guardian_parent_history(&session, &turn).await;
 
     let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        turn,
+        StepContextSeed::new(turn, Arc::new(model_context)),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -1688,7 +1695,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     seed_guardian_parent_history(&session, &turn).await;
     session
         .record_conversation_items(
-            turn.as_ref(),
+            StepContext::for_test(Arc::clone(&turn)).as_ref(),
             &[ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -1719,7 +1726,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 
     let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         request,
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
@@ -1911,7 +1918,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     };
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         first_request,
         Some("First retry reason".to_string()),
         guardian_output_schema(),
@@ -1921,7 +1928,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     .await;
     session
         .record_conversation_items(
-            turn.as_ref(),
+            StepContext::for_test(Arc::clone(&turn)).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1958,7 +1965,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     };
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         second_request,
         Some("Second retry reason".to_string()),
         guardian_output_schema(),
@@ -1968,7 +1975,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     .await;
     session
         .record_conversation_items(
-            turn.as_ref(),
+            StepContext::for_test(Arc::clone(&turn)).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -2001,7 +2008,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     };
     let third_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         third_request,
         Some("Third retry reason".to_string()),
         guardian_output_schema(),
@@ -2186,7 +2193,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -2229,7 +2236,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
 
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         GuardianApprovalRequest::Shell {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -2308,7 +2315,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &guardian_step_context_seed(&turn),
         "review-shell-guardian-error".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-error".to_string(),
@@ -2407,7 +2414,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
 
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         guardian_shell_request("shell-session-retry"),
         /*retry_reason*/ None,
         guardian_output_schema(),
@@ -2448,7 +2455,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &guardian_step_context_seed(&turn),
         "review-missing-assessment".to_string(),
         guardian_shell_request("shell-missing-assessment"),
         /*retry_reason*/ None,
@@ -2498,7 +2505,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
 
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        guardian_step_context_seed(&turn),
         guardian_shell_request("shell-parse-retry"),
         /*retry_reason*/ None,
         guardian_output_schema(),
@@ -2552,7 +2559,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &guardian_step_context_seed(&turn),
         "review-exhausted-retry".to_string(),
         guardian_shell_request("shell-exhausted-retry"),
         /*retry_reason*/ None,
@@ -2603,7 +2610,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &guardian_step_context_seed(&turn),
         "review-valid-denial".to_string(),
         guardian_shell_request("shell-valid-denial"),
         /*retry_reason*/ None,
@@ -2706,7 +2713,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         assert_eq!(
             review_approval_request(
                 &session,
-                &turn,
+                &guardian_step_context_seed(&turn),
                 "review-shell-guardian-1".to_string(),
                 initial_request,
                 /*retry_reason*/ None
@@ -2716,7 +2723,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         );
         session
             .record_conversation_items(
-                turn.as_ref(),
+                StepContext::for_test(Arc::clone(&turn)).as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2756,11 +2763,11 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         };
 
         let session_for_second = Arc::clone(&session);
-        let turn_for_second = Arc::clone(&turn);
+        let step_context_for_second = guardian_step_context_seed(&turn);
         let mut second_review = tokio::spawn(async move {
             review_approval_request(
                 &session_for_second,
-                &turn_for_second,
+                &step_context_for_second,
                 "review-shell-guardian-2".to_string(),
                 second_request,
                 Some("trunk follow-up".to_string()),
@@ -2783,7 +2790,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         );
         session
             .record_conversation_items(
-                turn.as_ref(),
+                StepContext::for_test(Arc::clone(&turn)).as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2807,7 +2814,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
 
         let third_decision = review_approval_request(
             &session,
-            &turn,
+            &guardian_step_context_seed(&turn),
             "review-shell-guardian-3".to_string(),
             third_request,
             Some("parallel follow-up".to_string()),

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::session::turn_context::TurnContext;
+use crate::session::step_model_context::StepModelContext;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -38,7 +38,7 @@ impl McpCallMetricOutcome {
 }
 
 pub(super) fn emit_mcp_call_metrics(
-    turn_context: &TurnContext,
+    model: &StepModelContext,
     outcome: &McpCallMetricOutcome,
     server_name: &str,
     tool_name: &str,
@@ -57,15 +57,13 @@ pub(super) fn emit_mcp_call_metrics(
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect();
-    turn_context
+    model
         .session_telemetry
         .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
     if let Some(duration) = duration {
-        turn_context.session_telemetry.record_duration(
-            MCP_CALL_DURATION_METRIC,
-            duration,
-            &tag_refs,
-        );
+        model
+            .session_telemetry
+            .record_duration(MCP_CALL_DURATION_METRIC, duration, &tag_refs);
     }
 
     let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code.as_deref())
@@ -79,11 +77,9 @@ pub(super) fn emit_mcp_call_metrics(
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect();
-    turn_context.session_telemetry.counter(
-        MCP_CALL_ERROR_COUNT_METRIC,
-        /*inc*/ 1,
-        &error_tag_refs,
-    );
+    model
+        .session_telemetry
+        .counter(MCP_CALL_ERROR_COUNT_METRIC, /*inc*/ 1, &error_tag_refs);
 }
 
 fn mcp_call_metric_tags(

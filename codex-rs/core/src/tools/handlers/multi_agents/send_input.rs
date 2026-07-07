@@ -34,11 +34,12 @@ impl Handler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             payload,
             call_id,
             ..
         } = invocation;
+        let turn = std::sync::Arc::clone(&step_context.turn);
         let arguments = function_arguments(payload)?;
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = parse_agent_id_target(&args.target)?;
@@ -49,7 +50,7 @@ impl Handler {
             .agent_control
             .get_agent_metadata(receiver_thread_id);
         if receiver_agent.is_some() {
-            let resume_config = build_agent_resume_config(turn.as_ref())?;
+            let resume_config = build_agent_resume_config(step_context.as_ref())?;
             session
                 .services
                 .agent_control

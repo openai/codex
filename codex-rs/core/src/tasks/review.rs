@@ -22,7 +22,7 @@ use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::session::TurnInput;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContextSeed;
 use crate::state::TaskKind;
 use codex_features::Feature;
 use codex_protocol::user_input::UserInput;
@@ -52,7 +52,7 @@ impl SessionTask for ReviewTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        ctx: Arc<TurnContext>,
+        ctx: StepContextSeed,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
@@ -88,18 +88,18 @@ impl SessionTask for ReviewTask {
         Ok(None)
     }
 
-    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: StepContextSeed) {
         exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
     }
 }
 
 async fn start_review_conversation(
     session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
+    ctx: StepContextSeed,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
-    let config = ctx.config.clone();
+    let config = ctx.turn.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, collab tools, view image).
@@ -120,7 +120,7 @@ async fn start_review_conversation(
     let model = config
         .review_model
         .clone()
-        .unwrap_or_else(|| ctx.model_info.slug.clone());
+        .unwrap_or_else(|| ctx.model.model_info.slug.clone());
     sub_agent_config.model = Some(model);
     (run_codex_thread_one_shot(
         sub_agent_config,
@@ -141,7 +141,7 @@ async fn start_review_conversation(
 
 async fn process_review_events(
     session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
+    ctx: StepContextSeed,
     receiver: async_channel::Receiver<Event>,
 ) -> Option<ReviewOutputEvent> {
     let mut prev_agent_message: Option<Event> = None;
@@ -151,7 +151,7 @@ async fn process_review_events(
                 if let Some(prev) = prev_agent_message.take() {
                     session
                         .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
+                        .send_event(ctx.turn.as_ref(), prev.msg)
                         .await;
                 }
                 prev_agent_message = Some(event);
@@ -179,7 +179,7 @@ async fn process_review_events(
             other => {
                 session
                     .clone_session()
-                    .send_event(ctx.as_ref(), other)
+                    .send_event(ctx.turn.as_ref(), other)
                     .await;
             }
         }
@@ -215,7 +215,7 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
 pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
-    ctx: Arc<TurnContext>,
+    ctx: StepContextSeed,
 ) {
     const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
     const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
@@ -241,7 +241,7 @@ pub(crate) async fn exit_review_mode(
     };
 
     session
-        .record_conversation_items(
+        .record_conversation_items_for_seed(
             &ctx,
             &[ResponseItem::Message {
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
@@ -255,13 +255,13 @@ pub(crate) async fn exit_review_mode(
 
     session
         .send_event(
-            ctx.as_ref(),
+            ctx.turn.as_ref(),
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
         )
         .await;
     session
         .record_response_item_and_emit_turn_item(
-            ctx.as_ref(),
+            &ctx,
             ResponseItem::Message {
                 id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
                 role: "assistant".to_string(),

@@ -34,7 +34,6 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
     ToolInvocation {
         session: session.into(),
         step_context: StepContext::for_test(Arc::clone(&turn)),
-        turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-apply-patch".to_string(),

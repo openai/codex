@@ -14,7 +14,7 @@ use codex_tools::TurnItemEmitter;
 
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::apply_turn_item_contributors;
 use crate::stream_events_utils::finalize_turn_item;
@@ -66,7 +66,7 @@ impl CoreToolRuntime for ExtensionToolAdapter {
 
 struct CoreTurnItemEmitter {
     session: Weak<Session>,
-    turn: Weak<TurnContext>,
+    step_context: Weak<StepContext>,
 }
 
 fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
@@ -79,9 +79,12 @@ fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
 impl TurnItemEmitter for CoreTurnItemEmitter {
     fn emit_started<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(async move {
-            let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
+            let (Some(session), Some(step_context)) =
+                (self.session.upgrade(), self.step_context.upgrade())
+            else {
                 return;
             };
+            let turn = &step_context.turn;
             session
                 .emit_turn_item_started(turn.as_ref(), &extension_turn_item(item))
                 .await;
@@ -90,9 +93,12 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(async move {
-            let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
+            let (Some(session), Some(step_context)) =
+                (self.session.upgrade(), self.step_context.upgrade())
+            else {
                 return;
             };
+            let turn = &step_context.turn;
             let item = match item {
                 ExtensionTurnItem::ImageGeneration(item) => {
                     let mut item = TurnItem::ImageGeneration(item);
@@ -108,17 +114,19 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
                     let mut item = TurnItem::WebSearch(item);
                     finalize_turn_item(
                         session.as_ref(),
-                        turn.as_ref(),
+                        step_context.as_ref(),
                         TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
                         &mut item,
-                        turn.collaboration_mode.mode
+                        step_context.model.collaboration_mode.mode
                             == codex_protocol::config_types::ModeKind::Plan,
                     )
                     .await;
                     item
                 }
             };
-            session.emit_turn_item_completed(turn.as_ref(), item).await;
+            session
+                .emit_turn_item_completed(turn.as_ref(), step_context.model.as_ref(), item)
+                .await;
         })
     }
 }
@@ -154,15 +162,20 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         });
     }
     ExtensionToolCall {
-        turn_id: invocation.turn.sub_id.clone(),
+        turn_id: invocation.step_context.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
-        model: invocation.turn.model_info.slug.clone(),
-        truncation_policy: invocation.turn.model_info.truncation_policy.into(),
+        model: invocation.step_context.model.model_info.slug.clone(),
+        truncation_policy: invocation
+            .step_context
+            .model
+            .model_info
+            .truncation_policy
+            .into(),
         conversation_history,
         turn_item_emitter: Arc::new(CoreTurnItemEmitter {
             session: Arc::downgrade(&invocation.session),
-            turn: Arc::downgrade(&invocation.turn),
+            step_context: Arc::downgrade(&invocation.step_context),
         }),
         environments,
         payload: invocation.payload.clone(),
@@ -292,7 +305,6 @@ mod tests {
         let invocation = ToolInvocation {
             session: session.into(),
             step_context: StepContext::for_test(Arc::clone(&turn)),
-            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-extension".to_string(),
@@ -329,11 +341,12 @@ mod tests {
             captured_call: Arc::clone(&captured_call),
         }));
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let weak_session = Arc::downgrade(&session);
         let weak_turn = Arc::downgrade(&turn);
         let turn_id = turn.sub_id.clone();
-        let model = turn.model_info.slug.clone();
-        let truncation_policy = turn.model_info.truncation_policy.into();
+        let model = step_context.model.model_info.slug.clone();
+        let truncation_policy = step_context.model.model_info.truncation_policy.into();
         let expected_sandbox_cwds = turn
             .environments
             .turn_environments
@@ -350,7 +363,7 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
         session
-            .record_conversation_items(&turn, std::slice::from_ref(&history_item))
+            .record_conversation_items(step_context.as_ref(), std::slice::from_ref(&history_item))
             .await;
         let mut expected_history_item = history_item.clone();
         expected_history_item.set_turn_id_if_missing(&turn_id);
@@ -359,11 +372,9 @@ mod tests {
             panic!("expected raw response item event");
         };
         assert_eq!(raw_history_item.item, expected_history_item);
-        let step_context = StepContext::for_test(Arc::clone(&turn));
         let invocation = ToolInvocation {
             session,
             step_context,
-            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-extension".to_string(),
@@ -373,6 +384,7 @@ mod tests {
                 arguments: json!({ "message": "hello" }).to_string(),
             },
         };
+        drop(turn);
 
         crate::tools::registry::ToolExecutor::handle(&handler, invocation)
             .await
@@ -476,9 +488,10 @@ mod tests {
         session.services.extensions = Arc::new(builder.build());
         let session = Arc::new(session);
         let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let emitter = CoreTurnItemEmitter {
             session: Arc::downgrade(&session),
-            turn: Arc::downgrade(&turn),
+            step_context: Arc::downgrade(&step_context),
         };
 
         codex_tools::TurnItemEmitter::emit_completed(
@@ -567,7 +580,6 @@ mod tests {
         let invocation = ToolInvocation {
             session,
             step_context,
-            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-image".to_string(),

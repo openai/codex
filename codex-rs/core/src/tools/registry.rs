@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::function_tool::FunctionCallError;
 use crate::hook_runtime::PreToolUseHookResult;
-use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_step_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
@@ -410,22 +410,22 @@ impl ToolRegistry {
         let tool_name = invocation.tool_name.clone();
         let tool_name_flat = flat_tool_name(&tool_name);
         let call_id_owned = invocation.call_id.clone();
-        let otel = invocation.turn.session_telemetry.clone();
+        let otel = invocation.step_context.model.session_telemetry.clone();
         let base_tool_result_tags = [
             (
                 "sandbox",
                 permission_profile_sandbox_tag(
-                    &invocation.turn.permission_profile,
-                    invocation.turn.windows_sandbox_level,
-                    invocation.turn.network.is_some(),
+                    &invocation.step_context.turn.permission_profile,
+                    invocation.step_context.turn.windows_sandbox_level,
+                    invocation.step_context.turn.network.is_some(),
                 ),
             ),
             (
                 "sandbox_policy",
                 permission_profile_policy_tag(
-                    &invocation.turn.permission_profile,
+                    &invocation.step_context.turn.permission_profile,
                     #[allow(deprecated)]
-                    invocation.turn.cwd.as_path(),
+                    invocation.step_context.turn.cwd.as_path(),
                 ),
             ),
         ];
@@ -495,7 +495,7 @@ impl ToolRegistry {
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             match run_pre_tool_use_hooks(
                 &invocation.session,
-                &invocation.turn,
+                invocation.step_context.as_ref(),
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
@@ -584,7 +584,7 @@ impl ToolRegistry {
             Some(
                 run_post_tool_use_hooks(
                     &invocation.session,
-                    &invocation.turn,
+                    invocation.step_context.as_ref(),
                     post_tool_use_payload.tool_use_id,
                     post_tool_use_payload.tool_name.name().to_string(),
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
@@ -597,9 +597,9 @@ impl ToolRegistry {
             None
         };
         if let Some(outcome) = &post_tool_use_outcome {
-            record_additional_contexts(
+            record_step_additional_contexts(
                 &invocation.session,
-                &invocation.turn,
+                invocation.step_context.as_ref(),
                 outcome.additional_contexts.clone(),
             )
             .await;
@@ -691,7 +691,12 @@ async fn handle_any_tool(
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
     if output.contains_external_context()
-        && invocation.turn.config.memories.disable_on_external_context
+        && invocation
+            .step_context
+            .turn
+            .config
+            .memories
+            .disable_on_external_context
     {
         state_db::mark_thread_memory_mode_polluted(
             invocation.session.services.state_db.as_deref(),

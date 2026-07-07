@@ -41,6 +41,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) struct ToolOrchestrator {
@@ -71,7 +72,7 @@ impl ToolOrchestrator {
     {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
-            &tool_ctx.turn.sub_id,
+            Arc::clone(&tool_ctx.step_context),
             managed_network_active,
             attempt.sandbox,
             tool.network_approval_spec(req, tool_ctx),
@@ -84,7 +85,7 @@ impl ToolOrchestrator {
 
         let attempt_tool_ctx = ToolCtx {
             session: tool_ctx.session.clone(),
-            turn: tool_ctx.turn.clone(),
+            step_context: tool_ctx.step_context.clone(),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
@@ -145,13 +146,13 @@ impl ToolOrchestrator {
         tool: &mut T,
         req: &Rq,
         tool_ctx: &ToolCtx,
-        turn_ctx: &crate::session::turn_context::TurnContext,
-        approval_policy: AskForApproval,
     ) -> Result<OrchestratorRunResult<Out>, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
-        let otel = turn_ctx.session_telemetry.clone();
+        let turn_ctx = tool_ctx.step_context.turn.as_ref();
+        let approval_policy = turn_ctx.approval_policy.value();
+        let otel = tool_ctx.step_context.model.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
@@ -171,7 +172,7 @@ impl ToolOrchestrator {
                     let guardian_review_id = Some(new_guardian_review_id());
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
-                        turn: &tool_ctx.turn,
+                        step_context: &tool_ctx.step_context,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: None,
@@ -206,7 +207,7 @@ impl ToolOrchestrator {
                 let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
-                    turn: &tool_ctx.turn,
+                    step_context: &tool_ctx.step_context,
                     call_id: &tool_ctx.call_id,
                     guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason.clone(),
@@ -403,7 +404,7 @@ impl ToolOrchestrator {
                     let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
-                        turn: &tool_ctx.turn,
+                        step_context: &tool_ctx.step_context,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
@@ -539,7 +540,7 @@ impl ToolOrchestrator {
             let tool_name = flat_tool_name(&tool_ctx.tool_name);
             match run_permission_request_hooks(
                 approval_ctx.session,
-                approval_ctx.turn,
+                approval_ctx.step_context.as_ref(),
                 permission_request_run_id,
                 permission_request,
             )
@@ -579,7 +580,9 @@ impl ToolOrchestrator {
                 Ok(action) => {
                     review_approval_request(
                         approval_ctx.session,
-                        approval_ctx.turn,
+                        &crate::session::step_context::StepContextSeed::from(
+                            approval_ctx.step_context.as_ref(),
+                        ),
                         review_id,
                         action,
                         approval_ctx.retry_reason.clone(),

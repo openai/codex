@@ -29,13 +29,16 @@ impl CodeModeExecuteHandler {
     async fn execute(
         &self,
         session: std::sync::Arc<crate::session::session::Session>,
-        turn: std::sync::Arc<crate::session::turn_context::TurnContext>,
+        step_context: std::sync::Arc<crate::session::step_context::StepContext>,
         call_id: String,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args =
             codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
-        let exec = ExecContext { session, turn };
+        let exec = ExecContext {
+            session,
+            step_context,
+        };
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
         let started_at = std::time::Instant::now();
@@ -59,7 +62,7 @@ impl CodeModeExecuteHandler {
             .services
             .rollout_thread_trace
             .start_code_cell_trace(
-                exec.turn.sub_id.as_str(),
+                exec.step_context.turn.sub_id.as_str(),
                 runtime_cell_id.as_str(),
                 call_id.as_str(),
                 args.code.as_str(),
@@ -113,7 +116,7 @@ impl CodeModeExecuteHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             call_id,
             tool_name,
             payload,
@@ -122,7 +125,7 @@ impl CodeModeExecuteHandler {
 
         match payload {
             ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
-                .execute(session, turn, call_id, input)
+                .execute(session, step_context, call_id, input)
                 .await
                 .map(boxed_tool_output),
             _ => Err(FunctionCallError::RespondToModel(format!(

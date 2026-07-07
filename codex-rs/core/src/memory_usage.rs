@@ -14,7 +14,7 @@ pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bo
     let success = if success { "true" } else { "false" };
     let tool_name = flat_tool_name(&invocation.tool_name);
     for kind in memories_usage_kinds_from_command(&command) {
-        invocation.turn.session_telemetry.counter(
+        invocation.step_context.model.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
             /*inc*/ 1,
             &[

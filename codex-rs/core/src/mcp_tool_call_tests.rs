@@ -2,6 +2,7 @@ use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
 use crate::session::step_context::StepContext;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::turn_context::TurnEnvironment;
@@ -93,10 +94,10 @@ fn approval_metadata(
     }
 }
 
-fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {
+fn mcp_turn_metadata_context(model: &StepModelContext) -> McpTurnMetadataContext<'_> {
     McpTurnMetadataContext {
-        model: turn_context.model_info.slug.as_str(),
-        reasoning_effort: turn_context.effective_reasoning_effort(),
+        model: model.model_info.slug.as_str(),
+        reasoning_effort: model.effective_reasoning_effort(),
     }
 }
 
@@ -1068,13 +1069,15 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
+    let model = StepModelContext::for_test(&turn_context);
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&model))
         .expect("turn metadata");
 
     let meta = build_mcp_tool_call_request_meta(
         &turn_context,
+        &model,
         "custom_server",
         "call-custom",
         /*metadata*/ None,
@@ -1088,13 +1091,13 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         turn_metadata
             .get("model")
             .and_then(serde_json::Value::as_str),
-        Some(turn_context.model_info.slug.as_str())
+        Some(model.model_info.slug.as_str())
     );
     assert_eq!(
         turn_metadata
             .get("reasoning_effort")
             .and_then(serde_json::Value::as_str),
-        turn_context
+        model
             .effective_reasoning_effort()
             .map(|effort| effort.to_string())
             .as_deref()
@@ -1111,12 +1114,14 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
     let (_, turn_context) = make_session_and_context().await;
+    let model = StepModelContext::for_test(&turn_context);
     turn_context
         .turn_metadata_state
         .set_turn_started_at_unix_ms(/*turn_started_at_unix_ms*/ 1_700_000_000_123);
 
     let meta = build_mcp_tool_call_request_meta(
         &turn_context,
+        &model,
         "custom_server",
         "call-custom",
         /*metadata*/ None,
@@ -1172,9 +1177,10 @@ async fn mcp_sandbox_cwd_is_none_for_unselected_server_environment() -> anyhow::
 #[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
+    let model = StepModelContext::for_test(&turn_context);
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&model))
         .expect("turn metadata");
     let mut metadata = approval_metadata(
         /*connector_id*/ None, /*connector_name*/ None,
@@ -1184,7 +1190,13 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     metadata.plugin_id = Some("sample@test".to_string());
 
     assert_eq!(
-        build_mcp_tool_call_request_meta(&turn_context, "sample", "call-plugin", Some(&metadata),),
+        build_mcp_tool_call_request_meta(
+            &turn_context,
+            &model,
+            "sample",
+            "call-plugin",
+            Some(&metadata),
+        ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_PLUGIN_ID_META_KEY: "sample@test",
@@ -1291,9 +1303,10 @@ async fn mcp_tool_call_item_includes_app_identity() {
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
+    let model = StepModelContext::for_test(&turn_context);
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&model))
         .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
@@ -1323,6 +1336,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
     assert_eq!(
         build_mcp_tool_call_request_meta(
             &turn_context,
+            &model,
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             Some(&metadata),
@@ -1342,14 +1356,16 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
+    let model = StepModelContext::for_test(&turn_context);
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&model))
         .expect("turn metadata");
 
     assert_eq!(
         build_mcp_tool_call_request_meta(
             &turn_context,
+            &model,
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             /*metadata*/ None,
@@ -2610,6 +2626,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let invocation = McpInvocation {
         server: "memory".to_string(),
         tool: "create_entities".to_string(),
@@ -2642,7 +2659,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
 
     let decision = maybe_request_mcp_tool_approval(
         &session,
-        &StepContext::for_test(Arc::clone(&turn_context)),
+        &step_context,
         "call-mcp-hook",
         &invocation,
         &HookToolName::new("mcp__memory__create_entities"),
@@ -2666,7 +2683,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
             "turn_id": "turn_id",
             "cwd": turn_cwd,
             "transcript_path": null,
-            "model": turn_context.model_info.slug,
+            "model": step_context.model.model_info.slug.as_str(),
             "permission_mode": "default",
             "tool_name": "mcp__memory__create_entities",
             "hook_event_name": "PermissionRequest",
@@ -2696,6 +2713,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let invocation = McpInvocation {
         server: "memory".to_string(),
         tool: "create_entities".to_string(),
@@ -2704,7 +2722,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
 
     let decision = maybe_request_mcp_tool_approval(
         &session,
-        &StepContext::for_test(Arc::clone(&turn_context)),
+        &step_context,
         "call-mcp-hook-no-metadata",
         &invocation,
         &HookToolName::new("mcp__memory__create_entities"),
@@ -2728,7 +2746,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
             "turn_id": "turn_id",
             "cwd": turn_cwd,
             "transcript_path": null,
-            "model": turn_context.model_info.slug,
+            "model": step_context.model.model_info.slug.as_str(),
             "permission_mode": "default",
             "tool_name": "mcp__memory__create_entities",
             "hook_event_name": "PermissionRequest",

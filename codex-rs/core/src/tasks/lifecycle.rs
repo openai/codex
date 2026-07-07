@@ -4,19 +4,21 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 
 use crate::session::session::Session;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 
 impl Session {
     pub(super) async fn emit_turn_start_lifecycle(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         token_usage_at_turn_start: &TokenUsage,
     ) {
+        let turn_context = step_context_seed.turn.as_ref();
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
                 .on_turn_start(codex_extension_api::TurnStartInput {
                     turn_id: turn_context.sub_id.as_str(),
-                    collaboration_mode: &turn_context.collaboration_mode,
+                    collaboration_mode: &step_context_seed.model.collaboration_mode,
                     token_usage_at_turn_start,
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,

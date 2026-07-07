@@ -4,7 +4,7 @@ use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
-use crate::session::tests::build_world_state_from_turn_context;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -319,9 +319,10 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
-    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let world_state = session.build_world_state_for_step(&step_context).await;
     let mut items = session
-        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .build_initial_context_with_world_state(&step_context, &world_state)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
@@ -860,13 +861,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(resumed_turn.turn.environments.turn_environments.len(), 1);
     assert_eq!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_turn.turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_turn.turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
 
@@ -887,13 +888,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(forked_turn.turn.environments.turn_environments.len(), 1);
     assert_eq!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_turn.turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_turn.turn.environments.turn_environments[0].cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
 }

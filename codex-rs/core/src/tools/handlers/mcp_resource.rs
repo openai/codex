@@ -239,6 +239,7 @@ async fn emit_tool_call_begin(
 async fn emit_tool_call_end(
     session: &Arc<Session>,
     turn: &TurnContext,
+    model: &crate::session::step_model_context::StepModelContext,
     call_id: &str,
     invocation: McpInvocation,
     duration: Duration,
@@ -277,7 +278,7 @@ async fn emit_tool_call_end(
         error,
         duration: Some(duration),
     });
-    session.emit_turn_item_completed(turn, item).await;
+    session.emit_turn_item_completed(turn, model, item).await;
 }
 
 fn normalize_optional_string(input: Option<String>) -> Option<String> {

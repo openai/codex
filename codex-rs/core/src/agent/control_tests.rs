@@ -11,6 +11,8 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
@@ -84,6 +86,10 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
         phase,
         internal_chat_message_metadata_passthrough: None,
     }
+}
+
+fn step_context_for_seed(seed: &StepContextSeed) -> Arc<StepContext> {
+    StepContext::for_test_with_model(Arc::clone(&seed.turn), Arc::clone(&seed.model))
 }
 
 #[test]
@@ -948,7 +954,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .codex
         .session
         .record_conversation_items(
-            turn_context.as_ref(),
+            step_context_for_seed(&turn_context).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -983,7 +989,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             ],
         )
         .await;
-    let parent_reference_context_item = turn_context.to_turn_context_item();
+    let parent_reference_context_item = step_context_for_seed(&turn_context).to_turn_context_item();
     parent_thread
         .codex
         .session
@@ -1033,7 +1039,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let history = child_thread.codex.session.clone_history().await;
     let mut expected_final_answer =
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
-    expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
+    expected_final_answer.set_turn_id_if_missing(&turn_context.turn.sub_id);
     let expected_history = [
         expected_parent_seed,
         expected_final_answer,
@@ -1187,7 +1193,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 previous_window_id: None,
                 window_id: None,
             }),
-            RolloutItem::TurnContext(turn_context.to_turn_context_item()),
+            RolloutItem::TurnContext(step_context_for_seed(&turn_context).to_turn_context_item()),
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
@@ -1265,7 +1271,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .codex
         .session
         .record_conversation_items(
-            turn_context.as_ref(),
+            step_context_for_seed(&turn_context).as_ref(),
             &[
                 assistant_message("unflushed final answer", Some(MessagePhase::FinalAnswer)),
                 spawn_agent_call(&parent_spawn_call_id),
@@ -1337,7 +1343,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .codex
         .session
         .record_conversation_items(
-            queued_turn_context.as_ref(),
+            step_context_for_seed(&queued_turn_context).as_ref(),
             &[queued_communication.to_response_input_item().into()],
         )
         .await;
@@ -1354,7 +1360,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .codex
         .session
         .record_conversation_items(
-            triggered_turn_context.as_ref(),
+            step_context_for_seed(&triggered_turn_context).as_ref(),
             &[triggered_communication.to_response_input_item().into()],
         )
         .await;
@@ -1367,7 +1373,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .codex
         .session
         .record_conversation_items(
-            spawn_turn_context.as_ref(),
+            step_context_for_seed(&spawn_turn_context).as_ref(),
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
@@ -1375,7 +1381,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .codex
         .session
         .persist_rollout_items(&[RolloutItem::TurnContext(
-            spawn_turn_context.to_turn_context_item(),
+            step_context_for_seed(&spawn_turn_context).to_turn_context_item(),
         )])
         .await;
     parent_thread
@@ -1493,7 +1499,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .codex
         .session
         .record_conversation_items(
-            startup_turn_context.as_ref(),
+            step_context_for_seed(&startup_turn_context).as_ref(),
             &[ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
@@ -1514,7 +1520,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .codex
         .session
         .record_conversation_items(
-            spawn_turn_context.as_ref(),
+            step_context_for_seed(&spawn_turn_context).as_ref(),
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
@@ -1622,7 +1628,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
         .codex
         .session
         .record_conversation_items(
-            turn_context.as_ref(),
+            step_context_for_seed(&turn_context).as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -2018,9 +2024,9 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
         .codex
         .session
         .send_event(
-            tester_turn.as_ref(),
+            tester_turn.turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: tester_turn.sub_id.clone(),
+                turn_id: tester_turn.turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
@@ -2105,9 +2111,9 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         .codex
         .session
         .send_event(
-            tester_turn.as_ref(),
+            tester_turn.turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: tester_turn.sub_id.clone(),
+                turn_id: tester_turn.turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,

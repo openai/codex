@@ -274,7 +274,6 @@ fn test_invocation_with_payload(
     ToolInvocation {
         session,
         step_context,
-        turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
         call_id: call_id.to_string(),

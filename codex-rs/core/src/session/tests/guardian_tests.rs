@@ -117,6 +117,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let step_context_seed = step_context_seed_for_test(Arc::clone(&turn_context));
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(NetworkPermissions {
@@ -132,7 +133,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     let response = tokio::time::timeout(
         Duration::from_secs(45),
         session.request_permissions_for_environment(
-            &turn_context,
+            &step_context_seed,
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
                 environment_id: None,
@@ -213,10 +214,12 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         }),
         ..RequestPermissionProfile::default()
     };
+    let step_context_seed = step_context_seed_for_test(Arc::clone(&turn_context));
     let cancellation_token = CancellationToken::new();
     let request_handle = tokio::spawn({
         let session = Arc::clone(&session);
         let turn_context = Arc::clone(&turn_context);
+        let step_context_seed = step_context_seed.clone();
         let requested_permissions = requested_permissions.clone();
         let cancellation_token = cancellation_token.clone();
         async move {
@@ -227,7 +230,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    &step_context_seed,
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
                         environment_id: None,
@@ -334,7 +337,6 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
-            turn: Arc::clone(&turn_context),
             step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -440,7 +442,6 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
-            turn: Arc::clone(&turn_context),
             step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
@@ -489,7 +490,6 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
-            turn: Arc::clone(&turn_context),
             step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
@@ -531,12 +531,13 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
     let turn_context = Arc::new(turn_context);
-    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
     let initial_context_injection = InitialContextInjection::BeforeLastUserMessage(world_state);
 
     let (refreshed, _) = crate::compact_remote::process_compacted_history(
         &session,
-        &turn_context,
+        &step_context,
         vec![
             ResponseItem::Message {
                 id: None,
@@ -620,7 +621,6 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
-            turn: Arc::clone(&turn_context),
             step_context,
             cancellation_token: CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),

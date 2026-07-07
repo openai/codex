@@ -140,13 +140,14 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
 #[tokio::test]
 async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
     let (session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
     let item = assistant_output_text(
         "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
     );
 
     let turn_item = handle_non_tool_response_item(
         &session,
-        &turn_context,
+        step_context.as_ref(),
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
@@ -228,13 +229,14 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
     builder.turn_item_contributor(Arc::new(TestTurnItemContributor));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
+    let step_context = StepContext::for_test(Arc::new(turn_context));
     let item = assistant_output_text(
         "hello<oai-mem-citation>ignored by memory parser</oai-mem-citation> world",
     );
 
     let provisional_turn_item = handle_non_tool_response_item(
         &session,
-        &turn_context,
+        step_context.as_ref(),
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
@@ -250,7 +252,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
 
     let turn_item = handle_non_tool_response_item(
         &session,
-        &turn_context,
+        step_context.as_ref(),
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
@@ -294,11 +296,16 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         &Default::default(),
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(router, Arc::clone(&session), step_context, tracker);
+    let tool_runtime = ToolCallRuntime::new(
+        router,
+        Arc::clone(&session),
+        Arc::clone(&step_context),
+        tracker,
+    );
     let item = assistant_output_text("original assistant text");
     let mut ctx = HandleOutputCtx {
         sess: session,
-        turn_context: Arc::clone(&turn_context),
+        step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
@@ -321,11 +328,12 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
+    let step_context = StepContext::for_test(Arc::new(turn_context));
     let item = assistant_output_text("<oai-mem-citation>hidden only</oai-mem-citation>");
 
     let finalized = finalize_non_tool_response_item(
         &session,
-        &turn_context,
+        step_context.as_ref(),
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
@@ -347,11 +355,12 @@ async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
+    let step_context = StepContext::for_test(Arc::new(turn_context));
     let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
 
     let finalized = finalize_non_tool_response_item(
         &session,
-        &turn_context,
+        step_context.as_ref(),
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,

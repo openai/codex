@@ -20,8 +20,8 @@ pub(crate) async fn notify_tool_start(invocation: &ToolInvocation) {
             .on_tool_start(ToolStartInput {
                 session_store: &invocation.session.services.session_extension_data,
                 thread_store: &invocation.session.services.thread_extension_data,
-                turn_store: invocation.turn.extension_data.as_ref(),
-                turn_id: invocation.turn.sub_id.as_str(),
+                turn_store: invocation.step_context.turn.extension_data.as_ref(),
+                turn_id: invocation.step_context.turn.sub_id.as_str(),
                 call_id: invocation.call_id.as_str(),
                 tool_name: &invocation.tool_name,
                 source: extension_tool_call_source(invocation.source.clone()),
@@ -33,7 +33,7 @@ pub(crate) async fn notify_tool_start(invocation: &ToolInvocation) {
 pub(crate) async fn notify_tool_finish(invocation: &ToolInvocation, outcome: ToolCallOutcome) {
     notify_tool_finish_parts(
         invocation.session.as_ref(),
-        invocation.turn.as_ref(),
+        invocation.step_context.turn.as_ref(),
         invocation.call_id.as_str(),
         &invocation.tool_name,
         invocation.source.clone(),

@@ -3,9 +3,12 @@ use codex_config::types::Personality;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -20,8 +23,12 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
@@ -37,7 +44,10 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use wiremock::MockServer;
@@ -142,6 +152,156 @@ fn test_model_info(
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_settings_update_during_turn_applies_to_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "step-context-user-input";
+    let request_args = json!({
+        "questions": [{
+            "id": "confirm",
+            "header": "Confirm",
+            "question": "Continue?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the turn."
+            }, {
+                "label": "No",
+                "description": "Stop the turn."
+            }]
+        }]
+    })
+    .to_string();
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "request_user_input", &request_args),
+                ev_completed("resp-1"),
+            ]),
+            sse_completed("resp-2"),
+            sse_completed("resp-3"),
+        ],
+    )
+    .await;
+
+    let current_model = "gpt-5.3-codex";
+    let current_instructions = "CURRENT_STEP_SETTINGS";
+    let mut builder = test_codex().with_model(current_model);
+    let test = builder.build_with_auto_env(&server).await?;
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "pause this turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings: Settings {
+                        model: current_model.to_string(),
+                        reasoning_effort: Some(ReasoningEffort::Medium),
+                        developer_instructions: Some(current_instructions.to_string()),
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.call_id, call_id);
+
+    let next_model = "gpt-5.4";
+    let next_instructions = "NEXT_STEP_SETTINGS";
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: next_model.to_string(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    developer_instructions: Some(next_instructions.to_string()),
+                },
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let mut answers = HashMap::new();
+    answers.insert(
+        "confirm".to_string(),
+        RequestUserInputAnswer {
+            answers: vec!["yes".to_string()],
+        },
+    );
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse { answers },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let current_turn_requests = response_mock.requests();
+    assert_eq!(current_turn_requests.len(), 2);
+    for request in &current_turn_requests {
+        let body = request.body_json();
+        assert_eq!(body["model"].as_str(), Some(current_model));
+        assert_eq!(body["reasoning"]["effort"].as_str(), Some("medium"));
+        assert!(request.body_contains_text(current_instructions));
+        assert!(!request.body_contains_text(next_instructions));
+    }
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start the next turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let next_request = &requests[2];
+    let body = next_request.body_json();
+    assert_eq!(body["model"].as_str(), Some(next_model));
+    assert_eq!(body["reasoning"]["effort"].as_str(), Some("high"));
+    assert!(next_request.body_contains_text(next_instructions));
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

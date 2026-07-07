@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::next_thread_spawn_depth;
+use crate::session::step_context::StepContext;
 use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_tools::ToolSpec;
@@ -33,11 +34,12 @@ async fn handle_resume_agent(
 ) -> Result<ResumeAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
-        turn,
+        step_context,
         payload,
         call_id,
         ..
     } = invocation;
+    let turn = std::sync::Arc::clone(&step_context.turn);
     let arguments = function_arguments(payload)?;
     let args: ResumeAgentArgs = parse_arguments(&arguments)?;
     let receiver_thread_id = ThreadId::from_string(&args.id).map_err(|err| {
@@ -79,7 +81,7 @@ async fn handle_resume_agent(
     let (receiver_agent, error) = if matches!(status, AgentStatus::NotFound) {
         match Box::pin(try_resume_closed_agent(
             &session,
-            &turn,
+            step_context.as_ref(),
             receiver_thread_id,
             child_depth,
         ))
@@ -131,7 +133,9 @@ async fn handle_resume_agent(
     if let Some(err) = error {
         return Err(err);
     }
-    turn.session_telemetry
+    step_context
+        .model
+        .session_telemetry
         .counter("codex.multi_agent.resume", /*inc*/ 1, &[]);
 
     Ok(ResumeAgentResult { status })
@@ -173,11 +177,12 @@ impl ToolOutput for ResumeAgentResult {
 
 async fn try_resume_closed_agent(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
+    step_context: &StepContext,
     receiver_thread_id: ThreadId,
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref())?;
+    let turn = step_context.turn.as_ref();
+    let config = build_agent_resume_config(step_context)?;
     Box::pin(session.services.agent_control.resume_agent_from_rollout(
         config,
         receiver_thread_id,

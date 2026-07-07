@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::step_context::StepContext;
 use crate::unified_exec::clamp_yield_time;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use pretty_assertions::assert_eq;
@@ -259,9 +260,10 @@ async fn late_network_denial_grace_observes_cancellation_after_exit() {
 #[tokio::test]
 async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
-        Arc::clone(&turn),
+        step_context,
         "call-unified-denied".to_string(),
     );
     let request = ExecCommandRequest {

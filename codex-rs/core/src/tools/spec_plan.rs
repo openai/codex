@@ -1,6 +1,7 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::session::step_context::StepContext;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -199,7 +200,7 @@ fn build_tool_specs_and_registry(
     apply_direct_model_only_namespace_overrides(turn_context, &mut planned_tools);
     append_tool_search_executor(&context, &mut planned_tools);
     prepend_code_mode_executors(&context, &mut planned_tools);
-    build_model_visible_specs_and_registry(turn_context, planned_tools)
+    build_model_visible_specs_and_registry(step_context, planned_tools)
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -233,9 +234,10 @@ fn apply_direct_model_only_namespace_overrides(
 
 #[instrument(level = "trace", skip_all)]
 fn build_model_visible_specs_and_registry(
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     planned_tools: PlannedTools,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
+    let turn_context = step_context.turn.as_ref();
     let PlannedTools {
         runtimes,
         hosted_specs,
@@ -248,11 +250,11 @@ fn build_model_visible_specs_and_registry(
             continue;
         }
         let exposure = runtime.exposure();
-        if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
+        if exposure.is_direct() && !is_hidden_by_code_mode_only(step_context, &tool_name, exposure)
         {
             let spec = runtime.spec();
             specs.push(spec_for_model_request(
-                turn_context,
+                step_context,
                 exposure,
                 &tool_name,
                 spec,
@@ -273,12 +275,13 @@ fn build_model_visible_specs_and_registry(
 }
 
 fn spec_for_model_request(
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     exposure: ToolExposure,
     tool_name: &ToolName,
     spec: ToolSpec,
 ) -> ToolSpec {
-    let tool_mode = effective_tool_mode(turn_context);
+    let turn_context = step_context.turn.as_ref();
+    let tool_mode = effective_tool_mode(step_context.model.as_ref(), &turn_context.config.features);
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
         && exposure != ToolExposure::DirectModelOnly
         && !is_excluded_from_code_mode(turn_context, tool_name)
@@ -293,13 +296,14 @@ fn spec_for_model_request(
 #[instrument(level = "trace", skip_all)]
 fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     let turn_context = context.step_context.turn.as_ref();
+    let model = context.step_context.model.as_ref();
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
-    if turn_context.model_info.use_responses_lite {
+    if model.model_info.use_responses_lite {
         return Vec::new();
     }
 
     let mut specs = Vec::new();
-    let standalone_web_search_available = standalone_web_search_enabled(turn_context)
+    let standalone_web_search_available = standalone_web_search_enabled(turn_context, model)
         && context
             .extension_tool_executors
             .iter()
@@ -315,21 +319,25 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     if let Some(hosted_web_search_tool) = create_web_search_tool(WebSearchToolOptions {
         web_search_mode,
         web_search_config,
-        web_search_tool_type: turn_context.model_info.web_search_tool_type,
+        web_search_tool_type: model.model_info.web_search_tool_type,
     }) {
         specs.push(hosted_web_search_tool);
     }
     // TODO: Remove hosted image generation once the standalone extension is ready.
-    if image_generation_tool_enabled(turn_context)
-        && !standalone_image_generation_available(turn_context, context.extension_tool_executors)
+    if image_generation_tool_enabled(turn_context, model)
+        && !standalone_image_generation_available(
+            turn_context,
+            model,
+            context.extension_tool_executors,
+        )
     {
         specs.push(create_image_generation_tool("png"));
     }
     specs
 }
 
-pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
+pub(crate) fn search_tool_enabled(turn_context: &TurnContext, model: &StepModelContext) -> bool {
+    model.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
@@ -376,8 +384,8 @@ fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
         )
 }
 
-fn image_generation_tool_enabled(turn_context: &TurnContext) -> bool {
-    image_generation_runtime_enabled(turn_context)
+fn image_generation_tool_enabled(turn_context: &TurnContext, model: &StepModelContext) -> bool {
+    image_generation_runtime_enabled(turn_context, model)
         && turn_context
             .config
             .features
@@ -385,7 +393,7 @@ fn image_generation_tool_enabled(turn_context: &TurnContext) -> bool {
             .enabled(Feature::ImageGeneration)
 }
 
-fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
+fn image_generation_runtime_enabled(turn_context: &TurnContext, model: &StepModelContext) -> bool {
     (turn_context
         .provider
         .info()
@@ -396,18 +404,23 @@ fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
                 .as_deref()
                 .is_some_and(AuthManager::current_auth_uses_codex_backend)))
         && turn_context.provider.capabilities().image_generation
-        && turn_context
+        && model
             .model_info
             .input_modalities
             .contains(&InputModality::Image)
 }
 
-fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
+fn standalone_image_generation_model_visible(
+    turn_context: &TurnContext,
+    model: &StepModelContext,
+) -> bool {
+    if !image_generation_runtime_enabled(turn_context, model)
+        || !namespace_tools_enabled(turn_context)
+    {
         return false;
     }
 
-    if turn_context.model_info.use_responses_lite {
+    if model.model_info.use_responses_lite {
         return true;
     }
 
@@ -420,9 +433,10 @@ fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool
 
 fn standalone_image_generation_available(
     turn_context: &TurnContext,
+    model: &StepModelContext,
     extension_tools: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
 ) -> bool {
-    standalone_image_generation_model_visible(turn_context)
+    standalone_image_generation_model_visible(turn_context, model)
         && extension_tools.iter().any(|executor| {
             executor.tool_name() == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
         })
@@ -458,11 +472,14 @@ fn agent_type_description(
 }
 
 fn is_hidden_by_code_mode_only(
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     tool_name: &ToolName,
     exposure: ToolExposure,
 ) -> bool {
-    let tool_mode = effective_tool_mode(turn_context);
+    let tool_mode = effective_tool_mode(
+        step_context.model.as_ref(),
+        &step_context.turn.config.features,
+    );
     tool_mode == ToolMode::CodeModeOnly
         && exposure != ToolExposure::DirectModelOnly
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
@@ -482,9 +499,10 @@ fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) 
 
 fn build_code_mode_executors(
     turn_context: &TurnContext,
+    model: &StepModelContext,
     executors: &[Arc<dyn CoreToolRuntime>],
 ) -> Vec<Arc<dyn CoreToolRuntime>> {
-    let tool_mode = effective_tool_mode(turn_context);
+    let tool_mode = effective_tool_mode(model, &turn_context.config.features);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
         return vec![];
     }
@@ -492,7 +510,7 @@ fn build_code_mode_executors(
     let mut code_mode_nested_tool_specs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_tools_available = false;
-    let deferred_tools_guidance_enabled = search_tool_enabled(turn_context);
+    let deferred_tools_guidance_enabled = search_tool_enabled(turn_context, model);
     for executor in executors {
         let exposure = executor.exposure();
         if exposure == ToolExposure::DirectModelOnly {
@@ -623,9 +641,9 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     }
 }
 
-fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
+fn standalone_web_search_enabled(turn_context: &TurnContext, model: &StepModelContext) -> bool {
     namespace_tools_enabled(turn_context)
-        && (turn_context.model_info.use_responses_lite
+        && (model.model_info.use_responses_lite
             || turn_context
                 .config
                 .features
@@ -640,6 +658,7 @@ fn tool_environment_mode(step_context: &StepContext) -> ToolEnvironmentMode {
 #[instrument(level = "trace", skip_all)]
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.step_context.turn.as_ref();
+    let model = context.step_context.model.as_ref();
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.step_context);
     if !environment_mode.has_environment() {
@@ -655,14 +674,13 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
         exec_permission_approvals_enabled,
     };
 
-    match shell_type_for_model_and_features(&turn_context.model_info, features) {
+    match shell_type_for_model_and_features(&model.model_info, features) {
         ConfigShellToolType::UnifiedExec => {
             planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
                 allow_login_shell,
                 exec_permission_approvals_enabled,
                 include_environment_id,
                 include_shell_parameter: unified_exec_should_include_shell_parameter(
-                    turn_context,
                     context.step_context,
                 ),
             }));
@@ -681,12 +699,9 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
     }
 }
 
-fn unified_exec_should_include_shell_parameter(
-    turn_context: &TurnContext,
-    step_context: &StepContext,
-) -> bool {
+fn unified_exec_should_include_shell_parameter(step_context: &StepContext) -> bool {
     !matches!(
-        &turn_context.unified_exec_shell_mode,
+        &step_context.turn.unified_exec_shell_mode,
         UnifiedExecShellMode::ZshFork(_)
     ) || step_context
         .environments
@@ -707,6 +722,7 @@ fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 #[instrument(level = "trace", skip_all)]
 fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.step_context.turn.as_ref();
+    let model = context.step_context.model.as_ref();
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.step_context);
 
@@ -762,13 +778,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         ));
     }
 
-    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
-    {
+    if environment_mode.has_environment() && model.model_info.apply_patch_tool_type.is_some() {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         planned_tools.add(ApplyPatchHandler::new(include_environment_id));
     }
 
-    if turn_context
+    if model
         .model_info
         .experimental_supported_tools
         .iter()
@@ -780,9 +795,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     if environment_mode.has_environment() {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         planned_tools.add(ViewImageHandler::new(ViewImageToolOptions {
-            can_request_original_image_detail: can_request_original_image_detail(
-                &turn_context.model_info,
-            ),
+            can_request_original_image_detail: can_request_original_image_detail(&model.model_info),
             include_environment_id,
         }));
     }
@@ -791,6 +804,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 #[instrument(level = "trace", skip_all)]
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.step_context.turn.as_ref();
+    let model = context.step_context.model.as_ref();
     if collab_tools_enabled(turn_context) {
         if multi_agent_v2_enabled(turn_context) {
             let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
@@ -844,7 +858,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure = if search_tool_enabled(turn_context) {
+            let exposure = if search_tool_enabled(turn_context, model) {
                 ToolExposure::Deferred
             } else {
                 ToolExposure::Direct
@@ -955,6 +969,7 @@ fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pl
     // before planning. Core only adapts those executors into its runtime set.
     append_extension_tool_executors(
         context.step_context.turn.as_ref(),
+        context.step_context.model.as_ref(),
         context.extension_tool_executors,
         planned_tools,
     );
@@ -966,7 +981,7 @@ fn append_tool_search_executor(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.step_context.turn.as_ref();
-    if !search_tool_enabled(turn_context) {
+    if !search_tool_enabled(turn_context, context.step_context.model.as_ref()) {
         return;
     }
 
@@ -989,12 +1004,17 @@ fn prepend_code_mode_executors(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.step_context.turn.as_ref();
-    let code_mode_executors = build_code_mode_executors(turn_context, planned_tools.runtimes());
+    let code_mode_executors = build_code_mode_executors(
+        turn_context,
+        context.step_context.model.as_ref(),
+        planned_tools.runtimes(),
+    );
     planned_tools.runtimes.splice(0..0, code_mode_executors);
 }
 
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
+    model: &StepModelContext,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
     planned_tools: &mut PlannedTools,
 ) {
@@ -1007,12 +1027,12 @@ fn append_extension_tool_executors(
         .iter()
         .map(|executor| executor.tool_name())
         .collect::<HashSet<_>>();
-    let tool_mode = effective_tool_mode(turn_context);
+    let tool_mode = effective_tool_mode(model, &turn_context.config.features);
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }
-    if search_tool_enabled(turn_context)
+    if search_tool_enabled(turn_context, model)
         && planned_tools
             .runtimes()
             .iter()
@@ -1021,7 +1041,7 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
     }
 
-    let standalone_web_search_enabled = standalone_web_search_enabled(turn_context);
+    let standalone_web_search_enabled = standalone_web_search_enabled(turn_context, model);
     let web_search_mode_on = turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
 
     for executor in executors.iter().cloned() {
@@ -1032,7 +1052,7 @@ fn append_extension_tool_executors(
             continue;
         }
         if tool_name == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
-            && !standalone_image_generation_model_visible(turn_context)
+            && !standalone_image_generation_model_visible(turn_context, model)
         {
             continue;
         }

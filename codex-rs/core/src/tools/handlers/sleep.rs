@@ -71,11 +71,12 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
         Box::pin(async move {
             let ToolInvocation {
                 session,
-                turn,
+                step_context,
                 call_id,
                 payload,
                 ..
             } = invocation;
+            let turn = std::sync::Arc::clone(&step_context.turn);
             let ToolPayload::Function { arguments } = payload else {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "{TOOL_NAME} handler received unsupported payload"
@@ -130,7 +131,9 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                     }
                 }
             };
-            session.emit_turn_item_completed(turn.as_ref(), item).await;
+            session
+                .emit_turn_item_completed(turn.as_ref(), step_context.model.as_ref(), item)
+                .await;
             let interrupted = sleep_result?;
 
             let message = if interrupted {

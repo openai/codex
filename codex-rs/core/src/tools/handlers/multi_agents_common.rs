@@ -4,6 +4,8 @@ use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
@@ -195,36 +197,41 @@ pub(crate) fn parse_collab_input(
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
-/// runtime-owned fields carried on `turn`, including model selection, reasoning settings,
-/// approval policy, sandbox, and cwd. Role-specific overrides are layered after this step;
+/// runtime-owned fields carried by the turn and step model contexts, including model selection,
+/// reasoning settings, approval policy, sandbox, and cwd. Role-specific overrides are layered
+/// after this step;
 /// skipping this helper and cloning stale config state directly can send the child agent out with
 /// the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
-    turn: &TurnContext,
+    step_context: &StepContext,
 ) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn)?;
+    let mut config = build_agent_shared_config(step_context)?;
     config.base_instructions = Some(base_instructions.text.clone());
     Ok(config)
 }
 
-pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn)?;
+pub(crate) fn build_agent_resume_config(
+    step_context: &StepContext,
+) -> Result<Config, FunctionCallError> {
+    let mut config = build_agent_shared_config(step_context)?;
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
 }
 
-fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
+fn build_agent_shared_config(step_context: &StepContext) -> Result<Config, FunctionCallError> {
+    let turn = step_context.turn.as_ref();
+    let model = step_context.model.as_ref();
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
-    config.model = Some(turn.model_info.slug.clone());
+    config.model = Some(model.model_info.slug.clone());
     config.model_provider = turn.provider.info().clone();
-    config.model_reasoning_effort = turn
-        .reasoning_effort
-        .clone()
-        .or_else(|| turn.model_info.default_reasoning_level.clone());
-    config.model_reasoning_summary = Some(turn.reasoning_summary);
+    config.model_reasoning_effort = model
+        .reasoning_effort()
+        .or_else(|| model.model_info.default_reasoning_level.clone());
+    config.model_reasoning_summary = Some(model.reasoning_summary);
+    config.service_tier = model.service_tier.clone();
     config.developer_instructions = turn.developer_instructions.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
@@ -274,7 +281,7 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     session: &Session,
-    turn: &TurnContext,
+    model: &StepModelContext,
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
@@ -313,8 +320,8 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
 
     if let Some(reasoning_effort) = requested_reasoning_effort {
         validate_spawn_agent_reasoning_effort(
-            &turn.model_info.slug,
-            &turn.model_info.supported_reasoning_levels,
+            &model.model_info.slug,
+            &model.model_info.supported_reasoning_levels,
             &reasoning_effort,
         )?;
         config.model_reasoning_effort = Some(reasoning_effort);

@@ -43,11 +43,12 @@ async fn handle_spawn_agent(
 ) -> Result<SpawnAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
-        turn,
+        step_context,
         payload,
         call_id,
         ..
     } = invocation;
+    let turn = std::sync::Arc::clone(&step_context.turn);
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
@@ -60,8 +61,10 @@ async fn handle_spawn_agent(
     let message = message_content(args.message)?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        step_context.as_ref(),
+    )?;
     if let Some(service_tier) = args.service_tier.as_ref() {
         config.service_tier = Some(service_tier.clone());
     }
@@ -74,7 +77,7 @@ async fn handle_spawn_agent(
     } else {
         apply_requested_spawn_agent_model_overrides(
             &session,
-            turn.as_ref(),
+            step_context.model.as_ref(),
             &mut config,
             args.model.as_deref(),
             args.reasoning_effort.clone(),
@@ -87,7 +90,7 @@ async fn handle_spawn_agent(
     apply_spawn_agent_service_tier(
         &session,
         &mut config,
-        turn.config.service_tier.as_deref(),
+        step_context.model.service_tier.as_deref(),
         args.service_tier.as_deref(),
     )
     .await?;
@@ -154,7 +157,7 @@ async fn handle_spawn_agent(
         )
         .await;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    turn.session_telemetry.counter(
+    step_context.model.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,
         &[("role", role_tag), ("version", "v2")],

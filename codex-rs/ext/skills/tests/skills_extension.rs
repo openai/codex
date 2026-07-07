@@ -22,6 +22,7 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::WorldStateContributionInput;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
@@ -70,6 +71,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
     )?;
     std::fs::write(&skill_path, DEMO_SKILL_CONTENTS)?;
     let config = default_config();
+    let model_info = test_model_info();
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder, skills_extension_config);
@@ -117,6 +119,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
                 }],
                 environments: Vec::new(),
             },
+            &model_info,
             &session_store,
             &thread_store,
             &turn_store,
@@ -179,6 +182,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     }];
     let session_source = SessionSource::Cli;
     let config = default_config();
+    let model_info = test_model_info();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -191,7 +195,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &model_info)
         .await;
     assert!(prompt_fragments.is_empty());
 
@@ -204,6 +208,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
+            model_info: &model_info,
             environments: std::slice::from_ref(&turn_environment),
             ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
@@ -233,6 +238,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
                 }],
                 environments: Vec::new(),
             },
+            &model_info,
             &session_store,
             &thread_store,
             &turn_store,
@@ -256,6 +262,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-2",
+            model_info: &model_info,
             environments: &[],
             ready_selected_capability_roots: &[],
             session_store: &session_store,
@@ -278,6 +285,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-3",
+            model_info: &model_info,
             environments: &[turn_environment],
             ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
@@ -305,6 +313,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-4",
+            model_info: &model_info,
             environments: &[],
             ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
@@ -362,6 +371,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
     let thread_store = ExtensionData::new("thread");
     let session_source = SessionSource::Cli;
     let config = default_config();
+    let model_info = test_model_info();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -374,7 +384,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
         .await;
 
     let fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &model_info)
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
@@ -484,6 +494,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
     let thread_store = ExtensionData::new("thread");
     let session_source = SessionSource::Cli;
     let config = default_config();
+    let model_info = test_model_info();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -496,7 +507,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &model_info)
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -518,6 +529,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
                     }],
                     environments: Vec::new(),
                 },
+                &model_info,
                 &session_store,
                 &thread_store,
                 &ExtensionData::new(turn_id),
@@ -574,6 +586,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         .collect::<Vec<_>>();
     let session_source = SessionSource::Cli;
     let config = default_config();
+    let model_info = test_model_info();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -590,6 +603,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
+            model_info: &model_info,
             environments: &[TurnEnvironmentSelection {
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
@@ -610,6 +624,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                 }],
                 environments: Vec::new(),
             },
+            &model_info,
             &session_store,
             &thread_store,
             &turn_store,
@@ -664,6 +679,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
     let thread_store = ExtensionData::new("thread");
     let session_source = SessionSource::Cli;
     let config = default_config();
+    let model_info = test_model_info();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -685,6 +701,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
                 }],
                 environments: Vec::new(),
             },
+            &model_info,
             &session_store,
             &thread_store,
             &ExtensionData::new("turn-1"),
@@ -797,6 +814,26 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
         bundled_skills_enabled: config.bundled_skills_enabled,
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
     }
+}
+
+fn test_model_info() -> ModelInfo {
+    serde_json::from_value(serde_json::json!({
+        "slug": "test-model",
+        "display_name": "Test Model",
+        "supported_reasoning_levels": [],
+        "shell_type": "default",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 0,
+        "service_tiers": [],
+        "base_instructions": "",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "truncation_policy": { "mode": "bytes", "limit": 10_000 },
+        "supports_parallel_tool_calls": false,
+        "experimental_supported_tools": []
+    }))
+    .expect("test model metadata should deserialize")
 }
 
 fn test_codex_home() -> PathBuf {

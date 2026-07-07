@@ -2,6 +2,7 @@ use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 
 use crate::function_tool::FunctionCallError;
+use crate::session::step_context::StepContextSeed;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -46,7 +47,6 @@ impl RequestPermissionsHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
             step_context,
             cancellation_token,
             call_id,
@@ -94,7 +94,7 @@ impl RequestPermissionsHandler {
 
         let response = session
             .request_permissions_for_environment(
-                &turn,
+                &StepContextSeed::from(step_context.as_ref()),
                 call_id,
                 args,
                 turn_environment.selection(),

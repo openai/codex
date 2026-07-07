@@ -129,7 +129,7 @@ impl McpHandler {
             payload,
             ..
         } = invocation;
-        let turn = Arc::clone(&step_context.turn);
+        let model = &step_context.model.model_info;
 
         let payload = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -157,8 +157,8 @@ impl McpHandler {
             result: result.result,
             tool_input: result.tool_input,
             wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.model_info.truncation_policy.into(),
+            original_image_detail_supported: can_request_original_image_detail(model),
+            truncation_policy: model.truncation_policy.into(),
         }))
     }
 }
@@ -350,7 +350,6 @@ mod tests {
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
                 step_context: StepContext::for_test(Arc::clone(&turn)),
-                turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-mcp-pre".to_string(),
@@ -384,7 +383,6 @@ mod tests {
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
                 step_context: StepContext::for_test(Arc::clone(&turn)),
-                turn,
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-mcp-pre-builtin-like".to_string(),
@@ -414,7 +412,6 @@ mod tests {
                 ToolInvocation {
                     session: session.into(),
                     step_context: StepContext::for_test(Arc::clone(&turn)),
-                    turn,
                     cancellation_token: tokio_util::sync::CancellationToken::new(),
                     tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                     call_id: "call-mcp-rewrite-builtin-like".to_string(),
@@ -463,7 +460,6 @@ mod tests {
         let invocation = ToolInvocation {
             session: session.into(),
             step_context: StepContext::for_test(Arc::clone(&turn)),
-            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-mcp-post".to_string(),

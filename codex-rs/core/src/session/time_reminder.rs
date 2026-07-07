@@ -6,7 +6,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 
 use super::session::Session;
-use super::turn_context::TurnContext;
+use super::step_context::StepContext;
 use crate::context::ContextualUserFragment;
 use crate::context_manager::is_user_turn_boundary;
 
@@ -70,9 +70,10 @@ impl CurrentTimeReminderState {
 
 pub(super) async fn maybe_record_current_time_reminder(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     window_id: &str,
 ) -> CodexResult<()> {
+    let turn_context = step_context.turn.as_ref();
     let Some(config) = turn_context.config.current_time_reminder else {
         return Ok(());
     };
@@ -99,7 +100,7 @@ pub(super) async fn maybe_record_current_time_reminder(
 
     let response_item =
         ContextualUserFragment::into(crate::context::CurrentTimeReminder::new(current_time));
-    sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+    sess.record_conversation_items(step_context, std::slice::from_ref(&response_item))
         .await;
 
     Ok(())

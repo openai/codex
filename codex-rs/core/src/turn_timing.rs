@@ -12,10 +12,15 @@ use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
 
 use crate::ResponseEvent;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
-pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
+pub(crate) async fn record_turn_ttft_metric(
+    turn_context: &TurnContext,
+    model: &StepModelContext,
+    event: &ResponseEvent,
+) {
     let Some(duration) = turn_context
         .turn_timing_state
         .record_ttft_for_response_event(event)
@@ -23,10 +28,14 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
     else {
         return;
     };
-    turn_context.session_telemetry.record_turn_ttft(duration);
+    model.session_telemetry.record_turn_ttft(duration);
 }
 
-pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &TurnItem) {
+pub(crate) async fn record_turn_ttfm_metric(
+    turn_context: &TurnContext,
+    model: &StepModelContext,
+    item: &TurnItem,
+) {
     let Some(duration) = turn_context
         .turn_timing_state
         .record_ttfm_for_turn_item(item)
@@ -34,7 +43,7 @@ pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &T
     else {
         return;
     };
-    turn_context
+    model
         .session_telemetry
         .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
 }

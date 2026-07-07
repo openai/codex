@@ -165,7 +165,6 @@ impl ShellCommandHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
             step_context,
             cancellation_token,
             tracker,
@@ -173,6 +172,7 @@ impl ShellCommandHandler {
             payload,
             ..
         } = invocation;
+        let turn = Arc::clone(&step_context.turn);
 
         let tool_name = self.tool_name();
         let ToolPayload::Function { arguments } = payload else {
@@ -197,7 +197,7 @@ impl ShellCommandHandler {
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
-            turn.as_ref(),
+            step_context.as_ref(),
             &params.command,
             &cwd,
         )
@@ -226,7 +226,7 @@ impl ShellCommandHandler {
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
-            turn,
+            step_context,
             turn_environment,
             tracker,
             call_id,

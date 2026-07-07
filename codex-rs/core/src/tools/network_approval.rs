@@ -8,6 +8,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -243,6 +245,7 @@ struct ActiveNetworkApprovalCall {
     command: String,
     environment_id: String,
     cancellation_token: CancellationToken,
+    step_context: Arc<StepContext>,
 }
 
 enum ActiveNetworkApprovalAttribution {
@@ -298,6 +301,7 @@ impl NetworkApprovalService {
         command: String,
         environment_id: String,
         cancellation_token: CancellationToken,
+        step_context: Arc<StepContext>,
     ) {
         let mut calls = self.calls.lock().await;
         let key = registration_id.clone();
@@ -310,6 +314,7 @@ impl NetworkApprovalService {
                 command,
                 environment_id,
                 cancellation_token,
+                step_context,
             }),
         );
     }
@@ -475,14 +480,12 @@ impl NetworkApprovalService {
         }
     }
 
-    async fn active_turn_context(
-        session: &Session,
-    ) -> Option<Arc<crate::session::turn_context::TurnContext>> {
+    async fn active_step_context_seed(session: &Session) -> Option<StepContextSeed> {
         let active_turn = session.active_turn.lock().await;
         active_turn
             .as_ref()
             .and_then(|turn| turn.task.as_ref())
-            .map(|task| Arc::clone(&task.turn_context))
+            .map(|task| task.step_context_seed.clone())
     }
 
     fn format_network_target(protocol: &str, host: &str, port: u16) -> String {
@@ -516,11 +519,20 @@ impl NetworkApprovalService {
         else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        let turn_context = Self::active_turn_context(session.as_ref()).await;
+        let step_context = match owner_call.as_ref() {
+            Some(owner_call) => Some(Arc::clone(&owner_call.step_context)),
+            None => {
+                let seed = Self::active_step_context_seed(session.as_ref()).await;
+                match seed {
+                    Some(seed) => Some(session.capture_step_context(&seed).await),
+                    None => None,
+                }
+            }
+        };
         let Some(environment_id) = active_environment_id.or_else(|| {
-            turn_context
+            step_context
                 .as_ref()
-                .and_then(|turn_context| turn_context.environments.primary())
+                .and_then(|step_context| step_context.environments.primary())
                 .map(|environment| environment.environment_id.clone())
         }) else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
@@ -551,7 +563,7 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some(turn_context) = turn_context else {
+        let Some(step_context) = step_context else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             if let Some(owner_call) = owner_call.as_ref() {
@@ -563,6 +575,7 @@ impl NetworkApprovalService {
             }
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
+        let turn_context = &step_context.turn;
         if !permission_profile_allows_network_approval_flow(&turn_context.permission_profile()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
@@ -599,7 +612,7 @@ impl NetworkApprovalService {
             .map_or_else(|| prompt_command.join(" "), |call| call.command.clone());
         if let Some(permission_request_decision) = run_permission_request_hooks(
             &session,
-            &turn_context,
+            step_context.as_ref(),
             &guardian_approval_id,
             PermissionRequestPayload::bash(command, Some(format!("network-access {target}"))),
         )
@@ -629,12 +642,12 @@ impl NetworkApprovalService {
                 }
             }
         }
-        let use_guardian = routes_approval_to_guardian(&turn_context);
+        let use_guardian = routes_approval_to_guardian(turn_context.as_ref());
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(
                 &session,
-                &turn_context,
+                &StepContextSeed::from(step_context.as_ref()),
                 review_id,
                 GuardianApprovalRequest::NetworkAccess {
                     id: guardian_approval_id.clone(),
@@ -655,7 +668,7 @@ impl NetworkApprovalService {
             let cwd = if let Some(owner_call) = owner_call.as_ref() {
                 owner_call.trigger.cwd.clone()
             } else {
-                turn_context
+                step_context
                     .environments
                     .turn_environments
                     .iter()
@@ -849,7 +862,7 @@ pub(crate) fn build_network_policy_decider(
 
 pub(crate) async fn begin_network_approval(
     session: &Session,
-    turn_id: &str,
+    step_context: Arc<StepContext>,
     managed_network_active: bool,
     selected_sandbox: SandboxType,
     spec: Option<NetworkApprovalSpec>,
@@ -890,11 +903,12 @@ pub(crate) async fn begin_network_approval(
         .network_approval
         .register_call(
             registration_id.clone(),
-            turn_id.to_string(),
+            step_context.turn.sub_id.clone(),
             trigger,
             command,
             environment_id,
             cancellation_token.clone(),
+            step_context,
         )
         .await;
 

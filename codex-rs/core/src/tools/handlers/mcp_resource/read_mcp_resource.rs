@@ -100,7 +100,7 @@ impl ReadMcpResourceHandler {
             })
         }
         .await;
-        let truncation_policy = turn.model_info.truncation_policy.into();
+        let truncation_policy = step_context.model.model_info.truncation_policy.into();
 
         match payload_result {
             Ok(payload) => match serialize_function_output(payload, truncation_policy) {
@@ -111,6 +111,7 @@ impl ReadMcpResourceHandler {
                     emit_tool_call_end(
                         &session,
                         turn.as_ref(),
+                        step_context.model.as_ref(),
                         &call_id,
                         invocation,
                         duration,
@@ -125,6 +126,7 @@ impl ReadMcpResourceHandler {
                     emit_tool_call_end(
                         &session,
                         turn.as_ref(),
+                        step_context.model.as_ref(),
                         &call_id,
                         invocation,
                         duration,
@@ -140,6 +142,7 @@ impl ReadMcpResourceHandler {
                 emit_tool_call_end(
                     &session,
                     turn.as_ref(),
+                    step_context.model.as_ref(),
                     &call_id,
                     invocation,
                     duration,

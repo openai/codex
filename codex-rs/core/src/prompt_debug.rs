@@ -76,28 +76,28 @@ pub(crate) async fn build_prompt_input_from_session(
     sess: &Arc<Session>,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
-    let turn_context = sess.new_default_turn().await;
+    let step_context_seed = sess.new_default_turn().await;
     // Prompt debugging builds a standalone request without entering run_turn.
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    let step_context = sess.capture_step_context(&step_context_seed).await;
     sess.record_context_updates_and_set_reference_context_item(step_context.as_ref())
         .await;
 
     if !input.is_empty() {
         let response_item = sess.response_item_from_user_input(input);
-        sess.record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&response_item))
+        sess.record_conversation_items(step_context.as_ref(), std::slice::from_ref(&response_item))
             .await;
     }
 
     let prompt_input = sess
         .clone_history()
         .await
-        .for_prompt(&turn_context.model_info.input_modalities);
+        .for_prompt(&step_context.model.model_info.input_modalities);
     let router = built_tools(sess, step_context.as_ref(), &CancellationToken::new()).await?;
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
         prompt_input,
         router.as_ref(),
-        turn_context.as_ref(),
+        step_context.as_ref(),
         base_instructions,
     );
 

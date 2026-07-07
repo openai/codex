@@ -9,6 +9,7 @@ use std::task::Waker;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_protocol::openai_models::ModelInfo;
 use shared_state_extension::recorded_style_contributions;
 use shared_state_extension::recorded_usage_contributions;
 
@@ -22,22 +23,26 @@ fn main() {
     let session_store = ExtensionData::new("session");
     let first_thread_store = ExtensionData::new("thread-1");
     let second_thread_store = ExtensionData::new("thread-2");
+    let model_info = example_model_info();
 
     // 3. Reusing the same session store shares session state across threads.
     let first_thread_fragments = block_on_ready(contribute_prompt(
         &registry,
         &session_store,
         &first_thread_store,
+        &model_info,
     ));
     block_on_ready(contribute_prompt(
         &registry,
         &session_store,
         &first_thread_store,
+        &model_info,
     ));
     block_on_ready(contribute_prompt(
         &registry,
         &session_store,
         &second_thread_store,
+        &model_info,
     ));
 
     println!("first prompt fragments: {}", first_thread_fragments.len());
@@ -71,16 +76,37 @@ async fn contribute_prompt(
     registry: &codex_extension_api::ExtensionRegistry<()>,
     session_store: &ExtensionData,
     thread_store: &ExtensionData,
+    model_info: &ModelInfo,
 ) -> Vec<codex_extension_api::PromptFragment> {
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
         fragments.extend(
             contributor
-                .contribute_thread_context(session_store, thread_store)
+                .contribute_thread_context(session_store, thread_store, model_info)
                 .await,
         );
     }
     fragments
+}
+
+fn example_model_info() -> ModelInfo {
+    serde_json::from_value(serde_json::json!({
+        "slug": "example-model",
+        "display_name": "Example Model",
+        "supported_reasoning_levels": [],
+        "shell_type": "default",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 0,
+        "service_tiers": [],
+        "base_instructions": "",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "truncation_policy": { "mode": "bytes", "limit": 10_000 },
+        "supports_parallel_tool_calls": false,
+        "experimental_supported_tools": []
+    }))
+    .expect("example model metadata should deserialize")
 }
 
 fn block_on_ready<F>(future: F) -> F::Output

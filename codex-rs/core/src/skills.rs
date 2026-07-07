@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
@@ -47,10 +47,11 @@ pub(crate) fn skills_load_input_from_config(
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     command: &str,
     workdir: &AbsolutePathBuf,
 ) {
+    let turn_context = step_context.turn.as_ref();
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
         turn_context.turn_skills.snapshot.outcome(),
         command,
@@ -86,7 +87,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         return;
     }
 
-    turn_context.session_telemetry.counter(
+    step_context.model.session_telemetry.counter(
         "codex.skill.injected",
         /*inc*/ 1,
         &[
@@ -99,7 +100,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         .analytics_events_client
         .track_skill_invocations(
             build_track_events_context(
-                turn_context.model_info.slug.clone(),
+                step_context.model.model_info.slug.clone(),
                 sess.thread_id.to_string(),
                 turn_context.sub_id.clone(),
                 turn_context.originator.clone(),

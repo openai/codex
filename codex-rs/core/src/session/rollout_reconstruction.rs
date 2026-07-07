@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
+use crate::session::step_context::StepContextSeed;
 use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
@@ -112,9 +113,10 @@ fn finalize_active_segment<'a>(
 impl Session {
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        let turn_context = step_context_seed.turn.as_ref();
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -327,14 +329,14 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
                         std::iter::once(response_item),
-                        turn_context.model_info.truncation_policy.into(),
+                        step_context_seed.model.model_info.truncation_policy.into(),
                     );
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
                     history.record_items(
                         std::iter::once(&response_item),
-                        turn_context.model_info.truncation_policy.into(),
+                        step_context_seed.model.model_info.truncation_policy.into(),
                     );
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}

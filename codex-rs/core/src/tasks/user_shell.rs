@@ -16,6 +16,7 @@ use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
 use crate::session::TurnInput;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use crate::state::TaskKind;
@@ -79,13 +80,13 @@ impl SessionTask for UserShellCommandTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        turn_context: Arc<TurnContext>,
+        step_context_seed: StepContextSeed,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         execute_user_shell_command(
             session.clone_session(),
-            turn_context,
+            step_context_seed,
             self.command.clone(),
             cancellation_token,
             UserShellCommandMode::StandaloneTurn,
@@ -97,11 +98,13 @@ impl SessionTask for UserShellCommandTask {
 
 pub(crate) async fn execute_user_shell_command(
     session: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context_seed: StepContextSeed,
     command: String,
     cancellation_token: CancellationToken,
     mode: UserShellCommandMode,
 ) {
+    let turn_context = &step_context_seed.turn;
+    let model_context = &step_context_seed.model;
     session
         .services
         .session_telemetry
@@ -119,8 +122,8 @@ pub(crate) async fn execute_user_shell_command(
             turn_id: turn_context.sub_id.clone(),
             trace_id: turn_context.trace_id.clone(),
             started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-            model_context_window: turn_context.model_context_window(),
-            collaboration_mode_kind: turn_context.collaboration_mode.mode,
+            model_context_window: model_context.model_context_window(),
+            collaboration_mode_kind: model_context.collaboration_mode.mode,
         });
         session.send_event(turn_context.as_ref(), event).await;
     }
@@ -256,7 +259,7 @@ pub(crate) async fn execute_user_shell_command(
             };
             persist_user_shell_output(
                 &session,
-                turn_context.as_ref(),
+                &step_context_seed,
                 &raw_command,
                 &exec_output,
                 mode,
@@ -265,6 +268,7 @@ pub(crate) async fn execute_user_shell_command(
             session
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
+                    model_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
                         id: call_id,
                         process_id: None,
@@ -288,6 +292,7 @@ pub(crate) async fn execute_user_shell_command(
             session
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
+                    model_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
                         id: call_id.clone(),
                         process_id: None,
@@ -308,13 +313,13 @@ pub(crate) async fn execute_user_shell_command(
                         duration: Some(output.duration),
                         formatted_output: Some(format_exec_output_str(
                             &output,
-                            turn_context.model_info.truncation_policy.into(),
+                            model_context.model_info.truncation_policy.into(),
                         )),
                     }),
                 )
                 .await;
 
-            persist_user_shell_output(&session, turn_context.as_ref(), &raw_command, &output, mode)
+            persist_user_shell_output(&session, &step_context_seed, &raw_command, &output, mode)
                 .await;
         }
         Ok(Err(err)) => {
@@ -331,6 +336,7 @@ pub(crate) async fn execute_user_shell_command(
             session
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
+                    model_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
                         id: call_id,
                         process_id: None,
@@ -347,14 +353,14 @@ pub(crate) async fn execute_user_shell_command(
                         duration: Some(exec_output.duration),
                         formatted_output: Some(format_exec_output_str(
                             &exec_output,
-                            turn_context.model_info.truncation_policy.into(),
+                            model_context.model_info.truncation_policy.into(),
                         )),
                     }),
                 )
                 .await;
             persist_user_shell_output(
                 &session,
-                turn_context.as_ref(),
+                &step_context_seed,
                 &raw_command,
                 &exec_output,
                 mode,
@@ -440,16 +446,21 @@ fn prepare_user_shell_exec_command_with_path_prepend(
 
 async fn persist_user_shell_output(
     session: &Session,
-    turn_context: &TurnContext,
+    step_context_seed: &StepContextSeed,
     raw_command: &str,
     exec_output: &ExecToolCallOutput,
     mode: UserShellCommandMode,
 ) {
-    let output_item = user_shell_command_record_item(raw_command, exec_output, turn_context);
+    let turn_context = step_context_seed.turn.as_ref();
+    let output_item =
+        user_shell_command_record_item(raw_command, exec_output, step_context_seed.model.as_ref());
 
     if mode == UserShellCommandMode::StandaloneTurn {
         session
-            .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
+            .record_conversation_items_for_seed(
+                step_context_seed,
+                std::slice::from_ref(&output_item),
+            )
             .await;
         // Standalone shell turns can run before any regular user turn, so
         // explicitly materialize rollout persistence after recording output.
@@ -458,7 +469,7 @@ async fn persist_user_shell_output(
     }
 
     session
-        .inject_no_new_turn(vec![output_item], Some(turn_context))
+        .inject_no_new_turn(vec![output_item], Some(step_context_seed))
         .await;
 }
 

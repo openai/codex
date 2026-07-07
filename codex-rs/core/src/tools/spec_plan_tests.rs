@@ -33,6 +33,7 @@ use serde_json::json;
 
 use crate::config::CurrentTimeReminderConfig;
 use crate::session::step_context::StepContext;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -181,10 +182,18 @@ async fn probe_with(
     configure_turn: impl FnOnce(&mut TurnContext),
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
+    probe_with_context(|turn, _model| configure_turn(turn), inputs).await
+}
+
+async fn probe_with_context(
+    configure_context: impl FnOnce(&mut TurnContext, &mut StepModelContext),
+    inputs: ToolPlanInputs,
+) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
-    configure_turn(&mut turn);
+    let mut model = StepModelContext::for_test(&turn);
+    configure_context(&mut turn, &mut model);
     let turn = Arc::new(turn);
-    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let step_context = StepContext::for_test_with_model(Arc::clone(&turn), Arc::new(model));
     let router = ToolRouter::from_context(
         step_context.as_ref(),
         ToolRouterParams {
@@ -201,6 +210,12 @@ async fn probe_with(
 
 async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
     probe_with(configure_turn, ToolPlanInputs::default()).await
+}
+
+async fn probe_context(
+    configure_context: impl FnOnce(&mut TurnContext, &mut StepModelContext),
+) -> ToolPlanProbe {
+    probe_with_context(configure_context, ToolPlanInputs::default()).await
 }
 
 fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
@@ -497,10 +512,10 @@ async fn request_user_input_stays_direct_in_code_mode_only() {
 
 #[tokio::test]
 async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
-    let plan = probe(|turn| {
+    let plan = probe_context(|turn, model| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
-        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+        model.model_info.shell_type = ConfigShellToolType::ShellCommand;
     })
     .await;
 
@@ -513,11 +528,11 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
 
 #[tokio::test]
 async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabled() {
-    let standalone = probe(|turn| {
+    let standalone = probe_context(|turn, model| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
-        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+        model.model_info.shell_type = ConfigShellToolType::ShellCommand;
     })
     .await;
 
@@ -526,7 +541,7 @@ async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabl
     standalone.assert_registered_contains(&["shell_command"]);
     standalone.assert_registered_lacks(&["exec_command", "write_stdin"]);
 
-    let composed = probe(|turn| {
+    let composed = probe_context(|turn, model| {
         set_features(
             turn,
             &[
@@ -536,7 +551,7 @@ async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabl
                 Feature::UnifiedExecZshFork,
             ],
         );
-        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+        model.model_info.shell_type = ConfigShellToolType::ShellCommand;
     })
     .await;
 
@@ -626,11 +641,11 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
 
 #[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
-    let no_environment = probe(|turn| {
+    let no_environment = probe_context(|turn, model| {
         turn.environments.turn_environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
-        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        model.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
     no_environment.assert_visible_lacks(&[
@@ -648,12 +663,12 @@ async fn environment_count_controls_environment_backed_tools() {
         "request_permissions",
     ]);
 
-    let multiple_environments = probe(|turn| {
+    let multiple_environments = probe_context(|turn, model| {
         duplicate_primary_environment(turn);
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
-        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        model.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
     multiple_environments.assert_visible_contains(&[
@@ -679,13 +694,15 @@ async fn environment_count_controls_environment_backed_tools() {
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
     set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
-    turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    let mut model = StepModelContext::for_test(&turn);
+    model.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
 
     let environments = turn.environments.clone();
     turn.environments.turn_environments.clear();
     let turn = Arc::new(turn);
     let step_context = Arc::new(StepContext::new(
         Arc::clone(&turn),
+        Arc::new(model),
         environments,
         Vec::new(),
         crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
@@ -774,9 +791,9 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         ..ToolPlanInputs::default()
     };
 
-    let missing_model_capability = probe_with(
-        |turn| {
-            turn.model_info.supports_search_tool = false;
+    let missing_model_capability = probe_with_context(
+        |_turn, model| {
+            model.model_info.supports_search_tool = false;
         },
         ToolPlanInputs {
             deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
@@ -786,9 +803,9 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
 
-    let missing_deferred_tools = probe(|turn| {
+    let missing_deferred_tools = probe_context(|turn, model| {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
-        turn.model_info.supports_search_tool = true;
+        model.model_info.supports_search_tool = true;
     })
     .await;
     missing_deferred_tools.assert_visible_lacks(&["tool_search"]);
@@ -798,9 +815,9 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
 
-    let bedrock_namespace_capability = probe_with(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
+    let bedrock_namespace_capability = probe_with_context(
+        |turn, model| {
+            model.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
         },
         ToolPlanInputs {
@@ -811,9 +828,9 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
 
-    let enabled = probe_with(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
+    let enabled = probe_with_context(
+        |_turn, model| {
+            model.model_info.supports_search_tool = true;
         },
         searchable_mcp,
     )
@@ -827,9 +844,9 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 
 #[tokio::test]
 async fn deferred_extension_tools_are_discoverable_with_tool_search() {
-    let plan = probe_with(
-        |turn| {
-            turn.model_info.supports_search_tool = true;
+    let plan = probe_with_context(
+        |_turn, model| {
+            model.model_info.supports_search_tool = true;
         },
         ToolPlanInputs {
             extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
@@ -848,10 +865,12 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
 async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let cache = ToolSearchHandlerCache::default();
 
-    let (_session, mut first_turn) = make_session_and_context().await;
-    first_turn.model_info.supports_search_tool = true;
+    let (_session, first_turn) = make_session_and_context().await;
+    let mut first_model = StepModelContext::for_test(&first_turn);
+    first_model.model_info.supports_search_tool = true;
     let first_turn = Arc::new(first_turn);
-    let first_step_context = StepContext::for_test(Arc::clone(&first_turn));
+    let first_step_context =
+        StepContext::for_test_with_model(Arc::clone(&first_turn), Arc::new(first_model));
     let first_router = ToolRouter::from_context(
         first_step_context.as_ref(),
         ToolRouterParams {
@@ -865,10 +884,12 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     );
     let first_plan = ToolPlanProbe::from_router(first_router);
 
-    let (_session, mut second_turn) = make_session_and_context().await;
-    second_turn.model_info.supports_search_tool = true;
+    let (_session, second_turn) = make_session_and_context().await;
+    let mut second_model = StepModelContext::for_test(&second_turn);
+    second_model.model_info.supports_search_tool = true;
     let second_turn = Arc::new(second_turn);
-    let second_step_context = StepContext::for_test(Arc::clone(&second_turn));
+    let second_step_context =
+        StepContext::for_test_with_model(Arc::clone(&second_turn), Arc::new(second_model));
     let second_router = ToolRouter::from_context(
         second_step_context.as_ref(),
         ToolRouterParams {
@@ -988,9 +1009,9 @@ async fn request_plugin_install_requires_all_discovery_features() {
 
 #[tokio::test]
 async fn request_plugin_install_stays_visible_without_tool_search() {
-    let plan = probe_with(
-        |turn| {
-            turn.model_info.supports_search_tool = false;
+    let plan = probe_with_context(
+        |turn, model| {
+            model.model_info.supports_search_tool = false;
             set_features(
                 turn,
                 &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
@@ -1094,10 +1115,10 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
 
 #[tokio::test]
 async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
-    let plan = probe_with(
-        |turn| {
+    let plan = probe_with_context(
+        |turn, model| {
             set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
-            turn.model_info.supports_search_tool = true;
+            model.model_info.supports_search_tool = true;
             update_config(turn, |config| {
                 config.code_mode.direct_only_tool_namespaces = vec!["direct_only".to_string()];
             });
@@ -1136,11 +1157,11 @@ async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
 
 #[tokio::test]
 async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
-    let plan = probe_with(
-        |turn| {
+    let plan = probe_with_context(
+        |turn, model| {
             set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
             set_feature(turn, Feature::Collab, /*enabled*/ false);
-            turn.model_info.supports_search_tool = true;
+            model.model_info.supports_search_tool = true;
             update_config(turn, |config| {
                 config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
             });
@@ -1336,9 +1357,9 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
 
 #[tokio::test]
 async fn tool_mode_selector_overrides_feature_flags() {
-    let direct = probe(|turn| {
+    let direct = probe_context(|turn, model| {
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
-        turn.model_info.tool_mode = Some(ToolMode::Direct);
+        model.model_info.tool_mode = Some(ToolMode::Direct);
     })
     .await;
     direct.assert_visible_lacks(&[
@@ -1349,8 +1370,8 @@ async fn tool_mode_selector_overrides_feature_flags() {
 
 #[tokio::test]
 async fn v1_multi_agent_tools_defer_when_tool_search_available() {
-    let plan = probe(|turn| {
-        turn.model_info.supports_search_tool = true;
+    let plan = probe_context(|turn, model| {
+        model.model_info.supports_search_tool = true;
         set_feature(turn, Feature::Collab, /*enabled*/ true);
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
     })
@@ -1527,14 +1548,14 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
 
 #[tokio::test]
 async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
-    let api_key_auth = probe(|turn| {
+    let api_key_auth = probe_context(|turn, model| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     api_key_auth.assert_visible_lacks(&["image_generation"]);
 
-    let unrelated_chatgpt_auth = probe(|turn| {
+    let unrelated_chatgpt_auth = probe_context(|turn, model| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         let mut provider_info = turn.provider.info().clone();
@@ -1544,65 +1565,65 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             config.model_provider = provider_info.clone();
         });
         turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
 
-    let actor_authorized_provider = probe(|turn| {
+    let actor_authorized_provider = probe_context(|turn, model| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         use_actor_authorized_provider(turn);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     actor_authorized_provider.assert_visible_contains(&["image_generation"]);
 
-    let feature_disabled = probe(|turn| {
+    let feature_disabled = probe_context(|turn, model| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
         use_actor_authorized_provider(turn);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     feature_disabled.assert_visible_lacks(&["image_generation"]);
 
-    let text_only_model = probe(|turn| {
+    let text_only_model = probe_context(|turn, model| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         use_actor_authorized_provider(turn);
-        turn.model_info.input_modalities = vec![];
+        model.model_info.input_modalities = vec![];
     })
     .await;
     text_only_model.assert_visible_lacks(&["image_generation"]);
 
-    let unsupported_image_generation_provider = probe(|turn| {
+    let unsupported_image_generation_provider = probe_context(|turn, model| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         use_bedrock_provider(turn);
         use_actor_authorized_provider(turn);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
 
-    let image_generation = probe(|turn| {
+    let image_generation = probe_context(|turn, model| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     image_generation.assert_visible_contains(&["image_generation"]);
 
-    let extension_flag_without_imagegen_tool = probe(|turn| {
+    let extension_flag_without_imagegen_tool = probe_context(|turn, model| {
         use_chatgpt_auth(turn);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
     extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
 
-    let live_web_search = probe(|turn| {
+    let live_web_search = probe_context(|turn, model| {
         set_web_search_mode(turn, WebSearchMode::Live);
-        turn.model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
+        model.model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
     })
     .await;
     assert_eq!(
@@ -1617,11 +1638,11 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         }
     );
 
-    let code_mode_only = probe(|turn| {
+    let code_mode_only = probe_context(|turn, model| {
         use_chatgpt_auth(turn);
         set_features(turn, &[Feature::CodeModeOnly, Feature::MultiAgentV2]);
         set_web_search_mode(turn, WebSearchMode::Live);
-        turn.model_info.input_modalities = vec![InputModality::Image];
+        model.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     assert_eq!(

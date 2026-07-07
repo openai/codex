@@ -146,7 +146,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
         let session = ctx.session;
-        let turn = ctx.turn;
+        let turn = &ctx.step_context.turn;
         let call_id = ctx.call_id.to_string();
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);

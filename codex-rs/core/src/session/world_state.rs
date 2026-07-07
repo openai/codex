@@ -66,6 +66,7 @@ impl Session {
                 .contribute_world_state(WorldStateContributionInput {
                     thread_id: self.thread_id(),
                     turn_id: turn_context.sub_id.as_str(),
+                    model_info: &step_context.model.model_info,
                     environments: &environments,
                     ready_selected_capability_roots: &ready_selected_capability_roots,
                     session_store: &self.services.session_extension_data,

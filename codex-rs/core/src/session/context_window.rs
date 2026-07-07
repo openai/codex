@@ -1,4 +1,5 @@
 use super::session::Session;
+use super::step_model_context::StepModelContext;
 use super::turn_context::TurnContext;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 
@@ -24,6 +25,7 @@ struct BodyAfterPrefixWindowStatus {
 pub(crate) async fn context_window_token_status(
     sess: &Session,
     turn_context: &TurnContext,
+    model_context: &StepModelContext,
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
 
@@ -31,7 +33,7 @@ pub(crate) async fn context_window_token_status(
         match turn_context.config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
                 active_context_tokens,
-                turn_context.model_info.auto_compact_token_limit(),
+                model_context.model_info.auto_compact_token_limit(),
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
@@ -41,8 +43,8 @@ pub(crate) async fn context_window_token_status(
                 let scope_limit = turn_context
                     .config
                     .model_auto_compact_token_limit
-                    .or_else(|| turn_context.model_info.auto_compact_token_limit());
-                let full_context_window_limit = turn_context.model_context_window();
+                    .or_else(|| model_context.model_info.auto_compact_token_limit());
+                let full_context_window_limit = model_context.model_context_window();
 
                 (
                     active_context_tokens.saturating_sub(baseline),

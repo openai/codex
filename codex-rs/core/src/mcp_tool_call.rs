@@ -19,6 +19,8 @@ use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -200,6 +202,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
             turn_context.as_ref(),
+            step_context.model.as_ref(),
             &call_id,
             invocation,
             item_metadata.clone(),
@@ -210,7 +213,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            turn_context.as_ref(),
+            step_context.model.as_ref(),
             &outcome,
             &server,
             &tool_name,
@@ -263,6 +266,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
+                    step_context.model.as_ref(),
                     &call_id,
                     invocation,
                     item_metadata.clone(),
@@ -276,6 +280,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
+                    step_context.model.as_ref(),
                     &call_id,
                     invocation,
                     item_metadata.clone(),
@@ -289,7 +294,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            turn_context.as_ref(),
+            step_context.model.as_ref(),
             &outcome,
             &server,
             &tool_name,
@@ -394,8 +399,13 @@ async fn handle_approved_mcp_tool_call(
     let result = async {
         let result = async {
             let rewritten_arguments = rewrite?;
-            let request_meta =
-                build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+            let request_meta = build_mcp_tool_call_request_meta(
+                turn_context,
+                step_context.model.as_ref(),
+                &server,
+                call_id,
+                metadata,
+            );
             execute_mcp_tool_call(
                 sess,
                 step_context,
@@ -431,6 +441,7 @@ async fn handle_approved_mcp_tool_call(
     notify_mcp_tool_call_completed(
         sess,
         turn_context,
+        step_context.model.as_ref(),
         call_id,
         invocation,
         item_metadata,
@@ -438,11 +449,19 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
-    maybe_track_codex_app_used(sess, turn_context, manager, &server, &tool_name).await;
+    maybe_track_codex_app_used(
+        sess,
+        turn_context,
+        step_context.model.as_ref(),
+        manager,
+        &server,
+        &tool_name,
+    )
+    .await;
 
     let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
-        turn_context,
+        step_context.model.as_ref(),
         &outcome,
         &server,
         &tool_name,
@@ -598,7 +617,8 @@ async fn execute_mcp_tool_call(
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
     let result = sanitize_mcp_tool_result_for_model(
-        turn_context
+        step_context
+            .model
             .model_info
             .input_modalities
             .contains(&InputModality::Image),
@@ -908,6 +928,7 @@ async fn notify_mcp_tool_call_started(
 async fn notify_mcp_tool_call_completed(
     sess: &Session,
     turn_context: &TurnContext,
+    model_context: &StepModelContext,
     call_id: &str,
     invocation: McpInvocation,
     item_metadata: McpToolCallItemMetadata,
@@ -947,7 +968,8 @@ async fn notify_mcp_tool_call_completed(
         error,
         duration: Some(duration),
     });
-    sess.emit_turn_item_completed(turn_context, item).await;
+    sess.emit_turn_item_completed(turn_context, model_context, item)
+        .await;
 }
 
 struct McpAppUsageMetadata {
@@ -958,6 +980,7 @@ struct McpAppUsageMetadata {
 async fn maybe_track_codex_app_used(
     sess: &Session,
     turn_context: &TurnContext,
+    model: &StepModelContext,
     manager: &McpConnectionManager,
     server: &str,
     tool_name: &str,
@@ -981,7 +1004,7 @@ async fn maybe_track_codex_app_used(
     };
 
     let tracking = build_track_events_context(
-        turn_context.model_info.slug.clone(),
+        model.model_info.slug.clone(),
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
         turn_context.originator.clone(),
@@ -1082,6 +1105,7 @@ async fn custom_mcp_tool_approval_mode(
 
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
+    model: &StepModelContext,
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
@@ -1091,8 +1115,8 @@ fn build_mcp_tool_call_request_meta(
     if let Some(turn_metadata) = turn_context
         .turn_metadata_state
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
-            model: turn_context.model_info.slug.as_str(),
-            reasoning_effort: turn_context.effective_reasoning_effort(),
+            model: model.model_info.slug.as_str(),
+            reasoning_effort: model.effective_reasoning_effort(),
         })
     {
         request_meta.insert(
@@ -1242,7 +1266,7 @@ async fn maybe_request_mcp_tool_approval(
 
     match run_permission_request_hooks(
         sess,
-        turn_context,
+        step_context.as_ref(),
         call_id,
         PermissionRequestPayload {
             tool_name: hook_tool_name.clone(),
@@ -1274,7 +1298,7 @@ async fn maybe_request_mcp_tool_approval(
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
-            turn_context,
+            &StepContextSeed::from(step_context.as_ref()),
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             /*retry_reason*/ None,
@@ -2182,6 +2206,7 @@ fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
 async fn notify_mcp_tool_call_skip(
     sess: &Session,
     turn_context: &TurnContext,
+    model_context: &StepModelContext,
     call_id: &str,
     invocation: McpInvocation,
     item_metadata: McpToolCallItemMetadata,
@@ -2202,6 +2227,7 @@ async fn notify_mcp_tool_call_skip(
     notify_mcp_tool_call_completed(
         sess,
         turn_context,
+        model_context,
         call_id,
         invocation,
         item_metadata,

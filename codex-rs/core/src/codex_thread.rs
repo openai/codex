@@ -461,7 +461,7 @@ impl CodexThread {
         };
         self.codex
             .session
-            .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
+            .inject_no_new_turn(vec![item], /*current_step_context_seed*/ None)
             .await;
     }
 
@@ -473,13 +473,13 @@ impl CodexThread {
             ));
         }
 
-        let turn_context = self.codex.session.new_default_turn().await;
+        let step_context_seed = self.codex.session.new_default_turn().await;
         if self.codex.session.reference_context_item().await.is_none() {
             // This history-only API runs without run_turn, so it owns its initial step.
             let step_context = self
                 .codex
                 .session
-                .capture_step_context(Arc::clone(&turn_context))
+                .capture_step_context(&step_context_seed)
                 .await;
             self.codex
                 .session
@@ -488,7 +488,7 @@ impl CodexThread {
         }
         self.codex
             .session
-            .inject_no_new_turn(items, Some(turn_context.as_ref()))
+            .inject_no_new_turn(items, Some(&step_context_seed))
             .await;
         self.codex.session.flush_rollout().await?;
         Ok(())
@@ -605,10 +605,10 @@ impl CodexThread {
 
     /// Returns the exact MCP config, environment bindings, and manager most recently published.
     pub async fn current_mcp_runtime(&self) -> Arc<crate::session::McpRuntimeSnapshot> {
-        let turn_context = self.codex.session.new_default_turn().await;
+        let step_context_seed = self.codex.session.new_default_turn().await;
         self.codex
             .session
-            .capture_step_context(turn_context)
+            .capture_step_context(&step_context_seed)
             .await
             .mcp
             .clone()

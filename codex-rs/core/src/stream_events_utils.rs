@@ -15,6 +15,7 @@ use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
@@ -167,9 +168,10 @@ pub(crate) async fn persist_image_generation_item(
 
 async fn record_image_generation_instructions(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     image_item: &ImageGenerationItem,
 ) {
+    let turn_context = step_context.turn.as_ref();
     if image_item.saved_path.is_none() {
         return;
     }
@@ -183,19 +185,19 @@ async fn record_image_generation_instructions(
         image_output_dir.display(),
         image_output_path.display(),
     ));
-    sess.record_conversation_items(turn_context, &[message])
+    sess.record_conversation_items(step_context, &[message])
         .await;
 }
 
 /// Persist a completed model response item and record any cited memory usage.
 pub(crate) async fn record_completed_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     item: &ResponseItem,
 ) {
     record_completed_response_item_with_finalized_facts(
         sess,
-        turn_context,
+        step_context,
         item,
         /*finalized_facts*/ None,
     )
@@ -204,17 +206,18 @@ pub(crate) async fn record_completed_response_item(
 
 pub(crate) async fn record_completed_response_item_with_finalized_facts(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
-    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+    let turn_context = step_context.turn.as_ref();
+    sess.record_conversation_items(step_context, std::slice::from_ref(item))
         .await;
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
                 item,
-                turn_context.collaboration_mode.mode == ModeKind::Plan,
+                step_context.model.collaboration_mode.mode == ModeKind::Plan,
             )
         },
         |facts| facts.defers_mailbox_delivery_to_next_turn,
@@ -315,7 +318,7 @@ pub(crate) struct OutputItemResult {
 
 pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
-    pub turn_context: Arc<TurnContext>,
+    pub step_context: Arc<StepContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
@@ -356,13 +359,13 @@ pub(crate) struct FinalizedTurnItemFacts {
 
 pub(crate) async fn finalize_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<FinalizedTurnItem> {
     let turn_item =
-        handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
+        handle_non_tool_response_item(sess, step_context, contributor_policy, item, plan_mode)
             .await?;
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
         match &turn_item {
@@ -408,7 +411,8 @@ pub(crate) async fn handle_output_item_done(
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let turn_context = &ctx.step_context.turn;
+    let plan_mode = ctx.step_context.model.collaboration_mode.mode == ModeKind::Plan;
 
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
@@ -417,7 +421,7 @@ pub(crate) async fn handle_output_item_done(
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
                     &ctx.sess.active_turn,
-                    &ctx.turn_context.sub_id,
+                    &turn_context.sub_id,
                 )
                 .await;
 
@@ -429,7 +433,7 @@ pub(crate) async fn handle_output_item_done(
                 payload_preview
             );
 
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+            record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
@@ -446,7 +450,7 @@ pub(crate) async fn handle_output_item_done(
         Ok(None) => {
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
+                ctx.step_context.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
@@ -465,17 +469,21 @@ pub(crate) async fn handle_output_item_done(
                         item.saved_path = None;
                     }
                     ctx.sess
-                        .emit_turn_item_started(&ctx.turn_context, &started_item)
+                        .emit_turn_item_started(turn_context, &started_item)
                         .await;
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed(&ctx.turn_context, finalized_turn_item.turn_item)
+                    .emit_turn_item_completed(
+                        turn_context,
+                        ctx.step_context.model.as_ref(),
+                        finalized_turn_item.turn_item,
+                    )
                     .await;
             }
             record_completed_response_item_with_finalized_facts(
                 ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
+                ctx.step_context.as_ref(),
                 &item,
                 finalized_facts.as_ref(),
             )
@@ -492,12 +500,12 @@ pub(crate) async fn handle_output_item_done(
                     ..Default::default()
                 },
             };
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+            record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
                 .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(
-                        &ctx.turn_context,
+                        ctx.step_context.as_ref(),
                         std::slice::from_ref(&response_item),
                     )
                     .await;
@@ -516,7 +524,7 @@ pub(crate) async fn handle_output_item_done(
 
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
@@ -531,14 +539,14 @@ pub(crate) async fn handle_non_tool_response_item(
             let mut turn_item = parse_turn_item(item)?;
             finalize_turn_item(
                 sess,
-                turn_context,
+                step_context,
                 contributor_policy,
                 &mut turn_item,
                 plan_mode,
             )
             .await;
             if let TurnItem::ImageGeneration(image_item) = &turn_item {
-                record_image_generation_instructions(sess, turn_context, image_item).await;
+                record_image_generation_instructions(sess, step_context, image_item).await;
             }
             Some(turn_item)
         }
@@ -554,11 +562,12 @@ pub(crate) async fn handle_non_tool_response_item(
 
 pub(crate) async fn finalize_turn_item(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     turn_item: &mut TurnItem,
     plan_mode: bool,
 ) {
+    let turn_context = step_context.turn.as_ref();
     if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
         apply_turn_item_contributors(sess, turn_store, turn_item).await;
     }

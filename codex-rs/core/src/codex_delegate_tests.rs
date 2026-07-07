@@ -1,6 +1,8 @@
 use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use async_channel::bounded;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -36,6 +38,11 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::timeout;
 
+fn step_context_seed(turn: Arc<crate::session::turn_context::TurnContext>) -> StepContextSeed {
+    let model = Arc::new(StepModelContext::for_test(&turn));
+    StepContextSeed::new(turn, model)
+}
+
 #[tokio::test]
 async fn forward_events_filters_private_events_before_blocked_send_is_cancelled() {
     let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -65,6 +72,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
         .unwrap();
 
     let cancel = CancellationToken::new();
+    let ctx = step_context_seed(ctx);
     let forward = tokio::spawn(forward_events(
         Arc::clone(&codex),
         tx_out.clone(),
@@ -184,13 +192,15 @@ async fn forward_ops_preserves_submission_trace_context() {
 async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
+    let config = parent_ctx.config.as_ref().clone();
+    let parent_ctx = step_context_seed(parent_ctx);
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
 
     let result = timeout(
         Duration::from_secs(/*secs*/ 1),
         run_codex_thread_interactive(
-            parent_ctx.config.as_ref().clone(),
+            config,
             Arc::clone(&parent_session.services.auth_manager),
             Arc::clone(&parent_session.services.models_manager),
             parent_session,
@@ -238,6 +248,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
     };
     #[allow(deprecated)]
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
+    let parent_ctx = step_context_seed(parent_ctx);
     let cancel_token = CancellationToken::new();
     let request_call_id = call_id.clone();
     let request_cwd = delegated_cwd.clone();
@@ -245,7 +256,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
     let handle = tokio::spawn({
         let codex = Arc::clone(&codex);
         let parent_session = Arc::clone(&parent_session);
-        let parent_ctx = Arc::clone(&parent_ctx);
+        let parent_ctx = parent_ctx.clone();
         let cancel_token = cancel_token.clone();
         async move {
             handle_request_permissions(
@@ -318,6 +329,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         .set(AskForApproval::OnRequest)
         .expect("set on-request policy");
     let parent_ctx = Arc::new(parent_ctx);
+    let parent_ctx = step_context_seed(parent_ctx);
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -334,7 +346,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     let handle = tokio::spawn({
         let codex = Arc::clone(&codex);
         let parent_session = Arc::clone(&parent_session);
-        let parent_ctx = Arc::clone(&parent_ctx);
+        let parent_ctx = parent_ctx.clone();
         let cancel_token = cancel_token.clone();
         async move {
             handle_exec_approval(
@@ -387,7 +399,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         assessment_event.target_item_id.as_deref(),
         Some("command-item-1")
     );
-    assert_eq!(assessment_event.turn_id, parent_ctx.sub_id);
+    assert_eq!(assessment_event.turn_id, parent_ctx.turn.sub_id);
     assert_eq!(
         assessment_event.status,
         GuardianAssessmentStatus::InProgress
@@ -432,6 +444,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
         .set(AskForApproval::OnRequest)
         .expect("set on-request policy");
     let parent_ctx = Arc::new(parent_ctx);
+    let parent_ctx = step_context_seed(parent_ctx);
 
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
@@ -485,6 +498,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
+    let parent_ctx = step_context_seed(parent_ctx);
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
         PendingMcpInvocation {

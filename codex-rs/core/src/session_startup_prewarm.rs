@@ -243,21 +243,24 @@ async fn schedule_startup_prewarm_inner(
     base_instructions: String,
 ) -> CodexResult<ModelClientSession> {
     let prewarm_started_at = Instant::now();
-    let startup_turn_context = session
+    let startup_step_context_seed = session
         .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
-    startup_turn_context.session_telemetry.record_startup_phase(
-        "startup_prewarm_create_turn_context",
-        prewarm_started_at.elapsed(),
-        /*status*/ None,
-    );
-    if routes_approval_to_guardian(&startup_turn_context) {
+    startup_step_context_seed
+        .model
+        .session_telemetry
+        .record_startup_phase(
+            "startup_prewarm_create_turn_context",
+            prewarm_started_at.elapsed(),
+            /*status*/ None,
+        );
+    if routes_approval_to_guardian(startup_step_context_seed.turn.as_ref()) {
         let guardian_session = Arc::clone(&session);
-        let guardian_parent_turn = Arc::clone(&startup_turn_context);
+        let guardian_parent_step_context = startup_step_context_seed.clone();
         drop(tokio::spawn(async move {
             if let Err(err) = guardian_session
                 .guardian_review_session
-                .initialize(Arc::clone(&guardian_session), guardian_parent_turn)
+                .initialize(Arc::clone(&guardian_session), guardian_parent_step_context)
                 .await
             {
                 warn!("failed to initialize guardian review session: {err:#}");
@@ -268,7 +271,7 @@ async fn schedule_startup_prewarm_inner(
     let built_tools_started_at = Instant::now();
     // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
     let step_context = session
-        .capture_step_context(Arc::clone(&startup_turn_context))
+        .capture_step_context(&startup_step_context_seed)
         .await;
     let startup_router = built_tools(
         session.as_ref(),
@@ -276,27 +279,34 @@ async fn schedule_startup_prewarm_inner(
         &startup_cancellation_token,
     )
     .await?;
-    startup_turn_context.session_telemetry.record_startup_phase(
-        "startup_prewarm_build_tools",
-        built_tools_started_at.elapsed(),
-        /*status*/ None,
-    );
+    startup_step_context_seed
+        .model
+        .session_telemetry
+        .record_startup_phase(
+            "startup_prewarm_build_tools",
+            built_tools_started_at.elapsed(),
+            /*status*/ None,
+        );
     let build_prompt_started_at = Instant::now();
     let startup_prompt = build_prompt(
         Vec::new(),
         startup_router.as_ref(),
-        startup_turn_context.as_ref(),
+        step_context.as_ref(),
         BaseInstructions {
             text: base_instructions,
         },
     );
-    startup_turn_context.session_telemetry.record_startup_phase(
-        "startup_prewarm_build_prompt",
-        build_prompt_started_at.elapsed(),
-        /*status*/ None,
-    );
+    startup_step_context_seed
+        .model
+        .session_telemetry
+        .record_startup_phase(
+            "startup_prewarm_build_prompt",
+            build_prompt_started_at.elapsed(),
+            /*status*/ None,
+        );
     let window_id = session.current_window_id().await;
-    let responses_metadata = startup_turn_context
+    let responses_metadata = startup_step_context_seed
+        .turn
         .turn_metadata_state
         .to_responses_metadata(
             session.installation_id.clone(),
@@ -308,18 +318,21 @@ async fn schedule_startup_prewarm_inner(
     client_session
         .prewarm_websocket(
             &startup_prompt,
-            &startup_turn_context.model_info,
-            &startup_turn_context.session_telemetry,
-            startup_turn_context.reasoning_effort.clone(),
-            startup_turn_context.reasoning_summary,
-            startup_turn_context.config.service_tier.clone(),
+            &startup_step_context_seed.model.model_info,
+            &startup_step_context_seed.model.session_telemetry,
+            startup_step_context_seed.model.reasoning_effort(),
+            startup_step_context_seed.model.reasoning_summary,
+            startup_step_context_seed.model.service_tier.clone(),
             &responses_metadata,
         )
         .await?;
-    startup_turn_context.session_telemetry.record_startup_phase(
-        "startup_prewarm_websocket_warmup",
-        websocket_warmup_started_at.elapsed(),
-        /*status*/ None,
-    );
+    startup_step_context_seed
+        .model
+        .session_telemetry
+        .record_startup_phase(
+            "startup_prewarm_websocket_warmup",
+            websocket_warmup_started_at.elapsed(),
+            /*status*/ None,
+        );
     Ok(client_session)
 }

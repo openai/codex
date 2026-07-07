@@ -156,9 +156,9 @@ async fn mark_thread_completed(thread: &CodexThread) {
         .codex
         .session
         .send_event(
-            turn.as_ref(),
+            turn.turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn.sub_id.clone(),
+                turn_id: turn.turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
@@ -175,9 +175,9 @@ async fn mark_thread_interrupted(thread: &CodexThread) {
         .codex
         .session
         .send_event(
-            turn.as_ref(),
+            turn.turn.as_ref(),
             EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id: Some(turn.sub_id.clone()),
+                turn_id: Some(turn.turn.sub_id.clone()),
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,

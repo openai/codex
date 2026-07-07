@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::client::ModelClientSession;
 use crate::session::session::Session;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
 use codex_protocol::error::CodexErr;
@@ -26,13 +27,11 @@ pub(crate) async fn handle_retryable_response_stream_error(
     client_session: &mut ModelClientSession,
     sess: &Session,
     turn_context: &TurnContext,
+    model: &StepModelContext,
     request: ResponsesStreamRequest,
 ) -> Result<(), CodexErr> {
     if *retries >= max_retries
-        && client_session.try_switch_fallback_transport(
-            &turn_context.session_telemetry,
-            &turn_context.model_info,
-        )
+        && client_session.try_switch_fallback_transport(&model.session_telemetry, &model.model_info)
     {
         sess.send_event(
             turn_context,

@@ -6,6 +6,8 @@ use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
@@ -74,11 +76,19 @@ fn invocation(
     tool_name: &str,
     payload: ToolPayload,
 ) -> ToolInvocation {
-    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let step_context = StepContext::for_test(turn);
+    invocation_with_step_context(session, step_context, tool_name, payload)
+}
+
+fn invocation_with_step_context(
+    session: Arc<crate::session::session::Session>,
+    step_context: Arc<StepContext>,
+    tool_name: &str,
+    payload: ToolPayload,
+) -> ToolInvocation {
     ToolInvocation {
         session,
         step_context,
-        turn,
         cancellation_token: CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
@@ -86,6 +96,27 @@ fn invocation(
         source: crate::tools::context::ToolCallSource::Direct,
         payload,
     }
+}
+
+async fn turn_and_model_with_model(
+    session: &crate::session::session::Session,
+    turn: TurnContext,
+    model: &str,
+) -> (TurnContext, StepModelContext) {
+    let requested_model = model.to_string();
+    let turn = Arc::new(turn);
+    let model_context = Arc::new(StepModelContext::for_test(turn.as_ref()));
+    let step_context_seed = StepContextSeed::new(turn, model_context)
+        .with_model(requested_model.clone(), &session.services.models_manager)
+        .await;
+    let StepContextSeed { turn, model } = step_context_seed;
+    let mut turn = Arc::try_unwrap(turn).expect("test turn should have a single owner");
+    let model = Arc::try_unwrap(model).expect("test model should have a single owner");
+    let mut config = (*turn.config).clone();
+    config.model = Some(requested_model);
+    config.model_reasoning_effort = model.reasoning_effort();
+    turn.config = Arc::new(config);
+    (turn, model)
 }
 
 fn function_payload(args: serde_json::Value) -> ToolPayload {
@@ -574,12 +605,11 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
 
     {
         let (mut session, turn) = make_session_and_context().await;
-        let mut turn = turn
-            .with_model("gpt-5.4".to_string(), &session.services.models_manager)
-            .await;
+        let (mut turn, mut model) = turn_and_model_with_model(&session, turn, "gpt-5.4").await;
         let mut config = (*turn.config).clone();
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         turn.config = Arc::new(config);
+        model.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let manager = thread_manager();
         let root = manager
             .start_thread((*turn.config).clone())
@@ -587,11 +617,12 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
             .expect("root thread should start");
         session.services.agent_control = manager.agent_control();
         session.thread_id = root.thread_id;
+        let step_context = StepContext::for_test_with_model(Arc::new(turn), Arc::new(model));
 
         let output = SpawnAgentHandler::default()
-            .handle(invocation(
+            .handle(invocation_with_step_context(
                 Arc::new(session),
-                Arc::new(turn),
+                step_context,
                 "spawn_agent",
                 function_payload(json!({"message": "inspect this repo"})),
             ))
@@ -615,12 +646,11 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
 
     {
         let (mut session, turn) = make_session_and_context().await;
-        let mut turn = turn
-            .with_model("gpt-5.4".to_string(), &session.services.models_manager)
-            .await;
+        let (mut turn, mut model) = turn_and_model_with_model(&session, turn, "gpt-5.4").await;
         let mut config = (*turn.config).clone();
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         turn.config = Arc::new(config);
+        model.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let manager = thread_manager();
         let root = manager
             .start_thread((*turn.config).clone())
@@ -628,11 +658,12 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
             .expect("root thread should start");
         session.services.agent_control = manager.agent_control();
         session.thread_id = root.thread_id;
+        let step_context = StepContext::for_test_with_model(Arc::new(turn), Arc::new(model));
 
         let output = SpawnAgentHandler::default()
-            .handle(invocation(
+            .handle(invocation_with_step_context(
                 Arc::new(session),
-                Arc::new(turn),
+                step_context,
                 "spawn_agent",
                 function_payload(json!({
                     "message": "inspect this repo",
@@ -729,9 +760,7 @@ async fn spawn_agent_role_service_tier_falls_back_to_supported_parent_tier() {
     }
 
     let (mut session, turn) = make_session_and_context().await;
-    let mut turn = turn
-        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
-        .await;
+    let (mut turn, mut model) = turn_and_model_with_model(&session, turn, "gpt-5.4").await;
     tokio::fs::create_dir_all(&turn.config.codex_home)
         .await
         .expect("codex home should be created");
@@ -757,6 +786,7 @@ service_tier = "turbo"
         },
     );
     turn.config = Arc::new(config);
+    model.service_tier = Some(ServiceTier::Fast.request_value().to_string());
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
@@ -764,11 +794,12 @@ service_tier = "turbo"
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.thread_id = root.thread_id;
+    let step_context = StepContext::for_test_with_model(Arc::new(turn), Arc::new(model));
 
     let output = SpawnAgentHandler::default()
-        .handle(invocation(
+        .handle(invocation_with_step_context(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
@@ -851,9 +882,7 @@ async fn spawn_agent_full_history_fork_accepts_explicit_service_tier() {
     }
 
     let (mut session, turn) = make_session_and_context().await;
-    let turn = turn
-        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
-        .await;
+    let (turn, model) = turn_and_model_with_model(&session, turn, "gpt-5.4").await;
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
@@ -861,11 +890,12 @@ async fn spawn_agent_full_history_fork_accepts_explicit_service_tier() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.thread_id = root.thread_id;
+    let step_context = StepContext::for_test_with_model(Arc::new(turn), Arc::new(model));
 
     let output = SpawnAgentHandler::default()
-        .handle(invocation(
+        .handle(invocation_with_step_context(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
@@ -899,9 +929,7 @@ async fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier() {
     }
 
     let (mut session, turn) = make_session_and_context().await;
-    let mut turn = turn
-        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
-        .await;
+    let (mut turn, model) = turn_and_model_with_model(&session, turn, "gpt-5.4").await;
     let mut config = (*turn.config).clone();
     config
         .features
@@ -917,11 +945,12 @@ async fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier() {
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
+    let step_context = StepContext::for_test_with_model(Arc::clone(&turn), Arc::new(model));
 
     let output = SpawnAgentHandlerV2::default()
-        .handle(invocation(
+        .handle(invocation_with_step_context(
             session.clone(),
-            turn.clone(),
+            step_context,
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
@@ -1549,7 +1578,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_s
         .get_thread(agent_id)
         .await
         .expect("child thread should exist");
-    let child_turn = child_thread.codex.session.new_default_turn().await;
+    let child_turn = child_thread.codex.session.new_default_turn().await.turn;
     child_thread
         .codex
         .session
@@ -1998,7 +2027,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
-    let first_turn = thread.codex.session.new_default_turn().await;
+    let first_turn = thread.codex.session.new_default_turn().await.turn;
     thread
         .codex
         .session
@@ -2039,7 +2068,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             )
     }));
 
-    let second_turn = thread.codex.session.new_default_turn().await;
+    let second_turn = thread.codex.session.new_default_turn().await.turn;
     thread
         .codex
         .session
@@ -2201,7 +2230,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         .await
         .expect("worker thread should exist");
 
-    let aborted_turn = thread.codex.session.new_default_turn().await;
+    let aborted_turn = thread.codex.session.new_default_turn().await.turn;
     thread
         .codex
         .session
@@ -2395,7 +2424,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .get_thread(agent_id)
         .await
         .expect("spawned agent thread should exist");
-    let child_turn = child_thread.codex.session.new_default_turn().await;
+    let child_turn = child_thread.codex.session.new_default_turn().await.turn;
     assert_eq!(
         child_turn.file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
@@ -3846,7 +3875,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             worker_session.clone(),
-            worker_session.new_default_turn().await,
+            worker_session.new_default_turn().await.turn,
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect a child task",
@@ -4272,7 +4301,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.codex.session.clone();
 
-    let child_turn = parent_session.new_default_turn().await;
+    let child_turn = parent_session.new_default_turn().await.turn;
     let child_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             parent_session.clone(),
@@ -4301,7 +4330,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let grandchild_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             child_session.clone(),
-            child_session.new_default_turn().await,
+            child_session.new_default_turn().await.turn,
             "spawn_agent",
             function_payload(json!({"message": "hello grandchild"})),
         ))
@@ -4321,7 +4350,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let close_output = CloseAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session.new_default_turn().await.turn,
             "close_agent",
             function_payload(json!({"target": child_thread_id.to_string()})),
         ))
@@ -4347,7 +4376,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let child_resume_output = ResumeAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session.new_default_turn().await.turn,
             "resume_agent",
             function_payload(json!({"id": child_thread_id.to_string()})),
         ))
@@ -4373,7 +4402,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let close_again_output = CloseAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session.new_default_turn().await.turn,
             "close_agent",
             function_payload(json!({"target": child_thread_id.to_string()})),
         ))
@@ -4415,7 +4444,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_resume_output = ResumeAgentHandler
         .handle(invocation(
             operator_session,
-            operator.thread.codex.session.new_default_turn().await,
+            operator.thread.codex.session.new_default_turn().await.turn,
             "resume_agent",
             function_payload(json!({"id": parent_thread_id.to_string()})),
         ))
@@ -4512,13 +4541,20 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let model = step_context.model.as_ref();
+    let config =
+        build_agent_spawn_config(&base_instructions, step_context.as_ref()).expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(base_instructions.text);
-    expected.model = Some(turn.model_info.slug.clone());
+    expected.model = Some(model.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort.clone();
-    expected.model_reasoning_summary = Some(turn.reasoning_summary);
+    expected.model_reasoning_effort = model
+        .reasoning_effort()
+        .or_else(|| model.model_info.default_reasoning_level.clone());
+    expected.model_reasoning_summary = Some(model.reasoning_summary);
+    expected.service_tier = model.service_tier.clone();
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]
     {
@@ -4546,14 +4582,20 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_resume_config(&turn).expect("resume config");
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let model = step_context.model.as_ref();
+    let config = build_agent_resume_config(step_context.as_ref()).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
-    expected.model = Some(turn.model_info.slug.clone());
+    expected.model = Some(model.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort.clone();
-    expected.model_reasoning_summary = Some(turn.reasoning_summary);
+    expected.model_reasoning_effort = model
+        .reasoning_effort()
+        .or_else(|| model.model_info.default_reasoning_level.clone());
+    expected.model_reasoning_summary = Some(model.reasoning_summary);
+    expected.service_tier = model.service_tier.clone();
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]
     {

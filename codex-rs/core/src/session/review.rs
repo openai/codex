@@ -5,14 +5,15 @@ use std::sync::atomic::AtomicBool;
 pub(super) async fn spawn_review_thread(
     sess: Arc<Session>,
     config: Arc<Config>,
-    parent_turn_context: Arc<TurnContext>,
+    parent_step_context: StepContextSeed,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
+    let parent_turn_context = &parent_step_context.turn;
     let model = config
         .review_model
         .clone()
-        .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
+        .unwrap_or_else(|| parent_step_context.model.model_info.slug.clone());
     let review_model_info = sess
         .services
         .models_manager
@@ -63,7 +64,8 @@ pub(super) async fn spawn_review_thread(
         );
     }
 
-    let session_telemetry = parent_turn_context
+    let session_telemetry = parent_step_context
+        .model
         .session_telemetry
         .clone()
         .with_model(model.as_str(), review_model_info.slug.as_str());
@@ -74,6 +76,12 @@ pub(super) async fn spawn_review_thread(
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
+    let collaboration_mode = parent_step_context.model.collaboration_mode.with_updates(
+        Some(model.clone()),
+        Some(reasoning_effort.clone()),
+        /*developer_instructions*/ None,
+    );
+    let service_tier = per_turn_config.service_tier.clone();
     let session_source = parent_turn_context.session_source.clone();
     let (forked_from_thread_id, thread_source) = {
         let state = sess.state.lock().await;
@@ -111,11 +119,7 @@ pub(super) async fn spawn_review_thread(
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
-        model_info: model_info.clone(),
-        session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
-        reasoning_effort,
-        reasoning_summary,
         session_source,
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
@@ -126,7 +130,6 @@ pub(super) async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
-        collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
@@ -142,6 +145,13 @@ pub(super) async fn spawn_review_thread(
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.snapshot.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         terminal_error: Arc::new(Mutex::new(None)),
+    };
+    let review_model_context = StepModelContext {
+        model_info,
+        collaboration_mode,
+        reasoning_summary,
+        service_tier,
+        session_telemetry: session_telemetry_for_context,
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
     };
@@ -155,20 +165,35 @@ pub(super) async fn spawn_review_thread(
         }],
         client_id: None,
     }];
-    let tc = Arc::new(review_turn_context);
-    if tc.environments.single_local_environment_cwd().is_some() {
-        tc.turn_metadata_state.spawn_git_enrichment_task();
+    let step_context_seed = StepContextSeed::new(
+        Arc::new(review_turn_context),
+        Arc::new(review_model_context),
+    );
+    if step_context_seed
+        .turn
+        .environments
+        .single_local_environment_cwd()
+        .is_some()
+    {
+        step_context_seed
+            .turn
+            .turn_metadata_state
+            .spawn_git_enrichment_task();
     }
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
+    sess.spawn_task(step_context_seed.clone(), input, ReviewTask::new())
+        .await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
-    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
-        .await;
+    sess.send_event(
+        step_context_seed.turn.as_ref(),
+        EventMsg::EnteredReviewMode(review_request),
+    )
+    .await;
 }

@@ -1,6 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -33,7 +33,7 @@ use super::format_exec_output_str;
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEventCtx<'a> {
     pub session: &'a Session,
-    pub turn: &'a TurnContext,
+    pub step_context: &'a StepContext,
     pub call_id: &'a str,
     pub turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
 }
@@ -41,13 +41,13 @@ pub(crate) struct ToolEventCtx<'a> {
 impl<'a> ToolEventCtx<'a> {
     pub fn new(
         session: &'a Session,
-        turn: &'a TurnContext,
+        step_context: &'a StepContext,
         call_id: &'a str,
         turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
     ) -> Self {
         Self {
             session,
-            turn,
+            step_context,
             call_id,
             turn_diff_tracker,
         }
@@ -107,11 +107,11 @@ pub(crate) async fn emit_exec_command_begin(
     if matches!(source, ExecCommandSource::UnifiedExecInteraction) {
         ctx.session
             .send_event(
-                ctx.turn,
+                ctx.step_context.turn.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: ctx.call_id.to_string(),
                     process_id: process_id.map(str::to_owned),
-                    turn_id: ctx.turn.sub_id.clone(),
+                    turn_id: ctx.step_context.turn.sub_id.clone(),
                     started_at_ms: now_unix_timestamp_ms(),
                     command: command.to_vec(),
                     cwd: cwd.clone(),
@@ -125,7 +125,7 @@ pub(crate) async fn emit_exec_command_begin(
     }
     ctx.session
         .emit_turn_item_started(
-            ctx.turn,
+            ctx.step_context.turn.as_ref(),
             &TurnItem::CommandExecution(CommandExecutionItem {
                 id: ctx.call_id.to_string(),
                 process_id: process_id.map(str::to_owned),
@@ -239,7 +239,7 @@ impl ToolEmitter {
             ) => {
                 ctx.session
                     .emit_turn_item_started(
-                        ctx.turn,
+                        ctx.step_context.turn.as_ref(),
                         &TurnItem::FileChange(FileChangeItem {
                             id: ctx.call_id.to_string(),
                             changes: changes.clone(),
@@ -373,7 +373,10 @@ impl ToolEmitter {
         output: &ExecToolCallOutput,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_exec_output_for_model(output, ctx.turn.model_info.truncation_policy.into())
+        super::format_exec_output_for_model(
+            output,
+            ctx.step_context.model.model_info.truncation_policy.into(),
+        )
     }
 
     pub async fn finish(
@@ -524,7 +527,7 @@ async fn emit_exec_stage(
                 duration: output.duration,
                 formatted_output: format_exec_output_str(
                     &output,
-                    ctx.turn.model_info.truncation_policy.into(),
+                    ctx.step_context.model.model_info.truncation_policy.into(),
                 ),
                 status: if output.exit_code == 0 {
                     ExecCommandStatus::Completed
@@ -571,11 +574,11 @@ async fn emit_exec_end(
     if matches!(exec_input.source, ExecCommandSource::UnifiedExecInteraction) {
         ctx.session
             .send_event(
-                ctx.turn,
+                ctx.step_context.turn.as_ref(),
                 EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                     call_id: ctx.call_id.to_string(),
                     process_id: exec_input.process_id.map(str::to_owned),
-                    turn_id: ctx.turn.sub_id.clone(),
+                    turn_id: ctx.step_context.turn.sub_id.clone(),
                     completed_at_ms: now_unix_timestamp_ms(),
                     command: exec_input.command.to_vec(),
                     cwd: exec_input.cwd.clone(),
@@ -596,7 +599,8 @@ async fn emit_exec_end(
     }
     ctx.session
         .emit_turn_item_completed(
-            ctx.turn,
+            ctx.step_context.turn.as_ref(),
+            ctx.step_context.model.as_ref(),
             TurnItem::CommandExecution(CommandExecutionItem {
                 id: ctx.call_id.to_string(),
                 process_id: exec_input.process_id.map(str::to_owned),
@@ -627,7 +631,8 @@ async fn emit_patch_end(
 ) {
     ctx.session
         .emit_turn_item_completed(
-            ctx.turn,
+            ctx.step_context.turn.as_ref(),
+            ctx.step_context.model.as_ref(),
             TurnItem::FileChange(FileChangeItem {
                 id: ctx.call_id.to_string(),
                 changes,
@@ -665,7 +670,10 @@ async fn emit_patch_end(
         };
         if should_emit_turn_diff {
             ctx.session
-                .send_event(ctx.turn, EventMsg::TurnDiff(TurnDiffEvent { unified_diff }))
+                .send_event(
+                    ctx.step_context.turn.as_ref(),
+                    EventMsg::TurnDiff(TurnDiffEvent { unified_diff }),
+                )
                 .await;
         }
     }
@@ -674,6 +682,7 @@ async fn emit_patch_end(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::step_context::StepContext;
     use crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_exec_server::LOCAL_FS;
@@ -693,6 +702,7 @@ mod tests {
     ) {
         let (session, turn, rx_event) =
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
         let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
@@ -715,7 +725,12 @@ mod tests {
             environment_id: None,
         }
         .finish(
-            ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+            ToolEventCtx::new(
+                session.as_ref(),
+                step_context.as_ref(),
+                "call-id",
+                Some(&tracker),
+            ),
             out,
             Some(&delta),
         )
@@ -777,6 +792,7 @@ mod tests {
     async fn net_zero_patch_emits_empty_turn_diff() {
         let (session, turn, rx_event) =
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
         let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
@@ -799,7 +815,12 @@ mod tests {
             .expect("apply patch");
 
             emit_patch_end(
-                ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+                ToolEventCtx::new(
+                    session.as_ref(),
+                    step_context.as_ref(),
+                    "call-id",
+                    Some(&tracker),
+                ),
                 HashMap::new(),
                 String::new(),
                 String::new(),
@@ -830,6 +851,7 @@ mod tests {
     async fn invalidation_emits_empty_turn_diff() {
         let (session, turn, rx_event) =
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let step_context = StepContext::for_test(Arc::clone(&turn));
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
         let dir = tempdir().expect("tempdir");
         let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
@@ -848,7 +870,12 @@ mod tests {
         tracker.lock().await.track_delta("", &delta);
 
         emit_patch_end(
-            ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+            ToolEventCtx::new(
+                session.as_ref(),
+                step_context.as_ref(),
+                "call-id",
+                Some(&tracker),
+            ),
             HashMap::new(),
             String::new(),
             String::new(),

@@ -39,6 +39,8 @@ use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
+use crate::session::step_model_context::StepModelContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::skills::SkillRenderSideEffects;
@@ -212,6 +214,7 @@ mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod step_context;
+pub(crate) mod step_model_context;
 pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
@@ -1274,10 +1277,10 @@ impl Session {
 
     pub(crate) async fn get_estimated_token_count(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Option<i64> {
         let state = self.state.lock().await;
-        state.history.estimate_token_count(turn_context)
+        state.history.estimate_token_count(step_context)
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
@@ -1334,14 +1337,14 @@ impl Session {
                     .await;
             }
             InitialHistory::Resumed(resumed_history) => {
-                let turn_context = self.new_default_turn().await;
+                let step_context_seed = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                    .apply_rollout_reconstruction(&step_context_seed, &rollout_items)
                     .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                let curr: &str = turn_context.model_info.slug.as_str();
+                let curr: &str = step_context_seed.model.model_info.slug.as_str();
                 if let Some(prev) = previous_turn_settings
                     .as_ref()
                     .map(|settings| settings.model.as_str())
@@ -1349,7 +1352,7 @@ impl Session {
                 {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
-                        &turn_context,
+                        step_context_seed.turn.as_ref(),
                         EventMsg::Warning(WarningEvent {
                             message: format!(
                                 "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
@@ -1374,15 +1377,20 @@ impl Session {
                 }
             }
             InitialHistory::Forked(mut rollout_items) => {
-                let turn_context = self.new_default_turn().await;
-                if turn_context.config.features.enabled(Feature::ItemIds) {
+                let step_context_seed = self.new_default_turn().await;
+                if step_context_seed
+                    .turn
+                    .config
+                    .features
+                    .enabled(Feature::ItemIds)
+                {
                     for rollout_item in &mut rollout_items {
                         if let RolloutItem::ResponseItem(response_item) = rollout_item {
                             Self::assign_missing_response_item_id(response_item);
                         }
                     }
                 }
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
+                self.apply_rollout_reconstruction(&step_context_seed, &rollout_items)
                     .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1418,7 +1426,7 @@ impl Session {
     )]
     async fn apply_rollout_reconstruction(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
         let rollout_reconstruction::RolloutReconstruction {
@@ -1431,7 +1439,7 @@ impl Session {
             previous_window_id,
             window_id,
         } = self
-            .reconstruct_history_from_rollout(turn_context, rollout_items)
+            .reconstruct_history_from_rollout(step_context_seed, rollout_items)
             .await;
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy images are processed once for this resume or fork and
@@ -1457,7 +1465,10 @@ impl Session {
             state.set_previous_turn_settings(previous_turn_settings.clone());
         }
         let prefix_tokens = if matches!(
-            turn_context.config.model_auto_compact_token_limit_scope,
+            step_context_seed
+                .turn
+                .config
+                .model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
         ) {
             let history = self.clone_history().await;
@@ -1467,8 +1478,11 @@ impl Session {
             None
         };
         if let Some(prefix_tokens) = prefix_tokens {
-            self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
-                .await;
+            self.set_auto_compact_window_estimated_prefill_for_scope(
+                step_context_seed.turn.as_ref(),
+                prefix_tokens,
+            )
+            .await;
         }
         previous_turn_settings
     }
@@ -1728,7 +1742,7 @@ impl Session {
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
-        current_context: &TurnContext,
+        current_context: &StepContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -1975,9 +1989,10 @@ impl Session {
     pub(crate) async fn emit_turn_item_completed(
         &self,
         turn_context: &TurnContext,
+        model_context: &StepModelContext,
         item: TurnItem,
     ) {
-        record_turn_ttfm_metric(turn_context, &item).await;
+        record_turn_ttfm_metric(turn_context, model_context, &item).await;
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
@@ -2013,21 +2028,30 @@ impl Session {
     }
 
     pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
+        self.step_context_seed_for_sub_id(sub_id)
+            .await
+            .map(|seed| seed.turn)
+    }
+
+    pub(crate) async fn step_context_seed_for_sub_id(
+        &self,
+        sub_id: &str,
+    ) -> Option<StepContextSeed> {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
             .and_then(|turn| turn.task.as_ref())
-            .filter(|task| task.turn_context.sub_id == sub_id)
-            .map(|task| Arc::clone(&task.turn_context))
+            .filter(|task| task.step_context_seed.turn.sub_id == sub_id)
+            .map(|task| task.step_context_seed.clone())
     }
 
     async fn active_turn_context_and_cancellation_token(
         &self,
-    ) -> Option<(Arc<TurnContext>, CancellationToken)> {
+    ) -> Option<(StepContextSeed, CancellationToken)> {
         let active = self.active_turn.lock().await;
         let task = active.as_ref()?.task.as_ref()?;
         Some((
-            Arc::clone(&task.turn_context),
+            task.step_context_seed.clone(),
             task.cancellation_token.child_token(),
         ))
     }
@@ -2043,8 +2067,8 @@ impl Session {
         };
         let message: ResponseItem =
             ContextualUserFragment::into(ApprovedCommandPrefixSaved::new(prefixes));
-        let turn_context = self.turn_context_for_sub_id(sub_id).await;
-        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+        let step_context_seed = self.step_context_seed_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], step_context_seed.as_ref())
             .await;
     }
 
@@ -2123,8 +2147,8 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
     ) {
         let message: ResponseItem = ContextualUserFragment::into(NetworkRuleSaved::new(amendment));
-        let turn_context = self.turn_context_for_sub_id(sub_id).await;
-        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+        let step_context_seed = self.step_context_seed_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], step_context_seed.as_ref())
             .await;
     }
 
@@ -2264,12 +2288,13 @@ impl Session {
     )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        step_context_seed: &StepContextSeed,
         call_id: String,
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        let turn_context = &step_context_seed.turn;
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2313,7 +2338,6 @@ impl Session {
             };
             let review_id = crate::guardian::new_guardian_review_id();
             let session = Arc::clone(self);
-            let turn = Arc::clone(turn_context);
             let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id: call_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -2322,7 +2346,7 @@ impl Session {
             };
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
-                turn,
+                step_context_seed.clone(),
                 review_id,
                 request,
                 /*retry_reason*/ None,
@@ -2431,12 +2455,13 @@ impl Session {
 
     pub(crate) async fn request_permissions_for_cwd(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        step_context_seed: &StepContextSeed,
         call_id: String,
         args: RequestPermissionsArgs,
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        let turn_context = &step_context_seed.turn;
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
@@ -2455,7 +2480,7 @@ impl Session {
         let mut environment = turn_environment.selection();
         environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
-            turn_context,
+            step_context_seed,
             call_id,
             args,
             environment,
@@ -2798,9 +2823,10 @@ impl Session {
     }
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
-    pub(crate) async fn record_conversation_items(
+    async fn record_conversation_items_with_model(
         &self,
         turn_context: &TurnContext,
+        model_context: &StepModelContext,
         items: &[ResponseItem],
     ) {
         let items = self.prepare_conversation_items_for_history(turn_context, items);
@@ -2810,11 +2836,37 @@ impl Session {
             state.current_time_reminder.note_recorded_items(items);
             state.record_items(
                 items.iter(),
-                turn_context.model_info.truncation_policy.into(),
+                model_context.model_info.truncation_policy.into(),
             );
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+    }
+
+    pub(crate) async fn record_conversation_items(
+        &self,
+        step_context: &StepContext,
+        items: &[ResponseItem],
+    ) {
+        self.record_conversation_items_with_model(
+            step_context.turn.as_ref(),
+            step_context.model.as_ref(),
+            items,
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_conversation_items_for_seed(
+        &self,
+        step_context_seed: &StepContextSeed,
+        items: &[ResponseItem],
+    ) {
+        self.record_conversation_items_with_model(
+            step_context_seed.turn.as_ref(),
+            step_context_seed.model.as_ref(),
+            items,
+        )
+        .await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(
@@ -2835,7 +2887,7 @@ impl Session {
             world_state.render_diff(&previous_snapshot),
         );
         if !items.is_empty() {
-            self.record_conversation_items(turn_context, &items).await;
+            self.record_conversation_items(step_context, &items).await;
         }
 
         // ContextManager remembers this for later turns; run_turn owns the live value.
@@ -2860,8 +2912,9 @@ impl Session {
     #[tracing::instrument(name = "step_context.capture", level = "info", skip_all)]
     pub(crate) async fn capture_step_context(
         self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
+        seed: &StepContextSeed,
     ) -> Arc<StepContext> {
+        let turn_context = &seed.turn;
         let deferred_executor_enabled = turn_context
             .config
             .features
@@ -2890,7 +2943,8 @@ impl Session {
             )
             .await;
         Arc::new(StepContext::new(
-            turn_context,
+            Arc::clone(&seed.turn),
+            Arc::clone(&seed.model),
             environments,
             selected_capability_roots,
             mcp,
@@ -2900,9 +2954,10 @@ impl Session {
 
     pub(crate) async fn record_inter_agent_communication(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         mut communication: InterAgentCommunication,
     ) {
+        let turn_context = step_context_seed.turn.as_ref();
         communication.set_turn_id_if_missing(&turn_context.sub_id);
         let response_item = communication.to_model_input_item();
         let items = self.prepare_conversation_items_for_history(
@@ -2916,7 +2971,7 @@ impl Session {
             state.current_time_reminder.note_recorded_items(items);
             state.record_items(
                 items.iter(),
-                turn_context.model_info.truncation_policy.into(),
+                step_context_seed.model.model_info.truncation_policy.into(),
             );
         }
         self.persist_rollout_items(&[
@@ -2931,10 +2986,11 @@ impl Session {
 
     async fn maybe_warn_on_server_model_mismatch(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        step_context: &Arc<StepContext>,
         server_model: String,
     ) -> bool {
-        let requested_model = turn_context.model_info.slug.clone();
+        let turn_context = &step_context.turn;
+        let requested_model = step_context.model.model_info.slug.clone();
         let server_model_normalized = server_model.to_ascii_lowercase();
         let requested_model_normalized = requested_model.to_ascii_lowercase();
         if server_model_normalized == requested_model_normalized {
@@ -3107,8 +3163,9 @@ impl Session {
 
     async fn build_turn_context_contribution_items(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::new();
         let mut contextual_user_sections = Vec::new();
         let mut separate_developer_sections = Vec::new();
@@ -3122,7 +3179,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
-                    model_context_window: turn_context.model_context_window(),
+                    model_context_window: step_context.model.model_context_window(),
                 })
                 .await
             {
@@ -3158,27 +3215,27 @@ impl Session {
 
     pub(crate) async fn build_initial_context_with_world_state(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
         let mcp = self.services.latest_mcp_runtime();
-        self.build_initial_context_with_world_state_and_mcp(turn_context, world_state, &mcp)
+        self.build_initial_context_with_world_state_and_mcp(step_context, world_state, &mcp)
             .await
     }
 
     async fn build_initial_context_with_world_state_and_mcp(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         world_state: &WorldState,
         mcp: &McpRuntimeSnapshot,
     ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let mut separate_developer_sections = Vec::<String>::new();
         let (
             reference_context_item,
             previous_turn_settings,
-            collaboration_mode,
             base_instructions,
             session_source,
             auto_compact_window_ids,
@@ -3187,7 +3244,6 @@ impl Session {
             (
                 state.reference_context_item(),
                 state.previous_turn_settings(),
-                state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
                 state.auto_compact_window_ids(),
@@ -3196,7 +3252,7 @@ impl Session {
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
-                turn_context,
+                step_context,
             )
         {
             developer_sections.push(model_switch_message);
@@ -3235,7 +3291,9 @@ impl Session {
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if turn_context.config.include_collaboration_mode_instructions
             && let Some(collab_instructions) =
-                CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
+                CollaborationModeInstructions::from_collaboration_mode(
+                    &step_context.model.collaboration_mode,
+                )
         {
             developer_sections.push(collab_instructions.render());
         }
@@ -3249,7 +3307,7 @@ impl Session {
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
-            let model_info = turn_context.model_info.clone();
+            let model_info = step_context.model.model_info.clone();
             let has_baked_personality = model_info.supports_personality()
                 && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
@@ -3266,7 +3324,7 @@ impl Session {
         if turn_context.config.include_skill_instructions {
             let available_skills = build_available_skills(
                 turn_context.turn_skills.snapshot.outcome(),
-                default_skill_metadata_budget(turn_context.model_info.context_window),
+                default_skill_metadata_budget(step_context.model.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
                 },
@@ -3275,7 +3333,10 @@ impl Session {
                 let warning_message = available_skills.warning_message.clone();
                 let skills_instructions = AvailableSkillsInstructions::from_available_skills(
                     &available_skills,
-                    turn_context.model_info.include_skills_usage_instructions,
+                    step_context
+                        .model
+                        .model_info
+                        .include_skills_usage_instructions,
                 );
                 if let Some(warning_message) = warning_message {
                     self.send_event_raw(Event {
@@ -3323,6 +3384,7 @@ impl Session {
                 .contribute_thread_context(
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
+                    &step_context.model.model_info,
                 )
                 .await
             {
@@ -3342,7 +3404,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
-                    model_context_window: turn_context.model_context_window(),
+                    model_context_window: step_context.model.model_context_window(),
                 })
                 .await
             {
@@ -3356,7 +3418,7 @@ impl Session {
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
-            && turn_context.model_context_window().is_some()
+            && step_context.model.model_context_window().is_some()
         {
             let mcp_result = mcp
                 .manager()
@@ -3435,7 +3497,7 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
-        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(turn_context) {
+        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(step_context) {
             items.push(ContextualUserFragment::into(
                 MultiAgentModeInstructions::new(multi_agent_mode),
             ));
@@ -3502,18 +3564,19 @@ impl Session {
 
     pub(crate) async fn start_new_context_window(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         world_state: Arc<WorldState>,
     ) -> u64 {
+        let turn_context = step_context.turn.as_ref();
         let window = {
             let mut state = self.state.lock().await;
             state.start_new_context_window()
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+            .build_initial_context_with_world_state(step_context, world_state.as_ref())
             .await;
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(
             turn_context,
             context_items,
@@ -3529,7 +3592,8 @@ impl Session {
             },
         )
         .await;
-        self.recompute_token_usage(turn_context).await;
+        self.recompute_token_usage(turn_context, step_context.model.as_ref())
+            .await;
         window_number
     }
 
@@ -3561,7 +3625,7 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = step_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
         let world_state = Arc::new(self.build_world_state_for_step(step_context).await);
@@ -3569,7 +3633,7 @@ impl Session {
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
                 .build_initial_context_with_world_state_and_mcp(
-                    turn_context,
+                    step_context,
                     world_state.as_ref(),
                     step_context.mcp.as_ref(),
                 )
@@ -3588,7 +3652,7 @@ impl Session {
             // Steady-state path: append only built-in context diffs here; turn-scoped extension
             // context is added below.
             let mut context_items = self
-                .build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                .build_settings_update_items(reference_context_item.as_ref(), step_context)
                 .await;
             let (world_state_items, world_state_item) = {
                 let mut state = self.state.lock().await;
@@ -3604,7 +3668,7 @@ impl Session {
         };
         if !should_inject_full_context && turn_context_changed {
             context_items.extend(
-                self.build_turn_context_contribution_items(turn_context)
+                self.build_turn_context_contribution_items(step_context)
                     .await,
             );
         }
@@ -3614,7 +3678,7 @@ impl Session {
             return world_state;
         }
         if !context_items.is_empty() {
-            self.record_conversation_items(turn_context, &context_items)
+            self.record_conversation_items(step_context, &context_items)
                 .await;
         }
         // Persist state only after any model-visible context generated from it.
@@ -3640,26 +3704,30 @@ impl Session {
 
     pub(crate) async fn update_token_usage_info(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
         let result = self
-            .record_token_usage_info(turn_context, token_usage)
+            .record_token_usage_info(step_context, token_usage)
             .await;
-        self.send_token_count_event(turn_context).await;
+        self.send_token_count_event(step_context.turn.as_ref())
+            .await;
         result
     }
 
     pub(crate) async fn record_token_usage_info(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
+        let turn_context = step_context.turn.as_ref();
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state.update_token_info_from_usage(
+                    token_usage,
+                    step_context.model.model_context_window(),
+                );
                 if matches!(
                     turn_context.config.model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -3686,7 +3754,11 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+    pub(crate) async fn recompute_token_usage(
+        &self,
+        turn_context: &TurnContext,
+        model_context: &StepModelContext,
+    ) {
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
@@ -3710,7 +3782,7 @@ impl Session {
                 total_tokens: estimated_total_tokens.max(0),
             };
 
-            if let Some(model_context_window) = turn_context.model_context_window() {
+            if let Some(model_context_window) = model_context.model_context_window() {
                 info.model_context_window = Some(model_context_window);
             }
 
@@ -3767,8 +3839,9 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        if let Some(context_window) = turn_context.model_context_window() {
+    pub(crate) async fn set_total_tokens_full(&self, step_context: &StepContext) {
+        let turn_context = step_context.turn.as_ref();
+        if let Some(context_window) = step_context.model.model_context_window() {
             let mut state = self.state.lock().await;
             state.set_token_usage_full(context_window);
         }
@@ -3777,37 +3850,47 @@ impl Session {
 
     pub(crate) async fn record_response_item_and_emit_turn_item(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         response_item: ResponseItem,
     ) {
+        let turn_context = step_context_seed.turn.as_ref();
         // Add to conversation history and persist response item to rollout.
-        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+        self.record_conversation_items_for_seed(
+            step_context_seed,
+            std::slice::from_ref(&response_item),
+        )
+        .await;
 
         // Derive a turn item and emit lifecycle events if applicable.
         if let Some(item) = parse_turn_item(&response_item) {
             self.emit_turn_item_started(turn_context, &item).await;
-            self.emit_turn_item_completed(turn_context, item).await;
+            self.emit_turn_item_completed(turn_context, step_context_seed.model.as_ref(), item)
+                .await;
         }
     }
 
     pub(crate) async fn record_user_prompt_and_emit_turn_item(
         &self,
-        turn_context: &TurnContext,
+        step_context_seed: &StepContextSeed,
         input: &[UserInput],
         client_id: Option<String>,
     ) {
+        let turn_context = step_context_seed.turn.as_ref();
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         let response_item = self.response_item_from_user_input(input.to_vec());
-        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+        self.record_conversation_items_for_seed(
+            step_context_seed,
+            std::slice::from_ref(&response_item),
+        )
+        .await;
         let mut user_message_item = UserMessageItem::new(input);
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
-        self.emit_turn_item_completed(turn_context, turn_item).await;
+        self.emit_turn_item_completed(turn_context, step_context_seed.model.as_ref(), turn_item)
+            .await;
         self.ensure_rollout_materialized().await;
     }
 
@@ -3852,7 +3935,7 @@ impl Session {
         let Some(active_task) = active_turn.task.as_ref() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
-        let active_turn_id = &active_task.turn_context.sub_id;
+        let active_turn_id = &active_task.step_context_seed.turn.sub_id;
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3888,7 +3971,8 @@ impl Session {
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
             active_task
-                .turn_context
+                .step_context_seed
+                .turn
                 .turn_metadata_state
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }

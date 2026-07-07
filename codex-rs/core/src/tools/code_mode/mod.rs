@@ -26,7 +26,7 @@ use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_model_context::StepModelContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -60,7 +60,7 @@ pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
 #[derive(Clone)]
 pub(crate) struct ExecContext {
     pub(super) session: Arc<Session>,
-    pub(super) turn: Arc<TurnContext>,
+    pub(super) step_context: Arc<StepContext>,
 }
 
 pub(crate) struct CodeModeService {
@@ -139,14 +139,14 @@ impl CodeModeService {
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
         let turn = &step_context.turn;
-        let tool_mode = effective_tool_mode(turn);
+        let tool_mode = effective_tool_mode(step_context.model.as_ref(), &turn.config.features);
         if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
         let exec = ExecContext {
             session: Arc::clone(session),
-            turn: Arc::clone(turn),
+            step_context: Arc::clone(&step_context),
         };
         Some(
             self.dispatch_broker
@@ -189,14 +189,14 @@ pub(super) async fn handle_runtime_response(
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
+            sanitize_runtime_image_detail(exec.step_context.model.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
+            sanitize_runtime_image_detail(exec.step_context.model.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
@@ -207,7 +207,7 @@ pub(super) async fn handle_runtime_response(
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
+            sanitize_runtime_image_detail(exec.step_context.model.as_ref(), &mut content_items);
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
                 content_items.push(FunctionCallOutputContentItem::InputText {
@@ -224,8 +224,11 @@ pub(super) async fn handle_runtime_response(
     }
 }
 
-fn sanitize_runtime_image_detail(turn: &TurnContext, items: &mut [FunctionCallOutputContentItem]) {
-    sanitize_image_detail_items(can_request_original_image_detail(&turn.model_info), items);
+fn sanitize_runtime_image_detail(
+    model: &StepModelContext,
+    items: &mut [FunctionCallOutputContentItem],
+) {
+    sanitize_image_detail_items(can_request_original_image_detail(&model.model_info), items);
 }
 
 fn format_script_status(response: &RuntimeResponse) -> String {

@@ -109,13 +109,13 @@ impl ExecCommandHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
             step_context,
             tracker,
             call_id,
             payload,
             ..
         } = invocation;
+        let turn = Arc::clone(&step_context.turn);
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -127,7 +127,8 @@ impl ExecCommandHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let context =
+            UnifiedExecContext::new(session.clone(), step_context.clone(), call_id.clone());
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
         let Some(turn_environment) = resolve_tool_environment(
             &step_context.environments,
@@ -194,7 +195,7 @@ impl ExecCommandHandler {
         if let Some(native_cwd) = native_cwd.as_ref() {
             maybe_emit_implicit_skill_invocation(
                 session.as_ref(),
-                context.turn.as_ref(),
+                context.step_context.as_ref(),
                 &hook_command,
                 native_cwd,
             )
@@ -275,11 +276,11 @@ impl ExecCommandHandler {
             .requests_sandbox_override()
             && !effective_additional_permissions.permissions_preapproved
             && !matches!(
-                context.turn.approval_policy.value(),
+                turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
-            let approval_policy = context.turn.approval_policy.value();
+            let approval_policy = turn.approval_policy.value();
             manager.release_process_id(process_id).await;
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
@@ -295,7 +296,7 @@ impl ExecCommandHandler {
             || {
                 normalize_and_validate_additional_permissions(
                     additional_permissions_allowed,
-                    context.turn.approval_policy.value(),
+                    turn.approval_policy.value(),
                     effective_additional_permissions.sandbox_permissions,
                     effective_additional_permissions.additional_permissions,
                     effective_additional_permissions.permissions_preapproved,
@@ -317,7 +318,7 @@ impl ExecCommandHandler {
             fs.as_ref(),
             turn_environment.clone(),
             context.session.clone(),
-            context.turn.clone(),
+            context.step_context.clone(),
             Some(&tracker),
             &context.call_id,
             "exec_command",
@@ -330,7 +331,12 @@ impl ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
-                truncation_policy: turn.model_info.truncation_policy.into(),
+                truncation_policy: context
+                    .step_context
+                    .model
+                    .model_info
+                    .truncation_policy
+                    .into(),
                 max_output_tokens,
                 process_id: None,
                 exit_code: None,
@@ -339,7 +345,7 @@ impl ExecCommandHandler {
             }));
         }
 
-        emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
+        emit_unified_exec_tty_metric(&context.step_context.model.session_telemetry, tty);
         match manager
             .exec_command(
                 ExecCommandRequest {
@@ -353,7 +359,7 @@ impl ExecCommandHandler {
                     sandbox_cwd: native_environment_cwd,
                     turn_environment: turn_environment.clone(),
                     shell_mode,
-                    network: context.turn.network.clone(),
+                    network: turn.network.clone(),
                     tty,
                     sandbox_permissions: effective_additional_permissions.sandbox_permissions,
                     additional_permissions: normalized_additional_permissions,
@@ -375,7 +381,12 @@ impl ExecCommandHandler {
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
-                    truncation_policy: turn.model_info.truncation_policy.into(),
+                    truncation_policy: context
+                        .step_context
+                        .model
+                        .model_info
+                        .truncation_policy
+                        .into(),
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.

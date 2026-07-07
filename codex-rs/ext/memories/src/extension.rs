@@ -6,6 +6,7 @@ use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ModelInfo;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
@@ -52,6 +53,7 @@ impl ContextContributor for MemoriesExtension {
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _model_info: &'a ModelInfo,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {

@@ -51,7 +51,7 @@ use crate::session::CodexSpawnOk;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContextSeed;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -78,11 +78,12 @@ pub(crate) async fn run_codex_thread_interactive(
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
+    parent_ctx: StepContextSeed,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    let parent_turn = &parent_ctx.turn;
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
@@ -113,16 +114,16 @@ pub(crate) async fn run_codex_thread_interactive(
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
-        originator: parent_ctx.originator.clone(),
+        originator: parent_turn.originator.clone(),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
         user_shell_override: None,
-        inherited_environments: Some(parent_ctx.environments.clone()),
+        inherited_environments: Some(parent_turn.environments.clone()),
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_selections: parent_ctx.environments.to_selections(),
+        environment_selections: parent_turn.environments.to_selections(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: parent_session
             .services
@@ -156,7 +157,7 @@ pub(crate) async fn run_codex_thread_interactive(
     // Forward events from the sub-agent to the consumer, filtering approvals and
     // routing them to the parent session for decisions.
     let parent_session_clone = Arc::clone(&parent_session);
-    let parent_ctx_clone = Arc::clone(&parent_ctx);
+    let parent_ctx_clone = parent_ctx.clone();
     let codex_for_events = Arc::clone(&codex);
     // Cache the child call's MCP metadata at begin time. The later legacy
     // RequestUserInput approval event only carries a call_id and question metadata.
@@ -199,7 +200,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     models_manager: SharedModelsManager,
     input: Vec<UserInput>,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
+    parent_ctx: StepContextSeed,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
@@ -278,7 +279,7 @@ async fn forward_events(
     codex: Arc<Codex>,
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
+    parent_ctx: StepContextSeed,
     pending_mcp_invocations: Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     cancel_token: CancellationToken,
 ) {
@@ -492,10 +493,11 @@ async fn handle_exec_approval(
     codex: &Codex,
     turn_id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
+    parent_ctx: &StepContextSeed,
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_turn = &parent_ctx.turn;
     let approval_id_for_op = event.effective_approval_id();
     let ExecApprovalRequestEvent {
         call_id,
@@ -510,11 +512,11 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
-    let decision = if routes_approval_to_guardian(parent_ctx) {
+    let decision = if routes_approval_to_guardian(parent_turn) {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
+            parent_ctx.clone(),
             new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
@@ -543,7 +545,7 @@ async fn handle_exec_approval(
     } else {
         await_approval_with_cancel(
             parent_session.request_command_approval(
-                parent_ctx,
+                parent_turn,
                 call_id,
                 approval_id,
                 environment_id,
@@ -577,10 +579,11 @@ async fn handle_patch_approval(
     codex: &Codex,
     _id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
+    parent_ctx: &StepContextSeed,
     event: ApplyPatchApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_turn = &parent_ctx.turn;
     let ApplyPatchApprovalRequestEvent {
         call_id,
         changes,
@@ -589,12 +592,12 @@ async fn handle_patch_approval(
         ..
     } = event;
     let approval_id = call_id.clone();
-    let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
+    let guardian_decision = if routes_approval_to_guardian(parent_turn) {
         let files = changes
             .keys()
             .map(|path| {
                 #[allow(deprecated)]
-                parent_ctx.cwd.join(path)
+                parent_turn.cwd.join(path)
             })
             .collect::<Vec<_>>();
         let review_cancel = cancel_token.child_token();
@@ -627,12 +630,12 @@ async fn handle_patch_approval(
             .join("\n");
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
+            parent_ctx.clone(),
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
                 #[allow(deprecated)]
-                cwd: parent_ctx.cwd.clone(),
+                cwd: parent_turn.cwd.clone(),
                 files,
                 patch,
             },
@@ -657,7 +660,7 @@ async fn handle_patch_approval(
         decision
     } else {
         let decision_rx = parent_session
-            .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
+            .request_patch_approval(parent_turn, call_id, changes, reason, grant_root)
             .await;
         await_approval_with_cancel(
             async move { decision_rx.await.unwrap_or_default() },
@@ -680,11 +683,12 @@ async fn handle_request_user_input(
     codex: &Codex,
     id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
+    parent_ctx: &StepContextSeed,
     pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_turn = &parent_ctx.turn;
     if let Some(response) = maybe_auto_review_mcp_request_user_input(
         parent_session,
         parent_ctx,
@@ -703,11 +707,11 @@ async fn handle_request_user_input(
         auto_resolution_ms: event.auto_resolution_ms,
     };
     let response_fut =
-        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+        parent_session.request_user_input(parent_turn, parent_turn.sub_id.clone(), args);
     let response = await_user_input_with_cancel(
         response_fut,
         parent_session,
-        &parent_ctx.sub_id,
+        &parent_turn.sub_id,
         cancel_token,
     )
     .await;
@@ -723,11 +727,12 @@ async fn handle_request_user_input(
 /// `McpToolCallBegin` in order to rebuild the full guardian review request.
 async fn maybe_auto_review_mcp_request_user_input(
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
+    parent_ctx: &StepContextSeed,
     pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     event: &RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) -> Option<RequestUserInputResponse> {
+    let parent_turn = &parent_ctx.turn;
     // TODO(ccunningham): Support delegated MCP approval elicitations here too after
     // coordinating with @fouad. Today guardian only auto-reviews the RequestUserInput
     // compatibility path for delegated MCP approvals.
@@ -743,14 +748,14 @@ async fn maybe_auto_review_mcp_request_user_input(
     let invocation = pending.invocation;
     let metadata = pending.metadata;
     let approvals_reviewer =
-        mcp_approvals_reviewer(parent_ctx, &invocation.server, metadata.as_ref());
-    if !routes_approval_to_guardian_with_reviewer(parent_ctx, approvals_reviewer) {
+        mcp_approvals_reviewer(parent_turn, &invocation.server, metadata.as_ref());
+    if !routes_approval_to_guardian_with_reviewer(parent_turn, approvals_reviewer) {
         return None;
     }
     let review_cancel = cancel_token.child_token();
     let review_rx = spawn_approval_request_review(
         Arc::clone(parent_session),
-        Arc::clone(parent_ctx),
+        parent_ctx.clone(),
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
@@ -796,10 +801,11 @@ async fn maybe_auto_review_mcp_request_user_input(
 async fn handle_request_permissions(
     codex: &Codex,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
+    parent_ctx: &StepContextSeed,
     event: RequestPermissionsEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_turn = &parent_ctx.turn;
     let call_id = event.call_id;
     let args = RequestPermissionsArgs {
         environment_id: event.environment_id,
@@ -808,7 +814,7 @@ async fn handle_request_permissions(
     };
     let cwd = event.cwd.unwrap_or_else(|| {
         #[allow(deprecated)]
-        parent_ctx.cwd.clone()
+        parent_turn.cwd.clone()
     });
     let response_fut = parent_session.request_permissions_for_cwd(
         parent_ctx,

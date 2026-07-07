@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::tests::build_world_state_from_turn_context;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
@@ -270,9 +270,10 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
     let (session, turn_context) = make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
-    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let world_state = session.build_world_state_for_step(&step_context).await;
     let mut items = session
-        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .build_initial_context_with_world_state(&step_context, &world_state)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));

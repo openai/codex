@@ -17,7 +17,8 @@ pub(crate) mod tool_dispatch_trace;
 
 use std::borrow::Cow;
 
-use crate::session::turn_context::TurnContext;
+use crate::config::ManagedFeatures;
+use crate::session::step_model_context::StepModelContext;
 use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::openai_models::ToolMode;
@@ -60,11 +61,11 @@ pub(crate) fn tool_user_shell_type(
     }
 }
 
-fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
-    turn_context.model_info.tool_mode.unwrap_or_else(|| {
-        if turn_context.config.features.enabled(Feature::CodeModeOnly) {
+fn effective_tool_mode(model: &StepModelContext, features: &ManagedFeatures) -> ToolMode {
+    model.model_info.tool_mode.unwrap_or_else(|| {
+        if features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly
-        } else if turn_context.config.features.enabled(Feature::CodeMode) {
+        } else if features.enabled(Feature::CodeMode) {
             ToolMode::CodeMode
         } else {
             ToolMode::Direct

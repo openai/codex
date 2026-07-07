@@ -6,6 +6,7 @@ use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
+use codex_protocol::openai_models::ModelInfo;
 
 /// Installs the tutorial contributors used by the example host.
 pub fn install(registry: &mut ExtensionRegistryBuilder<()>) {
@@ -21,6 +22,7 @@ impl ContextContributor for StyleContributor {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _model_info: &'a ModelInfo,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_style();
@@ -41,6 +43,7 @@ impl ContextContributor for UsageContributor {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _model_info: &'a ModelInfo,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_usage();

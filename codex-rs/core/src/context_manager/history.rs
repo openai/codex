@@ -5,7 +5,7 @@ use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
@@ -159,8 +159,9 @@ impl ContextManager {
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
-    pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model_info = &turn_context.model_info;
+    pub(crate) fn estimate_token_count(&self, step_context: &StepContext) -> Option<i64> {
+        let model_info = &step_context.model.model_info;
+        let turn_context = &step_context.turn;
         let personality = turn_context.personality.or(turn_context.config.personality);
         let base_instructions = BaseInstructions {
             text: model_info.get_model_instructions(personality),

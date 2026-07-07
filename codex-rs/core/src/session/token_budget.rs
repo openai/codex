@@ -1,13 +1,14 @@
 use super::session::Session;
-use super::turn_context::TurnContext;
+use super::step_context::StepContext;
 use crate::context::ContextualUserFragment;
 use codex_features::Feature;
 
 pub(super) async fn maybe_record(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     tokens_until_compaction: Option<i64>,
 ) {
+    let turn_context = step_context.turn.as_ref();
     if !turn_context.config.features.enabled(Feature::TokenBudget) {
         return;
     }
@@ -35,6 +36,6 @@ pub(super) async fn maybe_record(
         &config.reminder_message_template,
         tokens_until_compaction,
     ));
-    sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+    sess.record_conversation_items(step_context, std::slice::from_ref(&response_item))
         .await;
 }

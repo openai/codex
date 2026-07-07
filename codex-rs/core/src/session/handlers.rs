@@ -204,7 +204,7 @@ pub(super) async fn user_input_or_turn_inner(
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
+    let Ok(step_context_seed) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
@@ -215,7 +215,7 @@ pub(super) async fn user_input_or_turn_inner(
         })
         .await;
     }
-    sess.maybe_emit_model_warnings_for_turn(current_context.as_ref())
+    sess.maybe_emit_model_warnings_for_turn(&step_context_seed)
         .await;
     match sess
         .steer_input(
@@ -228,17 +228,24 @@ pub(super) async fn user_input_or_turn_inner(
         .await
     {
         Ok(_) => {
-            current_context.session_telemetry.user_prompt(&items);
+            step_context_seed
+                .model
+                .session_telemetry
+                .user_prompt(&items);
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-                current_context
+                step_context_seed
+                    .turn
                     .turn_metadata_state
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
-            current_context.session_telemetry.user_prompt(&items);
+            step_context_seed
+                .model
+                .session_telemetry
+                .user_prompt(&items);
             sess.refresh_mcp_servers_if_requested(
-                &current_context,
+                step_context_seed.turn.as_ref(),
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .await;
@@ -258,7 +265,7 @@ pub(super) async fn user_input_or_turn_inner(
                 });
             }
             sess.spawn_task(
-                Arc::clone(&current_context),
+                step_context_seed,
                 task_input,
                 crate::tasks::RegularTask::new(),
             )
@@ -293,14 +300,14 @@ pub async fn inter_agent_communication(
 }
 
 pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
-    if let Some((turn_context, cancellation_token)) =
+    if let Some((step_context_seed, cancellation_token)) =
         sess.active_turn_context_and_cancellation_token().await
     {
         let session = Arc::clone(sess);
         tokio::spawn(async move {
             execute_user_shell_command(
                 session,
-                turn_context,
+                step_context_seed,
                 command,
                 cancellation_token,
                 UserShellCommandMode::ActiveTurnAuxiliary,
@@ -310,9 +317,9 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let step_context_seed = sess.new_default_turn_with_sub_id(sub_id).await;
     sess.spawn_task(
-        Arc::clone(&turn_context),
+        step_context_seed,
         Vec::new(),
         UserShellCommandTask::new(command),
     )
@@ -443,9 +450,9 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let step_context_seed = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+    sess.spawn_task(step_context_seed, Vec::new(), CompactTask)
         .await;
 }
 
@@ -475,7 +482,8 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let step_context_seed = sess.new_default_turn_with_sub_id(sub_id).await;
+    let turn_context = &step_context_seed.turn;
     let live_thread = match sess.live_thread_for_persistence("rollback thread") {
         Ok(live_thread) => live_thread,
         Err(_) => {
@@ -524,13 +532,17 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    sess.apply_rollout_reconstruction(&step_context_seed, replay_items.as_slice())
         .await;
     sess.services
         .agent_control
         .rollout_budget()
         .rearm_reminder(sess.thread_id());
-    sess.recompute_token_usage(turn_context.as_ref()).await;
+    sess.recompute_token_usage(
+        step_context_seed.turn.as_ref(),
+        step_context_seed.model.as_ref(),
+    )
+    .await;
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
         .await;
@@ -670,18 +682,21 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-    sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
+    let step_context_seed = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+    sess.maybe_emit_model_warnings_for_turn(&step_context_seed)
         .await;
-    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
-        .await;
+    sess.refresh_mcp_servers_if_requested(
+        step_context_seed.turn.as_ref(),
+        Some(sess.mcp_elicitation_reviewer()),
+    )
+    .await;
     #[allow(deprecated)]
-    match resolve_review_request(review_request, &turn_context.cwd) {
+    match resolve_review_request(review_request, &step_context_seed.turn.cwd) {
         Ok(resolved) => {
             spawn_review_thread(
                 Arc::clone(sess),
                 Arc::clone(config),
-                turn_context.clone(),
+                step_context_seed.clone(),
                 sub_id,
                 resolved,
             )
@@ -695,7 +710,8 @@ pub async fn review(
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
-            sess.send_event(&turn_context, event.msg).await;
+            sess.send_event(step_context_seed.turn.as_ref(), event.msg)
+                .await;
         }
     }
 }
@@ -896,7 +912,7 @@ Approved action:
         phase: None,
     })];
 
-    sess.inject_no_new_turn(items, /*current_turn_context*/ None)
+    sess.inject_no_new_turn(items, /*current_step_context_seed*/ None)
         .await;
 }
 

@@ -104,6 +104,7 @@ where
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        model_info: &'a ModelInfo,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
@@ -130,9 +131,7 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            let include_usage = thread_store
-                .get::<ModelInfo>()
-                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            let include_usage = model_info.include_skills_usage_instructions;
             available_skills_fragment(&catalog, include_usage)
                 .map(|fragment| PromptFragment::developer_capability(fragment.render()))
                 .into_iter()
@@ -166,10 +165,7 @@ where
             input
                 .turn_store
                 .insert(ExecutorSkillsStepState(catalog.clone()));
-            let include_usage = input
-                .thread_store
-                .get::<ModelInfo>()
-                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            let include_usage = input.model_info.include_skills_usage_instructions;
             vec![executor_skills_world_state_section(
                 &catalog,
                 config.include_instructions,
@@ -212,6 +208,7 @@ where
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
+        model_info: &'a ModelInfo,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
@@ -248,9 +245,7 @@ where
                     entry.authority.kind != SkillSourceKind::Executor
                         && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
-                let include_usage = thread_store
-                    .get::<ModelInfo>()
-                    .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+                let include_usage = model_info.include_skills_usage_instructions;
                 if let Some(fragment) = available_skills_fragment(&turn_catalog, include_usage) {
                     fragments.push(Box::new(fragment));
                 }

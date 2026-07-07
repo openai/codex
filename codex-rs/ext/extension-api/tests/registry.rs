@@ -27,6 +27,7 @@ use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::empty_extension_registry;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
@@ -40,6 +41,7 @@ impl ContextContributor for AllContributors {
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
+        _model_info: &'a ModelInfo,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(Vec::new()))
     }
@@ -57,6 +59,7 @@ impl TurnInputContributor for AllContributors {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
+        _model_info: &'a ModelInfo,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
         _turn_store: &'a ExtensionData,
@@ -153,6 +156,7 @@ impl ContextContributor for NamedContextContributor {
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
+        _model_info: &'a ModelInfo,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(vec![PromptFragment::developer_policy(
             self.0,
@@ -214,12 +218,13 @@ async fn contributors_preserve_registration_order() {
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
     let turn_store = ExtensionData::new("turn");
+    let model_info = test_model_info();
 
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
         fragments.extend(
             contributor
-                .contribute_thread_context(&session_store, &thread_store)
+                .contribute_thread_context(&session_store, &thread_store, &model_info)
                 .await,
         );
     }
@@ -412,4 +417,24 @@ fn warning_event(id: &str, message: &str) -> Event {
             message: message.to_string(),
         }),
     }
+}
+
+fn test_model_info() -> ModelInfo {
+    serde_json::from_value(serde_json::json!({
+        "slug": "test-model",
+        "display_name": "Test Model",
+        "supported_reasoning_levels": [],
+        "shell_type": "default",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 0,
+        "service_tiers": [],
+        "base_instructions": "",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "truncation_policy": { "mode": "bytes", "limit": 10_000 },
+        "supports_parallel_tool_calls": false,
+        "experimental_supported_tools": []
+    }))
+    .expect("test model metadata should deserialize")
 }

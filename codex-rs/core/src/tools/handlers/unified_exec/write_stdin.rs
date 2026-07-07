@@ -52,7 +52,7 @@ impl WriteStdinHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             payload,
             ..
         } = invocation;
@@ -75,7 +75,7 @@ impl WriteStdinHandler {
                 input: &args.chars,
                 yield_time_ms: args.yield_time_ms,
                 max_output_tokens: args.max_output_tokens,
-                truncation_policy: turn.model_info.truncation_policy.into(),
+                truncation_policy: step_context.model.model_info.truncation_policy.into(),
             })
             .await
             .map_err(|err| {

@@ -9,6 +9,7 @@ use super::join_program_and_argv;
 use super::map_exec_result;
 use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use anyhow::Context;
 use codex_execpolicy::Decision;
@@ -406,7 +407,7 @@ async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Re
 
 #[tokio::test]
 async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyhow::Result<()> {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     let requested_permissions = AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
@@ -421,14 +422,16 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         &PermissionProfile::workspace_write(),
         Some(&requested_permissions),
     );
+    turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let provider = CoreShellActionProvider {
         policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
         session: Arc::new(session),
-        turn: Arc::new(turn_context),
+        step_context,
         call_id: "preapproved-additional-permissions".to_string(),
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -557,14 +560,15 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     let command = vec!["touch".to_string(), target_str.clone()];
     let expected_hook_command =
         codex_shell_command::parse_command::shlex_join(&["/usr/bin/touch".to_string(), target_str]);
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let provider = CoreShellActionProvider {
         policy: std::sync::Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
         session: std::sync::Arc::new(session),
-        turn: std::sync::Arc::new(turn_context),
+        step_context,
         call_id: "execve-hook-call".to_string(),
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -761,21 +765,23 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
     parser.parse("test.rules", &policy_src).unwrap();
     let policy = parser.build();
 
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,
         NetworkSandboxPolicy::Restricted,
     );
     let workdir = test_sandbox_cwd();
+    turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let provider = CoreShellActionProvider {
         policy: Arc::new(RwLock::new(policy)),
         session: Arc::new(session),
-        turn: Arc::new(turn_context),
+        step_context,
         call_id: "deny-read-prefix-allow".to_string(),
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: AskForApproval::OnRequest,
         permission_profile,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -798,27 +804,30 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
 
 #[tokio::test(flavor = "current_thread")]
 async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow::Result<()> {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,
         NetworkSandboxPolicy::Restricted,
     );
     let workdir = test_sandbox_cwd();
-    let provider = CoreShellActionProvider {
-        policy: Arc::new(RwLock::new(PolicyParser::new().build())),
-        session: Arc::new(session),
-        turn: Arc::new(turn_context),
-        call_id: "deny-read-granular-sandbox-reject".to_string(),
-        environment_id: "local".to_string(),
-        tool_name: GuardianCommandSource::Shell,
-        approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+    turn_context.approval_policy =
+        Constrained::allow_any(AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: false,
             rules: true,
             skill_approval: true,
             request_permissions: true,
             mcp_elicitations: true,
-        }),
+        }));
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(PolicyParser::new().build())),
+        session: Arc::new(session),
+        step_context,
+        call_id: "deny-read-granular-sandbox-reject".to_string(),
+        environment_id: "local".to_string(),
+        tool_name: GuardianCommandSource::Shell,
         permission_profile,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::RequireEscalated,

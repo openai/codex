@@ -11,6 +11,7 @@ use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
@@ -347,7 +348,6 @@ impl ApplyPatchHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
             step_context,
             tracker,
             call_id,
@@ -355,6 +355,7 @@ impl ApplyPatchHandler {
             payload,
             ..
         } = invocation;
+        let turn = Arc::clone(&step_context.turn);
 
         let ToolPayload::Custom { input: patch_input } = payload else {
             return Err(FunctionCallError::RespondToModel(
@@ -422,7 +423,7 @@ impl ApplyPatchHandler {
                         );
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
-                            turn.as_ref(),
+                            step_context.as_ref(),
                             &call_id,
                             Some(&tracker),
                         );
@@ -444,18 +445,12 @@ impl ApplyPatchHandler {
                         let mut runtime = ApplyPatchRuntime::new();
                         let tool_ctx = ToolCtx {
                             session: session.clone(),
-                            turn: turn.clone(),
+                            step_context: step_context.clone(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.clone(),
                         };
                         let out = orchestrator
-                            .run(
-                                &mut runtime,
-                                &req,
-                                &tool_ctx,
-                                turn.as_ref(),
-                                turn.approval_policy.value(),
-                            )
+                            .run(&mut runtime, &req, &tool_ctx)
                             .await
                             .map(|result| result.output);
                         let (out, delta) = match out {
@@ -464,7 +459,7 @@ impl ApplyPatchHandler {
                         };
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
-                            turn.as_ref(),
+                            step_context.as_ref(),
                             &call_id,
                             Some(&tracker),
                         );
@@ -549,11 +544,12 @@ pub(crate) async fn intercept_apply_patch(
     fs: &dyn ExecutorFileSystem,
     turn_environment: TurnEnvironment,
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
+    let turn = &step_context.turn;
     let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
@@ -585,7 +581,7 @@ pub(crate) async fn intercept_apply_patch(
                     );
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
-                        turn.as_ref(),
+                        step_context.as_ref(),
                         call_id,
                         tracker.as_ref().copied(),
                     );
@@ -607,18 +603,12 @@ pub(crate) async fn intercept_apply_patch(
                     let mut runtime = ApplyPatchRuntime::new();
                     let tool_ctx = ToolCtx {
                         session: session.clone(),
-                        turn: turn.clone(),
+                        step_context: step_context.clone(),
                         call_id: call_id.to_string(),
                         tool_name: ToolName::plain(tool_name),
                     };
                     let out = orchestrator
-                        .run(
-                            &mut runtime,
-                            &req,
-                            &tool_ctx,
-                            turn.as_ref(),
-                            turn.approval_policy.value(),
-                        )
+                        .run(&mut runtime, &req, &tool_ctx)
                         .await
                         .map(|result| result.output);
                     let (out, delta) = match out {
@@ -627,7 +617,7 @@ pub(crate) async fn intercept_apply_patch(
                     };
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
-                        turn.as_ref(),
+                        step_context.as_ref(),
                         call_id,
                         tracker.as_ref().copied(),
                     );

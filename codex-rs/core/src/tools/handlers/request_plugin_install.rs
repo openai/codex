@@ -192,7 +192,7 @@ impl RequestPluginInstallHandler {
                 .analytics_events_client
                 .track_plugin_install_requested(
                     build_track_events_context(
-                        turn.model_info.slug.clone(),
+                        step_context.model.model_info.slug.clone(),
                         session.thread_id.to_string(),
                         turn.sub_id.clone(),
                         turn.originator.clone(),
@@ -253,14 +253,17 @@ impl RequestPluginInstallHandler {
                 Some(ElicitationAction::Cancel) => "cancel",
                 None => "unavailable",
             };
-            turn.session_telemetry.record_plugin_install_suggestion(
-                tool_type,
-                tool.id(),
-                tool.name(),
-                response_action,
-                user_confirmed,
-                completed,
-            );
+            step_context
+                .model
+                .session_telemetry
+                .record_plugin_install_suggestion(
+                    tool_type,
+                    tool.id(),
+                    tool.name(),
+                    response_action,
+                    user_confirmed,
+                    completed,
+                );
         }
 
         let content = serde_json::to_string(&RequestPluginInstallResult {

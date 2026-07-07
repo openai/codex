@@ -10,7 +10,7 @@ use super::UnifiedExecContext;
 use super::process::UnifiedExecProcess;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
@@ -47,7 +47,7 @@ pub(crate) fn start_streaming_output(
     let exit_token = process.cancellation_token();
 
     let session_ref = Arc::clone(&context.session);
-    let turn_ref = Arc::clone(&context.turn);
+    let step_context_ref = Arc::clone(&context.step_context);
     let call_id = context.call_id.clone();
 
     tokio::spawn(async move {
@@ -91,7 +91,7 @@ pub(crate) fn start_streaming_output(
                         &transcript,
                         &call_id,
                         &session_ref,
-                        &turn_ref,
+                        &step_context_ref,
                         &mut emitted_deltas,
                         chunk,
                     ).await;
@@ -107,7 +107,7 @@ pub(crate) fn start_streaming_output(
 pub(crate) fn spawn_exit_watcher(
     process: Arc<UnifiedExecProcess>,
     session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
+    step_context_ref: Arc<StepContext>,
     call_id: String,
     command: Vec<String>,
     cwd: PathUri,
@@ -126,7 +126,7 @@ pub(crate) fn spawn_exit_watcher(
         if let Some(message) = process.failure_message() {
             emit_failed_exec_end_for_unified_exec(
                 session_ref,
-                turn_ref,
+                step_context_ref,
                 call_id,
                 command,
                 cwd,
@@ -141,7 +141,7 @@ pub(crate) fn spawn_exit_watcher(
             let exit_code = process.exit_code().unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 session_ref,
-                turn_ref,
+                step_context_ref,
                 call_id,
                 command,
                 cwd,
@@ -161,7 +161,7 @@ async fn process_chunk(
     transcript: &Arc<Mutex<HeadTailBuffer>>,
     call_id: &str,
     session_ref: &Arc<Session>,
-    turn_ref: &Arc<TurnContext>,
+    step_context_ref: &Arc<StepContext>,
     emitted_deltas: &mut usize,
     chunk: Vec<u8>,
 ) {
@@ -182,7 +182,10 @@ async fn process_chunk(
             chunk: prefix,
         };
         session_ref
-            .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
+            .send_event(
+                step_context_ref.turn.as_ref(),
+                EventMsg::ExecCommandOutputDelta(event),
+            )
             .await;
         *emitted_deltas += 1;
     }
@@ -194,7 +197,7 @@ async fn process_chunk(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_exec_end_for_unified_exec(
     session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
+    step_context_ref: Arc<StepContext>,
     call_id: String,
     command: Vec<String>,
     cwd: PathUri,
@@ -215,7 +218,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     };
     let event_ctx = ToolEventCtx::new(
         session_ref.as_ref(),
-        turn_ref.as_ref(),
+        step_context_ref.as_ref(),
         &call_id,
         /*turn_diff_tracker*/ None,
     );
@@ -239,7 +242,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
+    step_context_ref: Arc<StepContext>,
     call_id: String,
     command: Vec<String>,
     cwd: PathUri,
@@ -269,7 +272,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     };
     let event_ctx = ToolEventCtx::new(
         session_ref.as_ref(),
-        turn_ref.as_ref(),
+        step_context_ref.as_ref(),
         &call_id,
         /*turn_diff_tracker*/ None,
     );
