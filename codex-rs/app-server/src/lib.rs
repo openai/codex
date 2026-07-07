@@ -54,6 +54,7 @@ use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLoadError;
+use codex_config::ConstraintError;
 use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
@@ -298,6 +299,12 @@ fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)>
         })
 }
 
+fn is_unrecoverable_windows_network_config_error(err: &std::io::Error) -> bool {
+    err.get_ref()
+        .and_then(|source| source.downcast_ref::<ConstraintError>())
+        .is_some_and(ConstraintError::is_windows_network_configuration_error)
+}
+
 fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
     match err {
         ExecPolicyError::ParsePolicy { path, source } => {
@@ -521,7 +528,7 @@ pub async fn run_main_with_transport_options(
     {
         Ok(config) => (config, true),
         Err(err) => {
-            if strict_config {
+            if strict_config || is_unrecoverable_windows_network_config_error(&err) {
                 return Err(err);
             }
 
@@ -1364,6 +1371,7 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::is_unrecoverable_windows_network_config_error;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
     #[cfg(debug_assertions)]
@@ -1371,6 +1379,23 @@ mod tests {
     #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn windows_network_config_errors_are_unrecoverable() {
+        for error in [
+            codex_config::ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
+                requirement_source: codex_config::RequirementSource::Unknown,
+            },
+            codex_config::ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox,
+        ] {
+            let error = std::io::Error::from(error);
+            assert!(is_unrecoverable_windows_network_config_error(&error));
+        }
+
+        assert!(!is_unrecoverable_windows_network_config_error(
+            &std::io::Error::other("unrelated config error")
+        ));
+    }
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {

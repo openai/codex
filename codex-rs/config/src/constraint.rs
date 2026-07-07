@@ -33,6 +33,18 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
         reason: String,
     },
+
+    #[error(
+        "managed network requirements (set by {requirement_source}) require `[windows] allowed_sandbox_implementations = [\"elevated\"]`"
+    )]
+    ManagedNetworkRequiresElevatedWindowsSandbox {
+        requirement_source: RequirementSource,
+    },
+
+    #[error(
+        "the network proxy is incompatible with the unelevated Windows sandbox; set `windows.sandbox = \"elevated\"` or disable the network proxy"
+    )]
+    NetworkProxyIncompatibleWithUnelevatedWindowsSandbox,
 }
 
 impl ConstraintError {
@@ -40,6 +52,14 @@ impl ConstraintError {
         Self::EmptyField {
             field_name: field_name.into(),
         }
+    }
+
+    pub fn is_windows_network_configuration_error(&self) -> bool {
+        matches!(
+            self,
+            Self::ManagedNetworkRequiresElevatedWindowsSandbox { .. }
+                | Self::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox
+        )
     }
 }
 

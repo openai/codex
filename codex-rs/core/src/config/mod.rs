@@ -597,6 +597,31 @@ fn build_network_proxy_spec(
     })
 }
 
+pub fn validate_windows_sandbox_network_proxy_compatibility(
+    windows_sandbox_level: WindowsSandboxLevel,
+    network_proxy_configured: bool,
+) -> std::io::Result<()> {
+    validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        cfg!(target_os = "windows"),
+        windows_sandbox_level,
+        network_proxy_configured,
+    )
+}
+
+fn validate_windows_sandbox_network_proxy_compatibility_for_platform(
+    is_windows: bool,
+    windows_sandbox_level: WindowsSandboxLevel,
+    network_proxy_configured: bool,
+) -> std::io::Result<()> {
+    if is_windows
+        && network_proxy_configured
+        && windows_sandbox_level == WindowsSandboxLevel::RestrictedToken
+    {
+        return Err(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox.into());
+    }
+    Ok(())
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -3738,6 +3763,10 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
+        validate_windows_sandbox_network_proxy_compatibility(
+            windows_sandbox_level,
+            network.is_some(),
+        )?;
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
@@ -4132,11 +4161,16 @@ impl Config {
             NetworkProxyConfig::default()
         };
 
-        build_network_proxy_spec(
+        let network = build_network_proxy_spec(
             configured_network_proxy_config,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
-        )
+        )?;
+        validate_windows_sandbox_network_proxy_compatibility(
+            WindowsSandboxLevel::from_config(self),
+            network.is_some(),
+        )?;
+        Ok(network)
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {

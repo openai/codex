@@ -1299,6 +1299,23 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
         }
 
+        if let Some(network) = &network {
+            let elevated_is_only_allowed_windows_sandbox =
+                windows.as_ref().is_some_and(|windows| {
+                    matches!(
+                        windows.value.allowed_sandbox_implementations.as_deref(),
+                        Some([WindowsSandboxModeToml::Elevated])
+                    )
+                });
+            if !elevated_is_only_allowed_windows_sandbox {
+                return Err(
+                    ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
+                        requirement_source: network.source.clone(),
+                    },
+                );
+            }
+        }
+
         let approval_policy = match allowed_approval_policies {
             Some(Sourced {
                 value: policies,
@@ -2796,6 +2813,63 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
+    fn managed_network_requires_elevated_only_windows_sandbox() -> Result<()> {
+        for windows_requirements in [
+            "",
+            r#"
+                [windows]
+                allowed_sandbox_implementations = ["unelevated"]
+            "#,
+            r#"
+                [windows]
+                allowed_sandbox_implementations = ["elevated", "unelevated"]
+            "#,
+        ] {
+            let config: ConfigRequirementsToml = from_str(&format!(
+                r#"
+                    [experimental_network]
+                    enabled = false
+
+                    {windows_requirements}
+                "#
+            ))?;
+
+            assert_eq!(
+                ConfigRequirements::try_from(with_unknown_source(config)),
+                Err(
+                    ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
+                        requirement_source: RequirementSource::Unknown,
+                    }
+                )
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn managed_network_accepts_elevated_only_windows_sandbox() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                [experimental_network]
+                enabled = true
+
+                [windows]
+                allowed_sandbox_implementations = ["elevated"]
+            "#,
+        )?;
+
+        let requirements = ConfigRequirements::try_from(with_unknown_source(config))?;
+        assert!(requirements.network.is_some());
+        assert_eq!(
+            requirements.windows_sandbox_mode.value(),
+            Some(WindowsSandboxModeToml::Elevated)
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn deserialize_legacy_allowed_approvals_reviewer() -> Result<()> {
         let toml_str = r#"
             allowed_approvals_reviewers = ["guardian_subagent", "user"]
@@ -3335,6 +3409,9 @@ command = "python3 /enterprise/hooks/pre.py"
             [experimental_network.unix_sockets]
             "/tmp/example.sock" = "allow"
             "/tmp/blocked.sock" = "deny"
+
+            [windows]
+            allowed_sandbox_implementations = ["elevated"]
         "#;
 
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -3408,6 +3485,9 @@ command = "python3 /enterprise/hooks/pre.py"
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
+
+            [windows]
+            allowed_sandbox_implementations = ["elevated"]
         "#;
 
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;

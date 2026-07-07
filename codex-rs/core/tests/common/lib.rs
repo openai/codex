@@ -223,6 +223,9 @@ pub fn managed_network_requirements_loader() -> CloudConfigBundleLoader {
 [experimental_network]
 enabled = true
 allow_local_binding = true
+
+[windows]
+allowed_sandbox_implementations = ["elevated"]
 "#,
     )
 }

@@ -29,14 +29,8 @@ pub struct WindowsSandboxFilesystemOverrides {
     pub additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
-pub fn windows_sandbox_uses_elevated_backend(
-    sandbox_level: WindowsSandboxLevel,
-    proxy_enforced: bool,
-) -> bool {
-    // Windows firewall enforcement is tied to the logon-user sandbox identities, so
-    // proxy-enforced sessions must use that backend even when the configured mode is
-    // the default restricted-token sandbox.
-    proxy_enforced || matches!(sandbox_level, WindowsSandboxLevel::Elevated)
+pub fn windows_sandbox_uses_elevated_backend(sandbox_level: WindowsSandboxLevel) -> bool {
+    matches!(sandbox_level, WindowsSandboxLevel::Elevated)
 }
 
 pub fn permission_profile_supports_windows_restricted_token_sandbox(

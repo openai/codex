@@ -99,6 +99,84 @@ use serde::Deserialize;
 use tempfile::tempdir;
 
 use super::*;
+
+#[test]
+fn windows_network_proxy_requires_elevated_sandbox() {
+    let err = validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        /*is_windows*/ true,
+        WindowsSandboxLevel::RestrictedToken,
+        /*network_proxy_configured*/ true,
+    )
+    .expect_err("unelevated Windows sandbox should reject configured network proxy");
+
+    assert!(matches!(
+        err.get_ref()
+            .and_then(|source| source.downcast_ref::<ConstraintError>()),
+        Some(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox)
+    ));
+}
+
+#[test]
+fn windows_network_proxy_compatibility_allows_valid_combinations() -> std::io::Result<()> {
+    for (windows_sandbox_level, network_proxy_configured) in [
+        (WindowsSandboxLevel::Disabled, false),
+        (WindowsSandboxLevel::Disabled, true),
+        (WindowsSandboxLevel::RestrictedToken, false),
+        (WindowsSandboxLevel::Elevated, false),
+        (WindowsSandboxLevel::Elevated, true),
+    ] {
+        validate_windows_sandbox_network_proxy_compatibility_for_platform(
+            /*is_windows*/ true,
+            windows_sandbox_level,
+            network_proxy_configured,
+        )?;
+    }
+    validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        /*is_windows*/ false,
+        WindowsSandboxLevel::RestrictedToken,
+        /*network_proxy_configured*/ true,
+    )?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn hand_edited_network_proxy_and_unelevated_sandbox_is_rejected() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                network_access: true,
+                ..Default::default()
+            }),
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Unelevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("hand-edited incompatible network and sandbox settings should fail");
+
+    assert!(matches!(
+        err.get_ref()
+            .and_then(|source| source.downcast_ref::<ConstraintError>()),
+        Some(ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox)
+    ));
+    Ok(())
+}
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
@@ -1670,6 +1748,9 @@ async fn experimental_network_requirements_enable_proxy_without_feature() -> std
                 r#"
 [experimental_network]
 enabled = true
+
+[windows]
+allowed_sandbox_implementations = ["elevated"]
 "#,
             ),
         )
