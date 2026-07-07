@@ -591,7 +591,6 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
-    let turn_context = step_context.turn.as_ref();
     let manager = step_context.mcp.manager();
     let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string());
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
@@ -626,7 +625,7 @@ async fn execute_mcp_tool_call(
     )?;
     Ok(maybe_request_codex_apps_auth_elicitation(
         sess,
-        turn_context,
+        step_context,
         manager,
         call_id,
         &invocation.server,
@@ -638,13 +637,14 @@ async fn execute_mcp_tool_call(
 
 async fn maybe_request_codex_apps_auth_elicitation(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     manager: &McpConnectionManager,
     call_id: &str,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
     result: CallToolResult,
 ) -> CallToolResult {
+    let turn_context = step_context.turn.as_ref();
     if !manager.is_host_owned_codex_apps_server(server) {
         return result;
     }
@@ -689,7 +689,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
     };
     let response = sess
         .request_mcp_server_elicitation(
-            turn_context,
+            step_context,
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             request_id,
             request,
@@ -1364,7 +1364,7 @@ async fn maybe_request_mcp_tool_approval(
             });
         let decision = parse_mcp_tool_approval_elicitation_response(
             sess.request_mcp_server_elicitation(
-                turn_context.as_ref(),
+                step_context.as_ref(),
                 invocation.server.clone(),
                 request_id,
                 request,

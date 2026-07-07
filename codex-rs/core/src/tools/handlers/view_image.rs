@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use codex_protocol::items::ImageViewItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;

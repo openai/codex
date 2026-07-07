@@ -1833,7 +1833,6 @@ async fn handle_assistant_item_done_in_plan_mode(
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
 ) -> bool {
-    let turn_context = step_context.turn.as_ref();
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
     {

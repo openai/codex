@@ -451,7 +451,6 @@ async fn persist_user_shell_output(
     exec_output: &ExecToolCallOutput,
     mode: UserShellCommandMode,
 ) {
-    let turn_context = step_context_seed.turn.as_ref();
     let output_item =
         user_shell_command_record_item(raw_command, exec_output, step_context_seed.model.as_ref());
 

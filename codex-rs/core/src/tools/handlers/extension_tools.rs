@@ -152,6 +152,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         .await
         .additional_permissions;
         let file_system_sandbox_context = invocation
+            .step_context
             .turn
             .file_system_sandbox_context(additional_permissions, environment.cwd());
         environments.push(ToolEnvironment {

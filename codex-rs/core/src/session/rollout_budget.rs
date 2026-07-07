@@ -10,7 +10,6 @@ pub(super) async fn maybe_record_reminder(
     step_context: &StepContext,
     window_id: &str,
 ) {
-    let turn_context = step_context.turn.as_ref();
     let budget = sess.services.agent_control.rollout_budget();
     let Some(reminder) = budget.pending_reminder(sess.thread_id(), window_id) else {
         return;

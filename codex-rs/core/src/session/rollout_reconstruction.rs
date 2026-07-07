@@ -116,7 +116,6 @@ impl Session {
         step_context_seed: &StepContextSeed,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
-        let turn_context = step_context_seed.turn.as_ref();
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata

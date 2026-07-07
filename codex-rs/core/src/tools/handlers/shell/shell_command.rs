@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;

@@ -214,7 +214,7 @@ impl RequestPluginInstallHandler {
         let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
             .request_mcp_server_elicitation(
-                turn.as_ref(),
+                step_context.as_ref(),
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 request_id,
                 request,

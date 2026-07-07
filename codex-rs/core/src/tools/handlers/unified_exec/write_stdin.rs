@@ -94,7 +94,10 @@ impl WriteStdinHandler {
                 stdin: args.chars.clone(),
             };
             session
-                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                .send_event(
+                    step_context.turn.as_ref(),
+                    EventMsg::TerminalInteraction(interaction),
+                )
                 .await;
         }
 
