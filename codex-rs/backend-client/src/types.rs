@@ -1,6 +1,7 @@
 pub use codex_backend_openapi_models::models::ConfigBundleResponse;
 pub use codex_backend_openapi_models::models::CreditStatusDetails;
 pub use codex_backend_openapi_models::models::DeliveredConfigToml;
+pub use codex_backend_openapi_models::models::DeliveredManagedLayers;
 pub use codex_backend_openapi_models::models::DeliveredRequirementsToml;
 pub use codex_backend_openapi_models::models::DeliveredTomlFragment;
 pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;

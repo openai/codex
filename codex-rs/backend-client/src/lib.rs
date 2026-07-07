@@ -15,6 +15,7 @@ pub use types::ConfigBundleResponse;
 pub use types::ConsumeRateLimitResetCreditCode;
 pub use types::ConsumeRateLimitResetCreditResponse;
 pub use types::DeliveredConfigToml;
+pub use types::DeliveredManagedLayers;
 pub use types::DeliveredRequirementsToml;
 pub use types::DeliveredTomlFragment;
 pub use types::PaginatedListTaskListItem;

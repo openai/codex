@@ -1037,6 +1037,7 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     "model = \"low\"".to_string(),
                 ),
             ])),
+            managed_layers: None,
         }))),
         requirements_toml: Some(Some(Box::new(
             codex_backend_client::DeliveredRequirementsToml {
@@ -1045,6 +1046,7 @@ fn bundle_response_conversion_preserves_fragment_order() {
                     "High requirements".to_string(),
                     "allowed_approval_policies = [\"never\"]".to_string(),
                 )])),
+                managed_layers: None,
             },
         ))),
     };

@@ -21,12 +21,20 @@ pub struct DeliveredRequirementsToml {
         skip_serializing_if = "Option::is_none"
     )]
     pub enterprise_managed: Option<Option<Vec<models::DeliveredTomlFragment>>>,
+    #[serde(
+        rename = "managed_layers",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub managed_layers: Option<Option<Box<models::DeliveredManagedLayers>>>,
 }
 
 impl DeliveredRequirementsToml {
     pub fn new() -> DeliveredRequirementsToml {
         DeliveredRequirementsToml {
             enterprise_managed: None,
+            managed_layers: None,
         }
     }
 }

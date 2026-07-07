@@ -13,6 +13,9 @@ pub use self::config_file_response::ConfigFileResponse;
 pub(crate) mod delivered_config_toml;
 pub use self::delivered_config_toml::DeliveredConfigToml;
 
+pub(crate) mod delivered_managed_layers;
+pub use self::delivered_managed_layers::DeliveredManagedLayers;
+
 pub(crate) mod delivered_requirements_toml;
 pub use self::delivered_requirements_toml::DeliveredRequirementsToml;
 
