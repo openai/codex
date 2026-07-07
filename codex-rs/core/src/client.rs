@@ -64,6 +64,7 @@ use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -912,9 +913,14 @@ impl ModelClient {
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
-    /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    /// WebSocket use is controlled by outbound proxy policy, provider capability, and
+    /// session-scoped fallback state. System-proxy sessions conservatively use HTTP until the
+    /// WebSocket transport supports proxy-aware dialing.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.info().supports_websockets
+        if matches!(
+            self.http_client_factory.outbound_proxy_policy(),
+            OutboundProxyPolicy::RespectSystemProxy
+        ) || !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
         {
             return false;
