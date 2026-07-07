@@ -82,6 +82,16 @@ impl RolloutScan {
 }
 
 pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
+    if !config.features.enabled(codex_features::Feature::Sqlite) {
+        return DoctorCheck::new(
+            CHECK_ID,
+            CHECK_CATEGORY,
+            CheckStatus::Ok,
+            "state database is disabled",
+        )
+        .details(vec!["rollout/state DB parity check skipped".to_string()]);
+    }
+
     thread_inventory_check_for_roots(
         config.codex_home.as_path(),
         config.sqlite_home.as_path(),
@@ -677,6 +687,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config::ConfigBuilder;
+    use codex_features::Feature;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -684,6 +696,26 @@ mod tests {
     use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn thread_inventory_check_skips_intentionally_disabled_database() {
+        let codex_home = TempDir::new().expect("codex home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        config
+            .features
+            .disable(Feature::Sqlite)
+            .expect("disable sqlite");
+
+        let check = thread_inventory_check(&config).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "state database is disabled");
+        assert!(check.issues.is_empty());
+    }
 
     #[tokio::test]
     async fn thread_inventory_check_ok_when_rollouts_match_db() {

@@ -384,6 +384,10 @@ async fn start_app_server_for_archive_command(
         .build()
         .await
         .wrap_err("failed to load configuration")?;
+    let app_server_target = super::app_server_target_for_effective_sqlite_setting(
+        app_server_target,
+        config.features.enabled(codex_features::Feature::Sqlite),
+    );
     let state_db = super::init_state_db_for_app_server_target(&config, &app_server_target)
         .await
         .wrap_err("failed to initialize state database")?;

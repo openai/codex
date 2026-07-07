@@ -357,10 +357,9 @@ impl ExternalAgentConfigRequestProcessor {
     pub(crate) async fn read_import_histories(
         &self,
     ) -> Result<ExternalAgentConfigImportHistoriesReadResponse, JSONRPCErrorError> {
-        let state_db = self
-            .state_db
-            .as_ref()
-            .ok_or_else(|| internal_error("state database is unavailable"))?;
+        let Some(state_db) = self.state_db.as_ref() else {
+            return Ok(ExternalAgentConfigImportHistoriesReadResponse { data: Vec::new() });
+        };
         let histories = state_db
             .external_agent_config_import_history_records()
             .await

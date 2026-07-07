@@ -52,6 +52,37 @@ fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String
 }
 
 #[tokio::test]
+async fn external_agent_config_import_histories_are_empty_when_sqlite_is_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nsqlite = false\n",
+    )?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("CODEX_SQLITE_HOME", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import/readHistories",
+            /*params*/ None,
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+
+    assert!(response.data.is_empty());
+    for db in codex_state::runtime_db_paths(codex_home.path()) {
+        assert!(!db.path.exists(), "{} should not exist", db.label);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
 -> Result<()> {
     let codex_home = TempDir::new()?;

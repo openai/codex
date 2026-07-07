@@ -282,6 +282,10 @@ async fn init_state_db_for_app_server_target(
     config: &Config,
     app_server_target: &AppServerTarget,
 ) -> std::io::Result<Option<StateDbHandle>> {
+    if !config.features.enabled(codex_features::Feature::Sqlite) {
+        return Ok(None);
+    }
+
     match app_server_target {
         AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
             let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
@@ -814,6 +818,17 @@ fn app_server_target_for_launch(
     }
 }
 
+fn app_server_target_for_effective_sqlite_setting(
+    target: AppServerTarget,
+    sqlite_enabled: bool,
+) -> AppServerTarget {
+    // An implicitly reused daemon cannot adopt this invocation's effective feature set.
+    match target {
+        AppServerTarget::LocalDaemon { .. } if !sqlite_enabled => AppServerTarget::Embedded,
+        target => target,
+    }
+}
+
 fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
         && loader_overrides.user_config_profile.is_none()
@@ -1067,6 +1082,10 @@ pub async fn run_main(
         strict_config,
     )
     .await;
+    let app_server_target = app_server_target_for_effective_sqlite_setting(
+        app_server_target,
+        config.features.enabled(codex_features::Feature::Sqlite),
+    );
 
     remove_legacy_tui_log_file(config.codex_home.as_path());
 
@@ -2320,6 +2339,44 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_disabled_does_not_reuse_implicit_local_daemon() -> color_eyre::Result<()> {
+        let local_endpoint = RemoteAppServerEndpoint::UnixSocket {
+            socket_path: AbsolutePathBuf::relative_to_current_dir("local.sock")?,
+        };
+        let local_target = AppServerTarget::LocalDaemon {
+            endpoint: local_endpoint,
+        };
+        assert_eq!(
+            app_server_target_for_effective_sqlite_setting(
+                local_target.clone(),
+                /*sqlite_enabled*/ false,
+            ),
+            AppServerTarget::Embedded
+        );
+        assert_eq!(
+            app_server_target_for_effective_sqlite_setting(
+                local_target.clone(),
+                /*sqlite_enabled*/ true,
+            ),
+            local_target
+        );
+
+        let remote_target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("remote.sock")?,
+            },
+        };
+        assert_eq!(
+            app_server_target_for_effective_sqlite_setting(
+                remote_target.clone(),
+                /*sqlite_enabled*/ false,
+            ),
+            remote_target
+        );
+        Ok(())
+    }
+
+    #[test]
     fn can_reuse_implicit_local_daemon_requires_default_launch_config() -> color_eyre::Result<()> {
         let mut loader_overrides = LoaderOverrides::default();
         let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
@@ -2913,6 +2970,23 @@ mod tests {
                 .contains("failed to initialize state runtime"),
             "startup error should preserve the underlying state db failure"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embedded_state_db_can_be_explicitly_disabled() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.features.disable(codex_features::Feature::Sqlite)?;
+        let occupied_sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::write(&occupied_sqlite_home, "occupied")?;
+        config.sqlite_home = occupied_sqlite_home.clone();
+
+        let state_db =
+            init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await?;
+
+        assert!(state_db.is_none());
+        assert_eq!(std::fs::read_to_string(occupied_sqlite_home)?, "occupied");
         Ok(())
     }
 

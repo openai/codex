@@ -22,7 +22,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    create_config_toml(codex_home.path(), /*sqlite_enabled*/ true)?;
     let state_db = init_state_db(codex_home.path()).await?;
 
     let memory_root = codex_home.path().join("memories");
@@ -69,6 +69,37 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
         "memory root should be empty after reset"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_reset_reports_sqlite_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), /*sqlite_enabled*/ false)?;
+    let memory_root = codex_home.path().join("memories");
+    tokio::fs::create_dir_all(&memory_root).await?;
+    tokio::fs::write(memory_root.join("MEMORY.md"), "stale memory\n").await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request("memory/reset", /*params*/ None)
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "memory reset requires SQLite, which is disabled"
+    );
+    assert!(memory_root.join("MEMORY.md").is_file());
+    for db in codex_state::runtime_db_paths(codex_home.path()) {
+        assert!(!db.path.exists(), "{} should not exist", db.label);
+    }
     Ok(())
 }
 
@@ -130,11 +161,12 @@ async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     Ok(state_db)
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_config_toml(codex_home: &Path, sqlite_enabled: bool) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
-        r#"
+        format!(
+            r#"
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
@@ -142,7 +174,7 @@ model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 
 [features]
-sqlite = true
+sqlite = {sqlite_enabled}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -151,5 +183,6 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#,
+        ),
     )
 }

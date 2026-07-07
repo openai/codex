@@ -1614,6 +1614,12 @@ impl ThreadRequestProcessor {
     }
 
     async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
+        if !self.config.features.enabled(Feature::Sqlite) {
+            return Err(invalid_request(
+                "memory reset requires SQLite, which is disabled",
+            ));
+        }
+
         let state_db = self
             .state_db
             .clone()
@@ -1643,6 +1649,12 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadMetadataUpdateParams,
     ) -> Result<ThreadMetadataUpdateResponse, JSONRPCErrorError> {
+        if !self.config.features.enabled(Feature::Sqlite) {
+            return Err(invalid_request(
+                "thread metadata updates require SQLite, which is disabled",
+            ));
+        }
+
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
@@ -1988,6 +2000,11 @@ impl ThreadRequestProcessor {
             )),
             (None, None) => None,
         };
+        if relation_filter.is_some() && !self.config.features.enabled(Feature::Sqlite) {
+            return Err(invalid_request(
+                "thread relationship filters require SQLite, which is disabled",
+            ));
+        }
 
         let requested_page_size = limit
             .map(|value| value as usize)

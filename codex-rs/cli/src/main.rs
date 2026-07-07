@@ -2025,6 +2025,13 @@ async fn run_debug_clear_memories_command(
         .cli_overrides(cli_kv_overrides)
         .build()
         .await?;
+    clear_memories_for_config(&config).await
+}
+
+async fn clear_memories_for_config(config: &codex_core::config::Config) -> anyhow::Result<()> {
+    if !config.features.enabled(codex_features::Feature::Sqlite) {
+        anyhow::bail!("`codex debug clear-memories` requires SQLite, which is disabled");
+    }
 
     let memories_path = memories_db_path(config.sqlite_home.as_path());
     let cleared_memories_db =
@@ -2500,6 +2507,37 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn clear_memories_rejects_disabled_sqlite_without_mutating_state() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .build()
+            .await?;
+        config.sqlite_home = codex_home.path().to_path_buf();
+        config.features.disable(codex_features::Feature::Sqlite)?;
+        let memory_root = codex_home.path().join("memories");
+        let memory_file = memory_root.join("memory_summary.md");
+        std::fs::create_dir_all(&memory_root)?;
+        std::fs::write(&memory_file, "keep me")?;
+
+        let error = clear_memories_for_config(&config)
+            .await
+            .expect_err("disabled SQLite should reject the command");
+
+        assert_eq!(
+            error.to_string(),
+            "`codex debug clear-memories` requires SQLite, which is disabled"
+        );
+        assert_eq!(std::fs::read_to_string(memory_file)?, "keep me");
+        for db in codex_state::runtime_db_paths(config.sqlite_home.as_path()) {
+            assert!(!db.path.exists(), "{} should not exist", db.label);
+        }
+        Ok(())
+    }
 
     #[test]
     fn exec_server_remote_auth_accepts_api_key_auth() {

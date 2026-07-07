@@ -2161,13 +2161,19 @@ fn non_empty_trimmed(value: String) -> Option<String> {
 
 async fn state_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
+    let sqlite_enabled = config.features.enabled(codex_features::Feature::Sqlite);
     path_readiness(&mut details, "CODEX_HOME", &config.codex_home);
     path_readiness(&mut details, "log dir", &config.log_dir);
     path_readiness(&mut details, "sqlite home", &config.sqlite_home);
     let mut integrity_failures = Vec::new();
     for db in codex_state::runtime_db_paths(&config.sqlite_home) {
         path_readiness(&mut details, db.label, &db.path);
-        sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path).await;
+        if sqlite_enabled {
+            sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path)
+                .await;
+        } else {
+            details.push(format!("{} integrity: skipped (SQLite disabled)", db.label));
+        }
     }
     rollout_stats_details(&mut details, &config.codex_home);
     standalone_release_cache_details(&mut details);
@@ -2177,7 +2183,9 @@ async fn state_check(config: &Config) -> DoctorCheck {
     } else {
         CheckStatus::Fail
     };
-    let summary = if status == CheckStatus::Ok {
+    let summary = if !sqlite_enabled {
+        "state paths are inspectable; SQLite is disabled"
+    } else if status == CheckStatus::Ok {
         "state paths and databases are inspectable"
     } else {
         "state database integrity check failed"
@@ -3097,6 +3105,40 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[tokio::test]
+    async fn state_check_skips_inactive_corrupt_sqlite_database() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        config
+            .features
+            .disable(codex_features::Feature::Sqlite)
+            .expect("disable sqlite");
+        std::fs::write(
+            codex_state::state_db_path(config.sqlite_home.as_path()),
+            "not a sqlite database",
+        )
+        .expect("write corrupt database");
+
+        let check = state_check(&config).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            check.summary,
+            "state paths are inspectable; SQLite is disabled"
+        );
+        assert_eq!(check.remediation, None);
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail == "state DB integrity: skipped (SQLite disabled)")
+        );
+    }
 
     #[derive(Default)]
     struct RecordingProgress {

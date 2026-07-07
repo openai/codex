@@ -48,6 +48,20 @@ fn use_legacy_landlock_is_deprecated_and_disabled_by_default() {
 }
 
 #[test]
+fn sqlite_is_stable_enabled_by_default_and_configurable() {
+    assert_eq!(Feature::Sqlite.stage(), Stage::Stable);
+    assert_eq!(Feature::Sqlite.default_enabled(), true);
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpawnCsv);
+    features.apply_map(&BTreeMap::from([("sqlite".to_string(), false)]));
+    features.normalize_dependencies();
+    assert_eq!(features.enabled(Feature::Sqlite), false);
+    assert_eq!(features.enabled(Feature::Goals), false);
+    assert_eq!(features.enabled(Feature::SpawnCsv), false);
+}
+
+#[test]
 fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::UseLinuxSandboxBwrap.stage(), Stage::Removed);
     assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);

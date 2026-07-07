@@ -526,17 +526,22 @@ pub async fn run_main_with_transport_options(
                 return Err(err);
             }
 
-            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
+            let message = config_warning_from_error(
+                "Invalid configuration; using defaults with SQLite disabled.",
+                &err,
+            );
             config_warnings.push(message);
-            (
-                config_manager.load_default_config().await.map_err(|e| {
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("error loading default config after config error: {e}"),
-                    )
-                })?,
-                false,
-            )
+            let mut config = config_manager.load_default_config().await.map_err(|e| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("error loading default config after config error: {e}"),
+                )
+            })?;
+            config
+                .features
+                .disable(codex_features::Feature::Sqlite)
+                .map_err(std::io::Error::other)?;
+            (config, false)
         }
     };
 
@@ -1209,6 +1214,13 @@ struct StateDbInitResult {
 async fn init_sqlite_state_db_with_fresh_start_on_corruption(
     config: &Config,
 ) -> anyhow::Result<StateDbInitResult> {
+    if !config.features.enabled(codex_features::Feature::Sqlite) {
+        return Ok(StateDbInitResult {
+            state_db: None,
+            recovery_notice: None,
+        });
+    }
+
     let mut attempted_backups = HashSet::new();
     let mut recovered_databases = Vec::new();
     loop {
@@ -1369,9 +1381,12 @@ mod tests {
     use super::loader_overrides_with_test_user_config_file;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
+    use codex_core::config::ConfigBuilder;
+    use codex_features::Feature;
     #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {
@@ -1389,6 +1404,26 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[tokio::test]
+    async fn sqlite_state_db_can_be_explicitly_disabled() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await?;
+        config.features.disable(Feature::Sqlite)?;
+        let occupied_sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::write(&occupied_sqlite_home, "occupied")?;
+        config.sqlite_home = occupied_sqlite_home.clone();
+
+        let result = super::init_sqlite_state_db_with_fresh_start_on_corruption(&config).await?;
+
+        assert!(result.state_db.is_none());
+        assert!(result.recovery_notice.is_none());
+        assert_eq!(std::fs::read_to_string(occupied_sqlite_home)?, "occupied");
+        Ok(())
     }
 
     #[cfg(debug_assertions)]
