@@ -178,6 +178,25 @@ impl OAuthPersistor {
                 debug!("received refreshed MCP OAuth credentials from the provider");
                 refreshed_tokens(token_response, &latest, &self.inner)
             }
+            Ok(Err(error @ AuthError::TokenRefreshFailed(_))) => {
+                // RMCP 1.8 collapses definitive OAuth rejection (for example,
+                // `invalid_grant`) and transient token-endpoint failures into this string
+                // variant. Match RMCP's own request path for now so rejected refresh tokens
+                // prompt reauthorization instead of surfacing as generic MCP startup failures.
+                // This can also prompt reauthorization after a transient failure.
+                // TODO: Once modelcontextprotocol/rust-sdk#963 is available in the RMCP version
+                // used by Codex, map only its typed refresh-token rejection error here.
+                warn!(
+                    error = %error,
+                    "MCP OAuth refresh failed; reauthorization required by RMCP compatibility policy"
+                );
+                return Err(AuthError::AuthorizationRequired).with_context(|| {
+                    format!(
+                        "failed to refresh OAuth tokens for server {}: {error}",
+                        self.inner.server_name
+                    )
+                });
+            }
             Ok(Err(error)) => {
                 warn!(
                     error = %error,
