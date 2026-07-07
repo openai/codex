@@ -1572,13 +1572,13 @@ async fn does_not_inherit_namespace_for_skills_in_symlinked_plain_dir() {
 #[tokio::test]
 async fn keeps_inherited_namespace_when_symlink_target_is_scan_root_ancestor() {
     // temp-root/
-    // └── outer-plugin/
+    // └── a/b/c/d/e/f/outer-plugin/
     //     ├── .codex-plugin/plugin.json
     //     └── skills/
     //         ├── root/SKILL.md
     //         └── link -> temp-root/
     let root = tempfile::tempdir().expect("tempdir");
-    let plugin_root = root.path().join("outer-plugin");
+    let plugin_root = root.path().join("a/b/c/d/e/f/outer-plugin");
     write_plugin_manifest(&plugin_root, r#"{"name":"outer"}"#);
     let skills_root = plugin_root.join("skills");
     let skill_path = write_skill_at(&skills_root, "root", "root-skill", "root description");
