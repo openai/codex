@@ -1305,7 +1305,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_share_delete(params).await
             }
             ClientRequest::AppsList { params, .. } => {
-                self.apps_processor.apps_list(&request_id, params).await
+                self.apps_processor
+                    .apps_list(&request_id, params, supports_mcp_app_ui_webview)
+                    .await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
                 self.catalog_processor.skills_config_write(params).await
@@ -1400,7 +1402,7 @@ impl MessageProcessor {
             }
             ClientRequest::McpServerStatusList { params, .. } => {
                 self.mcp_processor
-                    .mcp_server_status_list(&request_id, params)
+                    .mcp_server_status_list(&request_id, params, supports_mcp_app_ui_webview)
                     .await
             }
             ClientRequest::McpResourceRead { params, .. } => {

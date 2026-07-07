@@ -36,8 +36,9 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params)
+        self.apps_list_inner(request_id, params, supports_mcp_app_ui_webview)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -46,6 +47,7 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
@@ -58,6 +60,7 @@ impl AppsRequestProcessor {
             None => None,
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
 
         if let Some(thread) = thread {
             let _ = config

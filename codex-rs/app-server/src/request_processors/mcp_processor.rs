@@ -47,8 +47,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_mcp_server_status(request_id, params)
+        self.list_mcp_server_status(request_id, params, supports_mcp_app_ui_webview)
             .await
             .map(|()| None)
     }
@@ -227,11 +228,12 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let (config, thread) = match params.thread_id.as_deref() {
+        let (mut config, thread) = match params.thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
                 let thread_config = thread.config().await;
@@ -244,6 +246,7 @@ impl McpRequestProcessor {
             }
             None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
         };
+        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
         let mcp_manager = self.thread_manager.mcp_manager();
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let auth = self.auth_manager.auth().await;

@@ -1,8 +1,8 @@
 //! Shared raw tool cache for the host-owned Codex Apps MCP server.
 //!
 //! Cache entries are process-local live state scoped by the active Codex auth
-//! key. Disk is best-effort cold-start persistence; entries do not reread disk
-//! after creation.
+//! key and host UI capability. Disk is best-effort cold-start persistence;
+//! entries do not reread disk after creation.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -146,10 +146,12 @@ impl CodexAppsToolsCache {
         &self,
         codex_home: PathBuf,
         auth_key: CodexAppsToolsCacheKey,
+        supports_mcp_app_ui_webview: bool,
     ) -> CodexAppsToolsCacheContext {
         let identity = CodexAppsToolsCacheIdentity {
             codex_home,
             auth_key,
+            supports_mcp_app_ui_webview,
         };
         let mut entries = lock_unpoisoned(&self.entries);
         let entry = entries
@@ -201,12 +203,14 @@ impl CodexAppsToolsCacheEntry {
 
 /// Everything that decides whether two Codex Apps clients can share tools.
 ///
-/// The auth key says whose catalog we are reading. `codex_home` keeps the
+/// The auth key says whose catalog we are reading. The UI capability keeps
+/// widget-aware and text-only catalogs isolated. `codex_home` keeps the
 /// persisted cache under the right home directory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CodexAppsToolsCacheIdentity {
     codex_home: PathBuf,
     auth_key: CodexAppsToolsCacheKey,
+    supports_mcp_app_ui_webview: bool,
 }
 
 impl CodexAppsToolsCacheIdentity {
@@ -214,7 +218,9 @@ impl CodexAppsToolsCacheIdentity {
         // `codex_home` is already the parent directory. Keep it out of the
         // filename hash so non-UTF-8 Unix paths cannot collapse distinct auth
         // keys onto the same disk cache file.
-        let identity_json = serde_json::to_string(&self.auth_key).unwrap_or_default();
+        let identity_json =
+            serde_json::to_string(&(&self.auth_key, self.supports_mcp_app_ui_webview))
+                .unwrap_or_default();
         let identity_hash = sha1_hex(&identity_json);
         self.codex_home
             .join(cache_dir)

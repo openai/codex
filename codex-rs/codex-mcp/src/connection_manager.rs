@@ -200,8 +200,11 @@ impl McpConnectionManager {
             let shares_codex_apps_tools_cache =
                 should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                codex_apps_tools_cache
-                    .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
+                codex_apps_tools_cache.context(
+                    codex_home.clone(),
+                    codex_apps_tools_cache_key.clone(),
+                    supports_mcp_app_ui_webview,
+                )
             });
             // If Codex Apps has an env bearer token, that is its auth path. Do
             // not also attach the ambient CodexAuth provider.
