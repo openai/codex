@@ -33,6 +33,7 @@ use crate::ThreadMetadataPatch;
 use crate::ThreadPage;
 use crate::ThreadRelationFilter;
 use crate::ThreadStore;
+use crate::ThreadStoreCleanup;
 use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
@@ -385,7 +386,7 @@ pub struct InMemoryThreadStoreCalls {
 /// service.
 #[derive(Default)]
 pub struct InMemoryThreadStore {
-    state: tokio::sync::Mutex<InMemoryThreadStoreState>,
+    state: Arc<tokio::sync::Mutex<InMemoryThreadStoreState>>,
 }
 
 #[derive(Default)]
@@ -634,16 +635,18 @@ impl ThreadStore for InMemoryThreadStore {
         })
     }
 
-    fn shutdown_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move {
-            self.state.lock().await.calls.shutdown_thread += 1;
+    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup {
+        let state = Arc::clone(&self.state);
+        ThreadStoreCleanup::spawn("shutdown", thread_id, async move {
+            state.lock().await.calls.shutdown_thread += 1;
             Ok(())
         })
     }
 
-    fn discard_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move {
-            self.state.lock().await.calls.discard_thread += 1;
+    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup {
+        let state = Arc::clone(&self.state);
+        ThreadStoreCleanup::spawn("discard", thread_id, async move {
+            state.lock().await.calls.discard_thread += 1;
             Ok(())
         })
     }

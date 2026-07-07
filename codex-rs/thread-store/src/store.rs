@@ -3,6 +3,9 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use tokio::task::JoinHandle;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -28,6 +31,54 @@ use crate::UpdateThreadMetadataParams;
 
 /// Future returned by [`ThreadStore`] operations.
 pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResult<T>> + Send + 'a>>;
+
+/// Handle for eagerly started terminal thread cleanup.
+///
+/// Awaiting the handle joins cleanup and reports its result. Dropping it detaches the underlying
+/// task instead of canceling cleanup, so terminal cleanup keeps running after its caller is
+/// canceled.
+#[must_use = "await this handle to observe terminal cleanup failures"]
+pub struct ThreadStoreCleanup {
+    operation: &'static str,
+    thread_id: ThreadId,
+    task: JoinHandle<ThreadStoreResult<()>>,
+}
+
+impl ThreadStoreCleanup {
+    /// Starts terminal cleanup immediately on the current Tokio runtime.
+    pub fn spawn(
+        operation: &'static str,
+        thread_id: ThreadId,
+        cleanup: impl Future<Output = ThreadStoreResult<()>> + Send + 'static,
+    ) -> Self {
+        Self {
+            operation,
+            thread_id,
+            task: tokio::spawn(cleanup),
+        }
+    }
+}
+
+impl Future for ThreadStoreCleanup {
+    type Output = ThreadStoreResult<()>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.task).poll(cx) {
+            Poll::Ready(Ok(result)) => Poll::Ready(result),
+            Poll::Ready(Err(err)) => {
+                let operation = this.operation;
+                let thread_id = &this.thread_id;
+                Poll::Ready(Err(ThreadStoreError::Internal {
+                    message: format!(
+                        "{operation} cleanup task failed for thread {thread_id}: {err}"
+                    ),
+                }))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
 
 /// Storage-neutral thread persistence boundary.
 pub trait ThreadStore: Any + Send + Sync {
@@ -60,17 +111,21 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Flushes all queued items and returns once they are durable/readable.
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
-    /// Flushes pending items and closes the live thread writer.
-    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
+    /// Starts terminal cleanup that flushes pending items and closes the live thread writer.
+    ///
+    /// This starts terminal cleanup before returning. Await the handle to observe completion; if
+    /// the caller is canceled, dropping the handle detaches the terminal task instead of
+    /// canceling it.
+    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup;
 
     /// Discards the live thread writer without forcing pending in-memory items to become durable.
     ///
     /// Core calls this when session initialization fails after a live writer has been created.
     /// This is an idempotent terminal release: implementations must preserve already-durable
-    /// thread data, finish releasing the lease after cleanup starts even if the returned future
-    /// is canceled or reports a diagnostic error, and prevent previously obtained writer handles
-    /// from appending once it returns.
-    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
+    /// thread data, keep releasing the lease after cleanup starts even if the returned handle is
+    /// dropped, and prevent previously obtained writer handles from appending after cleanup
+    /// completes.
+    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup;
 
     /// Loads persisted history for resume, fork, rollback, and memory jobs.
     fn load_history(
