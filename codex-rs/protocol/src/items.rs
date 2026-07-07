@@ -13,6 +13,7 @@ use crate::parse_command::ParsedCommand;
 use crate::protocol::AgentStatus;
 use crate::protocol::CollabAgentRef;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyStatus;
 use crate::protocol::SubAgentActivityKind;
@@ -135,6 +136,16 @@ pub enum CommandExecutionStatus {
     Completed,
     Failed,
     Declined,
+}
+
+impl From<ExecCommandStatus> for CommandExecutionStatus {
+    fn from(value: ExecCommandStatus) -> Self {
+        match value {
+            ExecCommandStatus::Completed => Self::Completed,
+            ExecCommandStatus::Failed => Self::Failed,
+            ExecCommandStatus::Declined => Self::Declined,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
