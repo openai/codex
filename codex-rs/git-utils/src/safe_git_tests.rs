@@ -671,6 +671,19 @@ async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
 }
 
 #[tokio::test]
+async fn get_has_changes_pins_normal_untracked_files_over_repository_config() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    run_git_async(&repo_path, &["config", "status.showUntrackedFiles", "no"]).await;
+    std::fs::write(repo_path.join("untracked.txt"), "untracked\n").expect("write untracked file");
+
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Ok(true)
+    );
+}
+
+#[tokio::test]
 async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_names() {
     for (driver, sentinel_attribute) in
         [("set", "filter"), ("unset", "-filter"), ("unspecified", "")]

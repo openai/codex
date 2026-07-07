@@ -92,6 +92,52 @@ fn request(root: &Path, patch: &str) -> ApplyGitRequest {
     }
 }
 
+#[test]
+fn reverse_preflight_refuses_the_same_divergent_staged_blob_without_mutation() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), b"old\n").expect("base file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    std::fs::write(root.join("file.txt"), b"staged\n").expect("staged file");
+    run_success(root, &["add", "file.txt"]);
+    std::fs::write(root.join("file.txt"), b"new\n").expect("reverse worktree");
+    let patch = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+    let index_before = std::fs::read(root.join(".git/index")).expect("read index");
+    let worktree_before = std::fs::read(root.join("file.txt")).expect("read worktree");
+
+    let mut preflight = request(root, patch);
+    preflight.preflight = true;
+    let preflight_error = apply_git_patch(&preflight).expect_err("preflight must refuse");
+    assert_eq!(preflight_error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        preflight_error
+            .to_string()
+            .contains("would replace existing staged data"),
+        "{preflight_error}"
+    );
+    assert_eq!(
+        std::fs::read(root.join(".git/index")).expect("index after preflight"),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read(root.join("file.txt")).expect("worktree after preflight"),
+        worktree_before
+    );
+
+    let apply_error = apply_git_patch(&request(root, patch)).expect_err("apply must refuse");
+    assert_eq!(apply_error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(apply_error.to_string(), preflight_error.to_string());
+    assert_eq!(
+        std::fs::read(root.join(".git/index")).expect("index after apply"),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read(root.join("file.txt")).expect("worktree after apply"),
+        worktree_before
+    );
+}
+
 fn topology_fixture(topology: Topology) -> (tempfile::TempDir, String) {
     let repo = init_repo();
     let root = repo.path();
@@ -158,6 +204,8 @@ fn assert_refused_without_mutation(root: &Path, patch: &str) {
     let before_leaves = [
         leaf_snapshot(root, "old.txt"),
         leaf_snapshot(root, "new.txt"),
+        leaf_snapshot(root, "file.txt"),
+        leaf_snapshot(root, "other.txt"),
     ];
     let error = apply_git_patch(&request(root, patch)).expect_err("unsafe reverse must fail");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
@@ -165,7 +213,9 @@ fn assert_refused_without_mutation(root: &Path, patch: &str) {
     assert_eq!(
         [
             leaf_snapshot(root, "old.txt"),
-            leaf_snapshot(root, "new.txt")
+            leaf_snapshot(root, "new.txt"),
+            leaf_snapshot(root, "file.txt"),
+            leaf_snapshot(root, "other.txt")
         ],
         before_leaves
     );
@@ -193,6 +243,65 @@ fn reverse_delete_and_rename_preserve_divergent_staged_blobs() {
         }
         assert_refused_without_mutation(root, &patch);
     }
+}
+
+#[test]
+fn reverse_three_way_refuses_staged_content_change_matching_the_worktree() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), b"top\nbase\nbottom\n").expect("base file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    let base = String::from_utf8(run_success(root, &["rev-parse", "HEAD"])).expect("base OID");
+    std::fs::write(root.join("file.txt"), b"top\ntheirs\nbottom\n").expect("theirs file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "theirs"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &[
+            "diff",
+            "--full-index",
+            base.trim(),
+            "HEAD",
+            "--",
+            "file.txt",
+        ],
+    ))
+    .expect("patch");
+    std::fs::write(root.join("file.txt"), b"top\nuser-staged\nbottom\n").expect("user staged file");
+    run_success(root, &["add", "file.txt"]);
+
+    assert_refused_without_mutation(root, &patch);
+}
+
+#[test]
+fn reverse_three_way_refuses_staged_non_candidate_before_staging_another_path() {
+    let repo = init_repo();
+    let root = repo.path();
+    for path in ["file.txt", "other.txt"] {
+        std::fs::write(root.join(path), b"top\nbase\nbottom\n").expect("base file");
+    }
+    run_success(root, &["add", "."]);
+    run_success(root, &["commit", "-qm", "base"]);
+    let base = String::from_utf8(run_success(root, &["rev-parse", "HEAD"])).expect("base OID");
+    for path in ["file.txt", "other.txt"] {
+        std::fs::write(root.join(path), b"top\ntheirs\nbottom\n").expect("theirs file");
+    }
+    run_success(root, &["add", "."]);
+    run_success(root, &["commit", "-qm", "theirs"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &["diff", "--full-index", base.trim(), "HEAD"],
+    ))
+    .expect("patch");
+
+    std::fs::write(root.join("file.txt"), b"top\nuser-staged\nbottom\n")
+        .expect("staged non-candidate");
+    run_success(root, &["add", "file.txt"]);
+    std::fs::write(root.join("other.txt"), b"top\nunstaged\nbottom\n")
+        .expect("unstaged staging candidate");
+
+    assert_refused_without_mutation(root, &patch);
 }
 
 #[test]
@@ -465,6 +574,47 @@ fn reverse_refuses_ignored_untracked_rename_endpoint_without_mutation() {
         [
             leaf_snapshot(root, "old.txt"),
             leaf_snapshot(root, "new.txt")
+        ],
+        before_leaves
+    );
+}
+
+#[test]
+fn reverse_refuses_ignored_endpoint_before_staging_eligible_peer() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("old.txt"), b"old\n").unwrap();
+    std::fs::write(root.join("other.txt"), b"old\n").unwrap();
+    run_success(root, &["add", "old.txt", "other.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    run_success(root, &["mv", "old.txt", "new.txt"]);
+    std::fs::write(root.join("other.txt"), b"new\n").unwrap();
+    run_success(root, &["add", "other.txt"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &["diff", "--cached", "--full-index", "--binary", "-M"],
+    ))
+    .unwrap();
+    run_success(root, &["reset", "--hard", "-q", "HEAD"]);
+
+    std::fs::write(root.join(".gitignore"), b"new.txt\n").unwrap();
+    std::fs::rename(root.join("old.txt"), root.join("new.txt")).unwrap();
+    std::fs::write(root.join("other.txt"), b"new\n").unwrap();
+
+    let before_index = index_snapshot(root);
+    let before_leaves = [
+        leaf_snapshot(root, "old.txt"),
+        leaf_snapshot(root, "new.txt"),
+        leaf_snapshot(root, "other.txt"),
+    ];
+    let error = apply_git_patch(&request(root, &patch)).expect_err("ignored endpoint");
+    assert!(error.to_string().contains("ignored"), "{error}");
+    assert_eq!(index_snapshot(root), before_index);
+    assert_eq!(
+        [
+            leaf_snapshot(root, "old.txt"),
+            leaf_snapshot(root, "new.txt"),
+            leaf_snapshot(root, "other.txt")
         ],
         before_leaves
     );

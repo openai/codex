@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -13,6 +14,11 @@ use crate::guarded_config::GuardedGitConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PatchPathInventory {
+    /// Requested-orientation destination records in patch order. Unlike
+    /// `primary_paths`, duplicates are retained so security-sensitive merge
+    /// classification can reject a later record that would hide an earlier
+    /// low-level merge result for the same path.
+    pub(crate) primary_records: Vec<String>,
     pub(crate) primary_paths: Vec<String>,
     pub(crate) effective_paths: Vec<String>,
 }
@@ -34,14 +40,16 @@ pub(crate) fn extract_patch_path_inventory_guarded(
             "forward and reverse patch parsing returned different path counts",
         ));
     }
-    let primary_paths = primary_paths
+    let primary_records = primary_paths
         .into_iter()
         .map(validate_patch_path)
-        .collect::<io::Result<BTreeSet<_>>>()?;
-    let opposite_paths = opposite_paths
+        .collect::<io::Result<Vec<_>>>()?;
+    let opposite_records = opposite_paths
         .into_iter()
         .map(validate_patch_path)
-        .collect::<io::Result<BTreeSet<_>>>()?;
+        .collect::<io::Result<Vec<_>>>()?;
+    let primary_paths = primary_records.iter().cloned().collect::<BTreeSet<_>>();
+    let opposite_paths = opposite_records.into_iter().collect::<BTreeSet<_>>();
     let effective_paths = primary_paths
         .iter()
         .cloned()
@@ -54,9 +62,41 @@ pub(crate) fn extract_patch_path_inventory_guarded(
         ));
     }
     Ok(PatchPathInventory {
+        primary_records,
         primary_paths: primary_paths.into_iter().collect(),
         effective_paths: effective_paths.into_iter().collect(),
     })
+}
+
+#[cfg(test)]
+enum StagePathsHookPoint {
+    BindRunner = 0,
+    ResolvePhysicalCwd = 1,
+    PreSpawn = 2,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    #[allow(clippy::type_complexity)]
+    static STAGE_PATHS_HOOKS: std::cell::RefCell<[Option<Box<dyn FnOnce()>>; 3]> =
+        std::cell::RefCell::new([None, None, None]);
+}
+
+#[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code))]
+fn set_stage_paths_hook(point: StagePathsHookPoint, hook: impl FnOnce() + 'static) {
+    STAGE_PATHS_HOOKS.with(|slots| {
+        let prior = slots.borrow_mut()[point as usize].replace(Box::new(hook));
+        assert!(prior.is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_stage_paths_hook(point: StagePathsHookPoint) {
+    let hook = STAGE_PATHS_HOOKS.with(|slots| slots.borrow_mut()[point as usize].take());
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 /// Extract effective patch paths through a bound operation configuration.
@@ -73,13 +113,9 @@ fn git_apply_numstat_paths_guarded(
     patch_path: &Path,
     revert: bool,
 ) -> io::Result<Vec<String>> {
-    let mut command = config.apply_command()?;
-    command.args(["--numstat", "-z"]);
-    if revert {
-        command.arg("-R");
-    }
-    command.arg("--").arg(patch_path);
-    let output = command.output()?;
+    #[cfg(test)]
+    run_stage_paths_hook(StagePathsHookPoint::PreSpawn);
+    let output = config.run_apply_numstat_path_inventory(revert, patch_path)?;
     if !output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -110,10 +146,11 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
     let paths = (|| -> io::Result<Vec<String>> {
         let git = GitRunner::for_cwd_io(cwd)?;
         let requested_cwd = std::fs::canonicalize(cwd)?;
-        let git_root = crate::get_git_repo_root(&requested_cwd)
-            .ok_or_else(|| io::Error::other("not a Git repository"))?;
-        let git_root = std::fs::canonicalize(git_root)?;
-        let config = GuardedGitConfig::authorize(&git, &git_root, Vec::new())?;
+        let authorized_cwd = crate::get_git_repo_root(&requested_cwd)
+            .map(std::fs::canonicalize)
+            .transpose()?
+            .unwrap_or(requested_cwd);
+        let config = GuardedGitConfig::authorize(&git, &authorized_cwd, Vec::new())?;
         extract_effective_paths_from_patch_guarded(&config, &patch_path, /*revert*/ false)
     })()
     .unwrap_or_default();
@@ -261,9 +298,52 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
-    let git = GitRunner::for_cwd_io(git_root)?;
-    git.ensure_repository_root_route(git_root)?;
-    let canonical_root = std::fs::canonicalize(git_root)?;
+    let immutable_traversal = !git_root.is_absolute()
+        && git_root.components().next().is_some()
+        && git_root
+            .components()
+            .all(|component| matches!(component, Component::CurDir | Component::ParentDir));
+    let (guarded_root, bound_git) = if git_root.is_absolute() {
+        (git_root.to_path_buf(), None)
+    } else if immutable_traversal {
+        let git = GitRunner::for_cwd_io(Path::new("."))?;
+        #[cfg(test)]
+        run_stage_paths_hook(StagePathsHookPoint::BindRunner);
+        let resolve_immutable_traversal = || -> io::Result<PathBuf> {
+            let mut root = std::fs::canonicalize(Path::new("."))?;
+            for component in git_root.components() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        root.pop();
+                    }
+                    _ => unreachable!("non-traversal component"),
+                }
+            }
+            Ok(root)
+        };
+        let initial_root = resolve_immutable_traversal()?;
+        git.ensure_active_worktree_root(&initial_root)?;
+        #[cfg(test)]
+        run_stage_paths_hook(StagePathsHookPoint::ResolvePhysicalCwd);
+        let live_root = resolve_immutable_traversal()?;
+        git.ensure_active_worktree_root(&live_root)?;
+        (live_root, Some(git))
+    } else {
+        (std::env::current_dir()?.join(git_root), None)
+    };
+    if !guarded_root.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "repository root route could not be anchored to an absolute path",
+        ));
+    }
+    let git = match bound_git {
+        Some(git) => git,
+        None => GitRunner::for_cwd_io(&guarded_root)?,
+    };
+    git.ensure_repository_root_route(&guarded_root)?;
+    let canonical_root = std::fs::canonicalize(&guarded_root)?;
     let mut config = GuardedGitConfig::authorize(&git, &canonical_root, Vec::new())?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths =

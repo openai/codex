@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io;
 use std::io::Seek;
@@ -8,14 +9,21 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use crate::FsmonitorOverride;
-use crate::FsmonitorProbeRunner;
 use crate::git_command::GitAsyncCommand;
 use crate::git_command::GitCommand;
 use crate::git_command::GitRunner;
+use crate::git_command::IsolatedGitStorage;
 use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 use crate::git_config::GitConfigEntry;
+use crate::git_config::GitConfigOrigin;
+use crate::git_config::GitConfigValue;
+use crate::git_config::MergeConfigRecord;
+use crate::git_config::parse_config_entries;
+use crate::git_config::parse_config_entries_with_origins;
 use crate::git_config::read_effective_config_with_fallback;
 use crate::git_config::read_effective_config_with_fallback_async;
+use crate::git_config::read_effective_shared_repository_with_fallback;
+use crate::git_config::read_merge_config_records_with_fallback;
 use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::git_config_sources::ensure_no_worktree_config_sources_async;
 use crate::safe_git::DISABLED_HOOKS_PATH;
@@ -31,7 +39,7 @@ use crate::safe_git::SentinelFilterProbeResolution;
 use crate::safe_git::build_filter_policy_snapshot;
 use crate::safe_git::classify_selected_filter;
 use crate::safe_git::classify_sentinel_filter_probes;
-use crate::safe_git::executable_filter_drivers;
+use crate::safe_git::status_policy_filter_drivers;
 use crate::safe_git::git_path_argument;
 use crate::safe_git::parse_filter_attributes;
 use crate::safe_git::parse_nul_paths;
@@ -57,6 +65,8 @@ pub(crate) use merge_overlay::merge_overlay_count;
 #[cfg(test)]
 pub(crate) use merge_overlay::reset_merge_policy_counts;
 mod reverse_probe;
+mod status_context;
+use status_context::SealedStatusReadContext;
 
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
@@ -120,6 +130,141 @@ impl<'git> ValidatedConfigSources<'git> {
             pattern,
             probe,
         )
+    }
+
+    fn read_shared_repository(&self) -> io::Result<Option<GitConfigValue>> {
+        read_effective_shared_repository_with_fallback(
+            self.git,
+            &self.canonical_root,
+            &self.base_config_args,
+        )
+    }
+
+    fn read_merge_config(&self) -> io::Result<Vec<MergeConfigRecord>> {
+        read_merge_config_records_with_fallback(
+            self.git,
+            &self.canonical_root,
+            &self.base_config_args,
+        )
+    }
+
+    fn read_direct_common_config(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        let (scoped, scoped_path) = self
+            .git
+            .read_active_common_config_without_includes(pattern, /*show_scope*/ true)?;
+        let entries = if scoped
+            .status
+            .code()
+            .is_some_and(|code| code == 0 || code == 1)
+        {
+            parse_config_entries(&scoped.stdout)?
+        } else {
+            let (legacy, legacy_path) = self
+                .git
+                .read_active_common_config_without_includes(pattern, /*show_scope*/ false)?;
+            if legacy_path != scoped_path {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "active Git common config changed during format fallback",
+                ));
+            }
+            if !legacy
+                .status
+                .code()
+                .is_some_and(|code| code == 0 || code == 1)
+            {
+                return Err(io::Error::other(format!(
+                    "git {probe} direct common config probe failed with status {}: {}",
+                    legacy.status,
+                    String::from_utf8_lossy(&legacy.stderr).trim()
+                )));
+            }
+            parse_config_entries_with_origins(&legacy.stdout)?
+        };
+        for entry in &entries {
+            let expected_origin = match &entry.origin {
+                GitConfigOrigin::File(origin) => {
+                    same_file::is_same_file(origin, &scoped_path).unwrap_or(false)
+                }
+                GitConfigOrigin::CommandLine => false,
+            };
+            if !expected_origin {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("git {probe} direct common config probe returned an unexpected origin"),
+                ));
+            }
+        }
+        Ok(entries
+            .into_iter()
+            .map(|entry| (entry.key.clone(), entry))
+            .collect())
+    }
+
+    async fn read_direct_common_config_async(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        let (scoped, scoped_path) = self
+            .git
+            .read_active_common_config_without_includes_async(pattern, /*show_scope*/ true)
+            .await?;
+        let entries = if scoped
+            .status
+            .code()
+            .is_some_and(|code| code == 0 || code == 1)
+        {
+            parse_config_entries(&scoped.stdout)?
+        } else {
+            let (legacy, legacy_path) = self
+                .git
+                .read_active_common_config_without_includes_async(
+                    pattern,
+                    /*show_scope*/ false,
+                )
+                .await?;
+            if legacy_path != scoped_path {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "active Git common config changed during format fallback",
+                ));
+            }
+            if !legacy
+                .status
+                .code()
+                .is_some_and(|code| code == 0 || code == 1)
+            {
+                return Err(io::Error::other(format!(
+                    "git {probe} direct common config probe failed with status {}: {}",
+                    legacy.status,
+                    String::from_utf8_lossy(&legacy.stderr).trim()
+                )));
+            }
+            parse_config_entries_with_origins(&legacy.stdout)?
+        };
+        for entry in &entries {
+            let expected_origin = match &entry.origin {
+                GitConfigOrigin::File(origin) => {
+                    same_file::is_same_file(origin, &scoped_path).unwrap_or(false)
+                }
+                GitConfigOrigin::CommandLine => false,
+            };
+            if !expected_origin {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("git {probe} direct common config probe returned an unexpected origin"),
+                ));
+            }
+        }
+        Ok(entries
+            .into_iter()
+            .map(|entry| (entry.key.clone(), entry))
+            .collect())
     }
 
     fn read_bool(&self, key: &str) -> io::Result<Option<bool>> {
@@ -216,6 +361,14 @@ fn invalid_base_config_args() -> io::Error {
 pub(crate) struct GuardedGitConfig<'git> {
     sources: ValidatedConfigSources<'git>,
     identity: Arc<CapabilityIdentity>,
+    // Captured once for an apply operation and appended after every mutable
+    // config source/overlay so these scalar inputs cannot change between a
+    // nonmutating gate and a later index/worktree mutation.
+    apply_policy: Option<ApplyPolicySnapshot>,
+    // Set only by the fixed real-policy numstat gate. Fatal whitespace modes
+    // may be neutralized for a later mutating child only after this proof is
+    // recorded on the same operation capability.
+    apply_policy_gate: ApplyPolicyGateState,
     // Ordered, typed snapshots keep each sealed filter overlay alive through
     // every later child. Downstream staging may attach a fresh Git-add policy
     // without rebuilding or weakening the source authorization.
@@ -226,13 +379,17 @@ pub(crate) struct GuardedGitConfig<'git> {
     merge: Option<SealedMergeConfigOverride>,
     merge_policy_installed: bool,
     // Status is a mutually exclusive operation state rather than another
-    // mutation overlay. `Some` with no neutralizer records the zero-driver
-    // case and is still required before the final status sink can run.
-    status: Option<StatusFilterPolicySnapshot>,
+    // mutation overlay. The retained context freezes helper selection, HEAD,
+    // and untracked presence for the final tracked-only Status sink.
+    status: Option<StatusPolicySnapshot>,
+    // Set only after proving the effective replacement-ref namespace empty
+    // (or already disabled). Every later snapshot command then forces
+    // replacements off so a late ref cannot affect the frozen context.
+    status_replacements_disabled: bool,
 }
 
-struct StatusFilterPolicySnapshot {
-    neutralizer: Option<SealedFilterConfigOverride>,
+struct StatusPolicySnapshot {
+    context: SealedStatusReadContext,
     fsmonitor: Option<FsmonitorOverride>,
 }
 
@@ -300,6 +457,105 @@ impl StatusRootMismatch {
 }
 
 struct CapabilityIdentity;
+
+/// Opaque operation identity for sealed plans implemented in sibling modules.
+/// Its inner capability cannot be forged or rebound outside this module.
+#[derive(Clone)]
+pub(crate) struct GuardedOperationIdentity(Arc<CapabilityIdentity>);
+
+impl GuardedOperationIdentity {
+    pub(crate) fn same_operation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+enum ApplyPolicyGateState {
+    NotRun,
+    Failed,
+    Succeeded { revert: bool, patch_path: String },
+}
+
+const APPLY_POLICY_CONFIG_PATTERN: &str =
+    r"^(apply\.(whitespace|ignorewhitespace)|core\.whitespace)$";
+const DEFAULT_APPLY_WHITESPACE: &str = "warn";
+const DEFAULT_APPLY_IGNORE_WHITESPACE: &str = "false";
+const DEFAULT_CORE_WHITESPACE: &str = "blank-at-eol,blank-at-eof,space-before-tab";
+
+struct ApplyPolicySnapshot {
+    config_args: Box<[String]>,
+    whitespace_mode: ApplyWhitespaceMode,
+}
+
+/// Normalized `apply.whitespace` behavior frozen for one apply operation.
+///
+/// Unknown or case-mismatched values stay invalid here and are left for Git's
+/// authoritative policy gate to reject. The `strip` alias has the same byte-
+/// correcting behavior as `fix`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApplyWhitespaceMode {
+    Warn,
+    Nowarn,
+    Error,
+    ErrorAll,
+    Fix,
+    Invalid,
+}
+
+impl ApplyWhitespaceMode {
+    fn normalize(value: &str) -> Self {
+        match value {
+            "warn" => Self::Warn,
+            "nowarn" => Self::Nowarn,
+            "error" => Self::Error,
+            "error-all" => Self::ErrorAll,
+            "fix" | "strip" => Self::Fix,
+            _ => Self::Invalid,
+        }
+    }
+
+    pub(crate) fn is_fatal(self) -> bool {
+        matches!(self, Self::Error | Self::ErrorAll)
+    }
+}
+
+impl ApplyPolicySnapshot {
+    fn capture(sources: &ValidatedConfigSources<'_>) -> io::Result<Self> {
+        let entries = sources.read_effective(APPLY_POLICY_CONFIG_PATTERN, "apply policy")?;
+        let value = |key: &str, default: &str| {
+            entries
+                .get(key)
+                .map(|entry| entry.value.clone())
+                .unwrap_or_else(|| default.to_string())
+        };
+        let apply_whitespace = value("apply.whitespace", DEFAULT_APPLY_WHITESPACE);
+        Ok(Self {
+            config_args: vec![
+                "-c".to_string(),
+                format!("apply.whitespace={apply_whitespace}"),
+                "-c".to_string(),
+                format!(
+                    "apply.ignoreWhitespace={}",
+                    value("apply.ignorewhitespace", DEFAULT_APPLY_IGNORE_WHITESPACE)
+                ),
+                "-c".to_string(),
+                format!(
+                    "core.whitespace={}",
+                    value("core.whitespace", DEFAULT_CORE_WHITESPACE)
+                ),
+            ]
+            .into_boxed_slice(),
+            whitespace_mode: ApplyWhitespaceMode::normalize(&apply_whitespace),
+        })
+    }
+
+    fn append_to(&self, command: &mut GitCommand) {
+        command.args(&self.config_args);
+    }
+
+    fn append_rendered(&self, parts: &mut Vec<String>) {
+        parts.extend(self.config_args.iter().cloned());
+    }
+}
 
 #[derive(Clone, Copy)]
 enum BoundSubcommand {
@@ -388,6 +644,24 @@ impl GuardedAsyncGitCommand<'_, '_> {
             .output_async_bounded(self.inner, MAX_INTERNAL_GIT_OUTPUT_BYTES)
             .await
     }
+
+    async fn output_in_status_context(
+        self,
+        context: &SealedStatusReadContext,
+    ) -> io::Result<std::process::Output> {
+        let isolated = context.context(&self.operation.identity)?;
+        let operation_identity = self.operation.operation_identity();
+        self.operation
+            .sources
+            .git
+            .output_async_in_isolated_read_context(
+                self.inner,
+                isolated,
+                &operation_identity,
+                MAX_INTERNAL_GIT_OUTPUT_BYTES,
+            )
+            .await
+    }
 }
 
 /// A sealed filter-only include owned for the complete capability lifetime.
@@ -467,6 +741,23 @@ impl GuardedGitCommand<'_, '_> {
     pub(crate) fn output(self) -> io::Result<std::process::Output> {
         self.operation.sources.git.output(self.inner)
     }
+
+    pub(crate) fn output_in_merge_scratch(
+        self,
+        storage: &IsolatedGitStorage,
+    ) -> io::Result<std::process::Output> {
+        let merge = self.operation.merge.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "scratch index command requires an installed merge policy",
+            )
+        })?;
+        let isolated = merge.common_dir(&self.operation.identity)?;
+        self.operation
+            .sources
+            .git
+            .output_in_isolated_scratch(self.inner, isolated, storage)
+    }
 }
 
 impl<'git> GuardedGitConfig<'git> {
@@ -478,10 +769,13 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(Self {
             sources: ValidatedConfigSources::authorize(git, canonical_root, base_config_args)?,
             identity: Arc::new(CapabilityIdentity),
+            apply_policy: None,
+            apply_policy_gate: ApplyPolicyGateState::NotRun,
             filters: Vec::new(),
             merge: None,
             merge_policy_installed: false,
             status: None,
+            status_replacements_disabled: false,
         })
     }
 
@@ -493,10 +787,13 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(Self {
             sources: ValidatedConfigSources::authorize_async(git, root, Vec::new()).await?,
             identity: Arc::new(CapabilityIdentity),
+            apply_policy: None,
+            apply_policy_gate: ApplyPolicyGateState::NotRun,
             filters: Vec::new(),
             merge: None,
             merge_policy_installed: false,
             status: None,
+            status_replacements_disabled: false,
         })
     }
 
@@ -504,8 +801,187 @@ impl<'git> GuardedGitConfig<'git> {
         &self.sources.canonical_root
     }
 
-    pub(crate) fn apply_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
-        self.guarded_command(BoundSubcommand::Apply)
+    pub(crate) fn operation_identity(&self) -> GuardedOperationIdentity {
+        GuardedOperationIdentity(Arc::clone(&self.identity))
+    }
+
+    pub(crate) fn ensure_operation_identity(
+        &self,
+        identity: &GuardedOperationIdentity,
+    ) -> io::Result<()> {
+        if Arc::ptr_eq(&self.identity, &identity.0) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "sealed Git plan belongs to another operation",
+            ))
+        }
+    }
+
+    pub(crate) fn freeze_apply_policy(&mut self) -> io::Result<()> {
+        if self.status.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply policy cannot coexist with status policy",
+            ));
+        }
+        if self.apply_policy.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply policy is already frozen for this operation",
+            ));
+        }
+        self.apply_policy = Some(ApplyPolicySnapshot::capture(&self.sources)?);
+        Ok(())
+    }
+
+    /// Parse the patch's path inventory without consulting or mutating the
+    /// index/worktree. The fixed whitespace override keeps path discovery from
+    /// preempting the later authoritative apply-policy result.
+    pub(crate) fn run_apply_numstat_path_inventory(
+        &self,
+        revert: bool,
+        patch_path: &Path,
+    ) -> io::Result<std::process::Output> {
+        let mut command = self.apply_command()?;
+        command.args(["--numstat", "--whitespace=nowarn", "-z"]);
+        if revert {
+            command.arg("-R");
+        }
+        command.arg("--").arg(patch_path);
+        command.output()
+    }
+
+    /// Run the one fixed, nonmutating policy gate and bind a successful result
+    /// to this operation. Keeping the proof here prevents a future caller from
+    /// suppressing a fatal final whitespace check without first executing the
+    /// authoritative frozen-policy gate.
+    pub(crate) fn run_apply_policy_gate(
+        &mut self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<(String, std::process::Output)> {
+        if !matches!(self.apply_policy_gate, ApplyPolicyGateState::NotRun) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply policy gate may run only once per operation",
+            ));
+        }
+        if self.apply_policy.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply policy must be frozen before its gate runs",
+            ));
+        }
+        // Mark the one-shot gate consumed before any fallible launch step.
+        self.apply_policy_gate = ApplyPolicyGateState::Failed;
+        let mut args = vec![
+            "apply".to_string(),
+            "--numstat".to_string(),
+            "-z".to_string(),
+        ];
+        if revert {
+            args.push("-R".to_string());
+        }
+        args.push(patch_path.to_string());
+        let rendered = self.render_apply_command_for_log(&args)?;
+        let mut command = self.apply_command()?;
+        command.args(&args[1..]);
+        let output = command.output()?;
+        if output.status.success() {
+            self.apply_policy_gate = ApplyPolicyGateState::Succeeded {
+                revert,
+                patch_path: patch_path.to_string(),
+            };
+        }
+        Ok((rendered, output))
+    }
+
+    /// Run the public preflight shape without exposing a generic `git apply`
+    /// command on which a caller could append mutating options.
+    pub(crate) fn run_apply_preflight_check(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<(String, std::process::Output)> {
+        let mut args = vec!["apply".to_string(), "--check".to_string()];
+        if revert {
+            args.push("-R".to_string());
+        }
+        args.push(patch_path.to_string());
+        let rendered = self.render_apply_command_for_log(&args)?;
+        let mut command = self.apply_command()?;
+        command.args(&args[1..]);
+        Ok((rendered, command.output()?))
+    }
+
+    /// Check whether the final operation can use the direct strategy. This is
+    /// deliberately fixed to `--check`; callers receive only the output, never
+    /// the underlying apply command.
+    pub(crate) fn run_apply_strategy_check(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<std::process::Output> {
+        let mut command = self.apply_command()?;
+        command.args(["--check", "--whitespace=nowarn"]);
+        if !revert {
+            command.arg("--index");
+        }
+        if revert {
+            command.arg("-R");
+        }
+        command.arg(patch_path);
+        command.output()
+    }
+
+    /// Return the typed frozen mode only after the authoritative gate has
+    /// succeeded for this operation.
+    pub(crate) fn final_apply_whitespace_mode(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<ApplyWhitespaceMode> {
+        match &self.apply_policy_gate {
+            ApplyPolicyGateState::Succeeded {
+                revert: gated_revert,
+                patch_path: gated_patch,
+            } if *gated_revert == revert && gated_patch == patch_path => {}
+            ApplyPolicyGateState::Succeeded { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "final apply does not match its successful policy gate",
+                ));
+            }
+            ApplyPolicyGateState::NotRun | ApplyPolicyGateState::Failed => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "final apply whitespace policy requires a successful policy gate",
+                ));
+            }
+        }
+        self.apply_policy
+            .as_ref()
+            .map(|policy| policy.whitespace_mode)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "final apply whitespace policy is not frozen",
+                )
+            })
+    }
+
+    fn apply_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        let mut command = self.command_with_attached_overlays()?;
+        if let Some(policy) = &self.apply_policy {
+            policy.append_to(&mut command);
+        }
+        BoundSubcommand::Apply.append_to(&mut command);
+        Ok(GuardedGitCommand {
+            operation: self,
+            inner: command,
+        })
     }
 
     pub(crate) fn rev_parse_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
@@ -583,9 +1059,6 @@ impl<'git> GuardedGitConfig<'git> {
         if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_rendered_args(&self.identity, &mut args)?;
         }
-        if let Some(merge) = &self.merge {
-            merge.append_rendered_args(&self.identity, &mut args)?;
-        }
         if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_rendered_args(&self.identity, &mut args)?;
         }
@@ -612,10 +1085,15 @@ impl<'git> GuardedGitConfig<'git> {
     }
 
     fn ensure_status_exclusive_state(&self) -> io::Result<()> {
-        if !self.filters.is_empty() || self.merge.is_some() || self.merge_policy_installed {
+        if self.apply_policy.is_some()
+            || !matches!(self.apply_policy_gate, ApplyPolicyGateState::NotRun)
+            || !self.filters.is_empty()
+            || self.merge.is_some()
+            || self.merge_policy_installed
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "status policy cannot coexist with mutation filter or merge policy",
+                "status policy cannot coexist with apply, mutation filter, or merge policy",
             ));
         }
         Ok(())
@@ -737,21 +1215,23 @@ impl<'git> GuardedGitConfig<'git> {
         if !output.status.success() {
             return Err(command_failure("tracked-path probe", &output));
         }
-        let paths = parse_nul_paths(&output.stdout)?;
+        let mut paths = parse_nul_paths(&output.stdout)?;
         if paths.len() > MAX_STATUS_TRACKED_PATHS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "tracked path count {} exceeds the status limit {MAX_STATUS_TRACKED_PATHS}",
+                    "tracked path record count {} exceeds the status limit {MAX_STATUS_TRACKED_PATHS}",
                     paths.len()
                 ),
             ));
         }
+        paths.sort();
+        paths.dedup();
         Ok(paths)
     }
 
-    /// Install the mutually exclusive Status filter policy. The common
-    /// zero-driver path occupies the slot without scanning tracked paths.
+    /// Install the mutually exclusive Status filter policy and publish one
+    /// operation-owned config, attribute, HEAD, and untracked-presence view.
     pub(crate) async fn install_status_policy_async(&mut self) -> io::Result<()> {
         self.ensure_status_exclusive_state()?;
         if self.status.is_some() {
@@ -766,59 +1246,189 @@ impl<'git> GuardedGitConfig<'git> {
             .sources
             .read_effective_async(crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN, "filter")
             .await?;
-        let executable_drivers = executable_filter_drivers(&entries)?;
+        let executable_drivers = status_policy_filter_drivers(&entries)?;
         validate_executable_driver_count(&executable_drivers)?;
-        if executable_drivers.is_empty() {
-            self.status = Some(StatusFilterPolicySnapshot {
-                neutralizer: None,
-                fsmonitor: None,
-            });
-            return Ok(());
-        }
-
         let paths = self.read_status_tracked_paths_async().await?;
-        let neutralizer = self
-            .build_filter_override_async(&executable_drivers)
+        let neutralizer = if executable_drivers.is_empty() {
+            None
+        } else {
+            Some(
+                self.build_filter_override_async(&executable_drivers)
+                    .await?,
+            )
+        };
+        self.ensure_no_effective_replacement_refs_async(neutralizer.as_ref())
             .await?;
-        let attributes = self
-            .read_status_filter_attributes_async(&paths, &executable_drivers, &neutralizer)
-            .await?;
-        let mut required_cache = BTreeMap::new();
-        for (path, driver) in attributes {
-            if !executable_drivers.contains(&driver) {
-                continue;
-            }
-            let required = required_cache.get(&driver).copied();
-            let mut policy = classify_selected_filter(&entries, &driver, required);
-            if policy == SelectedFilterPolicy::NeedsRequiredValue {
-                let required = self
-                    .sources
-                    .read_bool_async(&format!("filter.{driver}.required"))
-                    .await
-                    .map_err(|error| {
-                        io::Error::new(
-                            io::ErrorKind::Unsupported,
-                            format!(
-                                "refusing selected Git filter {driver:?} with malformed required value: {error}"
-                            ),
-                        )
-                    })?
-                    .unwrap_or(false);
-                required_cache.insert(driver.clone(), required);
-                policy = classify_selected_filter(&entries, &driver, Some(required));
-            }
-            if policy == SelectedFilterPolicy::Refused {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    SelectedStatusFilterRefusal { driver, path },
-                ));
+        if let Some(neutralizer) = &neutralizer {
+            let attributes = self
+                .read_status_filter_attributes_async(&paths, &executable_drivers, neutralizer)
+                .await?;
+            let mut required_cache = BTreeMap::new();
+            for (path, driver) in attributes {
+                if !executable_drivers.contains(&driver) {
+                    continue;
+                }
+                let required = required_cache.get(&driver).copied();
+                let mut policy = classify_selected_filter(&entries, &driver, required);
+                if policy == SelectedFilterPolicy::NeedsRequiredValue {
+                    let required = self
+                        .sources
+                        .read_bool_async(&format!("filter.{driver}.required"))
+                        .await
+                        .map_err(|error| {
+                            io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                format!(
+                                    "refusing selected Git filter {driver:?} with malformed required value: {error}"
+                                ),
+                            )
+                        })?
+                        .unwrap_or(false);
+                    required_cache.insert(driver.clone(), required);
+                    policy = classify_selected_filter(&entries, &driver, Some(required));
+                }
+                if policy == SelectedFilterPolicy::Refused {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        SelectedStatusFilterRefusal { driver, path },
+                    ));
+                }
             }
         }
-        self.status = Some(StatusFilterPolicySnapshot {
-            neutralizer: Some(neutralizer),
+        let has_untracked = self
+            .read_status_untracked_presence_async(neutralizer.as_ref())
+            .await?;
+        let head_oid = self
+            .read_status_head_oid_async(neutralizer.as_ref())
+            .await?;
+        let context = self
+            .build_status_read_context_async(
+                head_oid.as_deref(),
+                has_untracked,
+            )
+            .await?;
+        self.status = Some(StatusPolicySnapshot {
+            context,
             fsmonitor: None,
         });
         Ok(())
+    }
+
+    async fn read_status_untracked_presence_async(
+        &self,
+        neutralizer: Option<&SealedFilterConfigOverride>,
+    ) -> io::Result<bool> {
+        let mut command =
+            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        command.disable_optional_locks().args([
+            "ls-files",
+            "-z",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+            "--",
+        ]);
+        let output = command.output().await?;
+        if !output.status.success() {
+            return Err(command_failure("status untracked-presence inventory", &output));
+        }
+        let paths = parse_nul_paths(&output.stdout)?;
+        if paths.len() > MAX_STATUS_TRACKED_PATHS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "status untracked-presence inventory exceeds its path limit",
+            ));
+        }
+        Ok(!paths.is_empty())
+    }
+
+    async fn read_status_head_oid_async(
+        &self,
+        neutralizer: Option<&SealedFilterConfigOverride>,
+    ) -> io::Result<Option<String>> {
+        let mut command =
+            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        command
+            .disable_optional_locks()
+            .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        let output = command.output().await?;
+        if output.status.success() {
+            return parse_status_head_oid(&output.stdout).map(Some);
+        }
+        if output.status.code() != Some(1)
+            || !output.stdout.is_empty()
+            || !output.stderr.is_empty()
+        {
+            return Err(command_failure("status HEAD snapshot", &output));
+        }
+
+        let mut symbolic =
+            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        symbolic
+            .disable_optional_locks()
+            .args(["symbolic-ref", "--quiet", "HEAD"]);
+        let symbolic = symbolic.output().await?;
+        if !symbolic.status.success() {
+            return Err(command_failure("status symbolic HEAD snapshot", &symbolic));
+        }
+        let target = parse_status_symbolic_ref(&symbolic.stdout)?;
+
+        let mut verify = self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        verify
+            .disable_optional_locks()
+            .args(["show-ref", "--verify", "--quiet", "--"])
+            .arg(&target);
+        let verify = verify.output().await?;
+        if verify.status.code() == Some(1)
+            && verify.stdout.is_empty()
+            && verify.stderr.is_empty()
+        {
+            return Ok(None);
+        }
+        if verify.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Status HEAD target exists but does not resolve to a commit",
+            ));
+        }
+        Err(command_failure("status unborn HEAD verification", &verify))
+    }
+
+    async fn ensure_no_effective_replacement_refs_async(
+        &mut self,
+        neutralizer: Option<&SealedFilterConfigOverride>,
+    ) -> io::Result<()> {
+        if self.sources.git.replacement_refs_are_disabled() {
+            self.status_replacements_disabled = true;
+            return Ok(());
+        }
+        if self.sources.git.replacement_ref_base_is_custom() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "frozen Status is unavailable with a custom Git replacement-ref namespace",
+            ));
+        }
+        let mut command =
+            self.pending_status_command(FsmonitorOverride::Disabled, neutralizer)?;
+        command.disable_optional_locks().args([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/replace/",
+        ]);
+        let output = command.output().await?;
+        if !output.status.success() {
+            return Err(command_failure("status replacement-ref inventory", &output));
+        }
+        if output.stdout.is_empty() {
+            self.status_replacements_disabled = true;
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "frozen Status is unavailable with active Git replacement refs",
+            ))
+        }
     }
 
     pub(crate) async fn detect_status_fsmonitor_async(&mut self) -> FsmonitorOverride {
@@ -828,14 +1438,13 @@ impl<'git> GuardedGitConfig<'git> {
         if let Some(fsmonitor) = self.status.as_ref().and_then(|status| status.fsmonitor) {
             return fsmonitor;
         }
-        let fsmonitor = {
-            let mut runner = StatusFsmonitorProbeRunner { config: self };
-            crate::detect_fsmonitor_override(&mut runner).await
-        };
         if let Some(status) = &mut self.status {
-            status.fsmonitor = Some(fsmonitor);
+            // The synthetic owned Git directory has no stable fsmonitor daemon
+            // identity or socket lifecycle. Disabling it is a performance-only
+            // downgrade and avoids launching a daemon tied to temporary state.
+            status.fsmonitor = Some(FsmonitorOverride::Disabled);
         }
-        fsmonitor
+        FsmonitorOverride::Disabled
     }
 
     pub(crate) async fn status_output_async(&self) -> io::Result<std::process::Output> {
@@ -851,13 +1460,51 @@ impl<'git> GuardedGitConfig<'git> {
                 "status output requires a retained fsmonitor decision",
             )
         })?;
-        let mut command = self.pending_status_command(fsmonitor, status.neutralizer.as_ref())?;
+        let mut command = self.pending_frozen_status_command(fsmonitor)?;
         command.disable_optional_locks().args([
             "status",
             "--porcelain",
             "--ignore-submodules=dirty",
+            "--untracked-files=no",
         ]);
-        command.output().await
+        command.output_in_status_context(&status.context).await
+    }
+
+    pub(crate) fn status_has_untracked_snapshot(&self) -> io::Result<bool> {
+        let status = self.status.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "untracked status requires an installed status filter policy",
+            )
+        })?;
+        status.context.has_untracked(&self.identity)
+    }
+
+    fn pending_frozen_status_command<'operation>(
+        &'operation self,
+        fsmonitor: FsmonitorOverride,
+    ) -> io::Result<GuardedAsyncGitCommand<'operation, 'git>> {
+        self.ensure_status_exclusive_state()?;
+        if self.status.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "frozen Status command requires an installed context",
+            ));
+        }
+        let mut command = self
+            .sources
+            .git
+            .async_command_for_cwd(&self.sources.canonical_root)?;
+        command.args([
+            "-c",
+            &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
+            "-c",
+            fsmonitor.git_config_arg(),
+        ]);
+        Ok(GuardedAsyncGitCommand {
+            operation: self,
+            inner: command,
+        })
     }
 
     fn pending_status_command<'operation>(
@@ -870,6 +1517,9 @@ impl<'git> GuardedGitConfig<'git> {
             .git
             .async_command_for_cwd(&self.sources.canonical_root)?;
         command.args(self.status_config_args(fsmonitor, neutralizer)?);
+        if self.status_replacements_disabled {
+            command.env("GIT_NO_REPLACE_OBJECTS", "1");
+        }
         Ok(GuardedAsyncGitCommand {
             operation: self,
             inner: command,
@@ -1154,13 +1804,13 @@ impl<'git> GuardedGitConfig<'git> {
         let [apply] = self.filters.as_slice() else {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "composed exact staging requires exactly one apply filter snapshot",
+                "reverse exact staging requires exactly one apply filter snapshot",
             ));
         };
         if apply.role() != FilterPolicyRole::Apply {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "composed exact staging requires an apply filter snapshot",
+                "reverse exact staging requires an apply filter snapshot",
             ));
         }
         if let Some(path) = paths
@@ -1193,11 +1843,151 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(apply.checked_paths())
     }
 
+    pub(crate) fn run_direct_apply(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<std::process::Output> {
+        let mode = self.final_apply_whitespace_mode(revert, patch_path)?;
+        let mut command = self.apply_command()?;
+        command.arg("--index");
+        if mode.is_fatal() {
+            command.arg("--whitespace=nowarn");
+        }
+        if revert {
+            command.arg("-R");
+        }
+        command.arg(patch_path);
+        command.output()
+    }
+
+    pub(crate) fn render_direct_apply_for_log(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<String> {
+        let mode = self.final_apply_whitespace_mode(revert, patch_path)?;
+        let mut args = vec!["apply".to_string(), "--index".to_string()];
+        if mode.is_fatal() {
+            args.push("--whitespace=nowarn".to_string());
+        }
+        if revert {
+            args.push("-R".to_string());
+        }
+        args.push(patch_path.to_string());
+        self.render_apply_command_for_log(&args)
+    }
+
+    pub(crate) fn run_three_way_apply(
+        &mut self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<std::process::Output> {
+        let (apply, _git_add) = self.ordered_filter_snapshots()?;
+        if apply.is_none() || !self.merge_policy_installed {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "three-way apply policy is not installed",
+            ));
+        }
+        self.consume_three_way_merge_policy_proof(revert, patch_path)?;
+        let merge = self.merge.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated three-way config is unavailable",
+            )
+        })?;
+        let isolated = merge.common_dir(&self.identity)?;
+        let mut command = self
+            .sources
+            .git
+            .command_for_cwd(&self.sources.canonical_root)?;
+        append_safe_scalar_overrides(&mut command);
+        self.apply_policy
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "three-way apply policy scalars are not frozen",
+                )
+            })?
+            .append_to(&mut command);
+        BoundSubcommand::Apply.append_to(&mut command);
+        command.arg("--3way");
+        if self
+            .final_apply_whitespace_mode(revert, patch_path)?
+            .is_fatal()
+        {
+            command.arg("--whitespace=nowarn");
+        }
+        if revert {
+            command.arg("-R");
+        }
+        command.arg(patch_path);
+        self.sources
+            .git
+            .output_in_isolated_common_dir(command, isolated)
+    }
+
+    pub(crate) fn render_three_way_apply_for_log(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<String> {
+        // Rendering may precede the final post-staging index revalidation,
+        // but it must never render a selected-custom operation with no proof.
+        self.ensure_three_way_merge_policy_proof_installed()?;
+        let merge = self.merge.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated three-way config is unavailable",
+            )
+        })?;
+        let _ = merge.common_dir(&self.identity)?;
+        let mut parts = vec![
+            "env".to_string(),
+            "GIT_COMMON_DIR=<isolated>".to_string(),
+            "git".to_string(),
+        ];
+        parts.extend(safe_scalar_override_args());
+        self.apply_policy
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "three-way apply policy scalars are not frozen",
+                )
+            })?
+            .append_rendered(&mut parts);
+        parts.push("apply".to_string());
+        parts.push("--3way".to_string());
+        if self
+            .final_apply_whitespace_mode(revert, patch_path)?
+            .is_fatal()
+        {
+            parts.push("--whitespace=nowarn".to_string());
+        }
+        if revert {
+            parts.push("-R".to_string());
+        }
+        parts.push(patch_path.to_string());
+        Ok(format!(
+            "(cd {} && {})",
+            quote_shell(&self.sources.canonical_root.display().to_string()),
+            parts
+                .into_iter()
+                .map(|part| quote_shell(&part))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ))
+    }
+
     #[cfg(test)]
-    pub(crate) fn merge_include_arg(&self) -> Option<&str> {
+    pub(crate) fn merge_common_config_path(&self) -> Option<PathBuf> {
         self.merge
             .as_ref()
-            .map(SealedMergeConfigOverride::include_arg)
+            .and_then(|merge| merge.common_dir(&self.identity).ok())
+            .map(crate::git_command::IsolatedGitCommonDir::config_path)
     }
 
     pub(crate) fn authorize_git_add_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
@@ -1210,6 +2000,14 @@ impl<'git> GuardedGitConfig<'git> {
         match self.filters.as_slice() {
             [] => {}
             [apply] if apply.role() == FilterPolicyRole::Apply => {}
+            [apply, git_add]
+                if apply.role() == FilterPolicyRole::Apply
+                    && git_add.role() == FilterPolicyRole::GitAdd
+                    && git_add.checked_paths().into_iter().collect::<BTreeSet<_>>()
+                        == paths.iter().cloned().collect::<BTreeSet<_>>() =>
+            {
+                return Ok(());
+            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -1222,6 +2020,7 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn render_command_for_log(&self, args: &[String]) -> io::Result<String> {
         let mut parts = vec!["git".to_string()];
         parts.extend(self.mutation_config_args()?);
@@ -1236,51 +2035,31 @@ impl<'git> GuardedGitConfig<'git> {
                 .join(" ")
         ))
     }
-}
 
-struct StatusFsmonitorProbeRunner<'a, 'git> {
-    config: &'a GuardedGitConfig<'git>,
-}
-
-impl FsmonitorProbeRunner for StatusFsmonitorProbeRunner<'_, '_> {
-    async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
-        let allowed = matches!(
-            args,
-            ["config", "--null", "--get", "core.fsmonitor"]
-                | [
-                    "config",
-                    "--null",
-                    "--type=bool",
-                    "--fixed-value",
-                    "--get",
-                    "core.fsmonitor",
-                    _,
-                ]
-                | ["version", "--build-options"]
-        );
-        if !allowed {
-            return None;
+    pub(crate) fn render_apply_command_for_log(&self, args: &[String]) -> io::Result<String> {
+        let mut parts = vec!["git".to_string()];
+        parts.extend(self.sources.base_config_args.iter().cloned());
+        parts.extend(safe_scalar_override_args());
+        let (apply, git_add) = self.ordered_filter_snapshots()?;
+        if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
         }
-        let mut command = self
-            .config
-            .sources
-            .git
-            .async_command_for_cwd(&self.config.sources.canonical_root)
-            .ok()?;
-        command
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(&self.config.sources.base_config_args)
-            .args(args);
-        match self
-            .config
-            .sources
-            .git
-            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
-            .await
-        {
-            Ok(output) if output.status.success() => Some(output.stdout),
-            Ok(_) | Err(_) => None,
+        if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
         }
+        if let Some(policy) = &self.apply_policy {
+            policy.append_rendered(&mut parts);
+        }
+        parts.extend(args.iter().cloned());
+        Ok(format!(
+            "(cd {} && {})",
+            quote_shell(&self.sources.canonical_root.display().to_string()),
+            parts
+                .into_iter()
+                .map(|part| quote_shell(&part))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ))
     }
 }
 
@@ -1328,6 +2107,46 @@ fn safe_scalar_override_args() -> [String; 4] {
         "-c".to_string(),
         FsmonitorOverride::Disabled.git_config_arg().to_string(),
     ]
+}
+
+fn parse_status_head_oid(output: &[u8]) -> io::Result<String> {
+    let line = output.strip_suffix(b"\n").ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "unterminated Status HEAD output")
+    })?;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if !matches!(line.len(), 40 | 64) || !line.iter().all(u8::is_ascii_hexdigit) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Status HEAD did not resolve to one full object ID",
+        ));
+    }
+    Ok(String::from_utf8(line.to_ascii_lowercase()).expect("ASCII object ID"))
+}
+
+fn parse_status_symbolic_ref(output: &[u8]) -> io::Result<std::ffi::OsString> {
+    let line = output.strip_suffix(b"\n").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unterminated Status symbolic HEAD output",
+        )
+    })?;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if !line.starts_with(b"refs/heads/")
+        || line.contains(&0)
+        || line
+            .iter()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Status HEAD did not resolve to a safe symbolic ref",
+        ));
+    }
+    git_path_argument(line)
+}
+
+fn append_safe_scalar_overrides(command: &mut GitCommand) {
+    command.args(safe_scalar_override_args());
 }
 
 fn quote_shell(value: &str) -> String {

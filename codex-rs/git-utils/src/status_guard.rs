@@ -62,7 +62,12 @@ pub(crate) async fn read_status(config: &GuardedGitConfig<'_>) -> Result<bool, G
             exit_code: output.status.code(),
         });
     }
-    Ok(!output.stdout.is_empty())
+    if !output.stdout.is_empty() {
+        return Ok(true);
+    }
+    config
+        .status_has_untracked_snapshot()
+        .map_err(|error| map_io_error("statusUntracked", error))
 }
 
 pub(crate) fn map_io_error(operation: &str, error: io::Error) -> GitReadError {

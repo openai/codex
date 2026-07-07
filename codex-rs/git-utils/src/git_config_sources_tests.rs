@@ -40,6 +40,7 @@ fn init_repo_at(root: &Path) {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn create_junction(path: &Path, target: &Path) {
     // Bazel's GNU Windows runner can surface temporary paths with `/`
     // separators. `mklink` treats those separators as option prefixes, so
@@ -65,6 +66,17 @@ fn guard(root: &Path) -> io::Result<()> {
     ensure_no_worktree_config_sources(&git, root, &[])
 }
 
+#[test]
+fn blocking_source_authorization_is_safe_inside_futures_local_pool() {
+    let repo = init_repo();
+    let git = GitRunner::for_cwd_io(repo.path()).expect("Git runner");
+
+    futures::executor::block_on(async {
+        ensure_no_worktree_config_sources(&git, repo.path(), &[])
+            .expect("blocking traversal must not enter a nested executor");
+    });
+}
+
 fn add_include(root: &Path, key: &str, value: &str) {
     run_success(root, &["config", "--add", key, value]);
 }
@@ -74,7 +86,28 @@ fn assert_worktree_rejection(error: io::Error) {
     assert!(error.to_string().contains("worktree-controlled"), "{error}");
 }
 
+#[cfg(target_os = "linux")]
+fn assert_process_relative_include_rejection(error: io::Error) {
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("process-relative Git config include"),
+        "{error}"
+    );
+}
+
 fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[&str]) {
+    let cwd = std::env::current_dir().expect("current directory");
+    run_isolated_source_test_from(test_name, env, removed, &cwd);
+}
+
+fn run_isolated_source_test_from(
+    test_name: &str,
+    env: &[(&str, &OsStr)],
+    removed: &[&str],
+    cwd: &Path,
+) {
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     crate::safe_git::isolate_git_command_environment(&mut command);
     command
@@ -82,7 +115,8 @@ fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[
         .arg("--exact")
         .arg("--nocapture")
         .env("CODEX_GIT_CONFIG_SOURCE_CHILD", "1")
-        .env("RUST_TEST_THREADS", "1");
+        .env("RUST_TEST_THREADS", "1")
+        .current_dir(cwd);
     for (name, value) in env {
         command.env(name, value);
     }
@@ -96,6 +130,90 @@ fn run_isolated_source_test(test_name: &str, env: &[(&str, &OsStr)], removed: &[
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rejects_process_relative_primary_config_sources_before_git_changes_cwd() {
+    use std::os::unix::fs::symlink;
+
+    const TEST_NAME: &str = "git_config_sources::tests::rejects_process_relative_primary_config_sources_before_git_changes_cwd";
+    if std::env::var_os("CODEX_GIT_CONFIG_SOURCE_CHILD").is_none() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("repo");
+        let external = fixture.path().join("external");
+        let alias = fixture.path().join("config-alias");
+        let chained_alias = fixture.path().join("chained-alias");
+        init_repo_at(&root);
+        std::fs::create_dir(&external).expect("external directory");
+        std::fs::write(
+            external.join("decoy.gitconfig"),
+            "[safe]\nvalue = external\n",
+        )
+        .expect("external decoy");
+        std::fs::write(
+            external.join(".gitconfig"),
+            "[safe]\nvalue = external-home\n",
+        )
+        .expect("external HOME config");
+        for leaf in ["decoy.gitconfig", "missing-parent.gitconfig"] {
+            std::fs::write(root.join(leaf), "[unsafe]\nhelper = worktree\n")
+                .expect("worktree config");
+        }
+        symlink("/proc/self/cwd", &alias).expect("procfs alias");
+        symlink("config-alias", &chained_alias).expect("chained procfs alias");
+
+        let candidates = [
+            PathBuf::from("/proc/self/cwd/decoy.gitconfig"),
+            PathBuf::from("/proc/thread-self/cwd/decoy.gitconfig"),
+            PathBuf::from("/proc/self/cwd/missing-parent.gitconfig"),
+            alias.join("decoy.gitconfig"),
+            chained_alias.join("decoy.gitconfig"),
+        ];
+        for candidate in &candidates {
+            run_isolated_source_test_from(
+                TEST_NAME,
+                &[
+                    ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                    ("GIT_CONFIG_GLOBAL", candidate.as_os_str()),
+                    ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ],
+                &["GIT_CONFIG_SYSTEM"],
+                &external,
+            );
+        }
+        run_isolated_source_test_from(
+            TEST_NAME,
+            &[
+                ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                ("GIT_CONFIG_GLOBAL", OsStr::new("")),
+                (
+                    "GIT_CONFIG_SYSTEM",
+                    OsStr::new("/proc/self/cwd/decoy.gitconfig"),
+                ),
+            ],
+            &["GIT_CONFIG_NOSYSTEM"],
+            &external,
+        );
+        run_isolated_source_test_from(
+            TEST_NAME,
+            &[
+                ("CODEX_GIT_CONFIG_SOURCE_ROOT", root.as_os_str()),
+                ("HOME", OsStr::new("/proc/self/cwd")),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ],
+            &["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "XDG_CONFIG_HOME"],
+            &external,
+        );
+        return;
+    }
+
+    let root = PathBuf::from(
+        std::env::var_os("CODEX_GIT_CONFIG_SOURCE_ROOT").expect("fixture repository root"),
+    );
+    let error = guard(&root).expect_err("process-relative primary config source");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("process-relative"), "{error}");
 }
 
 #[test]
@@ -402,9 +520,8 @@ fn rejects_worktree_fifo_primary_source_without_opening_it() {
 }
 
 #[test]
-fn git_config_nosystem_accepts_cross_version_boolean_values() {
-    const TEST_NAME: &str =
-        "git_config_sources::tests::git_config_nosystem_accepts_cross_version_boolean_values";
+fn git_config_nosystem_uses_the_shared_parser_with_a_cross_version_numeric_subset() {
+    const TEST_NAME: &str = "git_config_sources::tests::git_config_nosystem_uses_the_shared_parser_with_a_cross_version_numeric_subset";
     if std::env::var_os("CODEX_GIT_CONFIG_SOURCE_CHILD").is_none() {
         let repo = init_repo();
         let unsafe_system = repo.path().join("system.gitconfig");
@@ -415,6 +532,11 @@ fn git_config_nosystem_accepts_cross_version_boolean_values() {
             ("-1", "ignored"),
             ("01", "ignored"),
             ("+1", "ignored"),
+            ("0x1", "ignored"),
+            ("010", "ignored"),
+            ("1k", "ignored"),
+            ("-1g", "ignored"),
+            (" 1", "ignored"),
             ("2147483647", "ignored"),
             ("-2147483647", "ignored"),
             ("true", "ignored"),
@@ -427,9 +549,17 @@ fn git_config_nosystem_accepts_cross_version_boolean_values() {
             ("no", "rejected"),
             ("off", "rejected"),
             ("not-a-bool", "invalid"),
+            ("08", "invalid"),
             ("2147483648", "invalid"),
             ("-2147483648", "invalid"),
+            ("-0x80000000", "invalid"),
+            ("-020000000000", "invalid"),
+            ("-2097152k", "invalid"),
+            ("-2048m", "invalid"),
+            ("-2g", "invalid"),
+            (" -2G", "invalid"),
             ("-2147483649", "invalid"),
+            ("2g", "invalid"),
         ] {
             run_isolated_source_test(
                 TEST_NAME,
@@ -836,6 +966,73 @@ async fn blocking_and_async_source_authorization_share_the_same_include_policy()
         .expect_err("async authorization must reject worktree include");
     assert_eq!(blocking.kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(asynchronous.kind(), blocking.kind());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rejects_process_relative_procfs_includes_across_the_include_graph() {
+    use std::os::unix::fs::symlink;
+
+    for (key, value, leaf) in [
+        (
+            "include.path",
+            "/proc/self/cwd/direct.gitconfig",
+            "direct.gitconfig",
+        ),
+        (
+            "includeIf.gitdir:/definitely/not/this/repository/**.path",
+            "/proc/thread-self/cwd/conditional.gitconfig",
+            "conditional.gitconfig",
+        ),
+    ] {
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join(leaf), "[unsafe]\nhelper = worktree\n")
+            .expect("write process-relative include target");
+        add_include(root, key, value);
+        assert_process_relative_include_rejection(
+            guard(root).expect_err("process-relative repository include"),
+        );
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join("command.gitconfig"),
+        "[unsafe]\nhelper = worktree\n",
+    )
+    .expect("write command include target");
+    let git = GitRunner::for_cwd_io(root).expect("Git runner");
+    let args = vec![
+        "-c".to_string(),
+        "include.path=/proc/self/cwd/command.gitconfig".to_string(),
+    ];
+    assert_process_relative_include_rejection(
+        ensure_no_worktree_config_sources(&git, root, &args)
+            .expect_err("process-relative command-scoped include"),
+    );
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join("nested.gitconfig"),
+        "[unsafe]\nhelper = worktree\n",
+    )
+    .expect("write nested include target");
+    let external = tempfile::tempdir().expect("external include directory");
+    let parent = external.path().join("parent.gitconfig");
+    let alias = external.path().join("procfs-alias");
+    symlink("/proc/self/cwd", &alias).expect("create procfs alias");
+    std::fs::write(&parent, "[include]\npath = procfs-alias/nested.gitconfig\n")
+        .expect("write external parent config");
+    add_include(
+        root,
+        "include.path",
+        parent.to_str().expect("UTF-8 parent config path"),
+    );
+    assert_process_relative_include_rejection(
+        guard(root).expect_err("nested aliased process-relative include"),
+    );
 }
 
 #[test]

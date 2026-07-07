@@ -15,7 +15,7 @@ codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
-futures = { workspace = true, features = ["alloc", "executor"] }
+futures = { workspace = true, features = ["alloc"] }
 gix = { workspace = true }
 once_cell = { workspace = true }
 regex = "1"
@@ -33,7 +33,17 @@ ts-rs = { workspace = true, features = [
 ] }
 walkdir = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 

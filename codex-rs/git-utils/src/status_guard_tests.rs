@@ -26,6 +26,23 @@ async fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
     output
 }
 
+async fn run_git_without_attr_source(cwd: &Path, args: &[&str]) -> std::process::Output {
+    let output = Command::new("git")
+        .env_remove("GIT_ATTR_SOURCE")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await
+        .expect("run Git without GIT_ATTR_SOURCE");
+    assert!(
+        output.status.success(),
+        "git {args:?} without GIT_ATTR_SOURCE failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
 async fn init_repo(temp_dir: &tempfile::TempDir, file_count: usize) -> PathBuf {
     let repo = temp_dir.path().join("repo");
     std::fs::create_dir(&repo).expect("create repository");
@@ -100,6 +117,76 @@ fn run_isolated_config_test(test_name: &str) {
     );
 }
 
+fn run_isolated_environment_test(
+    test_name: &str,
+    marker: &str,
+    variables: &[(&str, &str)],
+    global_attributes: Option<&str>,
+) {
+    let environment = tempfile::tempdir().expect("isolated Git environment");
+    let global_config = environment.path().join("global.gitconfig");
+    let system_config = environment.path().join("system.gitconfig");
+    let home = environment.path().join("home");
+    let xdg = environment.path().join("xdg");
+    std::fs::create_dir_all(xdg.join("git")).expect("create isolated XDG Git directory");
+    std::fs::create_dir_all(&home).expect("create isolated HOME");
+    std::fs::write(&global_config, "").expect("empty global config");
+    std::fs::write(&system_config, "").expect("empty system config");
+    if let Some(contents) = global_attributes {
+        std::fs::write(xdg.join("git/attributes"), contents)
+            .expect("write isolated global attributes");
+    }
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    crate::safe_git::isolate_git_command_environment(&mut command);
+    command
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(marker, "1")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_SYSTEM", &system_config)
+        .env("GIT_CONFIG_NOSYSTEM", "0")
+        .env("GIT_CONFIG_COUNT", "0")
+        .env("GIT_ATTR_NOSYSTEM", "0")
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env("RUST_TEST_THREADS", "1");
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    let output = command.output().expect("run isolated test process");
+    assert!(
+        output.status.success(),
+        "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn guarded_status(repo: &Path, git: &GitRunner) -> Result<bool, GitReadError> {
+    let mut guard = prepare_status_config(git, repo).await?;
+    detect_status_fsmonitor(&mut guard).await;
+    read_status(&guard).await
+}
+
+async fn replacement_fixture(repo: &Path) -> (String, String) {
+    let original = String::from_utf8(run_git(repo, &["rev-parse", "HEAD"]).await.stdout)
+        .expect("original commit UTF-8")
+        .trim()
+        .to_string();
+    std::fs::write(repo.join("test.txt"), "replacement\n").expect("write replacement contents");
+    run_git(repo, &["add", "test.txt"]).await;
+    run_git(repo, &["commit", "-m", "replacement commit"]).await;
+    let replacement = String::from_utf8(run_git(repo, &["rev-parse", "HEAD"]).await.stdout)
+        .expect("replacement commit UTF-8")
+        .trim()
+        .to_string();
+    run_git(repo, &["checkout", "--detach", &original]).await;
+    (original, replacement)
+}
+
 #[test]
 fn io_error_mapping_preserves_authority_provenance() {
     for error in [
@@ -125,6 +212,27 @@ fn io_error_mapping_preserves_authority_provenance() {
         ),
         GitReadError::AuthorityRefused {
             operation: "resolveGitRoot".to_string(),
+        }
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn process_relative_config_policy_maps_to_authority_refusal() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    let error = git
+        .ensure_config_source_is_not_worktree_controlled(
+            Path::new("/proc/self/cwd/config"),
+            "Git config include",
+        )
+        .expect_err("process-relative config must be refused");
+
+    assert_eq!(
+        map_io_error("statusFilterPreparation", error),
+        GitReadError::AuthorityRefused {
+            operation: "statusFilterPreparation".to_string(),
         }
     );
 }
@@ -239,6 +347,375 @@ async fn prepared_guard_neutralizes_filter_selected_after_the_probe() {
 }
 
 #[tokio::test]
+async fn frozen_status_blocks_a_new_filter_namespace_and_attribute_after_preparation() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    let mut guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare zero-driver status guard");
+
+    run_git(
+        &repo,
+        &[
+            "config",
+            "filter.fresh.clean",
+            "git config codex.fresh-ran true && git hash-object --stdin",
+        ],
+    )
+    .await;
+    std::fs::write(repo.join(".gitattributes"), "test.txt filter=fresh\n")
+        .expect("select new filter namespace after preparation");
+    std::fs::write(repo.join("test.txt"), "changed\n").expect("modify tracked path");
+
+    detect_status_fsmonitor(&mut guard).await;
+    assert_eq!(read_status(&guard).await, Ok(true));
+    assert!(!filter_marker_is_set(&repo, "codex.fresh-ran").await);
+}
+
+#[tokio::test]
+async fn frozen_status_preserves_info_global_core_and_system_attribute_selection() {
+    const MARKER: &str = "CODEX_GIT_UTILS_STATUS_ATTRIBUTE_ENV_CHILD";
+    if std::env::var_os(MARKER).is_none() {
+        run_isolated_environment_test(
+            "status_guard::tests::frozen_status_preserves_info_global_core_and_system_attribute_selection",
+            MARKER,
+            &[],
+            Some("global.txt ident\n"),
+        );
+        return;
+    }
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let core_attributes = temp_dir.path().join("core.attributes");
+    std::fs::write(&core_attributes, "core.txt ident\n").expect("write core attributes file");
+    std::fs::write(repo.join(".git/info/attributes"), "info.txt ident\n")
+        .expect("write info attributes");
+    for name in ["global.txt", "core.txt", "info.txt", "literal.txt"] {
+        std::fs::write(repo.join(name), "$Id$\n").expect("write source-parity fixture");
+    }
+    run_git(&repo, &["add", "."]).await;
+    run_git(&repo, &["commit", "-m", "attribute source fixtures"]).await;
+    for name in ["global.txt", "info.txt"] {
+        std::fs::remove_file(repo.join(name)).expect("remove source-parity fixture");
+        run_git(&repo, &["checkout", "--", name]).await;
+        assert!(
+            std::fs::read_to_string(repo.join(name))
+                .expect("read expanded ident fixture")
+                .starts_with("$Id: "),
+            "{name} did not select its attribute source"
+        );
+    }
+    let stock = run_git(&repo, &["status", "--porcelain"]).await;
+    assert!(
+        stock.stdout.is_empty(),
+        "global/info source-parity fixture must be clean under stock Git: {}",
+        String::from_utf8_lossy(&stock.stdout),
+    );
+
+    let wrapper = temp_dir.path().join("git-wrapper");
+    let log = temp_dir.path().join("git-wrapper.log");
+    let real_git = shell_quote(&real_git());
+    write_wrapper(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"${{GIT_ATTR_NOSYSTEM-unset}}\" \"${{HOME-unset}}\" \"${{XDG_CONFIG_HOME-unset}}\" \"$*\" >>{}\nexec {real_git} \"$@\"\n",
+            shell_quote(&log),
+        ),
+    );
+    let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
+    let mut global_info_guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare global/info source-parity guard");
+    detect_status_fsmonitor(&mut global_info_guard).await;
+    let global_info_output = global_info_guard
+        .status_output_async()
+        .await
+        .expect("run global/info source-parity status");
+    assert!(global_info_output.status.success());
+    assert!(
+        global_info_output.stdout.is_empty(),
+        "isolated global/info source parity diverged: {}",
+        String::from_utf8_lossy(&global_info_output.stdout)
+    );
+    assert!(!global_info_guard.status_has_untracked_snapshot().expect("untracked snapshot"));
+
+    let home = std::env::var("HOME").expect("isolated HOME");
+    let xdg = std::env::var("XDG_CONFIG_HOME").expect("isolated XDG config home");
+    let log_contents =
+        std::fs::read_to_string(&log).expect("read attribute environment log");
+    let final_status = log_contents
+        .lines()
+        .find(|line| line.contains(" status --porcelain"))
+        .expect("final status environment");
+    assert!(
+        final_status.starts_with(&format!("0|{home}|{xdg}|")),
+        "captured system/global attribute selectors were not restored: {final_status}"
+    );
+
+    run_git(&repo, &["config", "core.attributesFile", "../core.attributes"]).await;
+    std::fs::remove_file(repo.join("global.txt")).expect("remove global attribute fixture");
+    run_git(&repo, &["checkout", "--", "global.txt"]).await;
+    std::fs::remove_file(repo.join("core.txt")).expect("remove core attribute fixture");
+    run_git(&repo, &["checkout", "--", "core.txt"]).await;
+    assert!(
+        std::fs::read_to_string(repo.join("core.txt"))
+            .expect("read expanded core ident fixture")
+            .starts_with("$Id: "),
+        "relative core.attributesFile did not select ident"
+    );
+    let stock = run_git(&repo, &["status", "--porcelain"]).await;
+    assert!(
+        stock.stdout.is_empty(),
+        "core.attributesFile fixture must be clean under stock Git: {}",
+        String::from_utf8_lossy(&stock.stdout)
+    );
+    let mut core_guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare core.attributesFile source-parity guard");
+    detect_status_fsmonitor(&mut core_guard).await;
+    let core_output = core_guard
+        .status_output_async()
+        .await
+        .expect("run core.attributesFile source-parity status");
+    assert!(core_output.status.success());
+    assert!(
+        core_output.stdout.is_empty(),
+        "isolated core.attributesFile source parity diverged: {}",
+        String::from_utf8_lossy(&core_output.stdout)
+    );
+    assert!(!core_guard.status_has_untracked_snapshot().expect("untracked snapshot"));
+
+    std::fs::write(
+        repo.join(".git/info/attributes"),
+        "info.txt ident\nliteral.txt ident=set\n",
+    )
+    .expect("write literal sentinel info attribute");
+    std::fs::write(repo.join("literal.txt"), "$Id: fake $\n")
+        .expect("write literal-sentinel ident fixture");
+    assert_eq!(
+        guarded_status(&repo, &git).await,
+        Ok(true),
+        "literal ident=set must not be reserialized as special Set"
+    );
+}
+
+#[tokio::test]
+async fn frozen_status_refuses_git_attr_source_and_attr_tree() {
+    const MARKER: &str = "CODEX_GIT_UTILS_STATUS_ATTR_SOURCE_CHILD";
+    if std::env::var_os(MARKER).is_some() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = temp_dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("create repository");
+        run_git_without_attr_source(&repo, &["init", "-q"]).await;
+        run_git_without_attr_source(&repo, &["config", "user.name", "Test User"]).await;
+        run_git_without_attr_source(&repo, &["config", "user.email", "test@example.com"]).await;
+        std::fs::write(repo.join("test.txt"), "contents\n").expect("write tracked file");
+        run_git_without_attr_source(&repo, &["add", "test.txt"]).await;
+        run_git_without_attr_source(&repo, &["commit", "-m", "seed"]).await;
+        let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+        assert!(
+            prepare_status_config(&git, &repo).await.is_err(),
+            "GIT_ATTR_SOURCE must make frozen Status unavailable"
+        );
+        return;
+    }
+
+    run_isolated_environment_test(
+        "status_guard::tests::frozen_status_refuses_git_attr_source_and_attr_tree",
+        MARKER,
+        &[("GIT_ATTR_SOURCE", "HEAD")],
+        None,
+    );
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    run_git(&repo, &["config", "attr.tree", "HEAD"]).await;
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    assert!(
+        prepare_status_config(&git, &repo).await.is_err(),
+        "attr.tree must make frozen Status unavailable"
+    );
+}
+
+#[tokio::test]
+async fn frozen_untracked_presence_honors_all_standard_ignore_sources() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    std::fs::write(repo.join(".gitignore"), "root-ignored.txt\n")
+        .expect("write root ignore");
+    run_git(&repo, &["add", ".gitignore"]).await;
+    run_git(&repo, &["commit", "-m", "ignore rules"]).await;
+    std::fs::write(repo.join(".git/info/exclude"), "info-ignored.txt\n")
+        .expect("write info exclude");
+    let global_excludes = temp_dir.path().join("global-excludes");
+    std::fs::write(&global_excludes, "global-ignored.txt\n").expect("write global excludes");
+    run_git(
+        &repo,
+        &[
+            "config",
+            "core.excludesFile",
+            global_excludes.to_str().expect("UTF-8 excludes path"),
+        ],
+    )
+    .await;
+    for name in [
+        "root-ignored.txt",
+        "info-ignored.txt",
+        "global-ignored.txt",
+    ] {
+        std::fs::write(repo.join(name), "ignored\n").expect("write ignored file");
+    }
+
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    let mut guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare ignored-only status");
+    detect_status_fsmonitor(&mut guard).await;
+    assert_eq!(read_status(&guard).await, Ok(false));
+
+    std::fs::write(repo.join("visible.txt"), "visible\n").expect("write visible untracked file");
+    run_git(&repo, &["config", "status.showUntrackedFiles", "no"]).await;
+    let mut guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare visible-untracked status");
+    detect_status_fsmonitor(&mut guard).await;
+    assert_eq!(read_status(&guard).await, Ok(true));
+}
+
+#[tokio::test]
+async fn frozen_status_reports_an_ordinary_unmerged_index_as_dirty() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let base_branch = String::from_utf8(
+        run_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .stdout,
+    )
+    .expect("base branch UTF-8")
+    .trim()
+    .to_string();
+    run_git(&repo, &["checkout", "-b", "side"]).await;
+    std::fs::write(repo.join("test.txt"), "side\n").expect("write side contents");
+    run_git(&repo, &["commit", "-am", "side change"]).await;
+    run_git(&repo, &["checkout", &base_branch]).await;
+    std::fs::write(repo.join("test.txt"), "main\n").expect("write main contents");
+    run_git(&repo, &["commit", "-am", "main change"]).await;
+    let merge = Command::new("git")
+        .args(["merge", "side"])
+        .current_dir(&repo)
+        .output()
+        .await
+        .expect("run conflicting merge");
+    assert!(!merge.status.success(), "fixture must produce a conflict");
+    let stages = run_git(&repo, &["ls-files", "--unmerged"]).await;
+    assert!(
+        stages.stdout.split(|byte| *byte == b'\n').count() >= 3,
+        "fixture must retain multiple index stages"
+    );
+
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    assert_eq!(guarded_status(&repo, &git).await, Ok(true));
+}
+
+#[tokio::test]
+async fn status_head_snapshot_distinguishes_valid_detached_unborn_and_corrupt_states() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let commit = String::from_utf8(run_git(&repo, &["rev-parse", "HEAD"]).await.stdout)
+        .expect("commit UTF-8")
+        .trim()
+        .to_string();
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    prepare_status_config(&git, &repo)
+        .await
+        .expect("normal symbolic HEAD");
+
+    run_git(&repo, &["checkout", "--detach", &commit]).await;
+    prepare_status_config(&git, &repo)
+        .await
+        .expect("valid detached HEAD");
+    run_git(&repo, &["checkout", "-B", "restored", &commit]).await;
+
+    let ref_path = repo.join(".git/refs/heads/restored");
+    std::fs::write(&ref_path, format!("{}\n", "a".repeat(40)))
+        .expect("write missing-object ref");
+    assert!(
+        prepare_status_config(&git, &repo).await.is_err(),
+        "missing-object symbolic HEAD must not become unborn"
+    );
+
+    let blob = String::from_utf8(run_git(&repo, &["hash-object", "-w", "test.txt"]).await.stdout)
+        .expect("blob UTF-8")
+        .trim()
+        .to_string();
+    std::fs::write(&ref_path, format!("{blob}\n")).expect("write blob ref");
+    assert_eq!(
+        prepare_status_config(&git, &repo).await.map(|_| ()),
+        Err(GitReadError::CommandFailed {
+            operation: "statusFilterPreparation".to_string(),
+            exit_code: Some(1),
+        })
+    );
+
+    let unborn = temp_dir.path().join("unborn");
+    std::fs::create_dir(&unborn).expect("create unborn repo");
+    run_git(&unborn, &["init", "-q"]).await;
+    let unborn_git = GitRunner::for_cwd(&unborn).expect("unborn Git runner");
+    let mut guard = prepare_status_config(&unborn_git, &unborn)
+        .await
+        .expect("genuine unborn HEAD");
+    detect_status_fsmonitor(&mut guard).await;
+    assert_eq!(read_status(&guard).await, Ok(false));
+}
+
+#[tokio::test]
+async fn frozen_status_refuses_active_or_custom_replacements_and_ignores_late_replacements() {
+    const MARKER: &str = "CODEX_GIT_UTILS_STATUS_REPLACE_BASE_CHILD";
+    if std::env::var_os(MARKER).is_some() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+        let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+        assert!(
+            prepare_status_config(&git, &repo).await.is_err(),
+            "custom replacement-ref namespace must make frozen Status unavailable"
+        );
+        return;
+    }
+    run_isolated_environment_test(
+        "status_guard::tests::frozen_status_refuses_active_or_custom_replacements_and_ignores_late_replacements",
+        MARKER,
+        &[("GIT_REPLACE_REF_BASE", "refs/codex-replacements")],
+        None,
+    );
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let (original, replacement) = replacement_fixture(&repo).await;
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    let mut guard = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare before replacement ref exists");
+    run_git(&repo, &["replace", &original, &replacement]).await;
+    let stock = run_git(&repo, &["status", "--porcelain"]).await;
+    assert!(
+        !stock.stdout.is_empty(),
+        "replacement fixture must make stock Status dirty"
+    );
+    detect_status_fsmonitor(&mut guard).await;
+    assert_eq!(
+        read_status(&guard).await,
+        Ok(false),
+        "late replacement must not alter the frozen no-replacement view"
+    );
+    assert!(
+        prepare_status_config(&git, &repo).await.is_err(),
+        "an active default replacement must make frozen Status unavailable"
+    );
+}
+
+#[tokio::test]
 async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
@@ -271,6 +748,60 @@ async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
         })
     );
     assert!(!filter_marker_is_set(&repo, "codex.smudge-ran").await);
+}
+
+#[tokio::test]
+async fn selected_required_only_filter_is_typed_and_refused_when_truthy() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    std::fs::write(repo.join(".gitattributes"), "test.txt filter=required-only\n")
+        .expect("select required-only filter");
+    run_git(&repo, &["add", ".gitattributes"]).await;
+    run_git(&repo, &["commit", "-m", "required-only attribute"]).await;
+
+    run_git(
+        &repo,
+        &["config", "filter.required-only.required", "false"],
+    )
+    .await;
+    let git = GitRunner::for_cwd(&repo).expect("trusted Git");
+    prepare_status_config(&git, &repo)
+        .await
+        .expect("selected required=false filter is inert");
+
+    run_git(
+        &repo,
+        &["config", "filter.required-only.required", "true"],
+    )
+    .await;
+    assert_eq!(
+        prepare_status_config(&git, &repo).await.map(|_| ()),
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "required-only".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
+
+    run_git(
+        &repo,
+        &["config", "filter.required-only.required", "not-a-bool"],
+    )
+    .await;
+    assert!(
+        prepare_status_config(&git, &repo).await.is_err(),
+        "selected malformed required value must fail closed"
+    );
+
+    std::fs::write(repo.join(".gitattributes"), "other.txt filter=required-only\n")
+        .expect("move required-only filter off tracked paths");
+    run_git(
+        &repo,
+        &["config", "filter.required-only.required", "true"],
+    )
+    .await;
+    prepare_status_config(&git, &repo)
+        .await
+        .expect("unselected required-only namespace remains available");
 }
 
 #[tokio::test]
@@ -464,14 +995,12 @@ async fn ordinary_driver_uses_one_bulk_path_and_attribute_probe() {
     let fsmonitor = status
         .find("core.fsmonitor=")
         .expect("fsmonitor override before status");
-    let filter = status
-        .find("include.path=")
-        .expect("sealed filter include before status");
     let status_command = status
         .find(" status --porcelain")
         .expect("status subcommand");
-    assert!(hooks < fsmonitor && fsmonitor < filter && filter < status_command);
-    assert_eq!(status.matches("include.path=").count(), 1);
+    assert!(hooks < fsmonitor && fsmonitor < status_command);
+    assert!(!status.contains("include.path="));
+    assert!(status.ends_with("--untracked-files=no"));
     assert!(!filter_marker_is_set(&repo, "codex.ordinary-filter-ran").await);
 }
 
@@ -499,11 +1028,11 @@ async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_ord
 
     assert_eq!(
         detect_status_fsmonitor(&mut config).await,
-        FsmonitorOverride::BuiltIn
+        FsmonitorOverride::Disabled
     );
     assert_eq!(
         detect_status_fsmonitor(&mut config).await,
-        FsmonitorOverride::BuiltIn,
+        FsmonitorOverride::Disabled,
         "the retained decision must avoid a second probe"
     );
     read_status(&config).await.expect("final status");
@@ -513,30 +1042,24 @@ async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_ord
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    assert_eq!(
-        lines.len(),
-        3,
-        "one config probe, one feature probe, one status"
-    );
-    assert!(lines[0].ends_with("config --null --get core.fsmonitor"));
-    assert!(!lines[0].contains("core.fsmonitor=false"));
-    assert!(lines[1].ends_with("version --build-options"));
-    assert!(!lines[1].contains("core.fsmonitor=false"));
+    assert_eq!(lines.len(), 1, "synthetic context must not probe or start fsmonitor");
     let hooks = format!("core.hooksPath={}", crate::safe_git::DISABLED_HOOKS_PATH);
-    let hooks_offset = lines[2].find(&hooks).expect("hooks override");
-    let fsmonitor_offset = lines[2]
-        .find("core.fsmonitor=true")
-        .expect("typed fsmonitor override");
-    let status_offset = lines[2].find("status --porcelain").expect("status command");
+    let hooks_offset = lines[0].find(&hooks).expect("hooks override");
+    let fsmonitor_offset = lines[0]
+        .find("core.fsmonitor=false")
+        .expect("disabled fsmonitor override");
+    let status_offset = lines[0].find("status --porcelain").expect("status command");
     assert!(hooks_offset < fsmonitor_offset && fsmonitor_offset < status_offset);
-    assert!(lines[2].ends_with("status --porcelain --ignore-submodules=dirty"));
+    assert!(lines[0].ends_with(
+        "status --porcelain --ignore-submodules=dirty --untracked-files=no"
+    ));
 }
 
 #[tokio::test]
-async fn zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes() {
+async fn zero_driver_status_builds_the_same_frozen_context_without_an_overlay() {
     if std::env::var_os("CODEX_GIT_UTILS_STATUS_GUARD_ENV_CHILD").is_none() {
         run_isolated_config_test(
-            "status_guard::tests::zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes",
+            "status_guard::tests::zero_driver_status_builds_the_same_frozen_context_without_an_overlay",
         );
         return;
     }
@@ -558,9 +1081,11 @@ async fn zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes() 
         .await
         .expect("zero-driver status capability");
     let lines = std::fs::read_to_string(log).expect("read wrapper log");
-    assert!(!lines.contains(" ls-files -z --cached"), "{lines}");
+    assert!(lines.contains(" ls-files -z --cached"), "{lines}");
     assert!(!lines.contains(" check-attr --stdin -z filter"), "{lines}");
-    assert!(!lines.contains(" config --file "), "{lines}");
+    assert!(!lines.contains(" check-attr --stdin -z"), "{lines}");
+    assert!(lines.contains("config --file "), "{lines}");
+    assert!(!lines.contains("include.path="), "{lines}");
 }
 
 #[tokio::test]

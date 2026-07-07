@@ -61,11 +61,16 @@ impl GitConfigEnvironmentSnapshot {
             .collect::<Vec<_>>();
 
         if let Some(raw_count) = value_for(OsStr::new("GIT_CONFIG_COUNT")) {
-            let count = raw_count
+            let raw_count = raw_count
                 .to_str()
-                .ok_or_else(|| invalid_environment("non-UTF-8 GIT_CONFIG_COUNT"))?
-                .parse::<usize>()
-                .map_err(|_| invalid_environment("invalid GIT_CONFIG_COUNT"))?;
+                .ok_or_else(|| invalid_environment("non-UTF-8 GIT_CONFIG_COUNT"))?;
+            let count = if raw_count.is_empty() {
+                0
+            } else {
+                raw_count
+                    .parse::<usize>()
+                    .map_err(|_| invalid_environment("invalid GIT_CONFIG_COUNT"))?
+            };
             if count > MAX_CONFIG_ENVIRONMENT_ENTRIES {
                 return Err(invalid_environment(
                     "GIT_CONFIG_COUNT exceeds the supported safety bound",
@@ -98,6 +103,7 @@ impl GitConfigEnvironmentSnapshot {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn value(&self, name: &str) -> Option<&OsStr> {
         self.entries
             .iter()

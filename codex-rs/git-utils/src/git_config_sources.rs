@@ -121,11 +121,7 @@ pub(crate) fn ensure_no_worktree_config_sources(
     git_root: &Path,
     git_config_args: &[String],
 ) -> io::Result<()> {
-    futures::executor::block_on(ensure_no_worktree_config_sources_impl(
-        SourceExecution::Blocking(git),
-        git_root,
-        git_config_args,
-    ))
+    ensure_no_worktree_config_sources_blocking_impl(git, git_root, git_config_args)
 }
 
 /// Async counterpart to [`ensure_no_worktree_config_sources`] for bounded
@@ -137,102 +133,88 @@ pub(crate) async fn ensure_no_worktree_config_sources_async(
     git_root: &Path,
     git_config_args: &[String],
 ) -> io::Result<()> {
-    ensure_no_worktree_config_sources_impl(SourceExecution::Async(git), git_root, git_config_args)
-        .await
+    ensure_no_worktree_config_sources_async_impl(git, git_root, git_config_args).await
 }
 
-#[derive(Clone, Copy)]
-enum SourceExecution<'a> {
-    Blocking(&'a GitRunner),
-    Async(&'a GitRunner),
-}
-
-impl<'a> SourceExecution<'a> {
-    fn git(self) -> &'a GitRunner {
-        match self {
-            Self::Blocking(git) | Self::Async(git) => git,
-        }
-    }
-
-    async fn selected_home_candidates(self, cwd: &Path) -> io::Result<Vec<std::path::PathBuf>> {
-        match self {
-            Self::Blocking(git) => selected_git_home_config_candidates(git, cwd),
-            Self::Async(git) => selected_git_home_config_candidates_async(git, cwd).await,
-        }
-    }
-
-    async fn selected_prefix_candidate(self, cwd: &Path) -> io::Result<Option<std::path::PathBuf>> {
-        match self {
-            Self::Blocking(git) => selected_git_prefix_system_candidate(git, cwd),
-            Self::Async(git) => selected_git_prefix_system_candidate_async(git, cwd).await,
-        }
-    }
-
-    async fn read_include_entries(
-        self,
-        cwd: &Path,
-        git_config_args: &[String],
-        config_file: Option<&Path>,
-    ) -> io::Result<Vec<crate::git_config::GitConfigEntry>> {
-        match self {
-            Self::Blocking(git) => read_config_entries_without_includes(
-                git,
-                cwd,
-                git_config_args,
-                INCLUDE_CONFIG_PATTERN,
-                "include",
-                config_file,
-            ),
-            Self::Async(git) => {
-                read_config_entries_without_includes_async(
-                    git,
-                    cwd,
-                    git_config_args,
-                    INCLUDE_CONFIG_PATTERN,
-                    "include",
-                    config_file,
-                )
-                .await
-            }
-        }
-    }
-
-    async fn validate_entries(
-        self,
-        git_root: &Path,
-        entries: Vec<crate::git_config::GitConfigEntry>,
-        depth: usize,
-        pending: &mut Vec<(std::path::PathBuf, usize)>,
-        budget: &mut IncludeGraphBudget,
-    ) -> io::Result<()> {
-        match self {
-            Self::Blocking(git) => {
-                validate_include_entries(git, git_root, entries, depth, pending, budget)
-            }
-            Self::Async(git) => {
-                validate_include_entries_async(git, git_root, entries, depth, pending, budget).await
-            }
-        }
-    }
-
-    async fn default_system_candidates(
-        self,
-        cwd: &Path,
-    ) -> io::Result<Vec<(&'static str, std::path::PathBuf)>> {
-        match self {
-            Self::Blocking(git) => default_system_config_source_candidates(git, cwd),
-            Self::Async(git) => default_system_config_source_candidates_async(git, cwd).await,
-        }
-    }
-}
-
-async fn ensure_no_worktree_config_sources_impl(
-    execution: SourceExecution<'_>,
+fn ensure_no_worktree_config_sources_blocking_impl(
+    git: &GitRunner,
     git_root: &Path,
     git_config_args: &[String],
 ) -> io::Result<()> {
     let git_root = normalize_absolute_path(std::fs::canonicalize(git_root)?)?;
-    let git = execution.git();
+
+    for (description, candidate) in legacy_primary_config_source_candidates(git)? {
+        if !is_disabled_primary_config_path(&candidate) {
+            reject_source(git, &git_root, &candidate, description)?;
+        }
+    }
+    for candidate in selected_git_home_config_candidates(git, &git_root)? {
+        reject_source(git, &git_root, &candidate, "selected Git HOME config")?;
+    }
+    if let Some(candidate) = selected_git_prefix_system_candidate(git, &git_root)? {
+        reject_source(
+            git,
+            &git_root,
+            &candidate,
+            "selected Git prefix system config",
+        )?;
+    }
+    let entries = read_config_entries_without_includes(
+        git,
+        &git_root,
+        git_config_args,
+        INCLUDE_CONFIG_PATTERN,
+        "include",
+        /*config_file*/ None,
+    )?;
+    #[cfg(test)]
+    signal_blocking_no_includes_query_phase();
+    let mut pending = Vec::new();
+    let mut include_budget = IncludeGraphBudget::default();
+    validate_include_entries(
+        git,
+        &git_root,
+        entries,
+        /*depth*/ 1,
+        &mut pending,
+        &mut include_budget,
+    )?;
+    let mut visited = BTreeSet::new();
+    while let Some((config_path, depth)) = pending.pop() {
+        if !pending_include_is_new(&config_path, depth, &mut visited)? {
+            continue;
+        }
+        let entries = read_config_entries_without_includes(
+            git,
+            &git_root,
+            &[],
+            INCLUDE_CONFIG_PATTERN,
+            "include",
+            Some(&config_path),
+        )?;
+        validate_include_entries(
+            git,
+            &git_root,
+            entries,
+            depth + 1,
+            &mut pending,
+            &mut include_budget,
+        )?;
+    }
+    for (description, candidate) in default_system_config_source_candidates(git, &git_root)? {
+        if !is_disabled_primary_config_path(&candidate) {
+            reject_source(git, &git_root, &candidate, description)?;
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_no_worktree_config_sources_async_impl(
+    git: &GitRunner,
+    git_root: &Path,
+    git_config_args: &[String],
+) -> io::Result<()> {
+    let git_root = normalize_absolute_path(std::fs::canonicalize(git_root)?)?;
 
     // Environment, HOME, and XDG paths are attacker-controlled byte strings.
     // Classify their exact OsString spelling before selected Git can open or
@@ -242,10 +224,10 @@ async fn ensure_no_worktree_config_sources_impl(
             reject_source(git, &git_root, &candidate, description)?;
         }
     }
-    for candidate in execution.selected_home_candidates(&git_root).await? {
+    for candidate in selected_git_home_config_candidates_async(git, &git_root).await? {
         reject_source(git, &git_root, &candidate, "selected Git HOME config")?;
     }
-    if let Some(candidate) = execution.selected_prefix_candidate(&git_root).await? {
+    if let Some(candidate) = selected_git_prefix_system_candidate_async(git, &git_root).await? {
         reject_source(
             git,
             &git_root,
@@ -253,76 +235,97 @@ async fn ensure_no_worktree_config_sources_impl(
             "selected Git prefix system config",
         )?;
     }
-    let entries = execution
-        .read_include_entries(&git_root, git_config_args, /*config_file*/ None)
-        .await?;
-    #[cfg(test)]
-    if matches!(execution, SourceExecution::Blocking(_)) {
-        signal_blocking_no_includes_query_phase();
-    }
+    let entries = read_config_entries_without_includes_async(
+        git,
+        &git_root,
+        git_config_args,
+        INCLUDE_CONFIG_PATTERN,
+        "include",
+        /*config_file*/ None,
+    )
+    .await?;
     let mut pending = Vec::new();
     let mut include_budget = IncludeGraphBudget::default();
-    execution
-        .validate_entries(
-            &git_root,
-            entries,
-            /*depth*/ 1,
-            &mut pending,
-            &mut include_budget,
-        )
-        .await?;
+    validate_include_entries_async(
+        git,
+        &git_root,
+        entries,
+        /*depth*/ 1,
+        &mut pending,
+        &mut include_budget,
+    )
+    .await?;
     let mut visited = BTreeSet::new();
     while let Some((config_path, depth)) = pending.pop() {
-        if depth > MAX_CONFIG_INCLUDE_DEPTH {
-            return Err(path_safety::invalid_config_source(
-                "Git config include depth exceeded",
-            ));
-        }
-        match std::fs::canonicalize(&config_path) {
-            Ok(_) => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error),
-        }
-        if !visited.insert(config_path.clone()) {
+        if !pending_include_is_new(&config_path, depth, &mut visited)? {
             continue;
-        }
-        if visited.len() > MAX_CONFIG_INCLUDE_FILES {
-            return Err(path_safety::invalid_config_source(
-                "too many Git config include files",
-            ));
         }
         // The same file reached through two spellings can resolve a relative
         // child include differently. Deduplicate only the exact source
         // spelling, not its canonical target.
-        let entries = execution
-            .read_include_entries(&git_root, &[], Some(&config_path))
-            .await?;
-        execution
-            .validate_entries(
-                &git_root,
-                entries,
-                depth + 1,
-                &mut pending,
-                &mut include_budget,
-            )
-            .await?;
+        let entries = read_config_entries_without_includes_async(
+            git,
+            &git_root,
+            &[],
+            INCLUDE_CONFIG_PATTERN,
+            "include",
+            Some(&config_path),
+        )
+        .await?;
+        validate_include_entries_async(
+            git,
+            &git_root,
+            entries,
+            depth + 1,
+            &mut pending,
+            &mut include_budget,
+        )
+        .await?;
     }
     // `git var` loads repository config before reporting modern default-system
     // paths. Delay that supplemental probe until the complete no-includes
     // source graph above has been classified.
-    for (description, candidate) in execution.default_system_candidates(&git_root).await? {
+    for (description, candidate) in
+        default_system_config_source_candidates_async(git, &git_root).await?
+    {
         if !is_disabled_primary_config_path(&candidate) {
             reject_source(git, &git_root, &candidate, description)?;
         }
     }
     Ok(())
+}
+
+fn pending_include_is_new(
+    config_path: &Path,
+    depth: usize,
+    visited: &mut BTreeSet<std::path::PathBuf>,
+) -> io::Result<bool> {
+    if depth > MAX_CONFIG_INCLUDE_DEPTH {
+        return Err(path_safety::invalid_config_source(
+            "Git config include depth exceeded",
+        ));
+    }
+    match std::fs::canonicalize(config_path) {
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    }
+    if !visited.insert(config_path.to_path_buf()) {
+        return Ok(false);
+    }
+    if visited.len() > MAX_CONFIG_INCLUDE_FILES {
+        return Err(path_safety::invalid_config_source(
+            "too many Git config include files",
+        ));
+    }
+    Ok(true)
 }
 
 fn reject_source(

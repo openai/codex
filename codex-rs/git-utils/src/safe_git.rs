@@ -469,6 +469,25 @@ pub(crate) fn executable_filter_drivers(
     Ok(ExecutableFilterDrivers(executable_drivers))
 }
 
+/// Status must also inspect required-only namespaces. A selected
+/// `filter.<name>.required=true` with no clean/process command makes native
+/// status fail closed, so silently resetting it would turn an unavailable
+/// result into a potentially misleading Boolean.
+pub(crate) fn status_policy_filter_drivers(
+    entries: &BTreeMap<String, GitConfigEntry>,
+) -> io::Result<ExecutableFilterDrivers> {
+    let mut drivers = executable_filter_drivers(entries)?.0;
+    for entry in entries.values() {
+        let Some(remainder) = entry.key.strip_prefix("filter.") else {
+            return Err(invalid_filter_output("malformed filter config key"));
+        };
+        if let Some(driver) = remainder.strip_suffix(".required") {
+            drivers.insert(driver.to_string());
+        }
+    }
+    Ok(ExecutableFilterDrivers(drivers))
+}
+
 fn effective_filter_value<'a>(
     entries: &'a BTreeMap<String, GitConfigEntry>,
     driver: &str,

@@ -4,16 +4,52 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::exact_staging::PreparedReverseIndexUpdate;
+use crate::exact_staging::execute_prepared_reverse_index_update;
+use crate::exact_staging::prepare_index_exact_paths_for_reverse_apply;
+use crate::git_command::IsolatedGitStorage;
 use crate::guarded_config::GuardedGitConfig;
+use crate::guarded_config::GuardedOperationIdentity;
 use crate::patch_paths::confine_patch_paths_guarded;
 use crate::patch_paths::leaf_is_traversable_directory;
 use crate::patch_paths::leaf_may_run_git_content_filter;
 
-pub(crate) fn stage_effective_paths_for_reverse(
-    config: &mut GuardedGitConfig<'_>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReverseApplyMode {
+    Direct,
+    ThreeWay,
+}
+
+pub(crate) struct ReverseStagingPlan {
+    staging_candidates: Vec<String>,
+    content_filter_paths: Vec<String>,
+}
+
+pub(crate) struct SealedReverseStagingPlan {
+    owner: GuardedOperationIdentity,
+    update: PreparedReverseIndexUpdate,
+    scratch_use_available: bool,
+}
+
+/// Validate every reverse-staging precondition without changing the index.
+///
+/// Preflight uses the same plan builder as the real operation so an
+/// applicability-only `git apply --check -R` cannot report success when
+/// preparing the index would overwrite staged data.
+pub(crate) fn validate_effective_paths_for_reverse(
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
+    mode: ReverseApplyMode,
 ) -> io::Result<()> {
+    let _ = prepare_reverse_staging_plan(config, paths, mode)?;
+    Ok(())
+}
+
+pub(crate) fn prepare_reverse_staging_plan(
+    config: &GuardedGitConfig<'_>,
+    paths: &[String],
+    mode: ReverseApplyMode,
+) -> io::Result<ReverseStagingPlan> {
     let confined = confine_patch_paths_guarded(config, paths)?;
     let mut worktree_paths = BTreeMap::new();
     for path in confined.into_exact_leaves()? {
@@ -82,6 +118,15 @@ pub(crate) fn stage_effective_paths_for_reverse(
             "refusing to stage reverse patch path {path:?} because it has intent-to-add index state"
         )));
     }
+    if mode == ReverseApplyMode::ThreeWay
+        && let Some(path) = exact_paths
+            .iter()
+            .find(|path| cached_visible_status.contains_key(*path))
+    {
+        return Err(reverse_staging_error(format!(
+            "refusing a three-way reverse patch because it would replace existing staged data for {path:?}"
+        )));
+    }
     let worktree_changed_paths = read_changed_paths(config, &exact_paths)?;
 
     let mut staging_candidates = Vec::new();
@@ -101,7 +146,10 @@ pub(crate) fn stage_effective_paths_for_reverse(
         }
     }
     if staging_candidates.is_empty() {
-        return Ok(());
+        return Ok(ReverseStagingPlan {
+            staging_candidates,
+            content_filter_paths: Vec::new(),
+        });
     }
 
     if let Some(path) = staging_candidates
@@ -122,8 +170,54 @@ pub(crate) fn stage_effective_paths_for_reverse(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let result =
-        update_index_exact_paths_from_apply(config, &staging_candidates, &content_filter_paths)?;
+    Ok(ReverseStagingPlan {
+        staging_candidates,
+        content_filter_paths,
+    })
+}
+
+pub(crate) fn execute_reverse_staging_plan_in_scratch(
+    config: &GuardedGitConfig<'_>,
+    plan: &mut SealedReverseStagingPlan,
+    storage: &IsolatedGitStorage,
+) -> io::Result<()> {
+    config.ensure_operation_identity(&plan.owner)?;
+    if !std::mem::replace(&mut plan.scratch_use_available, false) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "sealed reverse staging plan scratch use was already consumed",
+        ));
+    }
+    let result = execute_prepared_reverse_index_update(config, &plan.update, Some(storage))?;
+    reverse_staging_result(result)
+}
+
+pub(crate) fn seal_reverse_staging_plan(
+    config: &mut GuardedGitConfig<'_>,
+    plan: ReverseStagingPlan,
+) -> io::Result<SealedReverseStagingPlan> {
+    let update = prepare_index_exact_paths_for_reverse_apply(
+        config,
+        &plan.staging_candidates,
+        &plan.content_filter_paths,
+    )?;
+    Ok(SealedReverseStagingPlan {
+        owner: config.operation_identity(),
+        update,
+        scratch_use_available: true,
+    })
+}
+
+pub(crate) fn execute_reverse_staging_plan(
+    config: &GuardedGitConfig<'_>,
+    plan: SealedReverseStagingPlan,
+) -> io::Result<()> {
+    config.ensure_operation_identity(&plan.owner)?;
+    let result = execute_prepared_reverse_index_update(config, &plan.update, None)?;
+    reverse_staging_result(result)
+}
+
+fn reverse_staging_result(result: crate::exact_staging::StagePathsResult) -> io::Result<()> {
     if result.exit_code == 0 {
         Ok(())
     } else {

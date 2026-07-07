@@ -41,6 +41,201 @@ fn run_isolated_config_test(test_name: &str) {
 }
 
 #[test]
+fn frozen_apply_policy_overrides_later_repository_config_changes() {
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "core.autocrlf", "false"]);
+    run_git(root, &["config", "apply.whitespace", "warn"]);
+    run_git(root, &["config", "apply.ignoreWhitespace", "change"]);
+    run_git(root, &["config", "core.whitespace", "-trailing-space"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new \n",
+    )
+    .expect("write patch");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze apply policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    let patch = patch.to_str().expect("UTF-8 patch path");
+    let (rendered, gate) = config
+        .run_apply_policy_gate(false, patch)
+        .expect("run policy gate");
+    assert!(rendered.contains("apply.whitespace=warn"), "{rendered}");
+    assert!(
+        rendered.contains("apply.ignoreWhitespace=change"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("core.whitespace=-trailing-space"),
+        "{rendered}"
+    );
+    assert!(
+        gate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+
+    run_git(root, &["config", "apply.whitespace", "error"]);
+    run_git(root, &["config", "apply.ignoreWhitespace", "false"]);
+    run_git(root, &["config", "core.whitespace", "trailing-space"]);
+
+    let final_apply = config
+        .run_direct_apply(false, patch)
+        .expect("run final apply");
+    assert!(
+        final_apply.status.success(),
+        "frozen policy must survive config mutation: {}",
+        String::from_utf8_lossy(&final_apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read result"),
+        "new \n"
+    );
+}
+
+#[test]
+fn frozen_apply_policy_materializes_git_defaults() {
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze apply policy");
+
+    let rendered = config
+        .render_apply_command_for_log(&["apply".to_string(), "--check".to_string()])
+        .expect("render frozen defaults");
+    assert!(rendered.contains("apply.whitespace=warn"), "{rendered}");
+    assert!(
+        rendered.contains("apply.ignoreWhitespace=false"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("core.whitespace=blank-at-eol,blank-at-eof,space-before-tab"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn apply_whitespace_modes_are_typed_and_case_sensitive_at_the_gate() {
+    for (value, expected) in [
+        ("warn", ApplyWhitespaceMode::Warn),
+        ("nowarn", ApplyWhitespaceMode::Nowarn),
+        ("error", ApplyWhitespaceMode::Error),
+        ("error-all", ApplyWhitespaceMode::ErrorAll),
+        ("fix", ApplyWhitespaceMode::Fix),
+        ("strip", ApplyWhitespaceMode::Fix),
+        ("ERROR", ApplyWhitespaceMode::Invalid),
+        ("unknown", ApplyWhitespaceMode::Invalid),
+    ] {
+        assert_eq!(ApplyWhitespaceMode::normalize(value), expected, "{value}");
+    }
+
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "apply.whitespace", "ERROR"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    )
+    .expect("write patch");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze invalid policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    assert!(
+        config
+            .final_apply_whitespace_mode(false, patch.to_str().expect("UTF-8 patch path"))
+            .is_err()
+    );
+    let (_, gate) = config
+        .run_apply_policy_gate(false, patch.to_str().expect("UTF-8 patch path"))
+        .expect("run invalid policy gate");
+    assert!(!gate.status.success());
+    assert!(
+        String::from_utf8_lossy(&gate.stderr).contains("unrecognized whitespace"),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+    assert!(
+        config
+            .final_apply_whitespace_mode(false, patch.to_str().expect("UTF-8 patch path"))
+            .is_err()
+    );
+}
+
+#[test]
+fn successful_apply_policy_gate_is_one_shot_and_bound_to_patch_orientation() {
+    let repo = tempfile::tempdir().expect("repo");
+    let root = repo.path();
+    run_git(root, &["init", "-q"]);
+    run_git(root, &["config", "user.email", "codex@example.com"]);
+    run_git(root, &["config", "user.name", "Codex"]);
+    run_git(root, &["config", "apply.whitespace", "error"]);
+    std::fs::write(root.join("file.txt"), "old\n").expect("write base");
+    run_git(root, &["add", "file.txt"]);
+    run_git(root, &["commit", "-qm", "base"]);
+    let patch_dir = tempfile::tempdir().expect("patch directory");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(
+        &patch,
+        "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    )
+    .expect("write patch");
+    let patch = patch.to_str().expect("UTF-8 patch path");
+
+    let git = GitRunner::for_cwd_io(root).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config");
+    config.freeze_apply_policy().expect("freeze policy");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("authorize filter path");
+    let (_, gate) = config
+        .run_apply_policy_gate(false, patch)
+        .expect("run successful policy gate");
+    assert!(gate.status.success());
+    assert_eq!(
+        config
+            .final_apply_whitespace_mode(false, patch)
+            .expect("matching proof"),
+        ApplyWhitespaceMode::Error
+    );
+    assert!(config.final_apply_whitespace_mode(true, patch).is_err());
+    assert!(
+        config
+            .final_apply_whitespace_mode(false, "different.patch")
+            .is_err()
+    );
+    assert!(config.run_apply_policy_gate(false, patch).is_err());
+}
+
+#[test]
 fn attached_filter_snapshots_retain_multiple_owned_overrides() {
     let repo = tempfile::tempdir().expect("repo");
     run_git(repo.path(), &["init", "-q"]);
@@ -125,7 +320,7 @@ fn attached_filter_snapshots_retain_multiple_owned_overrides() {
 }
 
 #[test]
-fn composed_staging_subset_proof_requires_exactly_one_apply_snapshot() {
+fn reverse_staging_subset_proof_requires_exactly_one_apply_snapshot() {
     let repo = tempfile::tempdir().expect("repo");
     run_git(repo.path(), &["init", "-q"]);
     let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
@@ -172,7 +367,7 @@ fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
         GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
 
     let error = config
-        .install_three_way_merge_policy()
+        .install_three_way_merge_policy(&[])
         .expect_err("merge policy without apply snapshot must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 
@@ -180,22 +375,22 @@ fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply snapshot");
     config
-        .install_three_way_merge_policy()
+        .install_three_way_merge_policy(&["file.txt".to_string()])
         .expect("zero-driver merge policy");
     assert!(config.merge_policy_installed);
-    assert!(config.merge.is_none());
+    assert!(config.merge.is_some());
 
     let error = config
-        .install_three_way_merge_policy()
+        .install_three_way_merge_policy(&["file.txt".to_string()])
         .expect_err("second merge policy must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
 #[test]
-fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
+fn isolated_merge_config_is_not_attached_to_preparatory_commands() {
     if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
         run_isolated_config_test(
-            "guarded_config::tests::command_order_is_apply_filter_then_merge_then_git_add_filter",
+            "guarded_config::tests::isolated_merge_config_is_not_attached_to_preparatory_commands",
         );
         return;
     }
@@ -215,7 +410,7 @@ fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
         .authorize_filter_paths(&["file.txt".to_string()])
         .expect("apply filter policy");
     config
-        .install_three_way_merge_policy()
+        .install_three_way_merge_policy(&["file.txt".to_string()])
         .expect("merge policy");
     config
         .authorize_git_add_filter_paths(&["file.txt".to_string()])
@@ -226,26 +421,24 @@ fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
         .expect("apply filter overlay")
         .include_arg
         .clone();
-    let merge_include = config
-        .merge_include_arg()
-        .expect("merge overlay")
-        .to_string();
+    let merge_config = config
+        .merge_common_config_path()
+        .expect("isolated merge config");
     let git_add_include = config.filters[1]
         .neutralizer()
         .expect("Git-add filter overlay")
         .include_arg
         .clone();
-    let overlay_paths = [&apply_include, &merge_include, &git_add_include]
+    let overlay_paths = [&apply_include, &git_add_include]
         .map(|include| PathBuf::from(include.strip_prefix("include.path=").expect("include path")));
 
     let rendered = config
         .render_command_for_log(&["ls-files".to_string()])
         .expect("render command");
     let apply_offset = rendered.find(&apply_include).expect("apply include");
-    let merge_offset = rendered.find(&merge_include).expect("merge include");
     let git_add_offset = rendered.find(&git_add_include).expect("Git-add include");
-    assert!(apply_offset < merge_offset && merge_offset < git_add_offset);
-    assert_eq!(rendered.matches(&merge_include).count(), 1);
+    assert!(apply_offset < git_add_offset);
+    assert!(!rendered.contains(&merge_config.display().to_string()));
 
     let output = config
         .ls_files_command()
@@ -254,9 +447,11 @@ fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
         .expect("execute bound command");
     assert!(output.status.success());
     assert!(overlay_paths.iter().all(|path| path.is_file()));
+    assert!(merge_config.is_file());
 
     drop(config);
     assert!(overlay_paths.iter().all(|path| !path.exists()));
+    assert!(!merge_config.exists());
 }
 
 #[test]
@@ -385,7 +580,10 @@ async fn zero_driver_status_occupies_its_slot_and_excludes_every_mutation_policy
         .expect("zero-driver status policy");
     assert_eq!(status_filter_policy_read_count(), 1);
     let status = config.status.as_ref().expect("occupied status slot");
-    assert!(status.neutralizer.is_none());
+    status
+        .context
+        .context(&config.identity)
+        .expect("sealed zero-driver Status context");
     assert_eq!(status.fsmonitor, None);
 
     let error = config
@@ -403,15 +601,23 @@ async fn zero_driver_status_occupies_its_slot_and_excludes_every_mutation_policy
         .expect_err("status plus GitAdd must fail");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     let error = config
-        .install_three_way_merge_policy()
+        .install_three_way_merge_policy(&[])
         .expect_err("status plus merge must fail");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let error = config
+        .freeze_apply_policy()
+        .expect_err("status plus frozen apply policy must fail");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(config.apply_policy.is_none());
+    assert!(matches!(
+        config.apply_policy_gate,
+        ApplyPolicyGateState::NotRun
+    ));
     let error = config
         .status_output_async()
         .await
         .expect_err("status sink requires a retained fsmonitor decision");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-
     let first = config.detect_status_fsmonitor_async().await;
     let second = config.detect_status_fsmonitor_async().await;
     assert_eq!(first, second);
@@ -433,13 +639,27 @@ async fn zero_driver_status_occupies_its_slot_and_excludes_every_mutation_policy
         .expect_err("Apply plus status must fail before a status read");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(status_filter_policy_read_count(), reads_before);
+
+    let mut apply_policy_only =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("apply capability");
+    apply_policy_only
+        .freeze_apply_policy()
+        .expect("frozen apply policy");
+    let reads_before = status_filter_policy_read_count();
+    let error = apply_policy_only
+        .install_status_policy_async()
+        .await
+        .expect_err("frozen apply policy plus status must fail before a status read");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(status_filter_policy_read_count(), reads_before);
+    assert!(apply_policy_only.status.is_none());
 }
 
 #[tokio::test]
-async fn status_uses_the_shared_four_entry_overlay_and_retains_it_through_the_sink() {
+async fn status_replaces_filter_config_with_an_owned_helper_free_context() {
     if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
         run_isolated_config_test(
-            "guarded_config::tests::status_uses_the_shared_four_entry_overlay_and_retains_it_through_the_sink",
+            "guarded_config::tests::status_replaces_filter_config_with_an_owned_helper_free_context",
         );
         return;
     }
@@ -463,42 +683,30 @@ async fn status_uses_the_shared_four_entry_overlay_and_retains_it_through_the_si
         .install_status_policy_async()
         .await
         .expect("optional smudge policy");
-    let neutralizer = config
-        .status
-        .as_ref()
-        .and_then(|status| status.neutralizer.as_ref())
-        .expect("status neutralizer");
-    let overlay = PathBuf::from(
-        neutralizer
-            .include_arg
-            .strip_prefix("include.path=")
-            .expect("sealed include path"),
-    );
-    assert!(overlay.is_file());
-    let mut actual = Vec::new();
-    for (name, expected) in FILTER_NEUTRALIZATION_PLAN {
-        let output = std::process::Command::new("git")
-            .args(["config", "--file"])
-            .arg(&overlay)
-            .args(["--get", &format!("filter.demo.{name}")])
-            .output()
-            .expect("read neutralization entry");
-        assert!(output.status.success(), "read {name}");
-        actual.push((
-            name,
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        ));
-        assert_eq!(actual.last().map(|entry| entry.1.as_str()), Some(expected));
-    }
-    assert_eq!(actual.len(), FILTER_NEUTRALIZATION_PLAN.len());
+    let status = config.status.as_ref().expect("Status context");
+    let owned_config = status
+        .context
+        .config_path(&config.identity)
+        .expect("owned config path");
+    let owned_attributes = status
+        .context
+        .attributes_path(&config.identity)
+        .expect("owned attributes path");
+    let config_contents = std::fs::read_to_string(&owned_config).expect("read owned config");
+    assert!(!config_contents.contains("filter.demo"));
+    let attribute_contents =
+        std::fs::read_to_string(&owned_attributes).expect("read owned attributes");
+    assert!(attribute_contents.contains("!filter"));
 
     config.detect_status_fsmonitor_async().await;
     let output = config.status_output_async().await.expect("guarded status");
     assert!(output.status.success());
-    assert!(overlay.is_file(), "overlay must outlive the final child");
-    drop(config);
+    assert!(owned_config.is_file(), "owned config must outlive final child");
     assert!(
-        !overlay.exists(),
-        "overlay must be removed with the capability"
+        owned_attributes.is_file(),
+        "owned attributes must outlive final child"
     );
+    drop(config);
+    assert!(!owned_config.exists(), "owned config must be removed");
+    assert!(!owned_attributes.exists(), "owned attributes must be removed");
 }
