@@ -8,14 +8,15 @@ use super::inspect_installation;
 #[test]
 fn version_probe_uses_the_first_nonempty_line() {
     assert_eq!(
-        first_nonempty_line(b"\n  Carbonyl 0.0.3  \nextra\n"),
-        Some("Carbonyl 0.0.3".to_string())
+        first_nonempty_line(b"\n  Carbonyl 0.0.3-codex.1  \nextra\n"),
+        Some("Carbonyl 0.0.3-codex.1".to_string())
     );
 }
 
 #[test]
 fn version_probe_requires_the_exact_pinned_version() {
-    assert!(has_supported_version("Carbonyl 0.0.3"));
+    assert!(has_supported_version("Carbonyl 0.0.3-codex.1"));
+    assert!(!has_supported_version("Carbonyl 0.0.3"));
     assert!(!has_supported_version("Carbonyl 0.0.30"));
     assert!(!has_supported_version("Carbonyl 1.0.0"));
 }
@@ -32,5 +33,5 @@ async fn configured_real_carbonyl_passes_the_sandboxed_version_probe() {
         .await
         .expect("supported installation");
 
-    assert_eq!(installation.version, "Carbonyl 0.0.3");
+    assert_eq!(installation.version, "Carbonyl 0.0.3-codex.1");
 }

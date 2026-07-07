@@ -14,6 +14,7 @@ use codex_terminal_browser::BrowserNetworkPolicy;
 use codex_terminal_browser::BrowserStatus;
 use codex_terminal_browser::BrowserToolOutput;
 use codex_terminal_browser::BrowserView;
+use codex_terminal_browser::HumanNavigationAction;
 use codex_terminal_browser::TerminalBrowser;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyEvent;
@@ -28,11 +29,14 @@ use crate::app_event::OwnedScreenPanel;
 use crate::app_event::TerminalBrowserControlTarget;
 use crate::app_event::TerminalBrowserProfileApproval;
 use crate::app_event::TerminalBrowserProfileCommand;
+use crate::terminal_browser::BrowserChromeKeyResult;
+use crate::terminal_browser::BrowserChromeMouseResult;
 use crate::terminal_browser::BrowserMouseRoute;
 use crate::terminal_browser::TerminalBrowserNetworkAvailability;
 use crate::terminal_browser::browser_key_input;
 use crate::terminal_browser::browser_mouse_input;
 use crate::terminal_browser::browser_mouse_route;
+use crate::terminal_browser::browser_panel_areas;
 use crate::terminal_browser::dynamic_tool_response;
 use crate::terminal_browser::profile_approval_view_params;
 use crate::tui::MousePrimaryEvent;
@@ -363,6 +367,7 @@ impl App {
     }
 
     pub(super) fn hide_terminal_browser_panel(&mut self) {
+        self.terminal_browser_chrome.focus_page();
         if let Some(browser) = self.terminal_browser_for_current_thread() {
             let invalidate_human_handles = browser.is_human_control_active();
             browser.set_visibility(/*visible*/ false);
@@ -399,6 +404,100 @@ impl App {
             self.chat_widget
                 .add_error_message(format!("Failed to paste into browser: {error}"));
         }
+    }
+
+    pub(super) fn handle_terminal_browser_chrome_key(&mut self, event: KeyEvent) -> bool {
+        match self.terminal_browser_chrome.handle_key(event) {
+            BrowserChromeKeyResult::Ignored => false,
+            BrowserChromeKeyResult::Consumed => true,
+            BrowserChromeKeyResult::Navigate(action) => {
+                self.navigate_terminal_browser_from_chrome(action);
+                true
+            }
+        }
+    }
+
+    pub(super) fn handle_terminal_browser_chrome_paste(&mut self, pasted: &str) -> bool {
+        self.terminal_browser_chrome.handle_paste(pasted)
+    }
+
+    pub(super) async fn handle_terminal_browser_chrome_mouse(
+        &mut self,
+        event: MousePrimaryEvent,
+    ) -> bool {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.owned_screen_frame.right_rail_content() != OwnedScreenRightRailContent::Browser
+            || !self
+                .terminal_browser_for_current_thread()
+                .is_some_and(|browser| browser.view().visible)
+        {
+            return false;
+        }
+        let Some(header) = self
+            .owned_screen_frame
+            .panel_body(OwnedScreenPanel::Summary)
+            .map(browser_panel_areas)
+            .map(|areas| areas.header)
+        else {
+            return false;
+        };
+        let BrowserChromeMouseResult::Consumed(navigation) = self
+            .terminal_browser_chrome
+            .handle_mouse_primary(event, header)
+        else {
+            return false;
+        };
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return true;
+        };
+        if !browser.is_human_control_active() {
+            let Some(target) = self.terminal_browser_control_target() else {
+                return true;
+            };
+            let outcome = browser.toggle_human_control(target.token).await;
+            let mut completion_target = target;
+            let error = match outcome {
+                Ok(token) => {
+                    completion_target.token = token;
+                    None
+                }
+                Err(error) => Some(error.to_string()),
+            };
+            let control_failed = error.is_some();
+            self.app_event_tx
+                .unscoped()
+                .send(AppEvent::TerminalBrowserControlCompleted {
+                    target: completion_target,
+                    error,
+                });
+            if control_failed {
+                self.terminal_browser_chrome.focus_page();
+                return true;
+            }
+        }
+        if let Some(navigation) = navigation {
+            self.navigate_terminal_browser_from_chrome(navigation);
+        }
+        true
+    }
+
+    fn navigate_terminal_browser_from_chrome(&mut self, action: HumanNavigationAction) {
+        let Some(browser) = self.terminal_browser_for_current_thread() else {
+            return;
+        };
+        let Some(target) = self.active_terminal_browser_control_target() else {
+            return;
+        };
+        let app_event_tx = self.app_event_tx.unscoped();
+        tokio::spawn(async move {
+            let error = browser
+                .navigate_for_human(action)
+                .await
+                .err()
+                .map(|error| error.to_string());
+            app_event_tx.send(AppEvent::TerminalBrowserNavigationCompleted { target, error });
+        });
     }
 
     pub(super) async fn forward_terminal_browser_mouse(
@@ -607,6 +706,7 @@ impl App {
     }
 
     fn take_terminal_browser_for_thread_change(&mut self) -> Option<Arc<TerminalBrowser>> {
+        self.terminal_browser_chrome.focus_page();
         self.terminal_browser_owner_thread_id = None;
         self.terminal_browser_generation =
             self.terminal_browser_generation.wrapping_add(/*rhs*/ 1);
@@ -818,6 +918,7 @@ impl App {
         if !self.terminal_browser_control_target_is_current(target) {
             return;
         }
+        self.terminal_browser_chrome.focus_page();
         let Some(browser) = self.terminal_browser_for_current_thread() else {
             return;
         };

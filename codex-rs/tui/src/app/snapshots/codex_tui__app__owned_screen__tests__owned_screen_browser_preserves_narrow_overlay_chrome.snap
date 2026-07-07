@@ -3,8 +3,8 @@ source: tui/src/app/owned_screen_tests.rs
 expression: terminal.backend()
 ---
 "committed response                      ┌ Summary | Browser ─────────────┐ "
-"                                        │ running Example                │ "
-"                                        │ https://example.com            │ "
+"                                        │ [<] [>] [R] Example running    │ "
+"                                        │ URL https://example.com        │ "
 "                                        │Codex browser panel             │ "
 "                                        │interactive page                │ "
 "                                        │ready                           │ "

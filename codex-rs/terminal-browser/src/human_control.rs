@@ -453,11 +453,9 @@ async fn run_human_input_worker(inner: Weak<Inner>, mut receivers: HumanInputRec
                     Some(bytes) => (send_terminal_input(writer, bytes).await, None, true),
                     None => (actions::dispatch_human_key(&cdp, &input).await, None, true),
                 },
-                HumanInput::Text(text) => (
-                    send_terminal_input(writer, text.into_bytes()).await,
-                    None,
-                    true,
-                ),
+                HumanInput::Text(text) => {
+                    (actions::insert_human_text(&cdp, &text).await, None, false)
+                }
                 HumanInput::Mouse(input) => {
                     let bytes = terminal_input::mouse_bytes(input, &mut mouse_state);
                     (

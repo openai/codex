@@ -138,6 +138,13 @@ pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInp
     Ok(())
 }
 
+pub(crate) async fn insert_human_text(client: &CdpClient, text: &str) -> Result<()> {
+    client
+        .call("Input.insertText", json!({ "text": text }))
+        .await?;
+    Ok(())
+}
+
 pub(crate) fn bounded_snapshot_json(mut snapshot: Value) -> Result<String> {
     truncate_string_field(&mut snapshot, "url", MAX_SNAPSHOT_URL_CHARS);
     truncate_string_field(&mut snapshot, "title", MAX_SNAPSHOT_TITLE_CHARS);

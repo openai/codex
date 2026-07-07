@@ -278,7 +278,7 @@ impl TerminalBrowser {
         )))
     }
 
-    async fn refresh_page_metadata(&self, session: &mut BrowserSession) -> Result<()> {
+    pub(crate) async fn refresh_page_metadata(&self, session: &mut BrowserSession) -> Result<()> {
         let metadata = actions::page_metadata(&session.cdp).await?;
         if let Some(url) = metadata.url.as_deref()
             && !is_allowed_browser_url(url)
@@ -306,7 +306,7 @@ async fn blank_disallowed_page(session: &mut BrowserSession) {
     session.handles.clear();
 }
 
-fn validate_browser_url(raw_url: &str) -> Result<Url> {
+pub(crate) fn validate_browser_url(raw_url: &str) -> Result<Url> {
     anyhow::ensure!(
         raw_url.len() <= MAX_URL_INPUT_BYTES,
         "URL exceeds the 4 KiB input limit"

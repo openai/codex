@@ -403,6 +403,12 @@ pub(crate) enum AppEvent {
         error: Option<String>,
     },
 
+    /// A navigation action from the Codex-owned browser chrome completed.
+    TerminalBrowserNavigationCompleted {
+        target: TerminalBrowserControlTarget,
+        error: Option<String>,
+    },
+
     /// The terminal-browser process finished closing.
     TerminalBrowserClosed,
 

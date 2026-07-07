@@ -17,4 +17,8 @@ fn runtime_replaces_the_user_home_and_working_storage() {
         Some(&runtime.temporary.as_path().display().to_string())
     );
     assert!(runtime.profile.starts_with(runtime.root.as_path()));
+    assert_eq!(
+        env.get("CARBONYL_ENV_CODEX_EMBEDDER"),
+        Some(&"1".to_string())
+    );
 }

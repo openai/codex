@@ -2,8 +2,8 @@
 source: tui/src/terminal_browser/tests.rs
 expression: "buffer_text(&buffer, area)"
 ---
- running Example
- https://example.com
+ [<] [>] [R] Example running
+ URL https://example.com
 User
 
 

@@ -17,6 +17,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
+use super::BrowserChromeState;
+use super::render_browser_chrome;
+
 const HEADER_HEIGHT: u16 = 2;
 const FOOTER_HEIGHT: u16 = 1;
 
@@ -89,17 +92,18 @@ impl TerminalBrowserPanel {
 
 pub(crate) fn render_browser_view(
     view: &BrowserView,
+    chrome: &BrowserChromeState,
     area: Rect,
     buf: &mut Buffer,
 ) -> BrowserPanelRender {
     Clear.render(area, buf);
     let areas = browser_panel_areas(area);
-    render_header(view, areas.header, buf);
+    let chrome_cursor = render_browser_chrome(view, chrome, areas.header, buf);
     render_screen_or_status(view, areas.viewport, buf);
     render_footer(view, areas.footer, buf);
     BrowserPanelRender {
         viewport: areas.viewport,
-        cursor: browser_cursor(view, areas.viewport),
+        cursor: chrome_cursor.or_else(|| browser_cursor(view, areas.viewport)),
     }
 }
 
@@ -118,27 +122,6 @@ fn browser_cursor(view: &BrowserView, viewport: Rect) -> Option<(u16, u16)> {
             viewport.y.saturating_add(row),
         )
     })
-}
-
-fn render_header(view: &BrowserView, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 {
-        return;
-    }
-    let title = view.title.as_deref().unwrap_or("Carbonyl");
-    let status = status_label(&view.status);
-    Line::from(vec![format!(" {status} ").cyan().bold(), title.into()]).render_ref(area, buf);
-    if area.height > 1 {
-        let url = view.url.as_deref().unwrap_or("about:blank");
-        Line::from(vec![" ".into(), url.dim()]).render_ref(
-            Rect::new(
-                area.x,
-                area.y.saturating_add(/*rhs*/ 1),
-                area.width,
-                /*height*/ 1,
-            ),
-            buf,
-        );
-    }
 }
 
 fn render_footer(view: &BrowserView, area: Rect, buf: &mut Buffer) {
@@ -276,16 +259,6 @@ fn color(color: BrowserColor) -> Option<Color> {
     }
 }
 
-fn status_label(status: &BrowserStatus) -> &'static str {
-    match status {
-        BrowserStatus::Unavailable { .. } => "unavailable",
-        BrowserStatus::Idle => "idle",
-        BrowserStatus::Starting => "starting",
-        BrowserStatus::Running => "running",
-        BrowserStatus::Crashed { .. } => "crashed",
-    }
-}
-
 fn status_message(status: &BrowserStatus) -> String {
     match status {
         BrowserStatus::Unavailable { reason } => format!("Browser unavailable: {reason}"),
@@ -316,7 +289,9 @@ pub(super) fn render_view_for_test(
     area: Rect,
     buf: &mut Buffer,
 ) -> BrowserPanelRender {
-    render_browser_view(view, area, buf)
+    let mut chrome = BrowserChromeState::default();
+    chrome.sync_url(view.url.as_deref());
+    render_browser_view(view, &chrome, area, buf)
 }
 
 #[cfg(test)]

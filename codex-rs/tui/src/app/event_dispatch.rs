@@ -530,6 +530,15 @@ impl App {
                 }
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::TerminalBrowserNavigationCompleted { target, error } => {
+                if self.terminal_browser_control_target_is_current(target) {
+                    if let Some(error) = error {
+                        self.chat_widget
+                            .add_error_message(format!("Browser navigation failed: {error}"));
+                    }
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::TerminalBrowserClosed | AppEvent::TerminalBrowserUpdated => {
                 let raw_mouse_events = self.sync_terminal_browser_panel();
                 tui.set_raw_mouse_events(raw_mouse_events);

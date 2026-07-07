@@ -87,6 +87,7 @@ impl BrowserRuntime {
         );
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
+        env.insert("CARBONYL_ENV_CODEX_EMBEDDER".to_string(), "1".to_string());
         if let BrowserNetworkPolicy::ManagedProxy { http_addr } = network_policy {
             let proxy = format!("http://{http_addr}");
             env.insert("HTTP_PROXY".to_string(), proxy.clone());

@@ -50,6 +50,18 @@ fn modified_printable_shortcuts_fall_back_to_cdp() {
 }
 
 #[test]
+fn unicode_text_falls_back_to_cdp() {
+    let unicode = BrowserKeyInput {
+        key: "é".to_string(),
+        code: "é".to_string(),
+        text: Some("é".to_string()),
+        modifiers: BrowserInputModifiers::default(),
+    };
+
+    assert_eq!(key_bytes(&unicode), None);
+}
+
+#[test]
 fn mouse_reports_preserve_carbonyl_coordinates_and_button_state() {
     let mut state = HumanTerminalMouseState::default();
     let press = BrowserMouseInput {

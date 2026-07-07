@@ -177,12 +177,15 @@ fn render_frame_app_with_browser(
     browser_view: Option<&BrowserView>,
 ) -> Terminal<TestBackend> {
     let frame_overlays_enabled = app.chat_widget.no_modal_or_popup_active();
+    let mut browser_chrome = crate::terminal_browser::BrowserChromeState::default();
+    browser_chrome.sync_url(browser_view.and_then(|view| view.url.as_deref()));
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
     terminal
         .draw(|frame| {
             let browser = browser_view.map(|view| OwnedScreenBrowser {
                 runtime: None,
                 view,
+                chrome: &browser_chrome,
             });
             let rendered = render_owned_screen_contents(
                 &mut app.chat_widget,

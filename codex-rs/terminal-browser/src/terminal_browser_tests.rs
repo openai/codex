@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 use crate::BrowserColor;
 use crate::BrowserLaunchContext;
 use crate::BrowserNetworkPolicy;
+use crate::HumanNavigationAction;
 use crate::TerminalBrowser;
 use crate::TerminalSize;
 use crate::actions::bounded_snapshot_json;
@@ -255,6 +256,7 @@ async fn configured_real_carbonyl_opens_local_page_and_snapshots() {
     let address = listener.local_addr().expect("smoke server address");
     let server = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(/*secs*/ 15);
+        let mut remaining_requests = 2;
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -272,7 +274,10 @@ async fn configured_real_carbonyl_opens_local_page_and_snapshots() {
                     stream
                         .write_all(response.as_bytes())
                         .expect("write smoke response");
-                    return;
+                    remaining_requests -= 1;
+                    if remaining_requests == 0 {
+                        return;
+                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     assert!(
@@ -352,6 +357,18 @@ async fn configured_real_carbonyl_opens_local_page_and_snapshots() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 20)).await;
     }
+    let token = browser
+        .toggle_human_control(browser.human_control_token())
+        .await
+        .expect("begin smoke-test human control");
+    browser
+        .navigate_for_human(HumanNavigationAction::Reload)
+        .await
+        .expect("reload from the Codex-owned browser chrome");
+    browser
+        .end_human_control(token)
+        .await
+        .expect("end smoke-test human control");
     browser.close().await;
     server.join().expect("smoke server thread");
 }

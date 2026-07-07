@@ -19,7 +19,7 @@ pub(crate) fn key_bytes(input: &BrowserKeyInput) -> Option<Vec<u8>> {
     if let Some(text) = input.text.as_deref()
         && !text.is_empty()
     {
-        return Some(text.as_bytes().to_vec());
+        return text.is_ascii().then(|| text.as_bytes().to_vec());
     }
     match input.key.as_str() {
         "Enter" => Some(vec![b'\r']),

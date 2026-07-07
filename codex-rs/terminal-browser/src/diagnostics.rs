@@ -12,7 +12,7 @@ use crate::sandbox::BrowserLaunchContext;
 use crate::sandbox::prepare_browser_launch;
 
 const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
-const SUPPORTED_VERSION: &str = "0.0.3";
+const SUPPORTED_VERSION: &str = "0.0.3-codex.1";
 const MAX_VERSION_OUTPUT_CHARS: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

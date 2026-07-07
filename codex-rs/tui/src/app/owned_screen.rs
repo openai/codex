@@ -55,6 +55,7 @@ struct RenderedOwnedScreen {
 struct OwnedScreenBrowser<'a> {
     runtime: Option<&'a Arc<TerminalBrowser>>,
     view: &'a codex_terminal_browser::BrowserView,
+    chrome: &'a crate::terminal_browser::BrowserChromeState,
 }
 
 impl OwnedScreen {
@@ -705,6 +706,11 @@ impl App {
         }
         let terminal_browser = self.terminal_browser_for_current_thread();
         let terminal_browser_view = terminal_browser.as_ref().map(|browser| browser.view());
+        self.terminal_browser_chrome.sync_url(
+            terminal_browser_view
+                .as_ref()
+                .and_then(|view| view.url.as_deref()),
+        );
         let browser_human_control = terminal_browser_view
             .as_ref()
             .is_some_and(|view| view.human_control);
@@ -713,6 +719,7 @@ impl App {
             .map(|view| OwnedScreenBrowser {
                 runtime: terminal_browser.as_ref(),
                 view,
+                chrome: &self.terminal_browser_chrome,
             });
         let mut rendered_area = Rect::default();
         let mut selection_autoscroll_active = false;
@@ -795,7 +802,8 @@ fn render_owned_screen_contents(
                         tracing::debug!(%error, "failed to resize terminal browser panel");
                     }
                 }
-                let browser_render = render_browser_view(browser.view, body, buffer);
+                let browser_render =
+                    render_browser_view(browser.view, browser.chrome, body, buffer);
                 debug_assert_eq!(browser_render.viewport, browser_viewport(body));
                 if let Some(rendered) = &mut rendered {
                     rendered.browser_cursor = browser_render.cursor;

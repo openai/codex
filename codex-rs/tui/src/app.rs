@@ -540,6 +540,8 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     /// Carbonyl runtime shared by the active conversation and the browser panel.
     pub(crate) terminal_browser: Option<Arc<TerminalBrowser>>,
+    /// Focus and editing state for the Codex-owned terminal-browser chrome.
+    terminal_browser_chrome: crate::terminal_browser::BrowserChromeState,
     /// Conversation currently allowed to drive `terminal_browser`.
     pub(crate) terminal_browser_owner_thread_id: Option<ThreadId>,
     /// Invalidates delayed browser-profile approvals when the owned runtime changes.
@@ -1066,6 +1068,7 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             overlay: None,
             terminal_browser: None,
+            terminal_browser_chrome: crate::terminal_browser::BrowserChromeState::default(),
             terminal_browser_owner_thread_id: None,
             terminal_browser_generation: 0,
             terminal_browser_reopenable: HashMap::new(),
@@ -1322,6 +1325,17 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         if let TuiEvent::MousePrimary(mouse_event) = &event
+            && self
+                .handle_terminal_browser_chrome_mouse(*mouse_event)
+                .await
+        {
+            let raw_mouse_events = self.sync_terminal_browser_panel();
+            tui.set_raw_mouse_events(raw_mouse_events);
+            tui.frame_requester().schedule_frame();
+            return Ok(AppRunControl::Continue);
+        }
+
+        if let TuiEvent::MousePrimary(mouse_event) = &event
             && let Some(click) = self.terminal_browser_control_click(*mouse_event)
         {
             self.handle_owned_screen_mouse_primary(tui, *mouse_event);
@@ -1347,6 +1361,7 @@ See the Codex keymap documentation for supported actions and examples."
                     if kind == KeyEventKind::Press
                         && let Some(target) = self.active_terminal_browser_control_target()
                     {
+                        self.terminal_browser_chrome.focus_page();
                         self.app_event_tx
                             .unscoped()
                             .send(AppEvent::EndTerminalBrowserControl { target });
@@ -1354,10 +1369,18 @@ See the Codex keymap documentation for supported actions and examples."
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::Key(key_event) => {
+                    if self.handle_terminal_browser_chrome_key(key_event) {
+                        tui.frame_requester().schedule_frame();
+                        return Ok(AppRunControl::Continue);
+                    }
                     self.forward_terminal_browser_key(key_event);
                     return Ok(AppRunControl::Continue);
                 }
                 TuiEvent::Paste(pasted) => {
+                    if self.handle_terminal_browser_chrome_paste(&pasted) {
+                        tui.frame_requester().schedule_frame();
+                        return Ok(AppRunControl::Continue);
+                    }
                     self.forward_terminal_browser_text(&pasted.replace("\r", "\n"));
                     return Ok(AppRunControl::Continue);
                 }
@@ -1372,11 +1395,13 @@ See the Codex keymap documentation for supported actions and examples."
                         browser_viewport,
                     ) && let Some(target) = self.active_terminal_browser_control_target()
                     {
+                        self.terminal_browser_chrome.focus_page();
                         self.end_terminal_browser_control(target);
                         tui.set_raw_mouse_events(/*raw_mouse_events*/ false);
                         self.handle_owned_screen_mouse_primary(tui, mouse_event);
                         return Ok(AppRunControl::Continue);
                     }
+                    self.terminal_browser_chrome.focus_page();
                     self.forward_terminal_browser_mouse(mouse_event.into(), browser_viewport)
                         .await;
                     return Ok(AppRunControl::Continue);

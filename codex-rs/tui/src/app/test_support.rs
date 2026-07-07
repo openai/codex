@@ -46,6 +46,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             runtime_permission_profile_override: None,
             overlay: None,
             terminal_browser: None,
+            terminal_browser_chrome: crate::terminal_browser::BrowserChromeState::default(),
             terminal_browser_owner_thread_id: None,
             terminal_browser_generation: 0,
             terminal_browser_reopenable: HashMap::new(),
