@@ -240,18 +240,27 @@ impl ChatWidget {
 
     pub(super) fn approval_preset_actions(
         approval: AskForApproval,
-        permission_profile: PermissionProfile,
-        active_permission_profile: ActivePermissionProfile,
+        profile_update: PermissionPresetProfileUpdate,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
+            let (permission_profile, active_permission_profile) = match &profile_update {
+                PermissionPresetProfileUpdate::Preserve => (None, None),
+                PermissionPresetProfileUpdate::Replace {
+                    permission_profile,
+                    active_permission_profile,
+                } => (
+                    Some(permission_profile.clone()),
+                    Some(active_permission_profile.clone()),
+                ),
+            };
             tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
                 Some(approval),
                 Some(approvals_reviewer),
-                Some(permission_profile.clone()),
-                Some(active_permission_profile.clone()),
+                permission_profile,
+                active_permission_profile,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -261,9 +270,15 @@ impl ChatWidget {
                 /*personality*/ None,
             )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateActivePermissionProfile(
-                active_permission_profile.clone(),
-            ));
+            if let PermissionPresetProfileUpdate::Replace {
+                active_permission_profile,
+                ..
+            } = &profile_update
+            {
+                tx.send(AppEvent::UpdateActivePermissionProfile(
+                    active_permission_profile.clone(),
+                ));
+            }
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
@@ -290,13 +305,24 @@ impl ChatWidget {
         profile_selection: Option<PermissionProfileSelection>,
         return_to_permissions: bool,
     ) -> Vec<SelectionAction> {
+        let preserve_workspace_profile = preset.id == "auto"
+            && Self::workspace_profile_matches_auto_mode(
+                self.config.permissions.permission_profile(),
+                self.config.cwd.as_path(),
+            );
         let apply_actions = || {
             profile_selection.clone().map_or_else(
                 || {
                     Self::approval_preset_actions(
                         AskForApproval::from(preset.approval),
-                        preset.permission_profile.clone(),
-                        preset.active_permission_profile.clone(),
+                        if preserve_workspace_profile {
+                            PermissionPresetProfileUpdate::Preserve
+                        } else {
+                            PermissionPresetProfileUpdate::Replace {
+                                permission_profile: preset.permission_profile.clone(),
+                                active_permission_profile: preset.active_permission_profile.clone(),
+                            }
+                        },
                         label.clone(),
                         approvals_reviewer,
                     )
@@ -390,18 +416,19 @@ impl ChatWidget {
                     && current_permission_profile.network_sandbox_policy()
                         == preset.permission_profile.network_sandbox_policy()
             }
-            "auto" => {
-                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
-                matches!(
-                    current_permission_profile,
-                    PermissionProfile::Managed { .. }
-                ) && file_system_policy.can_write_path_with_cwd(cwd, cwd)
-                    && !file_system_policy.has_full_disk_write_access()
-                    && current_permission_profile.network_sandbox_policy()
-                        == preset.permission_profile.network_sandbox_policy()
-            }
+            "auto" => Self::workspace_profile_matches_auto_mode(current_permission_profile, cwd),
             _ => current_permission_profile == &preset.permission_profile,
         }
+    }
+
+    pub(crate) fn workspace_profile_matches_auto_mode(
+        permission_profile: &PermissionProfile,
+        cwd: &std::path::Path,
+    ) -> bool {
+        let file_system_policy = permission_profile.file_system_sandbox_policy();
+        matches!(permission_profile, PermissionProfile::Managed { .. })
+            && file_system_policy.can_write_path_with_cwd(cwd, cwd)
+            && !file_system_policy.has_full_disk_write_access()
     }
 
     pub(crate) fn open_full_access_confirmation(
@@ -430,8 +457,10 @@ impl ChatWidget {
             || {
                 Self::approval_preset_actions(
                     approval,
-                    preset.permission_profile.clone(),
-                    preset.active_permission_profile.clone(),
+                    PermissionPresetProfileUpdate::Replace {
+                        permission_profile: preset.permission_profile.clone(),
+                        active_permission_profile: preset.active_permission_profile.clone(),
+                    },
                     selected_name.clone(),
                     ApprovalsReviewer::User,
                 )
@@ -446,8 +475,10 @@ impl ChatWidget {
             || {
                 Self::approval_preset_actions(
                     approval,
-                    preset.permission_profile,
-                    preset.active_permission_profile,
+                    PermissionPresetProfileUpdate::Replace {
+                        permission_profile: preset.permission_profile,
+                        active_permission_profile: preset.active_permission_profile,
+                    },
                     selected_name,
                     ApprovalsReviewer::User,
                 )

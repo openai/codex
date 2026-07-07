@@ -1061,7 +1061,7 @@ async fn permissions_selection_can_disable_auto_review() {
 }
 
 #[tokio::test]
-async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context() {
+async fn terminal_browser_auto_review_preserves_network_enabled_workspace_profile() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -1075,9 +1075,15 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         .approval_policy
         .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
     chat.config
         .permissions
-        .set_permission_profile(PermissionProfile::workspace_write())
+        .set_permission_profile(permission_profile.clone())
         .expect("set permission profile");
     chat.set_approvals_reviewer(ApprovalsReviewer::User);
 
@@ -1113,10 +1119,8 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            permission_profile: Some(PermissionProfile::workspace_write()),
-            active_permission_profile: Some(ActivePermissionProfile::new(
-                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-            )),
+            permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1127,18 +1131,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         }
     );
 
-    let active_permission_profile_update = std::iter::from_fn(|| rx.try_recv().ok())
-        .find_map(|event| match event {
-            AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
-                Some(active_permission_profile)
-            }
-            _ => None,
-        })
-        .expect("expected UpdateActivePermissionProfile event");
-
     assert_eq!(
-        active_permission_profile_update,
-        ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
+        chat.config.permissions.permission_profile(),
+        &permission_profile
+    );
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .all(|event| !matches!(event, AppEvent::UpdateActivePermissionProfile(_))),
+        "reviewer-only changes must not replace the effective workspace profile"
     );
 }
 

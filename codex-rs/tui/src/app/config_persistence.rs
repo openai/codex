@@ -431,9 +431,9 @@ impl App {
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
-                // We also align approval policy + sandbox to the Auto-review
-                // preset so enabling the experiment immediately
-                // makes guardian review observable in the current thread.
+                // We also align the approval policy with Auto-review. Preserve
+                // an existing workspace-shaped profile so enabling the reviewer
+                // does not discard configured roots or network access.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
                     auto_review_preset.approval_policy,
@@ -442,30 +442,34 @@ impl App {
                 ) {
                     continue;
                 }
-                let Some(permission_profile) = self
-                    .try_set_builtin_active_permission_profile_on_config(
-                        &mut feature_config,
-                        auto_review_preset.active_permission_profile.clone(),
-                        "Failed to enable Approve for me",
-                        "failed to set auto-review permission profile on staged config",
-                    )
-                else {
-                    continue;
-                };
-                feature_edits.extend([
-                    crate::config_update::replace_config_value(
-                        "approval_policy",
-                        serde_json::json!("on-request"),
-                    ),
-                    crate::config_update::replace_config_value(
+                feature_edits.push(crate::config_update::replace_config_value(
+                    "approval_policy",
+                    serde_json::json!("on-request"),
+                ));
+                let preserve_workspace_profile = ChatWidget::workspace_profile_matches_auto_mode(
+                    feature_config.permissions.permission_profile(),
+                    feature_config.cwd.as_path(),
+                );
+                if !preserve_workspace_profile {
+                    let Some(permission_profile) = self
+                        .try_set_builtin_active_permission_profile_on_config(
+                            &mut feature_config,
+                            auto_review_preset.active_permission_profile.clone(),
+                            "Failed to enable Approve for me",
+                            "failed to set auto-review permission profile on staged config",
+                        )
+                    else {
+                        continue;
+                    };
+                    feature_edits.push(crate::config_update::replace_config_value(
                         "sandbox_mode",
                         serde_json::json!("workspace-write"),
-                    ),
-                ]);
+                    ));
+                    permission_profile_override = Some(permission_profile);
+                    active_permission_profile_override =
+                        Some(auto_review_preset.active_permission_profile.clone());
+                }
                 approval_policy_override = Some(auto_review_preset.approval_policy);
-                permission_profile_override = Some(permission_profile);
-                active_permission_profile_override =
-                    Some(auto_review_preset.active_permission_profile.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -879,6 +883,13 @@ impl App {
             || sandbox_mode_from_effective_config(effective_config)
                 != Some(AppServerSandboxMode::WorkspaceWrite)
         {
+            return;
+        }
+
+        if ChatWidget::workspace_profile_matches_auto_mode(
+            self.config.permissions.permission_profile(),
+            self.config.cwd.as_path(),
+        ) {
             return;
         }
 

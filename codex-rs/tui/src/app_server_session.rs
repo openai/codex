@@ -14,7 +14,6 @@ use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
-use crate::terminal_browser::TerminalBrowserNetworkAvailability;
 use crate::terminal_browser::dynamic_tool_specs;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 use codex_app_server_client::AppServerClient;
@@ -1411,8 +1410,7 @@ fn thread_start_params_from_config(
 ) -> ThreadStartParams {
     let dynamic_tools = (matches!(thread_params_mode, ThreadParamsMode::Embedded)
         && cfg!(any(target_os = "macos", target_os = "linux"))
-        && config.features.enabled(Feature::TerminalBrowser)
-        && TerminalBrowserNetworkAvailability::dynamic_tools_supported(config))
+        && config.features.enabled(Feature::TerminalBrowser))
     .then(dynamic_tool_specs);
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
@@ -1968,7 +1966,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
-    async fn terminal_browser_dynamic_tools_allow_non_mitm_managed_network() {
+    async fn terminal_browser_dynamic_tools_stay_visible_when_network_is_restricted() {
         let direct_config = build_terminal_browser_config(/*managed_network*/ false).await;
         let managed_config = build_terminal_browser_config(/*managed_network*/ true).await;
         assert_eq!(
@@ -2016,7 +2014,7 @@ mod tests {
                 "network restricted",
                 &restricted_config,
                 ThreadParamsMode::Embedded,
-                false,
+                true,
             ),
             (
                 "managed network",

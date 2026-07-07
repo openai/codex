@@ -153,8 +153,10 @@ impl ChatWidget {
         ) {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
-                permission_profile,
-                active_permission_profile,
+                PermissionPresetProfileUpdate::Replace {
+                    permission_profile,
+                    active_permission_profile,
+                },
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));
@@ -173,8 +175,10 @@ impl ChatWidget {
         {
             accept_and_remember_actions.extend(Self::approval_preset_actions(
                 approval,
-                permission_profile,
-                active_permission_profile,
+                PermissionPresetProfileUpdate::Replace {
+                    permission_profile,
+                    active_permission_profile,
+                },
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));

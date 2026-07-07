@@ -44,15 +44,6 @@ impl TerminalBrowserNetworkAvailability {
         }
     }
 
-    pub(crate) fn dynamic_tools_supported(config: &Config) -> bool {
-        config.permissions.network_sandbox_policy().is_enabled()
-            && config
-                .permissions
-                .network
-                .as_ref()
-                .is_none_or(|network| !network.mitm_enabled())
-    }
-
     pub(crate) fn unavailable_message(self) -> Option<&'static str> {
         match self {
             Self::Direct | Self::ManagedProxy { .. } => None,

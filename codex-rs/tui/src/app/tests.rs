@@ -95,6 +95,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
@@ -2058,6 +2059,64 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     assert!(config.contains("approvals_reviewer = \"auto_review\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_browser_enabling_guardian_preserves_network_enabled_workspace_profile()
+-> Result<()> {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    app.config
+        .permissions
+        .set_permission_profile(permission_profile.clone())?;
+    app.chat_widget
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+            permission_profile.clone(),
+        ))?;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
+
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
+        .await;
+
+    assert_eq!(
+        app.config.permissions.permission_profile(),
+        &permission_profile
+    );
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .permission_profile(),
+        &permission_profile
+    );
+    assert_eq!(
+        op_rx.try_recv(),
+        Ok(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permission_profile: None,
+            active_permission_profile: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+    );
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config.contains("sandbox_mode ="));
     app_server.shutdown().await?;
     Ok(())
 }

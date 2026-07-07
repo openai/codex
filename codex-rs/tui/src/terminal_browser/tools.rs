@@ -13,7 +13,8 @@ pub(crate) const TERMINAL_BROWSER_NAMESPACE: &str = "terminal_browser";
 pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
         name: TERMINAL_BROWSER_NAMESPACE.to_string(),
-        description: "Control a browser rendered inside the terminal.".to_string(),
+        description: "Control the browser rendered inside the terminal. Use these tools when the user asks for the terminal browser; do not substitute shell text browsers."
+            .to_string(),
         tools: vec![
             tool(
                 "open",

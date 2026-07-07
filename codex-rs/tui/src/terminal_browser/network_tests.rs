@@ -53,18 +53,12 @@ async fn direct_network_does_not_require_runtime_proxy_details() {
         ),
         TerminalBrowserNetworkAvailability::Direct
     );
-    assert!(TerminalBrowserNetworkAvailability::dynamic_tools_supported(
-        &config
-    ));
 }
 
 #[tokio::test]
 async fn managed_network_requires_a_non_mitm_loopback_runtime_proxy() {
     let config = terminal_browser_config(/*managed_network*/ true).await;
     assert!(config.permissions.network.is_some());
-    assert!(TerminalBrowserNetworkAvailability::dynamic_tools_supported(
-        &config
-    ));
 
     assert_eq!(
         TerminalBrowserNetworkAvailability::from_config_and_runtime(

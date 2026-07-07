@@ -480,6 +480,15 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 const MAX_AGENT_COPY_HISTORY: usize = 32;
 
+#[derive(Clone)]
+enum PermissionPresetProfileUpdate {
+    Preserve,
+    Replace {
+        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
+    },
+}
+
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
