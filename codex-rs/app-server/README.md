@@ -93,6 +93,24 @@ App-server then advertises the downstream `openai/form` MCP extension for
 threads started, resumed, or forked by that connection. Clients that cannot
 handle the request envelope omit the field or set it to `false`.
 
+Clients that can render MCP App WebViews advertise the MCP UI extension:
+
+```json
+{
+  "capabilities": {
+    "extensions": {
+      "io.modelcontextprotocol/ui": {
+        "mimeTypes": ["text/html;profile=mcp-app"]
+      }
+    }
+  }
+}
+```
+
+App-server forwards this capability to the host-owned `codex_apps` MCP
+server during initialization and on each `tools/call`. Clients without an
+MCP App WebView omit the extension.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If

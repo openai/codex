@@ -1,17 +1,24 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use axum::Router;
 use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::EnvironmentAddResponse;
+use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -33,6 +40,7 @@ use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -68,6 +76,10 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::connection_handling_websocket::connect_websocket;
+use super::connection_handling_websocket::read_response_for_id;
+use super::connection_handling_websocket::send_request;
+use super::connection_handling_websocket::spawn_websocket_server;
 use super::exec_server_test_support::accept_exec_server_environment;
 use super::exec_server_test_support::read_exec_server_json;
 
@@ -80,7 +92,127 @@ const ELICITATION_MESSAGE: &str = "Allow this request?";
 const URL_ELICITATION_TRIGGER_MESSAGE: &str = "auth";
 const URL_ELICITATION_MESSAGE: &str = "Sign in to GitHub to continue.";
 const URL_ELICITATION_URL: &str = "https://github.example/login/device";
+const MCP_APP_UI_CAPABILITY_TRIGGER_MESSAGE: &str = "mcp-app-ui-capability";
 const LATE_ENVIRONMENT_ID: &str = "late-environment";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_server_tool_call_forwards_mcp_app_ui_capability_from_initialize() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_server_url, apps_server_handle) =
+        start_mcp_server_at_path("/api/codex/ps/mcp").await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &responses_server.uri(),
+        &apps_server_url,
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(config_path, format!("{config}\n[features]\napps = true\n"))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let mut text_only_client = connect_websocket(bind_addr).await?;
+    send_request(
+        &mut text_only_client,
+        "initialize",
+        1,
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: "text-only-client".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        })?),
+    )
+    .await?;
+    let _ = read_response_for_id(&mut text_only_client, 1).await?;
+
+    send_request(
+        &mut text_only_client,
+        "thread/start",
+        2,
+        Some(serde_json::to_value(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let thread_start_response = read_response_for_id(&mut text_only_client, 2).await?;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    let mut widget_capable_client = connect_websocket(bind_addr).await?;
+    send_request(
+        &mut widget_capable_client,
+        "initialize",
+        3,
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: "widget-capable-client".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                extensions: Some(HashMap::from([(
+                    "io.modelcontextprotocol/ui".to_string(),
+                    json!({
+                        "mimeTypes": ["text/html;profile=mcp-app"],
+                    }),
+                )])),
+                ..Default::default()
+            }),
+        })?),
+    )
+    .await?;
+    let _ = read_response_for_id(&mut widget_capable_client, 3).await?;
+
+    send_request(
+        &mut widget_capable_client,
+        "mcpServer/tool/call",
+        4,
+        Some(serde_json::to_value(McpServerToolCallParams {
+            thread_id: thread.id,
+            server: "codex_apps".to_string(),
+            tool: TEST_TOOL_NAME.to_string(),
+            arguments: Some(json!({
+                "message": MCP_APP_UI_CAPABILITY_TRIGGER_MESSAGE,
+            })),
+            meta: None,
+        })?),
+    )
+    .await?;
+    let tool_call_response = read_response_for_id(&mut widget_capable_client, 4).await?;
+    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
+
+    assert_eq!(
+        response
+            .structured_content
+            .as_ref()
+            .and_then(|content| content.pointer(
+                "/requestMeta/io.modelcontextprotocol~1clientCapabilities/extensions/io.modelcontextprotocol~1ui/mimeTypes"
+            )),
+        Some(&json!(["text/html;profile=mcp-app"]))
+    );
+
+    process.kill().await?;
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
@@ -743,6 +875,14 @@ impl ServerHandler for ToolAppsMcpServer {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
 
+        if message == MCP_APP_UI_CAPABILITY_TRIGGER_MESSAGE {
+            let mut result = CallToolResult::structured(json!({
+                "requestMeta": context.meta.0,
+            }));
+            result.content = vec![Content::text("captured request metadata")];
+            return Ok(result);
+        }
+
         let mut meta = Meta::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
 
@@ -819,6 +959,10 @@ impl ServerHandler for ToolAppsMcpServer {
 }
 
 async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
+    start_mcp_server_at_path("/mcp").await
+}
+
+async fn start_mcp_server_at_path(path: &str) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let mcp_service = StreamableHttpService::new(
@@ -826,7 +970,7 @@ async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/mcp", mcp_service);
+    let router = Router::new().nest_service(path, mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
