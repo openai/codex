@@ -31,7 +31,7 @@ use crate::noise_channel::PendingResponderHandshake;
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
     let (connection, mut control, mut outbound_rx) = connected_controlled_harness().await?;
 
@@ -48,7 +48,7 @@ async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
         .await?;
 
     control.wait_for_blocked_write(/*expected*/ 1).await?;
-    tokio::time::sleep(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
+    tokio::time::advance(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
     control.grant_writes(/*count*/ 1);
     let first_data = read_outbound_data(&mut outbound_rx).await?;
     assert_eq!(first_data.seq, 0);
@@ -64,7 +64,7 @@ async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
 
     control.wait_for_blocked_write(/*expected*/ 3).await?;
     control.send_inbound(Message::Pong(ping_payload))?;
-    tokio::time::sleep(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
+    tokio::time::advance(WEBSOCKET_KEEPALIVE_INTERVAL + Duration::from_millis(10)).await;
     control.grant_writes(/*count*/ 1);
     let second_data = read_outbound_data(&mut outbound_rx).await?;
     assert_eq!(second_data.seq, 1);
