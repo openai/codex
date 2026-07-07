@@ -606,6 +606,10 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, "calendar-call-1").await;
 
     assert_eq!(
+        apps_tool_call.pointer("/params/_meta/threadId"),
+        Some(&json!(test.session_configured.thread_id.to_string()))
+    );
+    assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
         Some(&json!({
             "call_id": "calendar-call-1",
