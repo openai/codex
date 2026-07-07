@@ -2,7 +2,6 @@ use super::manager::CodexAuth;
 use super::manager::ExternalAuth;
 use super::manager::ExternalAuthFuture;
 use super::manager::ExternalAuthRefreshContext;
-use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -67,10 +66,6 @@ impl BearerTokenRefresher {
 }
 
 impl ExternalAuth for BearerTokenRefresher {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
-    }
-
     fn resolve(&self) -> ExternalAuthFuture<'_, Option<CodexAuth>> {
         Box::pin(BearerTokenRefresher::resolve(self))
     }

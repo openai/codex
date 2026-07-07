@@ -617,14 +617,16 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+        let auth = CodexAuth::from_external_chatgpt_tokens(
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.auth_manager.reload().await;
+        self.auth_manager
+            .install_external_auth(auth)
+            .await
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),

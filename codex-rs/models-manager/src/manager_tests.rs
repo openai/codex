@@ -117,10 +117,6 @@ impl TestModelsEndpoint {
 struct TestExternalApiKeyAuth;
 
 impl ExternalAuth for TestExternalApiKeyAuth {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
-    }
-
     fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<CodexAuth>> {
         Box::pin(async { Ok(Some(CodexAuth::from_api_key("test-external-api-key"))) })
     }
@@ -137,10 +133,6 @@ impl ExternalAuth for TestExternalApiKeyAuth {
 struct TestUnresolvedExternalApiKeyAuth;
 
 impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
-    }
-
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,

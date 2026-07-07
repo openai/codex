@@ -1015,6 +1015,46 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
+struct RefreshOnlyExternalChatgptAuth;
+
+impl ExternalAuth for RefreshOnlyExternalChatgptAuth {
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Err(std::io::Error::other("refresh should not be called")) })
+    }
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn external_chatgpt_auth_resolves_from_the_manager_cache() {
+    let codex_home = tempdir().unwrap();
+    let params = AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    };
+    let access_token = fake_jwt_for_auth_file_params(&params).unwrap();
+    let auth =
+        CodexAuth::from_external_chatgpt_tokens(&access_token, WORKSPACE_ID_ALLOWED, Some("pro"))
+            .unwrap();
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await;
+    manager.set_external_auth(Arc::new(RefreshOnlyExternalChatgptAuth));
+    manager.install_external_auth(auth).await.unwrap();
+
+    let auth = manager.auth().await.expect("external auth should resolve");
+
+    assert_eq!(auth.api_auth_mode(), AuthMode::ChatgptAuthTokens);
+    assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
+}
+
 #[tokio::test]
 async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
     let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();

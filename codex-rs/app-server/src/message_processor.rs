@@ -79,7 +79,6 @@ use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_protocol::ThreadId;
-use codex_protocol::auth::AuthMode as LoginAuthMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
@@ -168,10 +167,6 @@ impl ExternalAuthRefreshBridge {
 }
 
 impl ExternalAuth for ExternalAuthRefreshBridge {
-    fn auth_mode(&self) -> LoginAuthMode {
-        LoginAuthMode::Chatgpt
-    }
-
     fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
