@@ -23,6 +23,7 @@ use crate::git_executable::windows_path_requires_fail_closed;
 use crate::repository_authority::RepositoryAuthority;
 #[cfg(test)]
 use crate::repository_authority::parse_marker_path as parse_git_marker_path;
+use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::isolate_git_command_environment;
 
 /// A Git executable outside the repository-controlled roots for one operation.
@@ -62,7 +63,7 @@ pub(crate) struct IsolatedGitStorage {
 }
 
 impl IsolatedGitStorage {
-    fn index_path(&self) -> PathBuf {
+    pub(crate) fn index_path(&self) -> PathBuf {
         self.root.path().join("index")
     }
 
@@ -332,7 +333,36 @@ impl GitRunner {
                 "owned isolated Git scratch storage",
             )?;
         std::fs::create_dir(root.path().join("objects"))?;
-        copy_regular_file_without_follow(&source_index, &root.path().join("index"))?;
+        let isolated_index = root.path().join("index");
+        match copy_regular_file_without_follow(&source_index, &isolated_index) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // An unborn repository may not have materialized an index
+                // yet. Create the equivalent empty index through trusted Git
+                // in operation-owned storage; an empty file is not a valid
+                // index, and hand-encoding one would couple this path to the
+                // repository hash algorithm and index checksum format.
+                let mut command = self.command_for_cwd(self.authority.active_worktree_root())?;
+                let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
+                command.args([
+                    "-c",
+                    &disabled_hooks,
+                    "-c",
+                    "core.fsmonitor=false",
+                    "read-tree",
+                    "--empty",
+                ]);
+                let output = self.output_with_new_isolated_index(command, &isolated_index)?;
+                if !output.status.success() {
+                    return Err(io::Error::other(format!(
+                        "failed to initialize an empty isolated Git index (status {}): {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )));
+                }
+            }
+            Err(error) => return Err(error),
+        }
         // A copied split index resolves its content-addressed base beside the
         // active per-worktree index, not in a distinct common directory. Copy
         // only well-formed names from that authoritative Git directory; Git
@@ -344,6 +374,27 @@ impl GitRunner {
         let storage = IsolatedGitStorage { root };
         storage.validate()?;
         Ok(storage)
+    }
+
+    fn output_with_new_isolated_index(
+        &self,
+        mut command: GitCommand,
+        index_path: &Path,
+    ) -> io::Result<std::process::Output> {
+        self.revalidate_active_repository_metadata()?;
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(
+                index_path,
+                "owned isolated Git scratch index",
+            )?;
+        isolate_git_command_environment(&mut command.inner);
+        command.inner.env("GIT_INDEX_FILE", index_path);
+        command.inner.env("GIT_OPTIONAL_LOCKS", "0");
+        command.inner.envs(crate::local_only_git_env());
+        harden_git_launch_environment(&mut command.inner, &self.safe_path);
+        let output = command.inner.output()?;
+        self.revalidate_active_repository_metadata()?;
+        Ok(output)
     }
 
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
@@ -369,6 +420,32 @@ impl GitRunner {
         storage: &IsolatedGitStorage,
     ) -> io::Result<std::process::Output> {
         self.output_in_isolated_common_dir_with_storage(command, isolated, Some(storage))
+    }
+
+    /// Run against an operation-owned copy of the active index while retaining
+    /// the repository's normal config and attribute sources. This is used only
+    /// for nonmutating classification and `update-index --info-only` setup;
+    /// callers cannot redirect the object database or common directory.
+    pub(crate) fn output_with_isolated_index(
+        &self,
+        mut command: GitCommand,
+        storage: &IsolatedGitStorage,
+    ) -> io::Result<std::process::Output> {
+        self.revalidate_active_repository_metadata()?;
+        storage.validate()?;
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(
+                storage.root.path(),
+                "owned isolated Git scratch storage",
+            )?;
+        isolate_git_command_environment(&mut command.inner);
+        command.inner.env("GIT_INDEX_FILE", storage.index_path());
+        command.inner.envs(crate::local_only_git_env());
+        harden_git_launch_environment(&mut command.inner, &self.safe_path);
+        let output = command.inner.output()?;
+        self.revalidate_active_repository_metadata()?;
+        storage.validate()?;
+        Ok(output)
     }
 
     fn output_in_isolated_common_dir_with_storage(

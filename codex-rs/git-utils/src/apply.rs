@@ -1089,6 +1089,61 @@ mod tests {
         assert_ne!(r.exit_code, 0, "non-zero exit on missing index");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn missing_index_three_way_classification_does_not_run_post_index_change_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let hooks = root.join(".githooks");
+        std::fs::create_dir(&hooks).expect("create hooks directory");
+        let hook = hooks.join("post-index-change");
+        std::fs::write(&hook, "#!/bin/sh\nprintf ran > \"$PWD/hook-ran\"\n")
+            .expect("write post-index-change hook");
+        let mut permissions = std::fs::metadata(&hook)
+            .expect("hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).expect("make hook executable");
+        assert_eq!(
+            run(root, &["git", "config", "core.hooksPath", ".githooks"]).0,
+            0
+        );
+        std::fs::write(root.join("new.txt"), b"local\n").expect("write untracked path");
+        assert!(
+            !root.join(".git/index").exists(),
+            "fixture has a real index"
+        );
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..893adcd31e963b01dfbbcfe3ec58a008f0d81201\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+patched\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("classify missing-index three-way fallback");
+
+        assert_ne!(
+            result.exit_code, 0,
+            "untracked destination must not be replaced"
+        );
+        assert!(result.cmd_for_log.contains("--3way"), "{result:?}");
+        assert!(
+            !root.join("hook-ran").exists(),
+            "post-index-change hook ran"
+        );
+        assert!(
+            !root.join(".git/index").exists(),
+            "scratch initialization created the real index"
+        );
+        assert_eq!(
+            std::fs::read(root.join("new.txt")).expect("read untracked path"),
+            b"local\n"
+        );
+    }
+
     #[test]
     fn apply_then_revert_success() {
         let _g = env_lock().lock().unwrap();

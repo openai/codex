@@ -187,6 +187,23 @@ fn assert_mutation_happened_between_probe_and_three_way(trace: &Path) {
     assert!(mutation < three_way, "final Git started before mutation");
 }
 
+fn assert_mutation_happened_after_probe_before_refusal(trace: &Path) {
+    let contents = std::fs::read_to_string(trace).expect("read completed trace");
+    let probe_start = contents.find("check-attr").expect("merge attribute probe");
+    let probe_exit = probe_start
+        + contents[probe_start..]
+            .find("\"event\":\"exit\"")
+            .expect("merge attribute probe exit");
+    let mutation = contents
+        .find(TRACE_MUTATION_MARKER)
+        .expect("mutation trace marker");
+    assert!(probe_exit < mutation, "mutation preceded probe exit");
+    assert!(
+        !contents[mutation..].contains("--3way"),
+        "a three-way apply started after an incoherent attribute snapshot"
+    );
+}
+
 fn append_driver_config(root: &Path, driver: &str, command: &str) {
     let mut config = OpenOptions::new()
         .append(true)
@@ -329,10 +346,10 @@ fn selected_empty_and_equals_named_drivers_reject_without_marker_or_index_mutati
 }
 
 #[test]
-fn post_probe_attribute_change_cannot_run_empty_named_driver() {
+fn post_probe_attribute_change_refuses_before_empty_named_driver() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
         run_isolated_test(
-            "merge_driver::race_tests::post_probe_attribute_change_cannot_run_empty_named_driver",
+            "merge_driver::race_tests::post_probe_attribute_change_refuses_before_empty_named_driver",
         );
         return;
     }
@@ -355,20 +372,20 @@ fn post_probe_attribute_change_cannot_run_empty_named_driver() {
         observed
     });
 
-    let result = apply_git_patch(&request(root, patch, /*revert*/ false))
-        .expect("neutralized three-way apply");
+    let error = apply_git_patch(&request(root, patch, /*revert*/ false))
+        .expect_err("attribute mutation during sentinel classification must fail closed");
     assert!(watcher.join().expect("attribute watcher"));
 
-    assert_mutation_happened_between_probe_and_three_way(&trace);
-    assert_ne!(result.exit_code, 0);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    assert_mutation_happened_after_probe_before_refusal(&trace);
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
 }
 
 #[test]
-fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
+fn post_probe_attribute_and_driver_change_refuses_before_helper_dispatch() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
         run_isolated_test(
-            "merge_driver::race_tests::post_probe_attribute_and_same_driver_command_change_stays_neutralized",
+            "merge_driver::race_tests::post_probe_attribute_and_driver_change_refuses_before_helper_dispatch",
         );
         return;
     }
@@ -395,21 +412,21 @@ fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
         observed
     });
 
-    let result = apply_git_patch(&request(root, patch, /*revert*/ false))
-        .expect("neutralized three-way apply");
+    let error = apply_git_patch(&request(root, patch, /*revert*/ false))
+        .expect_err("attribute mutation during sentinel classification must fail closed");
     assert!(watcher.join().expect("config watcher"));
 
-    assert_mutation_happened_between_probe_and_three_way(&trace);
-    assert_ne!(result.exit_code, 0);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    assert_mutation_happened_after_probe_before_refusal(&trace);
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
     assert!(!configured_marker_exists(root, "codex.newmergeran"));
 }
 
 #[test]
-fn post_probe_worktree_attribute_change_preserves_probed_union_semantics() {
+fn post_probe_worktree_attribute_change_refuses_snapshot_drift() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
         run_isolated_test(
-            "merge_driver::race_tests::post_probe_worktree_attribute_change_preserves_probed_union_semantics",
+            "merge_driver::race_tests::post_probe_worktree_attribute_change_refuses_snapshot_drift",
         );
         return;
     }
@@ -431,16 +448,12 @@ fn post_probe_worktree_attribute_change_preserves_probed_union_semantics() {
         observed
     });
 
-    let result = apply_git_patch(&request(root, patch, /*revert*/ false))
-        .expect("run frozen union three-way apply");
+    let error = apply_git_patch(&request(root, patch, /*revert*/ false))
+        .expect_err("attribute mutation during sentinel classification must fail closed");
     assert!(watcher.join().expect("attribute watcher"));
 
-    assert_mutation_happened_between_probe_and_three_way(&trace);
-    assert_eq!(result.exit_code, 0, "{}", result.stderr);
-    let contents = read_file_normalized(&root.join("target.txt"));
-    assert!(contents.contains("ours\n"), "{contents}");
-    assert!(contents.contains("theirs\n"), "{contents}");
-    assert!(!contents.contains("<<<<<<<"), "{contents}");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert_mutation_happened_after_probe_before_refusal(&trace);
 }
 
 #[test]
@@ -507,13 +520,19 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
         let outcome = apply_git_patch(&request(root, patch, /*revert*/ false));
         assert!(watcher.join().expect("namespace watcher"), "{race:?}");
 
-        assert_mutation_happened_between_probe_and_three_way(&trace);
-        if matches!(race, DriverNamespaceRace::KnownEmpty) {
+        if matches!(race, DriverNamespaceRace::BrandNewAttribute) {
+            let error = outcome
+                .expect_err("attribute mutation during sentinel classification must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+            assert_mutation_happened_after_probe_before_refusal(&trace);
+        } else if matches!(race, DriverNamespaceRace::KnownEmpty) {
+            assert_mutation_happened_between_probe_and_three_way(&trace);
             let error = outcome.expect_err(
                 "an explicit empty driver is a selected namespace and must refuse when reachable",
             );
             assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}");
         } else {
+            assert_mutation_happened_between_probe_and_three_way(&trace);
             let result = outcome.expect("run isolated three-way apply");
             assert_ne!(result.exit_code, 0, "{race:?}");
             assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
@@ -524,10 +543,10 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
 }
 
 #[test]
-fn isolated_three_way_config_scrubs_command_config_channels() {
+fn post_probe_command_config_selection_refuses_snapshot_drift() {
     if std::env::var_os("CODEX_GIT_UTILS_MERGE_RACE_CHILD").is_none() {
         run_isolated_test_with_env(
-            "merge_driver::race_tests::isolated_three_way_config_scrubs_command_config_channels",
+            "merge_driver::race_tests::post_probe_command_config_selection_refuses_snapshot_drift",
             &[
                 ("GIT_CONFIG_COUNT", OsStr::new("1")),
                 ("GIT_CONFIG_KEY_0", OsStr::new("merge.env-selected.driver")),
@@ -564,12 +583,16 @@ fn isolated_three_way_config_scrubs_command_config_channels() {
             observed
         });
 
-        let result = apply_git_patch(&request(root, patch, /*revert*/ false))
-            .expect("run isolated three-way apply");
+        let error = apply_git_patch(&request(root, patch, /*revert*/ false))
+            .expect_err("attribute mutation during sentinel classification must fail closed");
         assert!(watcher.join().expect("config-channel watcher"), "{driver}");
 
-        assert_mutation_happened_between_probe_and_three_way(&trace);
-        assert_ne!(result.exit_code, 0, "{driver}");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidData,
+            "{driver}: {error}"
+        );
+        assert_mutation_happened_after_probe_before_refusal(&trace);
         assert!(!configured_marker_exists(root, "codex.envmergeran"));
         assert!(!configured_marker_exists(root, "codex.basemergeran"));
     }
