@@ -10,6 +10,8 @@ use anyhow::Result;
 use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::LoginSuccessPage;
+use codex_login::LoginSuccessPageBrand;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -131,6 +133,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -141,13 +144,20 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     );
     let login_port = server.actual_port;
 
-    // Simulate browser callback, and follow redirect to /success
+    // Simulate browser callback and assert the local success redirect before following it.
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
     let resp = client.get(&url).send().await?;
-    assert!(resp.status().is_success());
+    assert_eq!(resp.status(), 302);
+    let success_url = resp.headers()["location"].to_str()?;
+    let success_url = Url::parse(success_url)?;
+    assert_eq!(success_url.host_str(), Some("localhost"));
+    assert_eq!(success_url.path(), "/success");
+
+    let success_resp = client.get(success_url).send().await?;
+    assert!(success_resp.status().is_success());
 
     // Wait for server shutdown
     server.block_until_done().await?;
@@ -166,6 +176,52 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 
     // Stop mock issuer
     drop(issuer_handle);
+    Ok(())
+}
+
+#[tokio::test]
+async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+    let tmp = tempdir()?;
+    let server = run_login_server(ServerOptions {
+        codex_home: tmp.path().to_path_buf(),
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some("streamlined_state".to_string()),
+        forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
+        login_success_page: LoginSuccessPage::Hosted {
+            url: Url::parse("http://localhost:3000/codex/open-app?source=old")?,
+            app_brand: LoginSuccessPageBrand::Chatgpt,
+        },
+        auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+    })?;
+    let login_port = server.actual_port;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:{login_port}/auth/callback?code=abc&state=streamlined_state"
+        ))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), 302);
+    assert_eq!(
+        response.headers()["location"].to_str()?,
+        "http://localhost:3000/codex/open-app?source=login&app_brand=chatgpt"
+    );
+    tokio::time::timeout(Duration::from_secs(1), server.block_until_done()).await??;
+
     Ok(())
 }
 
@@ -195,6 +251,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -240,6 +297,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         ]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     let auth_url = Url::parse(&server.auth_url)?;
@@ -280,6 +338,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -342,6 +401,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -412,6 +472,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -561,6 +622,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -584,6 +646,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        login_success_page: LoginSuccessPage::Local,
     };
 
     let second_server = run_login_server(second_opts)?;

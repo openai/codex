@@ -573,6 +573,12 @@ jobs:
             zstd -d --stdout "$unsigned_path" >"$signed_path"
             chmod 0755 "$signed_path"
 
+            entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$entitlements" ]]; then
+              echo "Entitlements file $entitlements not found"
+              exit 1
+            fi
+
             .github/scripts/macos-signing/sign_macos_code.sh \
               --target "$signed_path" \
               --identity unused \
@@ -580,7 +586,7 @@ jobs:
               --identifier "$binary" \
               --options runtime \
               --timestamp true \
-              --entitlements .github/scripts/macos-signing/codex.entitlements.plist
+              --entitlements "$entitlements"
 
             mkdir -p "${report_dir}/${binary}"
             rcodesign print-signature-info "$signed_path" \
@@ -974,15 +980,29 @@ jobs:
 
           target="${{ matrix.target }}"
           packaged_dir="dist/${target}"
-          expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex.entitlements.plist"
+          case "$target" in
+            aarch64-apple-darwin) expected_arch="arm64" ;;
+            x86_64-apple-darwin) expected_arch="x86_64" ;;
+            *)
+              echo "Unexpected macOS target: $target"
+              exit 1
+              ;;
+          esac
 
           verify_signed_binary() {
             local path="$1"
-            local actual_entitlements normalized_actual normalized_expected
+            local binary="$2"
+            local actual_entitlements expected_entitlements normalized_actual normalized_expected
 
             chmod 0755 "$path"
+            lipo "$path" -verify_arch "$expected_arch"
             codesign --verify --strict --verbose=2 "$path"
 
+            expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$expected_entitlements" ]]; then
+              echo "Expected entitlements file $expected_entitlements not found"
+              exit 1
+            fi
             actual_entitlements="$(mktemp)"
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
@@ -995,7 +1015,7 @@ jobs:
 
           for binary in ${{ matrix.binaries }}; do
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
-            verify_signed_binary "$binary_path"
+            verify_signed_binary "$binary_path" "$binary"
 
             # The app-server package contains the host, but its standalone archives
             # are omitted above to avoid duplicate release asset names.
@@ -1007,11 +1027,11 @@ jobs:
             rm -rf "$direct_archive_dir"
             mkdir -p "$direct_archive_dir"
             tar -xzf "${packaged_dir}/${binary}-${target}.tar.gz" -C "$direct_archive_dir"
-            verify_signed_binary "${direct_archive_dir}/${binary}-${target}"
+            verify_signed_binary "${direct_archive_dir}/${binary}-${target}" "$binary"
 
             direct_zstd_path="${RUNNER_TEMP}/${binary}-${target}-from-zstd"
             zstd -d --stdout "${packaged_dir}/${binary}-${target}.zst" >"$direct_zstd_path"
-            verify_signed_binary "$direct_zstd_path"
+            verify_signed_binary "$direct_zstd_path" "$binary"
           done
 
           case "${{ matrix.bundle }}" in
@@ -1033,8 +1053,8 @@ jobs:
           rm -rf "$package_dir"
           mkdir -p "$package_dir"
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
-          verify_signed_binary "${package_dir}/bin/${package_entrypoint}"
-          verify_signed_binary "${package_dir}/bin/codex-code-mode-host"
+          verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
+          verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
 
           if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
             exit 0
@@ -1060,7 +1080,7 @@ jobs:
           trap cleanup_mount EXIT
 
           for binary in ${{ matrix.binaries }}; do
-            verify_signed_binary "${mount_dir}/${binary}"
+            verify_signed_binary "${mount_dir}/${binary}" "$binary"
           done
 
           cleanup_mount

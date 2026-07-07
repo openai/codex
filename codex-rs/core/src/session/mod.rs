@@ -21,6 +21,7 @@ use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
+use crate::context::ApprovalPromptContext;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
@@ -3206,7 +3207,14 @@ impl Session {
                 PermissionsInstructions::from_permission_profile(
                     &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
-                    turn_context.config.approvals_reviewer,
+                    ApprovalPromptContext::new(
+                        turn_context.config.approvals_reviewer,
+                        turn_context
+                            .model_info
+                            .model_messages
+                            .as_ref()
+                            .and_then(|messages| messages.approvals.as_ref()),
+                    ),
                     self.services.exec_policy.current().as_ref(),
                     #[allow(deprecated)]
                     &turn_context.cwd,

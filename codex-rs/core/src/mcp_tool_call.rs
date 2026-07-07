@@ -1223,8 +1223,7 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    let approval_required = requires_mcp_tool_approval(annotations);
-    if !approval_required && approval_mode != AppToolApproval::Prompt {
+    if !requires_mcp_tool_approval_for_mode(annotations, approval_mode) {
         return None;
     }
 
@@ -1927,12 +1926,13 @@ fn normalize_approval_decision_for_mode(
     decision: McpToolApprovalDecision,
     approval_mode: AppToolApproval,
 ) -> McpToolApprovalDecision {
-    if approval_mode == AppToolApproval::Prompt
-        && matches!(
-            decision,
-            McpToolApprovalDecision::AcceptForSession | McpToolApprovalDecision::AcceptAndRemember
-        )
-    {
+    if matches!(
+        approval_mode,
+        AppToolApproval::Prompt | AppToolApproval::Writes
+    ) && matches!(
+        decision,
+        McpToolApprovalDecision::AcceptForSession | McpToolApprovalDecision::AcceptAndRemember
+    ) {
         McpToolApprovalDecision::Accept
     } else {
         decision
@@ -2177,6 +2177,20 @@ fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
         || annotations
             .and_then(|annotations| annotations.open_world_hint)
             .unwrap_or(true)
+}
+
+fn requires_mcp_tool_approval_for_mode(
+    annotations: Option<&ToolAnnotations>,
+    approval_mode: AppToolApproval,
+) -> bool {
+    match approval_mode {
+        AppToolApproval::Auto => requires_mcp_tool_approval(annotations),
+        AppToolApproval::Prompt => true,
+        AppToolApproval::Writes => !annotations
+            .and_then(|annotations| annotations.read_only_hint)
+            .unwrap_or(false),
+        AppToolApproval::Approve => false,
+    }
 }
 
 async fn notify_mcp_tool_call_skip(

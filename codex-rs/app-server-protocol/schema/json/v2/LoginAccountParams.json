@@ -1,5 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "LoginAppBrand": {
+      "enum": [
+        "codex",
+        "chatgpt"
+      ],
+      "type": "string"
+    }
+  },
   "oneOf": [
     {
       "properties": {
@@ -23,6 +32,17 @@
     },
     {
       "properties": {
+        "appBrand": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LoginAppBrand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "codexStreamlinedLogin": {
           "type": "boolean"
         },
@@ -32,6 +52,9 @@
           ],
           "title": "Chatgptv2::LoginAccountParamsType",
           "type": "string"
+        },
+        "useHostedLoginSuccessPage": {
+          "type": "boolean"
         }
       },
       "required": [
