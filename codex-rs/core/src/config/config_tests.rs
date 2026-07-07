@@ -1590,6 +1590,10 @@ respect_system_proxy = true
     .await?;
 
     assert!(config.respect_system_proxy);
+    assert_eq!(
+        config.outbound_proxy_config(),
+        Some(codex_http_client::OutboundProxyConfig::respect_system_proxy())
+    );
     Ok(())
 }
 
