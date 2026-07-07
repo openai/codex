@@ -33,6 +33,8 @@ impl SkillNamespaceResolver {
         plugin_roots: HashSet<PathUri>,
         namespace_roots: HashSet<PathUri>,
     ) -> Self {
+        // Plugin-owned skill roots already know their namespace. Keep that explicit source above
+        // all manifest discovery so a nested or symlinked manifest cannot rename those skills.
         if let Some(namespace) = provided_namespace {
             return Self {
                 inherited_namespace: ResolvedSkillNamespace::Plugin(namespace.to_string()),
@@ -40,10 +42,15 @@ impl SkillNamespaceResolver {
             };
         }
 
+        // Ordinary descendants inherit the nearest valid manifest at or above the scanned root.
+        // This remains the fallback when no more specific discovered root matches a skill path.
         let inherited_namespace = plugin_namespace_for_skill_uri(fs, root)
             .await
             .map(ResolvedSkillNamespace::Plugin)
             .unwrap_or(ResolvedSkillNamespace::Plain);
+        // Symlink traversal records canonical roots that can leave the scanned tree. Resolve each
+        // one independently, including Plain, so a symlink into a plain tree does not accidentally
+        // inherit the scanned root's plugin namespace.
         let namespace_roots = namespace_roots
             .into_iter()
             .filter(|namespace_root| namespace_root != root)
@@ -58,6 +65,8 @@ impl SkillNamespaceResolver {
                 .unwrap_or(ResolvedSkillNamespace::Plain);
             (namespace_root, namespace)
         }));
+        // Valid nested plugin manifests are more specific candidates than their enclosing roots.
+        // Invalid manifests are omitted, allowing selection to fall back to the next nearest root.
         let plugin_lookups = join_all(
             plugin_roots
                 .into_iter()
@@ -83,10 +92,12 @@ impl SkillNamespaceResolver {
     }
 
     pub(crate) fn for_skill(&self, path: &PathUri) -> &ResolvedSkillNamespace {
+        // Candidate roots are path prefixes; the deepest match is the nearest applicable
+        // namespace, whether it came from a canonical symlink root or a nested plugin manifest.
         self.nested_namespaces
             .iter()
-            .filter(|(plugin_root, _)| path.starts_with(plugin_root))
-            .max_by_key(|(plugin_root, _)| plugin_root.ancestors().count())
+            .filter(|(namespace_root, _)| path.starts_with(namespace_root))
+            .max_by_key(|(namespace_root, _)| namespace_root.ancestors().count())
             .map(|(_, namespace)| namespace)
             .unwrap_or(&self.inherited_namespace)
     }
