@@ -400,7 +400,7 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps._default]
 approvals_reviewer = "auto_review"
-default_tools_approval_mode = "approve"
+default_tools_approval_mode = "writes"
 
 [apps.app1]
 enabled = false
@@ -440,7 +440,7 @@ default_tools_approval_mode = "prompt"
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 destructive_enabled: true,
                 open_world_enabled: true,
-                default_tools_approval_mode: Some(AppToolApproval::Approve),
+                default_tools_approval_mode: Some(AppToolApproval::Writes),
             }),
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
