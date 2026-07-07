@@ -293,12 +293,20 @@ pub fn brokered_credential_dummy_env_keys(env: &HashMap<String, String>) -> Vec<
     keys
 }
 
-/// Returns supported credential keys only for an environment with an active broker.
+/// Returns credential keys plus provider context keys already present in an environment with an
+/// active broker.
 pub fn brokered_credential_env_keys(
     env: &HashMap<String, String>,
 ) -> impl Iterator<Item = &'static str> {
     let active = env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY).is_some_and(|value| value == "1");
-    providers::credential_broker_env_keys().filter(move |_| active)
+    let mut keys = Vec::new();
+    if active {
+        keys.extend(providers::credential_env_keys());
+        keys.extend(
+            providers::credential_context_env_keys().filter(|key| env_value(env, key).is_some()),
+        );
+    }
+    keys.into_iter()
 }
 
 #[cfg(test)]

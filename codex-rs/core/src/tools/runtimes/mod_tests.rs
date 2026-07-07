@@ -706,6 +706,50 @@ async fn snapshot_wrapper_restores_prepared_broker_credentials() -> anyhow::Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn snapshot_wrapper_keeps_context_and_strips_unbrokered_credentials() -> anyhow::Result<()> {
+    let proxy = test_network_proxy().await?;
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\n\
+         export GH_HOST='github.example.com'\n\
+         export GITHUB_TOKEN='ghp-snapshot-real'\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s\\n%s' \"$GH_HOST\" \"${GITHUB_TOKEN-unset}\"".to_string(),
+    ];
+    let env = proxy
+        .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?
+        .env;
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        Some(&shell_snapshot),
+        &HashMap::new(),
+        &env,
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .envs(&env)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "github.example.com\nunset"
+    );
+    Ok(())
+}
+
 #[test]
 fn broker_inactive_snapshot_exports_omit_credentials() {
     let (captures, restores) = build_proxy_env_exports(&HashMap::new());
