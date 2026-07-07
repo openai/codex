@@ -110,6 +110,10 @@ pub(crate) fn insert_history_hyperlink_lines_with_mode_and_wrap_policy<B>(
 where
     B: Backend + Write,
 {
+    let mut lines = lines;
+    for line in &mut lines {
+        line.sanitize();
+    }
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
@@ -530,6 +534,41 @@ mod tests {
         let output = String::from_utf8(actual).expect("UTF-8 terminal output");
         assert!(!output.contains(sequence));
         assert!(output.contains("_count_rows"));
+    }
+
+    #[test]
+    fn sanitizes_history_before_wrapping() {
+        let width = 12;
+        let height = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal =
+            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(
+            /*x*/ 0,
+            /*y*/ height - 1,
+            /*width*/ width,
+            /*height*/ 1,
+        ));
+        let mut line = HyperlinkLine::new(Line::from("_count_r"));
+        line.line
+            .push_span(format!("\x1b[{}uows", "13;2:3;".repeat(width.into())));
+
+        insert_history_hyperlink_lines_with_mode_and_wrap_policy(
+            &mut terminal,
+            vec![line],
+            InsertHistoryMode::Standard,
+            HistoryLineWrapPolicy::PreWrap,
+        )
+        .expect("insert sanitized history");
+
+        let rows = terminal
+            .backend()
+            .vt100()
+            .screen()
+            .rows(0, width)
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(|row| row.contains("_count_rows")));
+        assert!(!rows.iter().any(|row| row.contains("13;2:3")));
     }
 
     #[test]
