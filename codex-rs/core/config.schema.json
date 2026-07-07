@@ -635,6 +635,9 @@
             "secret_auth_storage": {
               "type": "boolean"
             },
+            "server_registered_tools_only": {
+              "$ref": "#/definitions/FeatureToml_for_ServerRegisteredToolsOnlyConfigToml"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -990,6 +993,16 @@
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ServerRegisteredToolsOnlyConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ServerRegisteredToolsOnlyConfigToml"
         }
       ]
     },
@@ -2777,6 +2790,38 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ServerRegisteredMcpToolToml": {
+      "additionalProperties": false,
+      "properties": {
+        "server_name": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server_name",
+        "tool_name"
+      ],
+      "type": "object"
+    },
+    "ServerRegisteredToolsOnlyConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mcp_tools": {
+          "description": "Raw MCP server and action identities authorized by the hosting server. An absent or empty list permits no MCP tools.",
+          "items": {
+            "$ref": "#/definitions/ServerRegisteredMcpToolToml"
           },
           "type": "array"
         }
@@ -5006,6 +5051,9 @@
         },
         "secret_auth_storage": {
           "type": "boolean"
+        },
+        "server_registered_tools_only": {
+          "$ref": "#/definitions/FeatureToml_for_ServerRegisteredToolsOnlyConfigToml"
         },
         "shell_snapshot": {
           "type": "boolean"

@@ -11,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use toml::Table;
 use toml::Value as TomlValue;
 
@@ -681,12 +682,44 @@ non_code_mode_only = true
 }
 
 #[test]
+fn server_registered_tools_only_deserializes_exact_raw_mcp_policy() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[server_registered_tools_only]
+enabled = true
+mcp_tools = [
+    { server_name = "hoopa", tool_name = "lookup" },
+    { server_name = "hoopa", tool_name = "search" },
+]
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("server_registered_tools_only".to_string(), true)])
+    );
+    assert_eq!(
+        features.server_registered_mcp_tools(),
+        BTreeMap::from([(
+            "hoopa".to_string(),
+            BTreeSet::from(["lookup".to_string(), "search".to_string()]),
+        )])
+    );
+
+    let boolean_only: FeaturesToml = toml::from_str("server_registered_tools_only = true")
+        .expect("boolean feature toggle should deserialize");
+    assert_eq!(boolean_only.server_registered_mcp_tools(), BTreeMap::new());
+}
+
+#[test]
 fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
     features.enable(Feature::NetworkProxy);
     features.enable(Feature::RespectSystemProxy);
+    features.enable(Feature::ServerRegisteredToolsOnly);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
@@ -699,6 +732,15 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
+        server_registered_tools_only: Some(FeatureToml::Config(
+            crate::ServerRegisteredToolsOnlyConfigToml {
+                enabled: Some(false),
+                mcp_tools: vec![crate::ServerRegisteredMcpToolToml {
+                    server_name: "hoopa".to_string(),
+                    tool_name: "search".to_string(),
+                }],
+            },
+        )),
         entries: BTreeMap::new(),
         ..Default::default()
     };
@@ -729,6 +771,10 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         }))
+    );
+    assert_eq!(
+        features_toml.server_registered_mcp_tools(),
+        BTreeMap::from([("hoopa".to_string(), BTreeSet::from(["search".to_string()]),)])
     );
     let replayed = Features::from_sources(
         FeatureConfigSource {

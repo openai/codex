@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -897,6 +898,101 @@ async fn invalid_mcp_tools_are_not_registered() {
 
     plan.assert_visible_lacks(&["mcp__invalid"]);
     plan.assert_registered_lacks(&[&ToolName::namespaced("mcp__invalid", "lookup").to_string()]);
+}
+
+#[tokio::test]
+async fn server_registered_tools_only_restricts_the_complete_tool_inventory() {
+    let plan = probe_with(
+        |turn| {
+            set_features(
+                turn,
+                &[
+                    Feature::Apps,
+                    Feature::ServerRegisteredToolsOnly,
+                    Feature::CodeMode,
+                    Feature::CodeModeOnly,
+                    Feature::ImageGeneration,
+                    Feature::MultiAgentV2,
+                    Feature::Plugins,
+                    Feature::RequestPermissionsTool,
+                    Feature::ShellTool,
+                    Feature::ToolSuggest,
+                ],
+            );
+            set_web_search_mode(turn, WebSearchMode::Live);
+            turn.model_info.supports_search_tool = true;
+            turn.model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
+            turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+            turn.model_info.input_modalities = vec![InputModality::Image];
+            update_config(turn, |config| {
+                config.server_registered_mcp_tools = BTreeMap::from([(
+                    "hoopa".to_string(),
+                    BTreeSet::from(["lookup".to_string(), "search".to_string()]),
+                )]);
+            });
+            use_chatgpt_auth(turn);
+            assert!(!super::tool_suggest_enabled(turn));
+        },
+        ToolPlanInputs {
+            mcp_tools: Some(vec![
+                mcp_tool("hoopa", "mcp__hoopa", "lookup"),
+                mcp_tool("hoopa", "mcp__hoopa", "search"),
+                mcp_tool("hoopa", "mcp__hoopa", "update"),
+                mcp_tool("user_server", "mcp__user_server", "lookup"),
+            ]),
+            deferred_mcp_tools: Some(vec![mcp_tool(
+                "user_deferred",
+                "mcp__user_deferred",
+                "lookup",
+            )]),
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            extension_tool_executors: vec![
+                Arc::new(DeferredExtensionTool),
+                Arc::new(TestNamespaceExtensionTool {
+                    namespace: "image_gen",
+                    tool_name: "imagegen",
+                }),
+            ],
+            dynamic_tools: vec![
+                dynamic_tool(
+                    /*namespace*/ None,
+                    "server_callback",
+                    /*defer_loading*/ false,
+                ),
+                dynamic_tool(
+                    /*namespace*/ None,
+                    "server_deferred",
+                    /*defer_loading*/ true,
+                ),
+            ],
+        },
+    )
+    .await;
+
+    assert_eq!(plan.visible_names, vec!["mcp__hoopa", "server_callback"]);
+    assert_eq!(
+        plan.namespace_function_names("mcp__hoopa"),
+        &["lookup".to_string(), "search".to_string()]
+    );
+    assert_eq!(
+        plan.registered_names,
+        vec![
+            ToolName::namespaced("mcp__hoopa", "lookup").to_string(),
+            ToolName::namespaced("mcp__hoopa", "search").to_string(),
+            "server_callback".to_string(),
+            "server_deferred".to_string(),
+        ]
+    );
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("mcp__hoopa", "lookup").to_string()),
+        ToolExposure::Direct
+    );
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("mcp__hoopa", "search").to_string()),
+        ToolExposure::Direct
+    );
+    assert_eq!(plan.exposure("server_callback"), ToolExposure::Direct);
+    assert_eq!(plan.exposure("server_deferred"), ToolExposure::Deferred);
 }
 
 #[tokio::test]

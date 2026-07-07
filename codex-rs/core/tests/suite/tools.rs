@@ -9,6 +9,10 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -16,6 +20,9 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -31,6 +38,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -88,6 +97,112 @@ async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> 
             !tools.contains(&environment_tool.to_string()),
             "{environment_tool} should be omitted for explicit empty turn environments; got {tools:?}"
         );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_registered_tools_only_is_enforced_in_model_requests() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "server-echo-call";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "server_echo", r#"{"message":"hello"}"#),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        for feature in [
+            Feature::ServerRegisteredToolsOnly,
+            Feature::CodeMode,
+            Feature::CodeModeOnly,
+        ] {
+            config
+                .features
+                .enable(feature)
+                .expect("test feature should enable");
+        }
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "server_echo".to_string(),
+                description: "Echo a server-owned value.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: false,
+            })],
+        )
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Use the server echo tool.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let EventMsg::DynamicToolCallRequest(request) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees DynamicToolCallRequest");
+    };
+    assert_eq!(request.call_id, call_id);
+    assert_eq!(request.tool, "server_echo");
+    assert_eq!(request.arguments, json!({"message": "hello"}));
+
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "echo-ok".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert_eq!(tool_names(&request.body_json()), vec!["server_echo"]);
     }
 
     Ok(())

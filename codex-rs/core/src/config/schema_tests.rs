@@ -73,3 +73,24 @@ fn config_schema_hides_unsupported_inline_mcp_bearer_token() {
         (false, true),
     );
 }
+
+#[test]
+fn config_schema_exposes_server_registered_tool_policy() {
+    let schema_json = config_schema_json().expect("serialize config schema");
+    let schema_value: serde_json::Value =
+        serde_json::from_slice(&schema_json).expect("decode schema json");
+
+    assert_eq!(
+        schema_value.pointer("/properties/features/properties/server_registered_tools_only/$ref"),
+        Some(&serde_json::json!(
+            "#/definitions/FeatureToml_for_ServerRegisteredToolsOnlyConfigToml"
+        ))
+    );
+    assert!(
+        schema_value
+            .pointer(
+                "/definitions/ServerRegisteredToolsOnlyConfigToml/properties/mcp_tools/items/$ref"
+            )
+            .is_some()
+    );
+}

@@ -2,6 +2,8 @@ use super::*;
 use crate::config_toml::ConfigToml;
 use crate::types::MemoriesToml;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 fn parse_toml(value: &str) -> TomlValue {
     toml::from_str(value).expect("TOML should parse")
@@ -123,4 +125,41 @@ fn merge_toml_values_normalizes_permission_network_domains_before_overlaying() {
 "#,
     );
     assert_eq!(base, expected);
+}
+
+#[test]
+fn server_registered_mcp_tool_policy_replaces_lower_layer_policy() {
+    let mut base = parse_toml(
+        r#"
+[features.server_registered_tools_only]
+enabled = true
+mcp_tools = [
+    { server_name = "user_server", tool_name = "write" },
+]
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[features.server_registered_tools_only]
+enabled = true
+mcp_tools = [
+    { server_name = "hoopa", tool_name = "lookup" },
+    { server_name = "hoopa", tool_name = "search" },
+]
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let config: ConfigToml = base.try_into().expect("merged config should deserialize");
+    assert_eq!(
+        config
+            .features
+            .expect("features should be present")
+            .server_registered_mcp_tools(),
+        BTreeMap::from([(
+            "hoopa".to_string(),
+            BTreeSet::from(["lookup".to_string(), "search".to_string()]),
+        )])
+    );
 }

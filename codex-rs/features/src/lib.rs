@@ -27,6 +27,8 @@ pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
 pub use feature_configs::RolloutBudgetConfigToml;
+pub use feature_configs::ServerRegisteredMcpToolToml;
+pub use feature_configs::ServerRegisteredToolsOnlyConfigToml;
 pub use feature_configs::TokenBudgetConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
@@ -164,6 +166,11 @@ pub enum Feature {
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
+    /// Restrict the model-visible tool surface to tools registered by the hosting server.
+    ///
+    /// This retains host-allowlisted MCP tools and dynamic tools while removing
+    /// Codex-owned core, extension, hosted, collaboration, and tool-discovery tools.
+    ServerRegisteredToolsOnly,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -647,6 +654,8 @@ pub struct FeaturesToml {
     pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_registered_tools_only: Option<FeatureToml<ServerRegisteredToolsOnlyConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -692,6 +701,16 @@ impl FeaturesToml {
         {
             entries.insert(Feature::CurrentTimeReminder.key().to_string(), enabled);
         }
+        if let Some(enabled) = self
+            .server_registered_tools_only
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(
+                Feature::ServerRegisteredToolsOnly.key().to_string(),
+                enabled,
+            );
+        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -706,6 +725,7 @@ impl FeaturesToml {
             token_budget,
             rollout_budget,
             current_time_reminder,
+            server_registered_tools_only,
             removed_apps_mcp_path_override: _,
             network_proxy,
             entries,
@@ -725,11 +745,29 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(rollout_budget, enabled);
             } else if spec.id == Feature::CurrentTimeReminder {
                 materialize_resolved_feature_enabled(current_time_reminder, enabled);
+            } else if spec.id == Feature::ServerRegisteredToolsOnly {
+                materialize_resolved_feature_enabled(server_registered_tools_only, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
                 entries.insert(spec.key.to_string(), enabled);
             }
+        }
+    }
+
+    pub fn server_registered_mcp_tools(&self) -> BTreeMap<String, BTreeSet<String>> {
+        match self.server_registered_tools_only.as_ref() {
+            Some(FeatureToml::Config(config)) => {
+                let mut tools = BTreeMap::<String, BTreeSet<String>>::new();
+                for tool in &config.mcp_tools {
+                    tools
+                        .entry(tool.server_name.clone())
+                        .or_default()
+                        .insert(tool.tool_name.clone());
+                }
+                tools
+            }
+            Some(FeatureToml::Enabled(_)) | None => BTreeMap::new(),
         }
     }
 }
@@ -1085,6 +1123,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,
         key: "non_prefixed_mcp_tool_names",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ServerRegisteredToolsOnly,
+        key: "server_registered_tools_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

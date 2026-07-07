@@ -120,6 +120,7 @@ use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -824,6 +825,10 @@ pub struct Config {
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
+
+    /// Raw MCP identities authorized when only server-registered tools are enabled.
+    /// An absent server or action is denied at tool-registry construction time.
+    pub server_registered_mcp_tools: BTreeMap<String, BTreeSet<String>>,
 
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -3068,6 +3073,11 @@ impl Config {
             },
             feature_overrides,
         );
+        let server_registered_mcp_tools = cfg
+            .features
+            .as_ref()
+            .map(FeaturesToml::server_registered_mcp_tools)
+            .unwrap_or_default();
         let features = ManagedFeatures::from_configured_with_warnings(
             configured_features,
             feature_requirements,
@@ -3832,6 +3842,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             mcp_servers,
+            server_registered_mcp_tools,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
