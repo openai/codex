@@ -991,6 +991,7 @@ pub(crate) struct CodexPluginInstallSuggestionOutcomeToolMetadata {
     pub(crate) remote_plugin_id: Option<String>,
     pub(crate) connector_ids: Vec<String>,
     pub(crate) selected: bool,
+    pub(crate) completed: bool,
 }
 
 #[derive(Serialize)]
@@ -1161,6 +1162,7 @@ pub(crate) fn codex_plugin_install_suggestion_outcome_metadata(
     tracking: &TrackEventsContext,
     outcome: PluginInstallSuggestionOutcome,
 ) -> CodexPluginInstallSuggestionOutcomeMetadata {
+    let completed = outcome.tools.iter().any(|tool| tool.completed);
     CodexPluginInstallSuggestionOutcomeMetadata {
         suggestion_id: outcome.suggestion_id,
         source: outcome.source,
@@ -1174,11 +1176,12 @@ pub(crate) fn codex_plugin_install_suggestion_outcome_metadata(
                 remote_plugin_id: tool.remote_plugin_id,
                 connector_ids: tool.connector_ids,
                 selected: tool.selected,
+                completed: tool.completed,
             })
             .collect(),
         response_action: outcome.response_action,
         user_confirmed: outcome.user_confirmed,
-        completed: outcome.completed,
+        completed,
         thread_id: tracking.thread_id.clone(),
         turn_id: tracking.turn_id.clone(),
         model_slug: tracking.model_slug.clone(),

@@ -598,7 +598,6 @@ pub struct PluginInstallSuggestionOutcome {
     pub tools: Vec<PluginInstallSuggestionOutcomeTool>,
     pub response_action: PluginInstallSuggestionResponseAction,
     pub user_confirmed: bool,
-    pub completed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -609,6 +608,7 @@ pub struct PluginInstallSuggestionOutcomeTool {
     pub remote_plugin_id: Option<String>,
     pub connector_ids: Vec<String>,
     pub selected: bool,
+    pub completed: bool,
 }
 
 pub(crate) struct PluginInstallSuggestionOutcomeInput {
