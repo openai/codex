@@ -25,35 +25,35 @@ pub fn supports_mcp_app_ui_webview(extensions: Option<&HashMap<String, Value>>) 
         })
 }
 
-/// Adds trusted host capabilities to a Codex Apps request and removes any
-/// caller-supplied copy of the reserved metadata key.
+/// Adds a trusted host capability profile to a Codex Apps request and removes
+/// any caller-supplied copy of the reserved metadata key.
+///
+/// An explicit empty profile is important for hosts without WebView support:
+/// downstream connector MCP sessions preserve WebView as the legacy default
+/// when client capabilities are absent.
 pub fn with_mcp_app_ui_client_capabilities_meta(
     meta: Option<Value>,
     supports_mcp_app_ui_webview: bool,
 ) -> Option<Value> {
-    let meta = match meta {
+    let mut object = match meta {
         Some(Value::Object(mut object)) => {
             object.remove(MCP_CLIENT_CAPABILITIES_META_KEY);
-            Some(Value::Object(object))
+            object
         }
-        other => other,
-    };
-    if !supports_mcp_app_ui_webview {
-        return meta;
-    }
-    let mut object = match meta {
-        Some(Value::Object(object)) => object,
         _ => Map::new(),
+    };
+    let extensions = if supports_mcp_app_ui_webview {
+        serde_json::json!({
+            MCP_APP_UI_EXTENSION_ID: {
+                "mimeTypes": [MCP_APP_UI_WEBVIEW_MIME_TYPE],
+            }
+        })
+    } else {
+        serde_json::json!({})
     };
     object.insert(
         MCP_CLIENT_CAPABILITIES_META_KEY.to_string(),
-        serde_json::json!({
-            "extensions": {
-                MCP_APP_UI_EXTENSION_ID: {
-                    "mimeTypes": [MCP_APP_UI_WEBVIEW_MIME_TYPE],
-                }
-            }
-        }),
+        serde_json::json!({ "extensions": extensions }),
     );
     Some(Value::Object(object))
 }

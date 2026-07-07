@@ -59,7 +59,7 @@ fn trusted_capabilities_replace_spoofed_request_metadata() {
 }
 
 #[test]
-fn absent_host_capabilities_remove_spoofed_request_metadata() {
+fn disabled_hosts_send_an_explicit_empty_capability_profile() {
     assert_eq!(
         with_mcp_app_ui_client_capabilities_meta(
             Some(json!({
@@ -68,7 +68,12 @@ fn absent_host_capabilities_remove_spoofed_request_metadata() {
             })),
             /*supports_mcp_app_ui_webview*/ false,
         ),
-        Some(json!({"caller": "preserved"}))
+        Some(json!({
+            "caller": "preserved",
+            MCP_CLIENT_CAPABILITIES_META_KEY: {
+                "extensions": {}
+            }
+        }))
     );
 }
 
