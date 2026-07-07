@@ -27,6 +27,7 @@ pub use crate::outbound_proxy::BuildRouteAwareHttpClientError;
 pub use crate::outbound_proxy::ClientRouteClass;
 pub use crate::outbound_proxy::HttpClientFactory;
 pub use crate::outbound_proxy::OutboundProxyPolicy;
+pub use crate::outbound_proxy::OutboundProxyRoute;
 pub use crate::outbound_proxy::RouteFailureClass;
 pub use crate::request::EncodedJsonBody;
 pub use crate::request::PreparedRequestBody;

@@ -231,6 +231,34 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_with_system_proxy_feature() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_provider_options(
+        websocket_provider(&server),
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[Feature::RespectSystemProxy],
+    )
+    .await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     skip_if_no_network!();
 
@@ -389,8 +417,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
     let harness = websocket_harness_with_provider_options(
-        provider, /*runtime_metrics_enabled*/ true,
+        provider,
+        /*runtime_metrics_enabled*/ true,
         /*concurrent_reasoning_summaries_enabled*/ true,
+        /*enabled_features*/ &[],
     )
     .await;
     let mut client_session = harness.client.new_session();
@@ -1005,8 +1035,10 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
     let harness = websocket_harness_with_provider_options(
-        provider, /*runtime_metrics_enabled*/ false,
+        provider,
+        /*runtime_metrics_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
     )
     .await;
 
@@ -2216,6 +2248,7 @@ async fn websocket_harness_with_options(
         websocket_provider(server),
         runtime_metrics_enabled,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
     )
     .await
 }
@@ -2224,6 +2257,7 @@ async fn websocket_harness_with_provider_options(
     provider: ModelProviderInfo,
     runtime_metrics_enabled: bool,
     concurrent_reasoning_summaries_enabled: bool,
+    enabled_features: &[Feature],
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -2238,6 +2272,12 @@ async fn websocket_harness_with_provider_options(
         config
             .features
             .enable(Feature::ConcurrentReasoningSummaries)
+            .expect("test config should allow feature update");
+    }
+    for feature in enabled_features {
+        config
+            .features
+            .enable(*feature)
             .expect("test config should allow feature update");
     }
     let config = Arc::new(config);
