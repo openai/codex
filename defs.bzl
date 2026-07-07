@@ -209,6 +209,7 @@ def _workspace_root_sharded_test_suite(name, shard_count, env, **kwargs):
 
     native.test_suite(
         name = name,
+        tags = [tag for tag in kwargs.get("tags", []) if tag != "manual"],
         tests = shard_targets,
     )
 
@@ -613,7 +614,7 @@ def codex_rust_crate(
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
                 # This wrapper has no Rust sources and transitions a data
                 # dependency to a Windows toolchain the lint does not register.
-                tags = test_tags + ["no-argument-comment-lint"],
+                tags = test_tags + ["manual", "no-argument-comment-lint"],
                 **wine_test_kwargs
             )
 
