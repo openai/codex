@@ -69,6 +69,7 @@ use tokio::sync::Mutex;
 
 use codex_utils_home_dir::find_codex_home;
 
+use self::refresh_lock::RefreshCredentialLock;
 pub(crate) use self::refresh_transaction::request_oauth_token_response;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
@@ -246,16 +247,51 @@ pub fn save_oauth_tokens(
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<()> {
     let keyring_store = DefaultKeyringStore;
+    save_oauth_tokens_with_keyring_store(
+        &keyring_store,
+        server_name,
+        tokens,
+        store_mode,
+        keyring_backend_kind,
+    )
+}
+
+pub(crate) async fn save_oauth_tokens_locked(
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<()> {
+    // Login persistence shares the refresh transaction lock so a completed login always becomes
+    // authoritative: it either lands before refresh's reread or waits and overwrites the refresh
+    // result afterward.
+    let _lock = RefreshCredentialLock::acquire_for_server(server_name, &tokens.url).await?;
+    save_oauth_tokens_with_keyring_store(
+        &DefaultKeyringStore,
+        server_name,
+        tokens,
+        store_mode,
+        keyring_backend_kind,
+    )
+}
+
+fn save_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<()> {
     match store_mode {
         OAuthCredentialsStoreMode::Auto => save_oauth_tokens_with_keyring_with_fallback_to_file(
-            &keyring_store,
+            keyring_store,
             keyring_backend_kind,
             server_name,
             tokens,
         ),
         OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file(tokens),
         OAuthCredentialsStoreMode::Keyring => save_oauth_tokens_with_keyring_and_cleanup_file(
-            &keyring_store,
+            keyring_store,
             keyring_backend_kind,
             server_name,
             tokens,
@@ -393,6 +429,24 @@ pub fn delete_oauth_tokens(
     let keyring_store = DefaultKeyringStore;
     delete_oauth_tokens_from_keyring_and_file(
         &keyring_store,
+        store_mode,
+        keyring_backend_kind,
+        server_name,
+        url,
+    )
+}
+
+pub async fn delete_oauth_tokens_locked(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<bool> {
+    // Logout shares the refresh transaction lock so refresh cannot resurrect credentials after a
+    // completed delete: it either observes the deletion or finishes before logout removes it.
+    let _lock = RefreshCredentialLock::acquire_for_server(server_name, url).await?;
+    delete_oauth_tokens_from_keyring_and_file(
+        &DefaultKeyringStore,
         store_mode,
         keyring_backend_kind,
         server_name,
