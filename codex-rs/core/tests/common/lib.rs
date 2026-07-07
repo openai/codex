@@ -218,7 +218,7 @@ pub async fn load_default_config_for_test_with_cloud_config_bundle(
 }
 
 pub fn managed_network_requirements_loader() -> CloudConfigBundleLoader {
-    CloudConfigBundleFixture::loader_with_enterprise_requirement(
+    CloudConfigBundleFixture::loader_with_system_overlay_requirement(
         r#"
 [experimental_network]
 enabled = true
