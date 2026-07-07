@@ -48,6 +48,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
         agent_status,
         session: Arc::clone(&session),
         session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::Canonical,
     });
 
     let (tx_out, rx_out) = bounded(1);
@@ -136,7 +137,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
 }
 
 #[tokio::test]
-async fn forward_ops_preserves_submission_trace_context() {
+async fn forwarding_proxy_reserves_once_and_delivers_shutdown() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
@@ -145,10 +146,20 @@ async fn forward_ops_preserves_submission_trace_context() {
         tx_sub,
         rx_event: rx_events,
         agent_status,
-        session,
+        session: Arc::clone(&session),
         session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::Canonical,
     });
     let (tx_ops, rx_ops) = bounded(1);
+    let (_tx_proxy_events, rx_proxy_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let proxy = Codex {
+        tx_sub: tx_ops,
+        rx_event: rx_proxy_events,
+        agent_status: codex.agent_status.clone(),
+        session: Arc::clone(&session),
+        session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::ForwardingProxy,
+    };
     let cancel = CancellationToken::new();
     let forward = tokio::spawn(forward_ops(Arc::clone(&codex), rx_ops, cancel));
 
@@ -163,8 +174,7 @@ async fn forward_ops_preserves_submission_trace_context() {
             tracestate: Some("vendor=state".to_string()),
         }),
     };
-    tx_ops.send(submission.clone()).await.unwrap();
-    drop(tx_ops);
+    proxy.submit_with_id(submission.clone()).await.unwrap();
 
     let forwarded = timeout(Duration::from_secs(1), rx_sub.recv())
         .await
@@ -173,6 +183,23 @@ async fn forward_ops_preserves_submission_trace_context() {
     assert_eq!(submission.id, forwarded.id);
     assert_eq!(submission.op, forwarded.op);
     assert_eq!(submission.trace, forwarded.trace);
+    session.finish_submission();
+
+    let idle_reservation = session
+        .try_claim_idle_shutdown()
+        .await
+        .expect("the forwarded submission should own exactly one reservation");
+    drop(idle_reservation);
+
+    proxy.submit(Op::Shutdown).await.unwrap();
+    let forwarded_shutdown = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("forward_ops hung while delivering shutdown")
+        .expect("forwarded shutdown missing");
+    assert!(matches!(forwarded_shutdown.op, Op::Shutdown));
+    session.finish_submission();
+
+    drop(proxy);
 
     timeout(Duration::from_secs(1), forward)
         .await
@@ -223,6 +250,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         agent_status,
         session: Arc::clone(&parent_session),
         session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::Canonical,
     });
 
     let call_id = "tool-call-1".to_string();
@@ -328,6 +356,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         agent_status,
         session: Arc::clone(&parent_session),
         session_loop_termination: completed_session_loop_termination(),
+        submission_transport: SubmissionTransport::Canonical,
     });
 
     let cancel_token = CancellationToken::new();

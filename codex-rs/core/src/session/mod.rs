@@ -393,9 +393,16 @@ pub struct Codex {
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
+    pub(crate) submission_transport: SubmissionTransport,
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubmissionTransport {
+    Canonical,
+    ForwardingProxy,
+}
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
 /// the unique session id.
@@ -721,6 +728,7 @@ impl Codex {
             agent_status: agent_status_rx,
             session,
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+            submission_transport: SubmissionTransport::Canonical,
         };
 
         Ok(CodexSpawnOk { codex, thread_id })
@@ -767,15 +775,71 @@ impl Codex {
 
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "submission ordering must remain serialized while a bounded-channel send waits"
+    )]
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
-        self.tx_sub
-            .send(sub)
-            .await
-            .map_err(|_| CodexErr::InternalAgentDied)?;
+        if self.submission_transport == SubmissionTransport::ForwardingProxy {
+            self.tx_sub
+                .send(sub)
+                .await
+                .map_err(|_| CodexErr::InternalAgentDied)?;
+            return Ok(());
+        }
+        let is_shutdown = matches!(&sub.op, Op::Shutdown);
+        let _send_guard = self.session.submission_send_lock.lock().await;
+        let Some(reservation) = self.session.submission_lifecycle.try_reserve(is_shutdown) else {
+            if is_shutdown {
+                return Ok(());
+            }
+            return Err(CodexErr::InvalidRequest(
+                "thread is shutting down".to_string(),
+            ));
+        };
+        if self.tx_sub.send(sub).await.is_err() {
+            reservation.release_after_failed_delivery();
+            return Err(CodexErr::InternalAgentDied);
+        }
+        reservation.commit();
         Ok(())
+    }
+
+    /// Atomically submits shutdown only when no work is active, queued, or
+    /// being dispatched. Once claimed, new submissions and automatic idle work
+    /// are rejected so shutdown cannot race a newly starting turn.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the send lock serializes the idle claim with submission delivery"
+    )]
+    pub async fn try_shutdown_if_idle(&self) -> CodexResult<bool> {
+        if self.submission_transport == SubmissionTransport::ForwardingProxy {
+            return Err(CodexErr::InvalidRequest(
+                "idle shutdown is unavailable through a forwarding proxy".to_string(),
+            ));
+        }
+        let _send_guard = self.session.submission_send_lock.lock().await;
+        if self.session.submission_lifecycle.is_closing() {
+            return Ok(true);
+        }
+        let Some(reservation) = self.session.try_claim_idle_shutdown().await else {
+            return Ok(false);
+        };
+        let sub = Submission {
+            id: new_submission_id(),
+            op: Op::Shutdown,
+            client_user_message_id: None,
+            trace: current_span_w3c_trace_context(),
+        };
+        if self.tx_sub.send(sub).await.is_err() {
+            reservation.release_after_failed_delivery();
+            return Err(CodexErr::InternalAgentDied);
+        }
+        reservation.commit();
+        Ok(true)
     }
 
     /// Persist a thread-level memory mode update for the active session.
@@ -978,6 +1042,28 @@ fn push_prompt_fragment(
 }
 
 impl Session {
+    async fn has_idle_shutdown_blocker(&self) -> bool {
+        matches!(self.agent_status.borrow().clone(), AgentStatus::Running)
+            || self.conversation.running_state().await.is_some()
+            || *self.services.elicitations.subscribe().borrow()
+            || self.input_queue.has_pending_mailbox_items().await
+            || self.active_turn.lock().await.is_some()
+            || !self.list_background_terminals().await.is_empty()
+    }
+
+    pub(crate) async fn try_claim_idle_shutdown(
+        &self,
+    ) -> Option<session::SubmissionReservation<'_>> {
+        if self.has_idle_shutdown_blocker().await {
+            return None;
+        }
+        let reservation = self.submission_lifecycle.try_reserve_idle_shutdown()?;
+        if self.has_idle_shutdown_blocker().await {
+            return None;
+        }
+        Some(reservation)
+    }
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
@@ -1194,6 +1280,9 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+        let Some(_reservation) = self.try_reserve_activity() else {
+            return;
+        };
         handlers::user_input_or_turn_inner(
             self,
             Uuid::now_v7().to_string(),

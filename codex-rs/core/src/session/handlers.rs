@@ -841,6 +841,7 @@ pub(super) async fn submission_loop(
         }
         .instrument(dispatch_span)
         .await;
+        sess.finish_submission();
         if should_exit {
             shutdown_received = true;
             break;

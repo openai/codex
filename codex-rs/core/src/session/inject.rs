@@ -62,6 +62,12 @@ impl Session {
             ));
         }
 
+        let Some(reservation) = self.try_reserve_activity() else {
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
+                input,
+            ));
+        };
         let turn_state = {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
@@ -73,6 +79,7 @@ impl Session {
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&active_turn.turn_state)
         };
+        drop(reservation);
 
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;

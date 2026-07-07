@@ -1154,6 +1154,7 @@ mod tests {
                     agent_status,
                     session,
                     session_loop_termination: crate::session::completed_session_loop_termination(),
+                    submission_transport: crate::session::SubmissionTransport::Canonical,
                 },
                 cancel_token: CancellationToken::new(),
                 reuse_key,
