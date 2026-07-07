@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::rollout::SESSIONS_SUBDIR;
+use crate::thread_activity::ThreadActivityRegistrationError;
 use codex_protocol::error::CodexErr;
 use codex_thread_store::ThreadStoreError;
 
@@ -11,6 +12,13 @@ pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> 
         .find_map(|cause| cause.downcast_ref::<ThreadStoreError>())
     {
         return CodexErr::UnsupportedOperation(format!("{operation} is not supported yet"));
+    }
+
+    if let Some(registration_error) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ThreadActivityRegistrationError>())
+    {
+        return CodexErr::InvalidRequest(registration_error.to_string());
     }
 
     if let Some(mapped) = err

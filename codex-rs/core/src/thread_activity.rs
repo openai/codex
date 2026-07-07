@@ -17,12 +17,17 @@ struct ThreadActivityState {
 
 struct ThreadActivityNode {
     generation: u64,
+    // A lineage edge follows the stable logical thread ID across runtime generations.
     parent_thread_id: Option<ThreadId>,
     active: usize,
     closing: bool,
     handle_live: bool,
     initializing: bool,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("thread or ancestor is shutting down")]
+pub(crate) struct ThreadActivityRegistrationError;
 
 pub(crate) struct ThreadActivityHandle {
     gate: Arc<ThreadActivityGate>,
@@ -35,7 +40,7 @@ impl ThreadActivityGate {
         self: &Arc<Self>,
         thread_id: ThreadId,
         parent_thread_id: Option<ThreadId>,
-    ) -> Option<ThreadActivityHandle> {
+    ) -> Result<ThreadActivityHandle, ThreadActivityRegistrationError> {
         let mut state = self
             .state
             .lock()
@@ -50,7 +55,7 @@ impl ThreadActivityGate {
             })
             || Self::has_active_descendant(&state, thread_id)
         {
-            return None;
+            return Err(ThreadActivityRegistrationError);
         }
 
         state.next_generation = state.next_generation.wrapping_add(1);
@@ -66,7 +71,7 @@ impl ThreadActivityGate {
                 initializing: true,
             },
         );
-        Some(ThreadActivityHandle {
+        Ok(ThreadActivityHandle {
             gate: Arc::clone(self),
             thread_id,
             generation,

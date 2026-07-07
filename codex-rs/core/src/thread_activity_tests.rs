@@ -1,5 +1,7 @@
 use super::*;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use std::path::Path;
 use std::sync::Arc;
 
 fn register(
@@ -21,12 +23,9 @@ fn registration_rejects_parent_cycles() {
     let missing_parent_id = ThreadId::new();
     let _first = register(&gate, first_id, Some(missing_parent_id));
 
-    assert!(gate.register(missing_parent_id, Some(first_id)).is_none());
+    assert!(gate.register(missing_parent_id, Some(first_id)).is_err());
     let self_parent_id = ThreadId::new();
-    assert!(
-        gate.register(self_parent_id, Some(self_parent_id))
-            .is_none()
-    );
+    assert!(gate.register(self_parent_id, Some(self_parent_id)).is_err());
 }
 
 #[test]
@@ -40,11 +39,8 @@ fn registration_and_publication_preserve_thread_incarnations() {
         .expect("register initializing child");
 
     parent.mark_closed();
-    assert!(
-        gate.register(parent_id, /*parent_thread_id*/ None)
-            .is_none()
-    );
-    assert!(gate.register(ThreadId::new(), Some(parent_id)).is_none());
+    assert!(gate.register(parent_id, /*parent_thread_id*/ None).is_err());
+    assert!(gate.register(ThreadId::new(), Some(parent_id)).is_err());
 
     child.mark_initialized();
     let replacement = gate
@@ -52,10 +48,18 @@ fn registration_and_publication_preserve_thread_incarnations() {
         .expect("register replacement parent");
     replacement.mark_initialized();
     drop(parent);
-    assert!(
-        gate.register(parent_id, /*parent_thread_id*/ None)
-            .is_none()
-    );
+    assert!(gate.register(parent_id, /*parent_thread_id*/ None).is_err());
+    let _grandchild = register(&gate, ThreadId::new(), Some(child_id));
+}
+
+#[test]
+fn registration_error_maps_to_invalid_request() {
+    let error = anyhow::Error::new(ThreadActivityRegistrationError);
+    let mapped = crate::session_rollout_init_error::map_session_init_error(&error, Path::new(""));
+    let CodexErr::InvalidRequest(message) = mapped else {
+        panic!("expected invalid request");
+    };
+    assert_eq!(message, error.to_string());
 }
 
 #[test]

@@ -17,6 +17,7 @@ use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_activity::ThreadActivityGate;
 use crate::thread_activity::ThreadActivityHandle;
+use crate::thread_activity::ThreadActivityRegistrationError;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
@@ -145,7 +146,7 @@ impl AgentControl {
         &self,
         thread_id: ThreadId,
         parent_thread_id: Option<ThreadId>,
-    ) -> Option<ThreadActivityHandle> {
+    ) -> Result<ThreadActivityHandle, ThreadActivityRegistrationError> {
         self.thread_activity_gate
             .register(thread_id, parent_thread_id)
     }

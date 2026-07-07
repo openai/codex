@@ -1243,8 +1243,7 @@ impl Session {
             };
             let thread_activity = services
                 .agent_control
-                .register_thread_activity(thread_id, parent_thread_id)
-                .ok_or_else(|| anyhow::anyhow!("thread or ancestor is shutting down"))?;
+                .register_thread_activity(thread_id, parent_thread_id)?;
             let sess = Arc::new(Session {
                 thread_id,
                 installation_id,
