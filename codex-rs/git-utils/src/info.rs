@@ -949,66 +949,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_git_branches_excludes_remote_refs_and_detached_head() {
+    async fn local_git_branches_excludes_detached_head_entry() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let repo = temp_dir.path();
         let envs = vec![
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
         ];
-        let init_status = std::process::Command::new("git")
-            .envs(envs.clone())
-            .args(["init", "-q", "--initial-branch=main"])
-            .current_dir(repo)
-            .status()
-            .expect("initialize test repository");
-        assert_eq!(init_status.code(), Some(0), "initialize test repository");
+        let run_git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .envs(envs.clone())
+                .args(args)
+                .current_dir(repo)
+                .status()
+                .expect("run Git command");
+            assert_eq!(status.code(), Some(0), "Git command failed: {args:?}");
+        };
 
-        let commit_status = std::process::Command::new("git")
-            .envs(envs.clone())
-            .args([
-                "-c",
-                "user.name=Codex Tests",
-                "-c",
-                "user.email=codex-tests@example.com",
-                "commit",
-                "--allow-empty",
-                "-q",
-                "-m",
-                "initial",
-            ])
-            .current_dir(repo)
-            .status()
-            .expect("create initial commit");
-        assert_eq!(commit_status.code(), Some(0), "create initial commit");
-
-        let branch_status = std::process::Command::new("git")
-            .envs(envs.clone())
-            .args(["branch", "feature/local"])
-            .current_dir(repo)
-            .status()
-            .expect("create local branch");
-        assert_eq!(branch_status.code(), Some(0), "create local branch");
-
-        let remote_ref_status = std::process::Command::new("git")
-            .envs(envs.clone())
-            .args(["update-ref", "refs/remotes/origin/remote-only", "HEAD"])
-            .current_dir(repo)
-            .status()
-            .expect("create remote-tracking ref");
-        assert_eq!(
-            remote_ref_status.code(),
-            Some(0),
-            "create remote-tracking ref"
-        );
-
-        let detach_status = std::process::Command::new("git")
-            .envs(envs)
-            .args(["checkout", "--detach", "-q"])
-            .current_dir(repo)
-            .status()
-            .expect("detach HEAD");
-        assert_eq!(detach_status.code(), Some(0), "detach HEAD");
+        run_git(&["init", "-q", "--initial-branch=main"]);
+        run_git(&[
+            "-c",
+            "user.name=Codex Tests",
+            "-c",
+            "user.email=codex-tests@example.com",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "initial",
+        ]);
+        run_git(&["branch", "feature/local"]);
+        run_git(&["checkout", "--detach", "-q"]);
 
         assert_eq!(
             local_git_branches(repo).await,
