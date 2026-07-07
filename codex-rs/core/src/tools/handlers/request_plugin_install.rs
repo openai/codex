@@ -14,6 +14,7 @@ use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
@@ -300,10 +301,10 @@ impl RequestPluginInstallHandler {
                             remote_plugin_id,
                             connector_ids,
                             selected: user_confirmed,
+                            completed,
                         }],
                         response_action,
                         user_confirmed,
-                        completed,
                     },
                 );
         }
@@ -412,12 +413,9 @@ async fn verify_request_plugin_install_completed(
         }),
         DiscoverableTool::Plugin(plugin) => {
             if is_remote_plugin_install_suggestion(&plugin.id) {
-                let (_, accessible_connectors) = tokio::join!(
+                let (completed, _) = tokio::join!(
                     refresh_remote_installed_plugins_cache_after_install(
-                        session,
-                        turn,
-                        auth,
-                        plugin.id.as_str(),
+                        session, turn, auth, plugin,
                     ),
                     refresh_missing_requested_connectors(
                         turn,
@@ -427,12 +425,7 @@ async fn verify_request_plugin_install_completed(
                         plugin.id.as_str(),
                     )
                 );
-                return accessible_connectors.is_some_and(|accessible_connectors| {
-                    all_requested_connectors_picked_up(
-                        &plugin.app_connector_ids,
-                        &accessible_connectors,
-                    )
-                });
+                return completed;
             }
 
             session.reload_user_config_layer().await;
@@ -459,11 +452,18 @@ async fn refresh_remote_installed_plugins_cache_after_install(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     auth: Option<&codex_login::CodexAuth>,
-    tool_id: &str,
-) {
+    plugin: &DiscoverablePluginInfo,
+) -> bool {
+    let Some(remote_plugin_id) = plugin.remote_plugin_id.as_deref() else {
+        warn!(
+            "remote plugin install suggestion did not include a remote plugin id for {}",
+            plugin.id
+        );
+        return false;
+    };
     let plugins_manager = &session.services.plugins_manager;
     let plugins_config = turn.config.plugins_config_input();
-    if let Err(err) = plugins_manager
+    match plugins_manager
         .build_and_cache_remote_installed_plugin_marketplaces(
             &plugins_config,
             auth,
@@ -472,9 +472,19 @@ async fn refresh_remote_installed_plugins_cache_after_install(
         )
         .await
     {
-        warn!(
-            "failed to refresh remote installed plugins cache after plugin install request for {tool_id}: {err:#}"
-        );
+        Ok(marketplaces) => marketplaces
+            .into_iter()
+            .flat_map(|marketplace| marketplace.plugins)
+            .any(|installed_plugin| {
+                installed_plugin.remote_plugin_id == remote_plugin_id && installed_plugin.installed
+            }),
+        Err(err) => {
+            warn!(
+                "failed to refresh remote installed plugins cache after plugin install request for {}: {err:#}",
+                plugin.id
+            );
+            false
+        }
     }
 }
 

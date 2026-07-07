@@ -414,6 +414,7 @@ async fn legacy_connector_install_emits_attributed_suggestion_outcome() -> Resul
                     "remote_plugin_id": null,
                     "connector_ids": [DISCOVERABLE_GMAIL_ID],
                     "selected": false,
+                    "completed": false,
                 }],
                 "response_action": "decline",
                 "user_confirmed": false,
@@ -618,6 +619,7 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
                     "remote_plugin_id": REMOTE_PLUGIN_ID,
                     "connector_ids": [APP_CONNECTOR_ID],
                     "selected": false,
+                    "completed": false,
                 }],
                 "response_action": "decline",
                 "user_confirmed": false,
@@ -646,15 +648,37 @@ enum RefreshedAppsTools {
     Missing,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_plugin_install_refreshes_plugin_and_apps_tool_caches() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Available).await?;
-    run_remote_plugin_install_refresh_case(RefreshedAppsTools::Missing).await
+#[derive(Clone, Copy)]
+enum RefreshedPluginInventory {
+    Installed,
+    Missing,
 }
 
-async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTools) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_plugin_completion_uses_refreshed_plugin_inventory() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Installed,
+        RefreshedAppsTools::Available,
+    )
+    .await?;
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Installed,
+        RefreshedAppsTools::Missing,
+    )
+    .await?;
+    run_remote_plugin_install_refresh_case(
+        RefreshedPluginInventory::Missing,
+        RefreshedAppsTools::Available,
+    )
+    .await
+}
+
+async fn run_remote_plugin_install_refresh_case(
+    refreshed_plugin_inventory: RefreshedPluginInventory,
+    refreshed_tools: RefreshedAppsTools,
+) -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = match refreshed_tools {
         RefreshedAppsTools::Available => {
@@ -693,11 +717,20 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
     let test = build_test(&server, &apps_server).await?;
 
     let elicitation = start_install_turn(&test, "use Calendar").await?;
-    mount_remote_calendar_installed_plugins(&server).await;
-    drop(initial_remote_installed_plugins);
+    if matches!(
+        refreshed_plugin_inventory,
+        RefreshedPluginInventory::Installed
+    ) {
+        mount_remote_calendar_installed_plugins(&server).await;
+        drop(initial_remote_installed_plugins);
+    }
     resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
 
-    let completed = matches!(refreshed_tools, RefreshedAppsTools::Available);
+    let completed = matches!(
+        refreshed_plugin_inventory,
+        RefreshedPluginInventory::Installed
+    );
+    let apps_tools_available = matches!(refreshed_tools, RefreshedAppsTools::Available);
     let outcome_event =
         wait_for_analytics_event(&server, "codex_plugin_install_suggestion_outcome").await;
     let thread_id = outcome_event["event_params"]["thread_id"].clone();
@@ -716,6 +749,7 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
                     "remote_plugin_id": REMOTE_CALENDAR_PLUGIN_ID,
                     "connector_ids": [CALENDAR_CONNECTOR_ID],
                     "selected": true,
+                    "completed": completed,
                 }],
                 "response_action": "accept",
                 "user_confirmed": true,
@@ -756,15 +790,17 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         requests[1]
             .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
             .is_some(),
-        completed,
+        apps_tools_available,
         "the resumed router should reflect the refreshed Apps tools"
     );
-    assert!(
-        !tool_names(&requests[1].body_json())
-            .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "the refreshed installed-plugin cache should filter the cached recommendation"
-    );
+    if completed {
+        assert!(
+            !tool_names(&requests[1].body_json())
+                .iter()
+                .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+            "the refreshed installed-plugin cache should filter the cached recommendation"
+        );
+    }
     Ok(())
 }
 
