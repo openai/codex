@@ -250,6 +250,7 @@ pub(crate) struct ThreadManagerState {
     user_instructions_provider: Arc<dyn UserInstructionsProvider>,
     thread_store: Arc<dyn ThreadStore>,
     agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
+    thread_activity_gate: Arc<crate::thread_activity::ThreadActivityGate>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     session_source: SessionSource,
@@ -351,6 +352,9 @@ impl ThreadManager {
                 user_instructions_provider,
                 thread_store,
                 agent_graph_store,
+                thread_activity_gate: Arc::new(
+                    crate::thread_activity::ThreadActivityGate::default(),
+                ),
                 attestation_provider,
                 external_time_provider,
                 auth_manager,
@@ -459,6 +463,9 @@ impl ThreadManager {
                 ),
                 thread_store,
                 agent_graph_store,
+                thread_activity_gate: Arc::new(
+                    crate::thread_activity::ThreadActivityGate::default(),
+                ),
                 attestation_provider: None,
                 external_time_provider: None,
                 auth_manager,
@@ -1074,6 +1081,10 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn thread_activity_gate(&self) -> Arc<crate::thread_activity::ThreadActivityGate> {
+        Arc::clone(&self.thread_activity_gate)
+    }
+
     pub(crate) fn agent_graph_store(&self) -> Option<Arc<dyn AgentGraphStore>> {
         self.agent_graph_store.clone()
     }
@@ -1646,6 +1657,7 @@ impl ThreadManagerState {
                     session_source,
                 ));
                 e.insert(thread.clone());
+                thread.codex.session.thread_activity.mark_initialized();
                 return Ok(NewThread {
                     thread_id,
                     thread,

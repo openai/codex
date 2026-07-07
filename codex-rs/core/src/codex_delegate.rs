@@ -137,6 +137,7 @@ pub(crate) async fn run_codex_thread_interactive(
     }))
     .or_cancel(&cancel_token)
     .await??;
+    codex.session.thread_activity.mark_initialized();
     let thread_config = codex.thread_config_snapshot().await;
     let client_metadata = parent_session.app_server_client_metadata().await;
     emit_subagent_session_started(

@@ -858,6 +858,7 @@ pub(super) async fn submission_loop(
             warn!("failed to shutdown thread persistence after submission channel closed: {err}");
         }
     }
+    sess.thread_activity.mark_closed();
     debug!("Agent loop exited");
 }
 

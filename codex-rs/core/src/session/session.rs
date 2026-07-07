@@ -7,6 +7,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
+use crate::thread_activity::ThreadActivityHandle;
 use codex_extension_api::ExtensionDataInit;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
@@ -145,6 +146,7 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) submission_lifecycle: SubmissionLifecycle,
+    pub(crate) thread_activity: ThreadActivityHandle,
     pub(crate) submission_send_lock: Mutex<()>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
@@ -630,6 +632,7 @@ impl Session {
         session_configuration.forked_from_thread_id = forked_from_id;
         let parent_thread_id = session_configuration
             .parent_thread_id
+            .or_else(|| session_configuration.session_source.parent_thread_id())
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
         let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
@@ -1238,6 +1241,10 @@ impl Session {
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };
+            let thread_activity = services
+                .agent_control
+                .register_thread_activity(thread_id, parent_thread_id)
+                .ok_or_else(|| anyhow::anyhow!("thread or ancestor is shutting down"))?;
             let sess = Arc::new(Session {
                 thread_id,
                 installation_id,
@@ -1251,6 +1258,7 @@ impl Session {
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 submission_lifecycle: SubmissionLifecycle::default(),
+                thread_activity,
                 submission_send_lock: Mutex::new(()),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),

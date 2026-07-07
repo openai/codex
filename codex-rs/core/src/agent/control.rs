@@ -15,6 +15,8 @@ use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::thread_activity::ThreadActivityGate;
+use crate::thread_activity::ThreadActivityHandle;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
@@ -103,6 +105,7 @@ pub(crate) struct AgentControl {
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    thread_activity_gate: Arc<ThreadActivityGate>,
     /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
     rollout_budget: Arc<RolloutBudget>,
 }
@@ -113,8 +116,13 @@ impl AgentControl {
         manager: Weak<ThreadManagerState>,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
+        let thread_activity_gate = manager
+            .upgrade()
+            .map(|manager| manager.thread_activity_gate())
+            .unwrap_or_default();
         let control = Self {
             manager,
+            thread_activity_gate,
             ..Default::default()
         };
         if let Some(rollout_budget) = rollout_budget {
@@ -131,6 +139,15 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) fn register_thread_activity(
+        &self,
+        thread_id: ThreadId,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Option<ThreadActivityHandle> {
+        self.thread_activity_gate
+            .register(thread_id, parent_thread_id)
     }
 
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {

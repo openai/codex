@@ -5507,6 +5507,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_snapshot,
     );
+    let thread_activity = Arc::new(crate::thread_activity::ThreadActivityGate::default())
+        .register(thread_id, /*parent_thread_id*/ None)
+        .expect("test thread activity registration");
+    thread_activity.mark_initialized();
     let session = Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -5520,6 +5524,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         submission_lifecycle: SubmissionLifecycle::default(),
+        thread_activity,
         submission_send_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
@@ -7783,6 +7788,10 @@ where
         "turn_id".to_string(),
         skills_snapshot,
     ));
+    let thread_activity = Arc::new(crate::thread_activity::ThreadActivityGate::default())
+        .register(thread_id, /*parent_thread_id*/ None)
+        .expect("test thread activity registration");
+    thread_activity.mark_initialized();
     let session = Arc::new(Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -7796,6 +7805,7 @@ where
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         submission_lifecycle: SubmissionLifecycle::default(),
+        thread_activity,
         submission_send_lock: Mutex::new(()),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
