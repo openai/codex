@@ -27,10 +27,10 @@ const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Local-store helper that derives SQLite metadata from canonical rollout items.
+/// Store implementation helper that derives query metadata from canonical rollout items.
 ///
-/// This is private implementation state for [`crate::LocalThreadStore`]. Other stores receive raw
-/// history and may derive their own metadata, or none at all.
+/// Stores may retain this as private per-thread state when they need the local metadata projection.
+/// Other stores receive raw history and may derive different metadata, or none at all.
 pub(crate) struct ThreadMetadataSync {
     thread_id: ThreadId,
     cwd_seen: bool,
