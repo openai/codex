@@ -885,7 +885,7 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        self.state.remove_thread(thread_id).await
     }
 
     /// Tries to shut down all tracked threads concurrently within the provided timeout.
@@ -924,6 +924,9 @@ impl ThreadManager {
 
         let mut tracked_threads = self.state.threads.write().await;
         for thread_id in &report.completed {
+            if let Some(thread) = tracked_threads.get(thread_id) {
+                thread.codex.session.thread_activity.mark_unpublished();
+            }
             tracked_threads.remove(thread_id);
         }
 
@@ -1168,7 +1171,11 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        let mut threads = self.threads.write().await;
+        if let Some(thread) = threads.get(thread_id) {
+            thread.codex.session.thread_activity.mark_unpublished();
+        }
+        threads.remove(thread_id)
     }
 
     pub(crate) async fn effective_multi_agent_version_for_spawn(
@@ -1554,6 +1561,7 @@ impl ThreadManagerState {
                         thread,
                     });
                 }
+                thread.codex.session.thread_activity.mark_unpublished();
                 threads.remove(&resumed.conversation_id);
             }
         }

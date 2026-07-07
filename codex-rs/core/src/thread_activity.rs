@@ -20,7 +20,10 @@ struct ThreadActivityNode {
     // A lineage edge follows the stable logical thread ID across runtime generations.
     parent_thread_id: Option<ThreadId>,
     active: usize,
+    committed: usize,
     closing: bool,
+    closed: bool,
+    unpublished: bool,
     handle_live: bool,
     initializing: bool,
 }
@@ -33,6 +36,15 @@ pub(crate) struct ThreadActivityHandle {
     gate: Arc<ThreadActivityGate>,
     thread_id: ThreadId,
     generation: u64,
+}
+
+pub(crate) struct ThreadActivityReservation {
+    gate: Arc<ThreadActivityGate>,
+    thread_id: ThreadId,
+    generation: u64,
+    clear_closing_on_drop: bool,
+    delivery_prepared: bool,
+    active: bool,
 }
 
 impl ThreadActivityGate {
@@ -66,7 +78,10 @@ impl ThreadActivityGate {
                 generation,
                 parent_thread_id,
                 active: 1,
+                committed: 0,
                 closing: false,
+                closed: false,
+                unpublished: false,
                 handle_live: true,
                 initializing: true,
             },
@@ -124,6 +139,170 @@ impl ThreadActivityGate {
         })
     }
 
+    fn validate_ancestors(
+        state: &ThreadActivityState,
+        mut parent_thread_id: Option<ThreadId>,
+        allow_closing: bool,
+    ) -> bool {
+        let mut visited = HashSet::new();
+        while let Some(parent_id) = parent_thread_id
+            && visited.insert(parent_id)
+        {
+            let Some(node) = state.nodes.get(&parent_id) else {
+                return true;
+            };
+            if (node.closing || node.initializing) && !allow_closing {
+                return false;
+            }
+            parent_thread_id = node.parent_thread_id;
+        }
+        parent_thread_id.is_none()
+    }
+
+    fn try_reserve(
+        self: &Arc<Self>,
+        thread_id: ThreadId,
+        generation: u64,
+        close: bool,
+    ) -> Option<ThreadActivityReservation> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let node = state.nodes.get(&thread_id)?;
+        if node.generation != generation
+            || node.closed
+            || node.closing
+            || (node.initializing && !close)
+            || !Self::validate_ancestors(&state, node.parent_thread_id, close)
+        {
+            return None;
+        }
+        let node = state.nodes.get_mut(&thread_id)?;
+        node.active = node.active.checked_add(1)?;
+        node.closing = close;
+        Some(ThreadActivityReservation {
+            gate: Arc::clone(self),
+            thread_id,
+            generation,
+            clear_closing_on_drop: close,
+            delivery_prepared: false,
+            active: true,
+        })
+    }
+
+    fn try_reserve_idle_shutdown(
+        self: &Arc<Self>,
+        thread_id: ThreadId,
+        generation: u64,
+    ) -> Option<ThreadActivityReservation> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let node = state.nodes.get(&thread_id)?;
+        if node.generation != generation
+            || node.closed
+            || node.closing
+            || !Self::validate_ancestors(&state, node.parent_thread_id, /*allow_closing*/ true)
+            || node.active != 0
+            || Self::has_active_descendant(&state, thread_id)
+        {
+            return None;
+        }
+        let node = state.nodes.get_mut(&thread_id)?;
+        node.active = 1;
+        node.closing = true;
+        Some(ThreadActivityReservation {
+            gate: Arc::clone(self),
+            thread_id,
+            generation,
+            clear_closing_on_drop: true,
+            delivery_prepared: false,
+            active: true,
+        })
+    }
+
+    fn release(&self, thread_id: ThreadId, generation: u64, clear_closing: bool) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return;
+        };
+        if node.generation != generation || node.active == 0 {
+            return;
+        }
+        node.active -= 1;
+        if clear_closing && !node.closed {
+            node.closing = false;
+        }
+        if node.active == 0 && !node.handle_live {
+            Self::prune_inactive_orphaned(&mut state, thread_id, generation);
+        }
+    }
+
+    fn prepare_delivery(&self, thread_id: ThreadId, generation: u64) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return false;
+        };
+        if node.generation != generation || node.closed {
+            return false;
+        }
+        let Some(committed) = node.committed.checked_add(1) else {
+            return false;
+        };
+        if committed > node.active {
+            return false;
+        }
+        node.committed = committed;
+        true
+    }
+
+    fn rollback_delivery(&self, thread_id: ThreadId, generation: u64, clear_closing: bool) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return;
+        };
+        if node.generation != generation || node.committed == 0 || node.active == 0 {
+            return;
+        }
+        node.committed -= 1;
+        node.active -= 1;
+        if clear_closing && !node.closed {
+            node.closing = false;
+        }
+        if node.active == 0 && !node.handle_live {
+            Self::prune_inactive_orphaned(&mut state, thread_id, generation);
+        }
+    }
+
+    fn finish_submission(&self, thread_id: ThreadId, generation: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return;
+        };
+        if node.generation != generation || node.committed == 0 {
+            return;
+        }
+        node.committed -= 1;
+        node.active = node.active.saturating_sub(1);
+        if node.active == 0 && !node.handle_live {
+            Self::prune_inactive_orphaned(&mut state, thread_id, generation);
+        }
+    }
+
     fn mark_closed(&self, thread_id: ThreadId, generation: u64) {
         let mut state = self
             .state
@@ -134,7 +313,53 @@ impl ThreadActivityGate {
         };
         if node.generation == generation {
             node.closing = true;
+            node.closed = true;
+            if node.unpublished {
+                node.unpublished = false;
+                node.active = node.active.saturating_sub(1);
+            }
         }
+    }
+
+    fn mark_unpublished(&self, thread_id: ThreadId, generation: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return;
+        };
+        if node.generation != generation || node.closed || node.unpublished {
+            return;
+        }
+        let Some(active) = node.active.checked_add(1) else {
+            return;
+        };
+        node.active = active;
+        node.unpublished = true;
+    }
+
+    fn prepare_idle_shutdown_delivery(&self, thread_id: ThreadId, generation: u64) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(node) = state.nodes.get(&thread_id) else {
+            return false;
+        };
+        if node.generation != generation
+            || !node.closing
+            || node.closed
+            || node.active != 1
+            || Self::has_active_descendant(&state, thread_id)
+        {
+            return false;
+        }
+        let Some(node) = state.nodes.get_mut(&thread_id) else {
+            return false;
+        };
+        node.committed = 1;
+        true
     }
 
     fn mark_initialized(&self, thread_id: ThreadId, generation: u64) {
@@ -187,8 +412,26 @@ impl ThreadActivityHandle {
         self.gate.mark_initialized(self.thread_id, self.generation);
     }
 
+    pub(crate) fn try_reserve(&self, close: bool) -> Option<ThreadActivityReservation> {
+        self.gate
+            .try_reserve(self.thread_id, self.generation, close)
+    }
+
+    pub(crate) fn try_reserve_idle_shutdown(&self) -> Option<ThreadActivityReservation> {
+        self.gate
+            .try_reserve_idle_shutdown(self.thread_id, self.generation)
+    }
+
+    pub(crate) fn finish_submission(&self) {
+        self.gate.finish_submission(self.thread_id, self.generation);
+    }
+
     pub(crate) fn mark_closed(&self) {
         self.gate.mark_closed(self.thread_id, self.generation);
+    }
+
+    pub(crate) fn mark_unpublished(&self) {
+        self.gate.mark_unpublished(self.thread_id, self.generation);
     }
 }
 
@@ -204,15 +447,85 @@ impl Drop for ThreadActivityHandle {
         };
         if node.generation == self.generation {
             node.handle_live = false;
-            node.active = 0;
             node.closing = true;
-            node.initializing = false;
+            node.closed = true;
+            // The loop cannot finish committed submissions after its session handle disappears.
+            // Live RAII reservations (notably parent completion delivery) must drain themselves.
+            node.active = node.active.saturating_sub(node.committed);
+            node.committed = 0;
+            if node.initializing {
+                node.active = node.active.saturating_sub(1);
+                node.initializing = false;
+            }
+            if node.unpublished {
+                node.active = node.active.saturating_sub(1);
+                node.unpublished = false;
+            }
             ThreadActivityGate::prune_inactive_orphaned(
                 &mut state,
                 self.thread_id,
                 self.generation,
             );
         }
+    }
+}
+
+impl ThreadActivityReservation {
+    pub(crate) fn prepare_delivery(&mut self) -> bool {
+        if !self.active || self.delivery_prepared {
+            return false;
+        }
+        if self.gate.prepare_delivery(self.thread_id, self.generation) {
+            self.delivery_prepared = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn prepare_idle_shutdown_delivery(&mut self) -> bool {
+        if !self.active || self.delivery_prepared {
+            return false;
+        }
+        if self
+            .gate
+            .prepare_idle_shutdown_delivery(self.thread_id, self.generation)
+        {
+            self.delivery_prepared = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn commit(mut self) {
+        if self.delivery_prepared {
+            self.active = false;
+        }
+    }
+
+    pub(crate) fn release_after_failed_delivery(mut self) {
+        self.rollback(/*clear_closing*/ false);
+    }
+
+    fn rollback(&mut self, clear_closing: bool) {
+        if !self.active {
+            return;
+        }
+        if self.delivery_prepared {
+            self.gate
+                .rollback_delivery(self.thread_id, self.generation, clear_closing);
+        } else {
+            self.gate
+                .release(self.thread_id, self.generation, clear_closing);
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for ThreadActivityReservation {
+    fn drop(&mut self) {
+        self.rollback(self.clear_closing_on_drop);
     }
 }
 

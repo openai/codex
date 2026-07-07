@@ -792,7 +792,7 @@ impl Codex {
         }
         let is_shutdown = matches!(&sub.op, Op::Shutdown);
         let _send_guard = self.session.submission_send_lock.lock().await;
-        let Some(reservation) = self.session.submission_lifecycle.try_reserve(is_shutdown) else {
+        let Some(mut reservation) = self.session.try_reserve_submission(is_shutdown) else {
             if is_shutdown {
                 return Ok(());
             }
@@ -800,6 +800,9 @@ impl Codex {
                 "thread is shutting down".to_string(),
             ));
         };
+        if !reservation.prepare_delivery() {
+            return Err(CodexErr::InternalAgentDied);
+        }
         if self.tx_sub.send(sub).await.is_err() {
             reservation.release_after_failed_delivery();
             return Err(CodexErr::InternalAgentDied);
@@ -825,9 +828,12 @@ impl Codex {
         if self.session.submission_lifecycle.is_closing() {
             return Ok(true);
         }
-        let Some(reservation) = self.session.try_claim_idle_shutdown().await else {
+        let Some(mut reservation) = self.session.try_claim_idle_shutdown().await else {
             return Ok(false);
         };
+        if !reservation.prepare_idle_shutdown_delivery() {
+            return Ok(false);
+        }
         let sub = Submission {
             id: new_submission_id(),
             op: Op::Shutdown,
@@ -1053,11 +1059,11 @@ impl Session {
 
     pub(crate) async fn try_claim_idle_shutdown(
         &self,
-    ) -> Option<session::SubmissionReservation<'_>> {
+    ) -> Option<session::SessionActivityReservation<'_>> {
         if self.has_idle_shutdown_blocker().await {
             return None;
         }
-        let reservation = self.submission_lifecycle.try_reserve_idle_shutdown()?;
+        let reservation = self.try_reserve_idle_shutdown()?;
         if self.has_idle_shutdown_blocker().await {
             return None;
         }

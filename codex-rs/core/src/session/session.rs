@@ -8,6 +8,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use crate::thread_activity::ThreadActivityHandle;
+use crate::thread_activity::ThreadActivityReservation;
 use codex_extension_api::ExtensionDataInit;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
@@ -108,12 +109,37 @@ pub(crate) struct SubmissionReservation<'a> {
     active: bool,
 }
 
+pub(crate) struct SessionActivityReservation<'a> {
+    submission: SubmissionReservation<'a>,
+    thread: ThreadActivityReservation,
+}
+
+impl SessionActivityReservation<'_> {
+    pub(crate) fn prepare_delivery(&mut self) -> bool {
+        self.thread.prepare_delivery()
+    }
+
+    pub(crate) fn prepare_idle_shutdown_delivery(&mut self) -> bool {
+        self.thread.prepare_idle_shutdown_delivery()
+    }
+
+    pub(crate) fn commit(self) {
+        self.submission.commit();
+        self.thread.commit();
+    }
+
+    pub(crate) fn release_after_failed_delivery(self) {
+        self.submission.release_after_failed_delivery();
+        self.thread.release_after_failed_delivery();
+    }
+}
+
 impl SubmissionReservation<'_> {
     pub(crate) fn commit(mut self) {
         self.active = false;
     }
 
-    pub(crate) fn release_after_failed_delivery(mut self) {
+    fn release_after_failed_delivery(mut self) {
         if self.active {
             self.lifecycle.release(/*clear_closing*/ false);
             self.active = false;
@@ -572,12 +598,28 @@ impl Session {
         self.thread_id
     }
 
-    pub(crate) fn try_reserve_activity(&self) -> Option<SubmissionReservation<'_>> {
-        self.submission_lifecycle.try_reserve(/*close*/ false)
+    pub(crate) fn try_reserve_submission(
+        &self,
+        close: bool,
+    ) -> Option<SessionActivityReservation<'_>> {
+        let thread = self.thread_activity.try_reserve(close)?;
+        let submission = self.submission_lifecycle.try_reserve(close)?;
+        Some(SessionActivityReservation { submission, thread })
+    }
+
+    pub(crate) fn try_reserve_activity(&self) -> Option<SessionActivityReservation<'_>> {
+        self.try_reserve_submission(/*close*/ false)
+    }
+
+    pub(crate) fn try_reserve_idle_shutdown(&self) -> Option<SessionActivityReservation<'_>> {
+        let thread = self.thread_activity.try_reserve_idle_shutdown()?;
+        let submission = self.submission_lifecycle.try_reserve_idle_shutdown()?;
+        Some(SessionActivityReservation { submission, thread })
     }
 
     pub(crate) fn finish_submission(&self) {
         self.submission_lifecycle.finish_submission();
+        self.thread_activity.finish_submission();
     }
 
     /// Returns the identity shared by the root thread and all descendant threads.
