@@ -165,55 +165,19 @@ impl TestAppServer {
         self.process.wait().await
     }
 
-    pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .build()
-            .await
-    }
-
-    /// Starts an app server with the standard test environment and retains it
-    /// for the server's lifetime.
-    ///
-    /// Local test runs explicitly remove `CODEX_EXEC_SERVER_URL`; Docker- and
-    /// Wine-backed runs set it to the remote fixture URL. Use
-    /// [`Self::auto_env_params`] or
-    /// [`Self::send_thread_start_request_with_auto_env`] to select the matching
-    /// target-native cwd in a thread. Because `environments.toml` overrides the
-    /// URL-based configuration, this helper rejects a `codex_home` containing
-    /// that file.
-    pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::builder().with_codex_home(codex_home).build().await
-    }
-
-    /// Starts an auto-environment app server that emits JSON logs.
-    ///
-    /// `rust_log` is the value to use for the `RUST_LOG` environment variable.
-    pub async fn new_with_auto_env_and_json_logging(
-        codex_home: &Path,
-        rust_log: impl Into<String>,
-    ) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .with_json_logging(rust_log)
-            .build()
-            .await
-    }
-
     /// Returns the automatically selected test environment retained by this server.
     ///
     /// Tests can use the environment to arrange target-native filesystem fixtures before starting
-    /// a thread. Returns an error unless this server was created with [`Self::new_with_auto_env`].
+    /// a thread. Returns an error unless the builder's automatic environment is enabled.
     pub fn auto_env(&self) -> anyhow::Result<&TestEnv> {
         self.auto_env
             .as_ref()
-            .context("auto environment is unavailable; use TestAppServer::new_with_auto_env")
+            .context("auto environment is unavailable; enable it on TestAppServer::builder")
     }
 
     /// Returns app-server protocol parameters for the automatically selected
-    /// test environment. Returns an error unless this server was created with
-    /// [`Self::new_with_auto_env`].
+    /// test environment. Returns an error unless the builder's automatic
+    /// environment is enabled.
     pub fn auto_env_params(&self) -> anyhow::Result<TurnEnvironmentParams> {
         let selection = self.auto_env()?.selection();
         Ok(TurnEnvironmentParams {
@@ -247,90 +211,6 @@ impl TestAppServer {
     /// Returns every stderr line parsed and validated as a JSON log event.
     pub fn json_log_events(&self) -> anyhow::Result<Vec<serde_json::Value>> {
         self.json_logs.events()
-    }
-
-    pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .without_managed_config()
-            .build()
-            .await
-    }
-
-    pub async fn new_without_managed_config_with_env(
-        codex_home: &Path,
-        env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .without_managed_config()
-            .with_env_overrides(env_overrides)
-            .build()
-            .await
-    }
-
-    pub async fn new_with_plugin_startup_tasks(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .with_plugin_startup_tasks()
-            .build()
-            .await
-    }
-
-    pub async fn new_with_env_and_plugin_startup_tasks(
-        codex_home: &Path,
-        env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .with_plugin_startup_tasks()
-            .with_env_overrides(env_overrides)
-            .build()
-            .await
-    }
-
-    pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .with_args(args)
-            .build()
-            .await
-    }
-
-    /// Creates a new MCP process, allowing tests to override or remove
-    /// specific environment variables for the child process only.
-    ///
-    /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
-    /// remove a variable from the child's environment.
-    pub async fn new_with_env(
-        codex_home: &Path,
-        env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .with_env_overrides(env_overrides)
-            .build()
-            .await
-    }
-
-    pub async fn new_with_program_and_env(
-        codex_home: &Path,
-        program: &Path,
-        env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
-        Self::builder()
-            .with_codex_home(codex_home)
-            .without_auto_env()
-            .with_program(program)
-            .with_env_overrides(env_overrides)
-            .build()
-            .await
     }
 
     async fn new_with_program_env_and_args(
@@ -579,9 +459,9 @@ impl TestAppServer {
         self.send_request("thread/start", params).await
     }
 
-    /// Sends a `thread/start` request selecting the environment provisioned by
-    /// [`Self::new_with_auto_env`]. Returns an error if `params` already select
-    /// environments so the caller cannot accidentally override the fixture.
+    /// Sends a `thread/start` request selecting the builder's automatic
+    /// environment. Returns an error if `params` already select environments
+    /// so the caller cannot accidentally override the fixture.
     pub async fn send_thread_start_request_with_auto_env(
         &mut self,
         mut params: ThreadStartParams,
