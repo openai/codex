@@ -1,15 +1,16 @@
 use super::ShellRequest;
+use crate::approval_coordinator::ApprovalAction;
+use crate::approval_coordinator::ApprovalCoordinator;
+use crate::approval_coordinator::ApprovalHookRequest;
+use crate::approval_coordinator::ApprovalResolution;
+use crate::approval_coordinator::ApprovalResolutionSource;
+use crate::approval_coordinator::ApprovalReview;
+use crate::approval_coordinator::ApprovalReviewer;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
-use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
-use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -30,7 +31,6 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
-use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -374,12 +374,6 @@ enum DecisionSource {
     UnmatchedCommandFallback,
 }
 
-struct PromptDecision {
-    decision: ReviewDecision,
-    guardian_review_id: Option<String>,
-    rejection_message: Option<String>,
-}
-
 fn execve_prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     decision_source: &DecisionSource,
@@ -446,7 +440,7 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<AdditionalPermissionProfile>,
-    ) -> anyhow::Result<PromptDecision> {
+    ) -> anyhow::Result<ApprovalResolution> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.clone();
         let session = self.session.clone();
@@ -455,85 +449,52 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
-                // 1) Run PermissionRequest hooks
                 let permission_request = PermissionRequestPayload::bash(
                     codex_shell_command::parse_command::shlex_join(&command),
                     /*description*/ None,
                 );
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-                match run_permission_request_hooks(
+                ApprovalCoordinator::resolve_event_cancellable(
                     &session,
                     &turn,
-                    &effective_approval_id,
-                    permission_request,
-                )
-                .await
-                {
-                    Some(PermissionRequestDecision::Allow) => {
-                        return PromptDecision {
-                            decision: ReviewDecision::Approved,
-                            guardian_review_id: None,
-                            rejection_message: None,
-                        };
-                    }
-                    Some(PermissionRequestDecision::Deny { message }) => {
-                        return PromptDecision {
-                            decision: ReviewDecision::Denied,
-                            guardian_review_id: None,
-                            rejection_message: Some(message),
-                        };
-                    }
-                    None => {}
-                }
-
-                // 2) Route to Guardian if configured
-                if let Some(review_id) = guardian_review_id.clone() {
-                    let decision = review_approval_request(
-                        &session,
-                        &turn,
-                        review_id.clone(),
-                        GuardianApprovalRequest::Execve {
+                    ApprovalReviewer::for_turn(&turn),
+                    Some(ApprovalHookRequest {
+                        run_id: &effective_approval_id,
+                        payload: permission_request,
+                    }),
+                    ApprovalReview::main_turn_cancellable(
+                        ApprovalAction::Execve {
                             id: call_id.clone(),
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
                             cwd: workdir.clone(),
-                            additional_permissions,
+                            additional_permissions: additional_permissions.clone(),
                         },
                         /*retry_reason*/ None,
-                    )
-                    .await;
-                    return PromptDecision {
-                        decision,
-                        guardian_review_id,
-                        rejection_message: None,
-                    };
-                }
-
-                // 3) Fall back to regular user prompt
-                let decision = session
-                    .request_command_approval(
-                        &turn,
-                        call_id,
-                        approval_id,
-                        environment_id,
-                        command,
-                        workdir.clone(),
-                        /*reason*/ None,
-                        /*network_approval_context*/ None,
-                        /*proposed_execpolicy_amendment*/ None,
-                        additional_permissions,
-                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    )
-                    .await;
-                PromptDecision {
-                    decision,
-                    guardian_review_id: None,
-                    rejection_message: None,
-                }
+                        CancellationToken::new(),
+                    ),
+                    || async {
+                        session
+                            .request_command_approval(
+                                &turn,
+                                call_id,
+                                approval_id,
+                                environment_id,
+                                command,
+                                workdir,
+                                /*reason*/ None,
+                                /*network_approval_context*/ None,
+                                /*proposed_execpolicy_amendment*/ None,
+                                additional_permissions,
+                                Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+                            )
+                            .await
+                    },
+                )
+                .await
             })
             .await)
     }
@@ -588,22 +549,23 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            let message = if let Some(message) =
-                                prompt_decision.rejection_message.clone()
-                            {
-                                message
-                            } else if let Some(review_id) =
-                                prompt_decision.guardian_review_id.as_deref()
-                            {
-                                guardian_rejection_message(self.session.as_ref(), review_id).await
-                            } else {
-                                "User denied execution".to_string()
-                            };
+                            let message =
+                                if prompt_decision.source == ApprovalResolutionSource::User {
+                                    "User denied execution".to_string()
+                                } else {
+                                    prompt_decision
+                                        .rejection
+                                        .clone()
+                                        .unwrap_or_else(|| "Execution denied by policy".to_string())
+                                };
                             EscalationDecision::deny(Some(message))
                         }
-                        ReviewDecision::TimedOut => {
-                            EscalationDecision::deny(Some(guardian_timeout_message()))
-                        }
+                        ReviewDecision::TimedOut => EscalationDecision::deny(Some(
+                            prompt_decision
+                                .rejection
+                                .clone()
+                                .unwrap_or_else(guardian_timeout_message),
+                        )),
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
                         }

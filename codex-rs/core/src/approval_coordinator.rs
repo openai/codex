@@ -104,6 +104,10 @@ impl ApprovalReviewer {
         Self::routes_to_guardian(turn, reviewer).then_some(Self::Guardian)
     }
 
+    pub(crate) fn automatic_for_turn(turn: &TurnContext) -> Option<Self> {
+        Self::automatic_for_reviewer(turn, turn.config.approvals_reviewer)
+    }
+
     fn routes_to_guardian(turn: &TurnContext, reviewer: ApprovalsReviewer) -> bool {
         matches!(
             turn.approval_policy.value(),
