@@ -2431,6 +2431,48 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_cutoff_is_omitted_for_non_openai_provider() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.name = "mock".to_string();
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));

@@ -828,7 +828,8 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
-        if !self.state.provider.info().is_openai() {
+        let is_openai = self.state.provider.info().is_openai();
+        if !is_openai {
             input
                 .iter_mut()
                 .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
@@ -856,13 +857,10 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let stream_options =
-            self.state
-                .concurrent_reasoning_summaries_enabled
-                .then_some(StreamOptions {
-                    reasoning_summary_delivery:
-                        codex_api::ReasoningSummaryDelivery::SequentialCutoff,
-                });
+        let stream_options = (self.state.concurrent_reasoning_summaries_enabled && is_openai)
+            .then_some(StreamOptions {
+                reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::SequentialCutoff,
+            });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -1092,10 +1090,6 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
-    }
-
-    pub(crate) fn uses_sequential_cutoff_reasoning_summaries(&self) -> bool {
-        self.client.state.concurrent_reasoning_summaries_enabled
     }
 
     fn reset_websocket_session(&mut self) {
@@ -1557,7 +1551,6 @@ impl ModelClientSession {
             };
             if warmup {
                 ws_payload.generate = Some(false);
-                ws_payload.stream_options = None;
             }
 
             match self
