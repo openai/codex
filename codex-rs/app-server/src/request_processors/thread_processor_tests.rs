@@ -1273,7 +1273,7 @@ mod thread_processor_behavior_tests {
             );
         }
 
-        manager.remove_thread_state(thread_id).await;
+        let _ = manager.remove_thread_state(thread_id).await;
         assert_eq!(cancel_rx.await, Ok(()));
 
         let state = manager.thread_state(thread_id).await;

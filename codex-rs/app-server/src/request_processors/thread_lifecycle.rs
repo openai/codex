@@ -173,13 +173,17 @@ pub(super) async fn ensure_conversation_listener(
         listener_task_context.clone(),
         conversation_id,
         conversation,
-        thread_state,
+        Arc::clone(&thread_state),
     )
     .await
     {
         let _ = listener_task_context
             .thread_state_manager
-            .unsubscribe_connection_from_thread(conversation_id, connection_id)
+            .unsubscribe_connection_from_current_thread_state(
+                conversation_id,
+                connection_id,
+                &thread_state,
+            )
             .await;
         return Err(error);
     }
@@ -210,6 +214,10 @@ pub(super) fn log_listener_attach_result(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "listener registration must be serialized against pending unloads"
+)]
 pub(super) async fn ensure_listener_task_running(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
@@ -240,28 +248,6 @@ pub(super) async fn ensure_listener_task_running(
         .await;
     let thread_settings_baseline =
         thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
-    let (mut listener_command_rx, listener_generation) = {
-        let mut thread_state = thread_state.lock().await;
-        if thread_state.listener_matches(&conversation) {
-            return Ok(());
-        }
-        let (listener_command_rx, listener_generation) = thread_state.set_listener(
-            cancel_tx,
-            &conversation,
-            watch_registration,
-            thread_settings_baseline,
-        );
-        let Some(listener_command_tx) = thread_state.listener_command_tx() else {
-            tracing::warn!(
-                "thread listener command sender missing immediately after listener registration"
-            );
-            return Ok(());
-        };
-        listener_task_context
-            .thread_state_manager
-            .register_listener_command_tx(conversation_id, listener_command_tx);
-        (listener_command_rx, listener_generation)
-    };
     let ListenerTaskContext {
         outgoing,
         thread_manager,
@@ -273,8 +259,44 @@ pub(super) async fn ensure_listener_task_running(
         codex_home,
         ..
     } = listener_task_context;
+
+    let pending_thread_unloads_guard = pending_thread_unloads.lock().await;
+    if pending_thread_unloads_guard.contains(&conversation_id) {
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
+    }
+    let Some(mut thread_state_guard) = thread_state_manager
+        .lock_current_thread_state(conversation_id, &thread_state)
+        .await
+    else {
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
+    };
+    if thread_state_guard.listener_matches(&conversation) {
+        return Ok(());
+    }
+    let (mut listener_command_rx, listener_generation) = thread_state_guard.set_listener(
+        cancel_tx,
+        &conversation,
+        watch_registration,
+        thread_settings_baseline,
+    );
+    let Some(listener_command_tx) = thread_state_guard.listener_command_tx() else {
+        tracing::warn!(
+            "thread listener command sender missing immediately after listener registration"
+        );
+        return Ok(());
+    };
+    let listener_command_tx_for_task = listener_command_tx.clone();
+    let thread_state_for_task = Arc::clone(&thread_state);
+    let pending_thread_unloads_for_task = Arc::clone(&pending_thread_unloads);
+    let listener_registry = thread_state_manager.clone();
     let outgoing_for_task = Arc::clone(&outgoing);
-    tokio::spawn(async move {
+    let listener_task = async move {
+        let thread_state = thread_state_for_task;
+        let pending_thread_unloads = pending_thread_unloads_for_task;
         loop {
             tokio::select! {
                 biased;
@@ -389,11 +411,34 @@ pub(super) async fn ensure_listener_task_running(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
-            thread_state.clear_listener();
+            let _ = thread_state.clear_listener();
+            drop(thread_state);
+            let _ = thread_state_manager
+                .unregister_listener_command_tx(conversation_id, &listener_command_tx_for_task);
         }
-    });
-    Ok(())
+    };
+    let registration = listener_registry.spawn_and_register_listener(
+        conversation_id,
+        listener_command_tx,
+        listener_task,
+    );
+    if matches!(&registration, ThreadListenerRegistration::Closing) {
+        let _ = thread_state_guard.clear_listener();
+    }
+    drop(thread_state_guard);
+    drop(pending_thread_unloads_guard);
+    match registration {
+        ThreadListenerRegistration::Registered(retired) => {
+            if let Some(retired) = retired {
+                retired.abort();
+                retired.wait_until_closed().await;
+            }
+            Ok(())
+        }
+        ThreadListenerRegistration::Closing => Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        ))),
+    }
 }
 
 pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
@@ -420,7 +465,7 @@ pub(super) async fn unload_thread_without_subscribers(
     outgoing
         .cancel_requests_for_thread(thread_id, /*error*/ None)
         .await;
-    thread_state_manager.remove_thread_state(thread_id).await;
+    let _ = thread_state_manager.remove_thread_state(thread_id).await;
 
     tokio::spawn(async move {
         match wait_for_thread_shutdown(&thread).await {

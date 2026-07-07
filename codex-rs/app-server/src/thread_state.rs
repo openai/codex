@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
@@ -117,14 +118,17 @@ impl ThreadState {
         (listener_command_rx, self.listener_generation)
     }
 
-    pub(crate) fn clear_listener(&mut self) {
+    pub(crate) fn clear_listener(
+        &mut self,
+    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
         if let Some(cancel_tx) = self.cancel_tx.take() {
             let _ = cancel_tx.send(());
         }
-        self.listener_command_tx = None;
+        let listener_command_tx = self.listener_command_tx.take();
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
+        listener_command_tx
     }
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
@@ -159,6 +163,30 @@ impl ThreadState {
         self.last_thread_settings = Some(thread_settings);
         changed
     }
+}
+
+pub(crate) struct ThreadListenerHandle {
+    command_tx: mpsc::UnboundedSender<ThreadListenerCommand>,
+    abort_handle: Option<tokio::task::AbortHandle>,
+}
+
+impl ThreadListenerHandle {
+    pub(crate) fn abort(&self) {
+        if let Some(abort_handle) = &self.abort_handle {
+            abort_handle.abort();
+        }
+    }
+
+    pub(crate) async fn wait_until_closed(self) {
+        if self.abort_handle.is_some() {
+            self.command_tx.closed().await;
+        }
+    }
+}
+
+pub(crate) enum ThreadListenerRegistration {
+    Registered(Option<ThreadListenerHandle>),
+    Closing,
 }
 
 pub(crate) async fn resolve_server_request_on_thread_listener(
@@ -205,6 +233,16 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
+    struct DropSignal(Option<oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(stopped) = self.0.take() {
+                let _ = stopped.send(());
+            }
+        }
+    }
+
     #[test]
     fn note_thread_settings_reports_only_effective_changes() {
         let mut state = ThreadState::default();
@@ -219,6 +257,105 @@ mod tests {
         ];
 
         assert_eq!(results, vec![true, false, true, false]);
+    }
+
+    #[test]
+    fn stale_listener_cannot_unregister_replacement() {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::new();
+        let (old_tx, _old_rx) = mpsc::unbounded_channel();
+        let (replacement_tx, _replacement_rx) = mpsc::unbounded_channel();
+        manager.register_listener_command_tx(thread_id, old_tx.clone());
+        manager.register_listener_command_tx(thread_id, replacement_tx.clone());
+
+        assert!(
+            manager
+                .unregister_listener_command_tx(thread_id, &old_tx)
+                .is_none()
+        );
+        assert!(
+            manager
+                .current_listener_command_tx(thread_id)
+                .is_some_and(|current| current.same_channel(&replacement_tx))
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_all_listeners_waits_for_aborted_tasks() {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::new();
+        let connection_id = ConnectionId(1);
+        manager
+            .connection_initialized(connection_id, ConnectionCapabilities::default())
+            .await;
+        let thread_state = manager.thread_state(thread_id).await;
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (first_stopped_tx, first_stopped_rx) = oneshot::channel();
+        let first_stopped = DropSignal(Some(first_stopped_tx));
+        thread_state.lock().await.listener_command_tx = Some(command_tx.clone());
+        let registration = manager.spawn_and_register_listener(thread_id, command_tx, async move {
+            let _stopped = first_stopped;
+            futures::future::pending::<()>().await;
+            drop(command_rx);
+        });
+        assert!(matches!(
+            registration,
+            ThreadListenerRegistration::Registered(None)
+        ));
+        let (replacement_tx, replacement_rx) = mpsc::unbounded_channel();
+        let (replacement_stopped_tx, replacement_stopped_rx) = oneshot::channel();
+        let replacement_stopped = DropSignal(Some(replacement_stopped_tx));
+        thread_state.lock().await.listener_command_tx = Some(replacement_tx.clone());
+        let registration =
+            manager.spawn_and_register_listener(thread_id, replacement_tx, async move {
+                let _stopped = replacement_stopped;
+                futures::future::pending::<()>().await;
+                drop(replacement_rx);
+            });
+        assert!(matches!(
+            registration,
+            ThreadListenerRegistration::Registered(Some(_))
+        ));
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            manager.clear_all_listeners(),
+        )
+        .await
+        .expect("listener shutdown should not hang");
+        first_stopped_rx
+            .await
+            .expect("superseded listener should stop");
+        replacement_stopped_rx
+            .await
+            .expect("current listener should stop");
+        assert!(
+            manager
+                .try_ensure_connection_subscribed(
+                    ThreadId::new(),
+                    connection_id,
+                    /*experimental_raw_events*/ false,
+                )
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn detached_thread_state_is_rejected_for_listener_install() {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::new();
+        let detached = manager.thread_state(thread_id).await;
+        let _ = manager.remove_thread_state(thread_id).await;
+        let replacement = manager.thread_state(thread_id).await;
+
+        assert!(!Arc::ptr_eq(&detached, &replacement));
+        assert!(
+            manager
+                .lock_current_thread_state(thread_id, &detached)
+                .await
+                .is_none()
+        );
     }
 
     fn thread_settings(model: &str) -> ThreadSettings {
@@ -282,6 +419,12 @@ struct ThreadStateManagerInner {
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
 
+#[derive(Default)]
+struct ThreadListenerRegistry {
+    closing: bool,
+    listeners: HashMap<ThreadId, ThreadListenerHandle>,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
@@ -292,8 +435,8 @@ pub(crate) struct ThreadStateManager {
     state: Arc<Mutex<ThreadStateManagerInner>>,
     // Extension event sinks are synchronous, so they need an await-free way to
     // enqueue work on the active per-thread listener.
-    listener_commands:
-        Arc<StdMutex<HashMap<ThreadId, mpsc::UnboundedSender<ThreadListenerCommand>>>>,
+    listener_commands: Arc<StdMutex<ThreadListenerRegistry>>,
+    listener_tasks: TaskTracker,
 }
 
 impl ThreadStateManager {
@@ -364,6 +507,25 @@ impl ThreadStateManager {
         state.threads.entry(thread_id).or_default().state.clone()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "thread state identity must be checked while its lock is held"
+    )]
+    pub(crate) async fn lock_current_thread_state<'a>(
+        &self,
+        thread_id: ThreadId,
+        expected: &'a Arc<Mutex<ThreadState>>,
+    ) -> Option<tokio::sync::MutexGuard<'a, ThreadState>> {
+        let guard = expected.lock().await;
+        self.state
+            .lock()
+            .await
+            .threads
+            .get(&thread_id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.state, expected))
+            .then_some(guard)
+    }
+
     pub(crate) fn current_listener_command_tx(
         &self,
         thread_id: ThreadId,
@@ -371,57 +533,149 @@ impl ThreadStateManager {
         self.listener_commands
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .listeners
             .get(&thread_id)
-            .cloned()
+            .map(|listener| listener.command_tx.clone())
     }
 
+    #[cfg(test)]
     pub(crate) fn register_listener_command_tx(
         &self,
         thread_id: ThreadId,
         tx: mpsc::UnboundedSender<ThreadListenerCommand>,
     ) {
-        self.listener_commands
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(thread_id, tx);
+        let _ = self.register_listener(
+            thread_id,
+            ThreadListenerHandle {
+                command_tx: tx,
+                abort_handle: None,
+            },
+        );
     }
 
-    pub(crate) fn unregister_listener_command_tx(&self, thread_id: ThreadId) {
-        self.listener_commands
+    pub(crate) fn spawn_and_register_listener<F>(
+        &self,
+        thread_id: ThreadId,
+        command_tx: mpsc::UnboundedSender<ThreadListenerCommand>,
+        listener: F,
+    ) -> ThreadListenerRegistration
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut registry = self
+            .listener_commands
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&thread_id);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if registry.closing {
+            return ThreadListenerRegistration::Closing;
+        }
+        let listener = self.listener_tasks.spawn(listener);
+        let handle = ThreadListenerHandle {
+            command_tx,
+            abort_handle: Some(listener.abort_handle()),
+        };
+        let retired = registry.listeners.insert(thread_id, handle);
+        if let Some(retired) = &retired {
+            retired.abort();
+        }
+        drop(listener);
+        ThreadListenerRegistration::Registered(retired)
     }
 
-    pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
+    #[cfg(test)]
+    fn register_listener(
+        &self,
+        thread_id: ThreadId,
+        listener: ThreadListenerHandle,
+    ) -> ThreadListenerRegistration {
+        let mut registry = self
+            .listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if registry.closing {
+            ThreadListenerRegistration::Closing
+        } else {
+            ThreadListenerRegistration::Registered(registry.listeners.insert(thread_id, listener))
+        }
+    }
+
+    pub(crate) fn unregister_listener_command_tx(
+        &self,
+        thread_id: ThreadId,
+        expected: &mpsc::UnboundedSender<ThreadListenerCommand>,
+    ) -> Option<ThreadListenerHandle> {
+        let mut listeners = self
+            .listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if listeners
+            .listeners
+            .get(&thread_id)
+            .is_some_and(|current| current.command_tx.same_channel(expected))
+        {
+            listeners.listeners.remove(&thread_id)
+        } else {
+            None
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "thread state removal must commit atomically after both locks are held"
+    )]
+    pub(crate) async fn remove_thread_state(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ThreadListenerHandle> {
         let thread_state = {
+            let state = self.state.lock().await;
+            state.threads.get(&thread_id)?.state.clone()
+        };
+        let mut thread_state_guard = self
+            .lock_current_thread_state(thread_id, &thread_state)
+            .await?;
+        {
             let mut state = self.state.lock().await;
-            let thread_state = state
-                .threads
-                .remove(&thread_id)
-                .map(|thread_entry| thread_entry.state);
+            state.threads.remove(&thread_id);
             state.thread_ids_by_connection.retain(|_, thread_ids| {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()
             });
-            thread_state
-        };
-        self.unregister_listener_command_tx(thread_id);
-
-        if let Some(thread_state) = thread_state {
-            let mut thread_state = thread_state.lock().await;
-            tracing::debug!(
-                thread_id = %thread_id,
-                listener_generation = thread_state.listener_generation,
-                had_listener = thread_state.cancel_tx.is_some(),
-                had_active_turn = thread_state.active_turn_snapshot().is_some(),
-                "clearing thread listener during thread-state teardown"
-            );
-            thread_state.clear_listener();
         }
+        tracing::debug!(
+            thread_id = %thread_id,
+            listener_generation = thread_state_guard.listener_generation,
+            had_listener = thread_state_guard.cancel_tx.is_some(),
+            had_active_turn = thread_state_guard.active_turn_snapshot().is_some(),
+            "clearing thread listener during thread-state teardown"
+        );
+        let listener_command_tx = thread_state_guard.clear_listener();
+        drop(thread_state_guard);
+        let listener =
+            listener_command_tx.and_then(|tx| self.unregister_listener_command_tx(thread_id, &tx));
+        if let Some(listener) = &listener {
+            listener.abort();
+        }
+        listener
     }
 
     pub(crate) async fn clear_all_listeners(&self) {
+        let listeners = {
+            let mut registry = self
+                .listener_commands
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registry.closing = true;
+            self.listener_tasks.close();
+            registry
+                .listeners
+                .drain()
+                .map(|(_, listener)| listener)
+                .collect::<Vec<_>>()
+        };
+        for listener in &listeners {
+            listener.abort();
+        }
         let thread_states = {
             let state = self.state.lock().await;
             state
@@ -430,9 +684,7 @@ impl ThreadStateManager {
                 .map(|(thread_id, thread_entry)| (*thread_id, thread_entry.state.clone()))
                 .collect::<Vec<_>>()
         };
-
         for (thread_id, thread_state) in thread_states {
-            self.unregister_listener_command_tx(thread_id);
             let mut thread_state = thread_state.lock().await;
             tracing::debug!(
                 thread_id = %thread_id,
@@ -441,8 +693,10 @@ impl ThreadStateManager {
                 had_active_turn = thread_state.active_turn_snapshot().is_some(),
                 "clearing thread listener during app-server shutdown"
             );
-            thread_state.clear_listener();
+            let _ = thread_state.clear_listener();
         }
+        drop(listeners);
+        self.listener_tasks.wait().await;
     }
 
     pub(crate) async fn unsubscribe_connection_from_thread(
@@ -450,9 +704,39 @@ impl ThreadStateManager {
         thread_id: ThreadId,
         connection_id: ConnectionId,
     ) -> bool {
+        self.unsubscribe_connection_from_thread_if_state(
+            thread_id,
+            connection_id,
+            /*expected*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn unsubscribe_connection_from_current_thread_state(
+        &self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+        expected: &Arc<Mutex<ThreadState>>,
+    ) -> bool {
+        self.unsubscribe_connection_from_thread_if_state(
+            thread_id,
+            connection_id,
+            /*expected*/ Some(expected),
+        )
+        .await
+    }
+
+    async fn unsubscribe_connection_from_thread_if_state(
+        &self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+        expected: Option<&Arc<Mutex<ThreadState>>>,
+    ) -> bool {
         {
             let mut state = self.state.lock().await;
-            if !state.threads.contains_key(&thread_id) {
+            if !state.threads.get(&thread_id).is_some_and(|entry| {
+                expected.is_none_or(|expected| Arc::ptr_eq(&entry.state, expected))
+            }) {
                 return false;
             }
 
@@ -497,7 +781,13 @@ impl ThreadStateManager {
     ) -> Option<Arc<Mutex<ThreadState>>> {
         let thread_state = {
             let mut state = self.state.lock().await;
-            if !state.live_connections.contains_key(&connection_id) {
+            if self
+                .listener_commands
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .closing
+                || !state.live_connections.contains_key(&connection_id)
+            {
                 return None;
             }
             state
@@ -525,7 +815,13 @@ impl ThreadStateManager {
         connection_id: ConnectionId,
     ) -> bool {
         let mut state = self.state.lock().await;
-        if !state.live_connections.contains_key(&connection_id) {
+        if self
+            .listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closing
+            || !state.live_connections.contains_key(&connection_id)
+        {
             return false;
         }
         state

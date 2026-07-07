@@ -796,7 +796,8 @@ impl ThreadRequestProcessor {
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
-        self.thread_state_manager
+        let _ = self
+            .thread_state_manager
             .remove_thread_state(thread_id)
             .await;
         self.thread_watch_manager

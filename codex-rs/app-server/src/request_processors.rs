@@ -546,6 +546,7 @@ use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
+use crate::thread_state::ThreadListenerRegistration;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
