@@ -17,25 +17,17 @@ use crate::outgoing_message::OutgoingMessageSender;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Clone)]
 pub(crate) struct ExternalAuthBridge {
     outgoing: Arc<OutgoingMessageSender>,
-    auth: Arc<RwLock<CodexAuth>>,
+    auth: RwLock<CodexAuth>,
 }
 
 impl ExternalAuthBridge {
     pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>, auth: CodexAuth) -> Self {
         Self {
             outgoing,
-            auth: Arc::new(RwLock::new(auth)),
+            auth: RwLock::new(auth),
         }
-    }
-
-    fn current_auth(&self) -> std::io::Result<CodexAuth> {
-        self.auth
-            .read()
-            .map(|auth| auth.clone())
-            .map_err(|_| std::io::Error::other("external auth lock is poisoned"))
     }
 
     async fn refresh(&self, context: ExternalAuthRefreshContext) -> std::io::Result<CodexAuth> {
@@ -89,7 +81,12 @@ impl ExternalAuthBridge {
 
 impl ExternalAuth for ExternalAuthBridge {
     fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
-        Box::pin(async { self.current_auth() })
+        Box::pin(async {
+            self.auth
+                .read()
+                .map(|auth| auth.clone())
+                .map_err(|_| std::io::Error::other("external auth lock is poisoned"))
+        })
     }
 
     fn refresh(&self, context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {

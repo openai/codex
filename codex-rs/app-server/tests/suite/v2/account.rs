@@ -327,6 +327,27 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         }
     );
 
+    let logout_id = mcp.send_logout_account_request().await?;
+    let logout_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(logout_id)),
+    )
+    .await??;
+    let _: LogoutAccountResponse = to_response(logout_resp)?;
+
+    let get_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let get_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(get_resp)?;
+    assert_eq!(account.account, None);
+
     Ok(())
 }
 

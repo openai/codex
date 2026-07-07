@@ -86,9 +86,6 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     ) -> ModelsManagerFuture<'_, Vec<ModelPreset>> {
         Box::pin(
             async move {
-                if let Some(auth_manager) = self.auth_manager() {
-                    let _ = auth_manager.auth().await;
-                }
                 let catalog = self.raw_model_catalog(refresh_strategy).await;
                 self.build_available_models(catalog.models)
             }
