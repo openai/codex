@@ -1,4 +1,6 @@
+use super::bedrock_auth::clear_user_model_provider_if_bedrock;
 use super::bedrock_auth::set_user_model_provider_to_bedrock;
+use super::bedrock_auth::user_model_provider_state;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
@@ -831,13 +833,26 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> Result<(), JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
                 drop(active);
             }
+        }
+
+        let managed_bedrock_auth = matches!(
+            self.auth_manager.auth_cached(),
+            Some(CodexAuth::BedrockApiKey(_))
+        );
+        let user_model_provider = if managed_bedrock_auth {
+            Some(user_model_provider_state(&self.config_manager).await?)
+        } else {
+            None
+        };
+        if self.config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
+            return Ok(());
         }
 
         match self.auth_manager.logout_with_revoke().await {
@@ -854,26 +869,20 @@ impl AccountRequestProcessor {
         )
         .await;
 
-        // Reflect the current auth method after logout (likely None).
-        Ok(self
-            .auth_manager
-            .auth_cached()
-            .as_ref()
-            .map(CodexAuth::api_auth_mode)
-            .map(auth_mode_to_api))
+        if let Some(user_model_provider) = user_model_provider {
+            clear_user_model_provider_if_bedrock(&self.config_manager, user_model_provider).await?;
+        }
+
+        Ok(())
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
         let result = self.logout_common().await;
-        let account_updated =
-            result
-                .as_ref()
-                .ok()
-                .cloned()
-                .map(|auth_mode| AccountUpdatedNotification {
-                    auth_mode,
-                    plan_type: None,
-                });
+        let account_updated = if result.is_ok() {
+            Some(self.current_account_updated_notification())
+        } else {
+            None
+        };
         self.outgoing
             .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
             .await;

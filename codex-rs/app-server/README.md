@@ -2060,6 +2060,8 @@ Codex stores the key and region as the primary Codex auth, replacing any previou
 { "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
+When Codex-managed Amazon Bedrock auth is stored, logout removes that credential and clears the user-level `model_provider` only when it is still `"amazon-bedrock"`. A concurrent user config change is preserved. For AWS-managed Bedrock auth, logout is a no-op because the AWS SDK credential chain is managed outside Codex.
+
 ### 7) Rate limits (ChatGPT)
 
 ```json
