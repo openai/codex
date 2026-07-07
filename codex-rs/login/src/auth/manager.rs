@@ -2221,7 +2221,7 @@ impl AuthManager {
         if let Ok(mut external_auth) = self.external_auth.write()
             && external_auth.take().is_some()
         {
-            self.set_cached_auth(None);
+            self.set_cached_auth(/*new_auth*/ None);
         }
     }
 
