@@ -21,6 +21,21 @@ fn run_git(cwd: &Path, args: &[&str]) {
     );
 }
 
+fn unset_git_config(cwd: &Path, key: &str) {
+    let mut command = std::process::Command::new("git");
+    isolate_git_command_environment(&mut command);
+    let output = command
+        .current_dir(cwd)
+        .args(["config", "--unset-all", key])
+        .output()
+        .expect("Git");
+    assert!(
+        output.status.success() || output.status.code() == Some(5),
+        "git config --unset-all {key}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn run_isolated_config_test(test_name: &str) {
     let environment = tempfile::tempdir().expect("isolated Git environment");
     let global_config = environment.path().join("global.gitconfig");
@@ -166,6 +181,9 @@ async fn status_replaces_filter_config_with_an_owned_helper_free_context() {
     }
     let repo = tempfile::tempdir().expect("repo");
     run_git(repo.path(), &["init", "-q"]);
+    // Git for Windows may write this platform default during `init`. Remove it
+    // so this fixture actually exercises the absent-config branch everywhere.
+    unset_git_config(repo.path(), "core.symlinks");
     std::fs::write(repo.path().join("file.txt"), "contents\n").expect("tracked file");
     std::fs::write(repo.path().join(".gitattributes"), "file.txt filter=demo\n")
         .expect("attributes");
