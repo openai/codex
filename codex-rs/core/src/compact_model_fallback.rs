@@ -2,33 +2,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionReason;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::CodexErr;
-use serde_json::Value;
 use tracing::warn;
-
-#[cfg(test)]
-#[path = "compact_model_fallback_tests.rs"]
-mod tests;
-
-pub(crate) fn is_model_unavailable_error(error: &CodexErr, model: &str) -> bool {
-    let CodexErr::InvalidRequest(message) = error else {
-        return false;
-    };
-    let expected =
-        format!("The '{model}' model is not supported when using Codex with a ChatGPT account.");
-    if message == &expected {
-        return true;
-    }
-    serde_json::from_str::<Value>(message)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .is_some_and(|message| message == expected)
-}
 
 pub(crate) fn record_model_fallback(
     session_telemetry: &SessionTelemetry,
@@ -36,7 +10,7 @@ pub(crate) fn record_model_fallback(
     current_model: &str,
     reason: CompactionReason,
     implementation: CompactionImplementation,
-    succeeded: bool,
+    fallback_error: Option<&CodexErr>,
 ) {
     let reason_tag = match reason {
         CompactionReason::UserRequested => "user_requested",
@@ -49,7 +23,11 @@ pub(crate) fn record_model_fallback(
         CompactionImplementation::ResponsesCompactionV2 => "responses_compaction_v2",
         CompactionImplementation::ResponsesCompact => "responses_compact",
     };
-    let outcome = if succeeded { "succeeded" } else { "failed" };
+    let outcome = if fallback_error.is_none() {
+        "succeeded"
+    } else {
+        "failed"
+    };
     session_telemetry.counter(
         "codex.compaction.model_fallback",
         /*inc*/ 1,
@@ -65,6 +43,7 @@ pub(crate) fn record_model_fallback(
         ?reason,
         ?implementation,
         outcome,
-        "previous model was unavailable during compaction; retried with current model"
+        ?fallback_error,
+        "previous-model compaction failed; retried with current model"
     );
 }

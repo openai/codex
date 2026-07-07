@@ -282,14 +282,9 @@ fn openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     provider
 }
 
-fn unsupported_chatgpt_model_response(model: &str) -> wiremock::ResponseTemplate {
+fn invalid_request_response(message: impl Into<String>) -> wiremock::ResponseTemplate {
     wiremock::ResponseTemplate::new(/*status*/ 400).set_body_json(json!({
-        "error": {
-            "type": "invalid_request_error",
-            "message": format!(
-                "The '{model}' model is not supported when using Codex with a ChatGPT account."
-            ),
-        }
+        "detail": message.into(),
     }))
 }
 
@@ -2301,9 +2296,9 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    let retired_model = "gpt-5.6-oai";
-    let previous_model_family = "gpt-5.6";
-    let renamed_model = "gpt-5.6-sol-oai";
+    let retired_model = "gpt-5.5";
+    let previous_model_family = "gpt-5.5";
+    let renamed_model = "gpt-5.6";
     let mut previous_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-a"));
     previous_model_info.slug = previous_model_family.to_string();
     let mut renamed_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-b"));
@@ -2324,7 +2319,9 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
                 ev_assistant_message("m1", "before switch"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ])),
-            unsupported_chatgpt_model_response(retired_model),
+            invalid_request_response(format!(
+                "The '{retired_model}' model is not supported when using Codex with a ChatGPT account."
+            )),
             sse_response(sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -2436,13 +2433,13 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_falls_back_from_retired_previous_model_on_downshift() {
+async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on_downshift() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    let retired_model = "gpt-5.6-oai";
+    let retired_model = "gpt-5.6";
     let previous_model_family = "gpt-5.6";
-    let next_model = "gpt-5.4-ultrafast";
+    let next_model = "gpt-5.5";
     let mut previous_model_info =
         model_info_with_context_window("gpt-5.4", /*context_window*/ 273_000);
     previous_model_info.slug = previous_model_family.to_string();
@@ -2465,7 +2462,7 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_on_downshif
                 ev_assistant_message("m1", "before switch"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
             ])),
-            unsupported_chatgpt_model_response(retired_model),
+            invalid_request_response("previous-model compaction was rejected"),
             sse_response(sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -2542,9 +2539,9 @@ async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    let previous_model = "custom/gpt-5.6-oai";
-    let previous_model_family = "gpt-5.6";
-    let next_model = "gpt-5.6-sol-oai";
+    let previous_model = "custom/gpt-5.5";
+    let previous_model_family = "gpt-5.5";
+    let next_model = "gpt-5.6";
     let mut previous_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-a"));
     previous_model_info.slug = previous_model_family.to_string();
     let mut next_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-b"));

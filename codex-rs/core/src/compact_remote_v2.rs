@@ -8,7 +8,6 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
-use crate::compact_model_fallback::is_model_unavailable_error;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
@@ -228,7 +227,7 @@ async fn run_remote_compact_task_inner_impl(
             let Some(fallback_step_context) = fallback_step_context else {
                 return Err(error);
             };
-            if !is_model_unavailable_error(&error, turn_context.model_info.slug.as_str()) {
+            if !matches!(&error, CodexErr::InvalidRequest(_)) {
                 return Err(error);
             }
             let fallback_result = run_remote_compact_v2_attempt(
@@ -246,9 +245,12 @@ async fn run_remote_compact_task_inner_impl(
                 fallback_step_context.turn.model_info.slug.as_str(),
                 reason,
                 CompactionImplementation::ResponsesCompactionV2,
-                fallback_result.is_ok(),
+                fallback_result.as_ref().err(),
             );
-            (fallback_result?, &fallback_step_context.turn)
+            match fallback_result {
+                Ok(attempt) => (attempt, &fallback_step_context.turn),
+                Err(_) => return Err(error),
+            }
         }
     };
     let RemoteCompactV2Attempt {
