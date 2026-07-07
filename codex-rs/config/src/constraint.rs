@@ -35,11 +35,9 @@ pub enum ConstraintError {
     },
 
     #[error(
-        "managed network requirements (set by {requirement_source}) require `[windows] allowed_sandbox_implementations = [\"elevated\"]`"
+        "network proxy configuration requires `[windows] allowed_sandbox_implementations = [\"elevated\"]` in requirements"
     )]
-    ManagedNetworkRequiresElevatedWindowsSandbox {
-        requirement_source: RequirementSource,
-    },
+    NetworkProxyRequiresElevatedWindowsSandboxRequirement,
 
     #[error(
         "the network proxy is incompatible with the unelevated Windows sandbox; set `windows.sandbox = \"elevated\"` or disable the network proxy"
@@ -57,7 +55,7 @@ impl ConstraintError {
     pub fn is_windows_network_configuration_error(&self) -> bool {
         matches!(
             self,
-            Self::ManagedNetworkRequiresElevatedWindowsSandbox { .. }
+            Self::NetworkProxyRequiresElevatedWindowsSandboxRequirement
                 | Self::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox
         )
     }

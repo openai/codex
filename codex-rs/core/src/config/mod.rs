@@ -622,6 +622,31 @@ fn validate_windows_sandbox_network_proxy_compatibility_for_platform(
     Ok(())
 }
 
+fn validate_windows_network_proxy_requirements(
+    requirements: &ConfigRequirementsToml,
+    network_proxy_configured: bool,
+) -> std::io::Result<()> {
+    validate_windows_network_proxy_requirements_for_platform(
+        cfg!(target_os = "windows"),
+        requirements,
+        network_proxy_configured,
+    )
+}
+
+fn validate_windows_network_proxy_requirements_for_platform(
+    is_windows: bool,
+    requirements: &ConfigRequirementsToml,
+    network_proxy_configured: bool,
+) -> std::io::Result<()> {
+    if is_windows
+        && network_proxy_configured
+        && !requirements.allows_only_elevated_windows_sandbox()
+    {
+        return Err(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement.into());
+    }
+    Ok(())
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -3763,6 +3788,10 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
+        validate_windows_network_proxy_requirements(
+            config_layer_stack.requirements_toml(),
+            network.is_some(),
+        )?;
         validate_windows_sandbox_network_proxy_compatibility(
             windows_sandbox_level,
             network.is_some(),
@@ -4165,6 +4194,10 @@ impl Config {
             configured_network_proxy_config,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
+        )?;
+        validate_windows_network_proxy_requirements(
+            self.config_layer_stack.requirements_toml(),
+            network.is_some(),
         )?;
         validate_windows_sandbox_network_proxy_compatibility(
             WindowsSandboxLevel::from_config(self),

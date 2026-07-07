@@ -754,6 +754,13 @@ impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_sandbox_implementations.is_none()
     }
+
+    pub fn allows_only_elevated_sandbox(&self) -> bool {
+        matches!(
+            self.allowed_sandbox_implementations.as_deref(),
+            Some([WindowsSandboxModeToml::Elevated])
+        )
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -879,6 +886,14 @@ pub struct ConfigRequirementsToml {
     pub permissions: Option<PermissionsRequirementsToml>,
     pub models: Option<ModelsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+impl ConfigRequirementsToml {
+    pub fn allows_only_elevated_windows_sandbox(&self) -> bool {
+        self.windows
+            .as_ref()
+            .is_some_and(WindowsRequirementsToml::allows_only_elevated_sandbox)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1299,21 +1314,12 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
         }
 
-        if let Some(network) = &network {
-            let elevated_is_only_allowed_windows_sandbox =
-                windows.as_ref().is_some_and(|windows| {
-                    matches!(
-                        windows.value.allowed_sandbox_implementations.as_deref(),
-                        Some([WindowsSandboxModeToml::Elevated])
-                    )
-                });
-            if !elevated_is_only_allowed_windows_sandbox {
-                return Err(
-                    ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
-                        requirement_source: network.source.clone(),
-                    },
-                );
-            }
+        if network.is_some()
+            && !windows
+                .as_ref()
+                .is_some_and(|windows| windows.value.allows_only_elevated_sandbox())
+        {
+            return Err(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement);
         }
 
         let approval_policy = match allowed_approval_policies {
@@ -2836,11 +2842,7 @@ allowed_approvals_reviewers = ["user"]
 
             assert_eq!(
                 ConfigRequirements::try_from(with_unknown_source(config)),
-                Err(
-                    ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
-                        requirement_source: RequirementSource::Unknown,
-                    }
-                )
+                Err(ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement)
             );
         }
 

@@ -1383,9 +1383,7 @@ mod tests {
     #[test]
     fn windows_network_config_errors_are_unrecoverable() {
         for error in [
-            codex_config::ConstraintError::ManagedNetworkRequiresElevatedWindowsSandbox {
-                requirement_source: codex_config::RequirementSource::Unknown,
-            },
+            codex_config::ConstraintError::NetworkProxyRequiresElevatedWindowsSandboxRequirement,
             codex_config::ConstraintError::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox,
         ] {
             let error = std::io::Error::from(error);

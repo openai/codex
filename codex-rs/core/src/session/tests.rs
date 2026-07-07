@@ -4757,9 +4757,17 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
         codex_home.path().join(codex_config::CONFIG_TOML_FILE),
         toml::to_string(&base_config).expect("serialize config"),
     )?;
+    let elevated_only_windows_sandbox_requirement = || {
+        codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"[windows]
+allowed_sandbox_implementations = ["elevated"]
+"#,
+        )
+    };
     let locked_config = Arc::new(
         ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .cloud_config_bundle(elevated_only_windows_sandbox_requirement())
             .harness_overrides(ConfigOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 ..Default::default()
@@ -4778,6 +4786,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
     );
     let selected_config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(elevated_only_windows_sandbox_requirement())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
             default_permissions: Some("web-enabled".to_string()),
