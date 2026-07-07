@@ -11,6 +11,7 @@ use crate::FsmonitorOverride;
 use crate::git_command::GitCommand;
 use crate::git_command::GitRunner;
 use crate::git_command::IsolatedGitStorage;
+use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 use crate::git_config::GitConfigEntry;
 use crate::git_config::GitConfigOrigin;
 use crate::git_config::GitConfigValue;
@@ -18,15 +19,24 @@ use crate::git_config::MergeConfigRecord;
 use crate::git_config::parse_config_entries;
 use crate::git_config::parse_config_entries_with_origins;
 use crate::git_config::read_effective_config_with_fallback;
+use crate::git_config::read_effective_config_with_fallback_async;
 use crate::git_config::read_effective_shared_repository_with_fallback;
 use crate::git_config::read_merge_config_records_with_fallback;
 use crate::git_config_sources::ensure_no_worktree_config_sources;
+use crate::git_config_sources::ensure_no_worktree_config_sources_async;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ExecutableFilterDrivers;
 use crate::safe_git::FilterExecution;
 use crate::safe_git::FilterPolicyRole;
 use crate::safe_git::FilterPolicySnapshot;
 use crate::safe_git::build_filter_policy_snapshot;
+
+const FILTER_NEUTRALIZATION_PLAN: [(&str, &str); 4] = [
+    ("clean", ""),
+    ("smudge", ""),
+    ("process", ""),
+    ("required", "false"),
+];
 
 mod merge_overlay;
 use merge_overlay::SealedMergeConfigOverride;
@@ -39,6 +49,21 @@ pub(crate) use merge_overlay::merge_overlay_count;
 #[cfg(test)]
 pub(crate) use merge_overlay::reset_merge_policy_counts;
 mod reverse_probe;
+mod status_command;
+pub(crate) use status_command::StatusPolicyCommandFailure;
+use status_command::command_failure;
+mod status_context;
+mod status_filter_policy;
+pub(crate) use status_filter_policy::SelectedStatusFilterRefusal;
+pub(crate) use status_filter_policy::StatusFilterProbeLimitExceeded;
+#[cfg(test)]
+pub(crate) use status_filter_policy::status_filter_policy_read_count;
+mod status_index;
+mod status_policy;
+use status_policy::MAX_STATUS_TRACKED_PATHS;
+pub(crate) use status_policy::NoActiveStatusWorktree;
+use status_policy::StatusPolicySnapshot;
+pub(crate) use status_policy::StatusRootMismatch;
 
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
@@ -64,6 +89,25 @@ impl<'git> ValidatedConfigSources<'git> {
         let canonical_root = std::fs::canonicalize(canonical_root)?;
         git.ensure_active_worktree_root(&canonical_root)?;
         ensure_no_worktree_config_sources(git, &canonical_root, &base_config_args)?;
+        Ok(Self {
+            git,
+            canonical_root,
+            base_config_args: base_config_args.into_boxed_slice(),
+        })
+    }
+
+    async fn authorize_async(
+        git: &'git GitRunner,
+        canonical_root: &Path,
+        base_config_args: Vec<String>,
+    ) -> io::Result<Self> {
+        #[cfg(test)]
+        CONFIG_SOURCE_AUTHORIZATION_COUNT.with(|count| count.set(count.get() + 1));
+
+        validate_base_config_args(&base_config_args)?;
+        let canonical_root = std::fs::canonicalize(canonical_root)?;
+        git.ensure_active_worktree_root(&canonical_root)?;
+        ensure_no_worktree_config_sources_async(git, &canonical_root, &base_config_args).await?;
         Ok(Self {
             git,
             canonical_root,
@@ -158,6 +202,67 @@ impl<'git> ValidatedConfigSources<'git> {
             .collect())
     }
 
+    async fn read_direct_common_config_async(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        let (scoped, scoped_path) = self
+            .git
+            .read_active_common_config_without_includes_async(pattern, /*show_scope*/ true)
+            .await?;
+        let entries = if scoped
+            .status
+            .code()
+            .is_some_and(|code| code == 0 || code == 1)
+        {
+            parse_config_entries(&scoped.stdout)?
+        } else {
+            let (legacy, legacy_path) = self
+                .git
+                .read_active_common_config_without_includes_async(
+                    pattern, /*show_scope*/ false,
+                )
+                .await?;
+            if legacy_path != scoped_path {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "active Git common config changed during format fallback",
+                ));
+            }
+            if !legacy
+                .status
+                .code()
+                .is_some_and(|code| code == 0 || code == 1)
+            {
+                return Err(io::Error::other(format!(
+                    "git {probe} direct common config probe failed with status {}: {}",
+                    legacy.status,
+                    String::from_utf8_lossy(&legacy.stderr).trim()
+                )));
+            }
+            parse_config_entries_with_origins(&legacy.stdout)?
+        };
+        for entry in &entries {
+            let expected_origin = match &entry.origin {
+                GitConfigOrigin::File(origin) => {
+                    same_file::is_same_file(origin, &scoped_path).unwrap_or(false)
+                }
+                GitConfigOrigin::CommandLine => false,
+            };
+            if !expected_origin {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("git {probe} direct common config probe returned an unexpected origin"),
+                ));
+            }
+        }
+        Ok(entries
+            .into_iter()
+            .map(|entry| (entry.key.clone(), entry))
+            .collect())
+    }
+
     fn read_bool(&self, key: &str) -> io::Result<Option<bool>> {
         let mut command = self.git.command_for_cwd(&self.canonical_root)?;
         command
@@ -165,27 +270,59 @@ impl<'git> ValidatedConfigSources<'git> {
             .args(&self.base_config_args)
             .args(["config", "--type=bool", "--get", key]);
         let output = self.git.output(command)?;
-        if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
-            return Ok(None);
-        }
-        if !output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "Git boolean config probe for {key:?} failed with status {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-            ));
-        }
-        match String::from_utf8_lossy(&output.stdout).trim() {
-            "true" => Ok(Some(true)),
-            "false" => Ok(Some(false)),
-            value => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected normalized Git boolean value {value:?} for {key:?}"),
-            )),
-        }
+        parse_bool_output(&output, key)
+    }
+
+    async fn read_effective_async(
+        &self,
+        pattern: &str,
+        probe: &str,
+    ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+        read_effective_config_with_fallback_async(
+            self.git,
+            &self.canonical_root,
+            &self.base_config_args,
+            pattern,
+            probe,
+        )
+        .await
+    }
+
+    async fn read_bool_async(&self, key: &str) -> io::Result<Option<bool>> {
+        let mut command = self.git.async_command_for_cwd(&self.canonical_root)?;
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(&self.base_config_args)
+            .args(["config", "--type=bool", "--get", key]);
+        let output = self
+            .git
+            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+            .await?;
+        parse_bool_output(&output, key)
+    }
+}
+
+fn parse_bool_output(output: &std::process::Output, key: &str) -> io::Result<Option<bool>> {
+    if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+        return Ok(None);
+    }
+    if !output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Git boolean config probe for {key:?} failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        value => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected normalized Git boolean value {value:?} for {key:?}"),
+        )),
     }
 }
 
@@ -237,6 +374,14 @@ pub(crate) struct GuardedGitConfig<'git> {
     // attachment timing.
     merge: Option<SealedMergeConfigOverride>,
     merge_policy_installed: bool,
+    // Status is a mutually exclusive operation state rather than another
+    // mutation overlay. The retained context freezes helper selection, HEAD,
+    // and untracked presence for the final tracked-only Status sink.
+    status: Option<StatusPolicySnapshot>,
+    // Set only after proving the effective replacement-ref namespace empty
+    // (or already disabled). Every later snapshot command then forces
+    // replacements off so a late ref cannot affect the frozen context.
+    status_replacements_disabled: bool,
 }
 
 struct CapabilityIdentity;
@@ -245,6 +390,12 @@ struct CapabilityIdentity;
 /// Its inner capability cannot be forged or rebound outside this module.
 #[derive(Clone)]
 pub(crate) struct GuardedOperationIdentity(Arc<CapabilityIdentity>);
+
+impl GuardedOperationIdentity {
+    pub(crate) fn same_operation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 enum ApplyPolicyGateState {
     NotRun,
@@ -491,6 +642,8 @@ impl<'git> GuardedGitConfig<'git> {
             filters: Vec::new(),
             merge: None,
             merge_policy_installed: false,
+            status: None,
+            status_replacements_disabled: false,
         })
     }
 
@@ -517,6 +670,12 @@ impl<'git> GuardedGitConfig<'git> {
     }
 
     pub(crate) fn freeze_apply_policy(&mut self) -> io::Result<()> {
+        if self.status.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply policy cannot coexist with status policy",
+            ));
+        }
         if self.apply_policy.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -733,16 +892,27 @@ impl<'git> GuardedGitConfig<'git> {
             .sources
             .git
             .command_for_cwd(&self.sources.canonical_root)?;
-        command.args(&self.sources.base_config_args);
-        append_safe_scalar_overrides(&mut command);
+        command.args(self.mutation_config_args()?);
+        Ok(command)
+    }
+
+    fn mutation_config_args(&self) -> io::Result<Vec<String>> {
+        if self.status.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "status policy cannot be used by a mutation command",
+            ));
+        }
+        let mut args = self.sources.base_config_args.to_vec();
+        args.extend(safe_scalar_override_args());
         let (apply, git_add) = self.ordered_filter_snapshots()?;
         if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
-            neutralizer.append_to(&self.identity, &mut command)?;
+            neutralizer.append_rendered_args(&self.identity, &mut args)?;
         }
         if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
-            neutralizer.append_to(&self.identity, &mut command)?;
+            neutralizer.append_rendered_args(&self.identity, &mut args)?;
         }
-        Ok(command)
+        Ok(args)
     }
 
     fn ordered_filter_snapshots(
@@ -823,10 +993,9 @@ impl<'git> GuardedGitConfig<'git> {
         self.ensure_owned_config_path(&config_path, "owned Git filter neutralization")?;
         std::fs::write(&config_path, [])?;
         for driver in executable_drivers.iter() {
-            for name in ["clean", "smudge", "process"] {
-                self.write_filter_override_value(&config_path, driver, name, "")?;
+            for (name, value) in FILTER_NEUTRALIZATION_PLAN {
+                self.write_filter_override_value(&config_path, driver, name, value)?;
             }
-            self.write_filter_override_value(&config_path, driver, "required", "false")?;
         }
         let config_path = config_path.to_str().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 filter guard path")
@@ -868,6 +1037,12 @@ impl<'git> GuardedGitConfig<'git> {
     }
 
     pub(crate) fn authorize_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
+        if self.status.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply filter policy cannot coexist with status policy",
+            ));
+        }
         if !self.filters.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1071,6 +1246,12 @@ impl<'git> GuardedGitConfig<'git> {
     }
 
     pub(crate) fn authorize_git_add_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
+        if self.status.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Git-add filter policy cannot coexist with status policy",
+            ));
+        }
         match self.filters.as_slice() {
             [] => {}
             [apply] if apply.role() == FilterPolicyRole::Apply => {}
@@ -1097,15 +1278,7 @@ impl<'git> GuardedGitConfig<'git> {
     #[cfg(test)]
     pub(crate) fn render_command_for_log(&self, args: &[String]) -> io::Result<String> {
         let mut parts = vec!["git".to_string()];
-        parts.extend(self.sources.base_config_args.iter().cloned());
-        parts.extend(safe_scalar_override_args());
-        let (apply, git_add) = self.ordered_filter_snapshots()?;
-        if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
-            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
-        }
-        if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
-            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
-        }
+        parts.extend(self.mutation_config_args()?);
         parts.extend(args.iter().cloned());
         Ok(format!(
             "(cd {} && {})",
@@ -1145,10 +1318,6 @@ impl<'git> GuardedGitConfig<'git> {
     }
 }
 
-fn append_safe_scalar_overrides(command: &mut GitCommand) {
-    command.args(safe_scalar_override_args());
-}
-
 fn safe_scalar_override_args() -> [String; 4] {
     [
         "-c".to_string(),
@@ -1156,6 +1325,10 @@ fn safe_scalar_override_args() -> [String; 4] {
         "-c".to_string(),
         FsmonitorOverride::Disabled.git_config_arg().to_string(),
     ]
+}
+
+fn append_safe_scalar_overrides(command: &mut GitCommand) {
+    command.args(safe_scalar_override_args());
 }
 
 fn quote_shell(value: &str) -> String {
@@ -1177,6 +1350,7 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn reset_config_source_authorization_count() {
     CONFIG_SOURCE_AUTHORIZATION_COUNT.with(|count| count.set(0));
+    status_filter_policy::reset_status_filter_policy_read_count();
 }
 
 #[cfg(test)]

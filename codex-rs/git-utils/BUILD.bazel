@@ -4,7 +4,7 @@ codex_rust_crate(
     name = "git-utils",
     crate_name = "codex_git_utils",
     test_shard_counts = {
-        "git-utils-unit-tests": 2,
+        "git-utils-unit-tests": 8,
     },
     unit_test_timeout = "long",
 )

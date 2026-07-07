@@ -126,6 +126,8 @@ pub(crate) struct TurnMetadataWorkspace {
     pub(crate) latest_git_commit_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) has_changes: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) has_changes_unavailable_reason: Option<codex_git_utils::GitReadError>,
 }
 
 /// Caller-owned snapshot of Codex metadata sent to ResponsesAPI.

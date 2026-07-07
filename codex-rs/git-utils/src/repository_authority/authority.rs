@@ -12,6 +12,7 @@ use crate::path_authority::repository_route_boundaries;
 use super::CommonConfigAuthority;
 use super::RegisteredWorktree;
 use super::ResolvedRepositoryMetadata;
+use super::authority_refusal;
 use super::directories_refer_to_same_location;
 use super::helpers::common_dir_is_within_untrusted_root;
 use super::helpers::invalid_metadata;
@@ -141,6 +142,12 @@ impl RepositoryAuthority {
         Ok(())
     }
 
+    pub(crate) fn active_worktree_root(&self) -> Option<&Path> {
+        self.active_metadata
+            .as_ref()
+            .map(|_| self.active_worktree_root.as_path())
+    }
+
     pub(crate) fn path_is_untrusted_for_executable(&self, path: &Path) -> bool {
         self.path_is_untrusted_for_executable_result(path)
             .unwrap_or(true)
@@ -152,31 +159,22 @@ impl RepositoryAuthority {
             return Ok(());
         };
         let actual = resolve_repository_metadata(&expected.marker).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "repository metadata changed during Git operation at {}: {error}",
-                    expected.marker.display()
-                ),
-            )
+            authority_refusal(format!(
+                "repository metadata changed during Git operation at {}: {error}",
+                expected.marker.display()
+            ))
         })?;
         if &actual != expected {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "repository metadata changed during Git operation at {}",
-                    expected.marker.display()
-                ),
-            ));
+            return Err(authority_refusal(format!(
+                "repository metadata changed during Git operation at {}",
+                expected.marker.display()
+            )));
         }
         self.validate_snapshot_routes(&actual).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "repository metadata changed during Git operation at {}: {error}",
-                    expected.marker.display()
-                ),
-            )
+            authority_refusal(format!(
+                "repository metadata changed during Git operation at {}: {error}",
+                expected.marker.display()
+            ))
         })
     }
 
@@ -189,14 +187,11 @@ impl RepositoryAuthority {
                 || same_file::is_same_file(&canonical_root, &self.active_worktree_root)?
         };
         if !same_root {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "guarded Git repository identity {} does not match runner repository {}",
-                    canonical_root.display(),
-                    self.active_worktree_root.display()
-                ),
-            ));
+            return Err(authority_refusal(format!(
+                "guarded Git repository identity {} does not match runner repository {}",
+                canonical_root.display(),
+                self.active_worktree_root.display()
+            )));
         }
         Ok(())
     }
@@ -206,14 +201,12 @@ impl RepositoryAuthority {
             return Ok(());
         };
         let actual = Handle::from_path(&self.active_worktree_root).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("guarded Git repository identity could not be revalidated: {error}"),
-            )
+            authority_refusal(format!(
+                "guarded Git repository identity could not be revalidated: {error}"
+            ))
         })?;
         if &actual != expected {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
+            return Err(authority_refusal(
                 "guarded Git repository identity changed before Git launch",
             ));
         }
@@ -258,10 +251,6 @@ impl RepositoryAuthority {
         self.active_metadata
             .as_ref()
             .map(|metadata| metadata.common_dir.as_path())
-    }
-
-    pub(crate) fn active_worktree_root(&self) -> &Path {
-        &self.active_worktree_root
     }
 
     #[cfg(test)]

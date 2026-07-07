@@ -7,6 +7,7 @@ use super::path_safety::CONFIG_PATH_KEY;
 use super::path_safety::git_var_path_from_bytes;
 use super::path_safety::invalid_config_source;
 use crate::git_command::GitRunner;
+use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 use crate::git_config::parse_git_boolean_symmetric_i32;
 
 pub(super) fn default_system_config_source_candidates(
@@ -25,6 +26,24 @@ pub(super) fn default_system_config_source_candidates(
     // the derivable prefix/ProgramData paths are still checked separately and
     // the no-includes graph validates every directive the system file exposes.
     let Some(paths) = git_var_config_paths(git, cwd, "GIT_CONFIG_SYSTEM")? else {
+        return Ok(Vec::new());
+    };
+    Ok(paths
+        .into_iter()
+        .map(|path| ("GIT_CONFIG_SYSTEM", path))
+        .collect())
+}
+
+pub(super) async fn default_system_config_source_candidates_async(
+    git: &GitRunner,
+    cwd: &Path,
+) -> io::Result<Vec<(&'static str, PathBuf)>> {
+    if git_env_bool(git, "GIT_CONFIG_NOSYSTEM")?
+        || git.config_environment_value("GIT_CONFIG_SYSTEM").is_some()
+    {
+        return Ok(Vec::new());
+    }
+    let Some(paths) = git_var_config_paths_async(git, cwd, "GIT_CONFIG_SYSTEM").await? else {
         return Ok(Vec::new());
     };
     Ok(paths
@@ -58,6 +77,31 @@ pub(super) fn selected_git_home_config_candidates(
     Ok(candidates)
 }
 
+pub(super) async fn selected_git_home_config_candidates_async(
+    git: &GitRunner,
+    cwd: &Path,
+) -> io::Result<Vec<PathBuf>> {
+    if git.config_environment_value("GIT_CONFIG_GLOBAL").is_some() {
+        return Ok(Vec::new());
+    }
+    #[cfg(not(windows))]
+    if git.config_environment_value("HOME").is_none() {
+        return Ok(Vec::new());
+    }
+    let dot_gitconfig = selected_git_path_candidate_async(git, cwd, "~/.gitconfig").await?;
+    let mut candidates = vec![dot_gitconfig.clone()];
+    if git
+        .config_environment_value("XDG_CONFIG_HOME")
+        .is_none_or(OsStr::is_empty)
+    {
+        let home = dot_gitconfig
+            .parent()
+            .ok_or_else(|| invalid_config_source("selected Git HOME has no parent"))?;
+        candidates.push(home.join(".config/git/config"));
+    }
+    Ok(candidates)
+}
+
 pub(super) fn selected_git_prefix_system_candidate(
     git: &GitRunner,
     cwd: &Path,
@@ -68,6 +112,20 @@ pub(super) fn selected_git_prefix_system_candidate(
         return Ok(None);
     }
     selected_git_path_candidate(git, cwd, "%(prefix)/etc/gitconfig").map(Some)
+}
+
+pub(super) async fn selected_git_prefix_system_candidate_async(
+    git: &GitRunner,
+    cwd: &Path,
+) -> io::Result<Option<PathBuf>> {
+    if git_env_bool(git, "GIT_CONFIG_NOSYSTEM")?
+        || git.config_environment_value("GIT_CONFIG_SYSTEM").is_some()
+    {
+        return Ok(None);
+    }
+    selected_git_path_candidate_async(git, cwd, "%(prefix)/etc/gitconfig")
+        .await
+        .map(Some)
 }
 
 fn selected_git_path_candidate(git: &GitRunner, cwd: &Path, raw: &str) -> io::Result<PathBuf> {
@@ -100,8 +158,50 @@ fn selected_git_path_candidate(git: &GitRunner, cwd: &Path, raw: &str) -> io::Re
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
+    parse_selected_git_path(&output.stdout)
+}
+
+async fn selected_git_path_candidate_async(
+    git: &GitRunner,
+    cwd: &Path,
+    raw: &str,
+) -> io::Result<PathBuf> {
+    let tempdir = tempfile::tempdir()?;
+    let nonexistent_git_dir = tempdir.path().join("nonexistent-git-dir");
+    let disabled_config = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut command = git.async_command_for_cwd(cwd)?;
+    command
+        .env("GIT_CONFIG_GLOBAL", disabled_config)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_COUNT", "0")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .arg("--git-dir")
+        .arg(&nonexistent_git_dir)
+        .arg("-c")
+        .arg(format!("{CONFIG_PATH_KEY}={raw}"))
+        .args([
+            "config",
+            "--null",
+            "--no-includes",
+            "--path",
+            "--get",
+            CONFIG_PATH_KEY,
+        ]);
+    let output = git
+        .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+        .await?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "isolated selected Git path expansion failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    parse_selected_git_path(&output.stdout)
+}
+
+fn parse_selected_git_path(output: &[u8]) -> io::Result<PathBuf> {
     let value = output
-        .stdout
         .strip_suffix(&[0])
         .ok_or_else(|| invalid_config_source("unterminated selected Git path"))?;
     if value.is_empty() || value.contains(&0) {
@@ -120,6 +220,26 @@ fn git_var_config_paths(
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["var", variable]);
     let output = git.output(command)?;
+    parse_git_var_config_paths_result(
+        output.status.code(),
+        &output.stdout,
+        &output.stderr,
+        variable,
+    )
+}
+
+async fn git_var_config_paths_async(
+    git: &GitRunner,
+    cwd: &Path,
+    variable: &str,
+) -> io::Result<Option<Vec<PathBuf>>> {
+    let mut command = git.async_command_for_cwd(cwd)?;
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["var", variable]);
+    let output = git
+        .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+        .await?;
     parse_git_var_config_paths_result(
         output.status.code(),
         &output.stdout,

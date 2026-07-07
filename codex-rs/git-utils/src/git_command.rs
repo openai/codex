@@ -1,12 +1,16 @@
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Arc;
 
 #[cfg(windows)]
 use same_file::Handle;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 
 use crate::errors::GitReadError;
 use crate::git_config_environment::GitConfigEnvironmentSnapshot;
@@ -20,11 +24,14 @@ use crate::git_executable::search_directory_is_untrusted;
 use crate::git_executable::select_git_executable;
 #[cfg(all(test, windows))]
 use crate::git_executable::windows_path_requires_fail_closed;
+use crate::guarded_config::GuardedOperationIdentity;
 use crate::repository_authority::RepositoryAuthority;
 #[cfg(test)]
 use crate::repository_authority::parse_marker_path as parse_git_marker_path;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::isolate_git_command_environment;
+
+pub(crate) const MAX_INTERNAL_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 /// A Git executable outside the repository-controlled roots for one operation.
 #[derive(Debug)]
@@ -37,12 +44,28 @@ pub(crate) struct GitRunner {
     safe_path: std::ffi::OsString,
     authority: RepositoryAuthority,
     config_environment: GitConfigEnvironmentSnapshot,
+    replace_ref_base: Option<OsString>,
+    no_replace_objects: Option<OsString>,
+    attr_source: Option<OsString>,
+    attr_nosystem: Option<OsString>,
+    identity: Arc<GitRunnerIdentity>,
 }
+
+#[derive(Debug)]
+struct GitRunnerIdentity;
 
 /// A Git command that can only be spawned through [`GitRunner::output`],
 /// keeping metadata revalidation and launch hardening at one choke point.
 pub(crate) struct GitCommand {
     inner: Command,
+}
+
+/// A Tokio Git command that retains the same authority and launch-hardening
+/// choke point as [`GitCommand`]. Callers can configure arguments and stdin,
+/// but cannot replace the authorized process cwd.
+pub(crate) struct GitAsyncCommand {
+    inner: tokio::process::Command,
+    stdin_configured: bool,
 }
 
 /// App-owned common repository metadata for one final three-way apply.
@@ -60,6 +83,23 @@ pub(crate) struct IsolatedGitCommonDir {
 /// read-only, authority-derived alternate by `GitRunner`.
 pub(crate) struct IsolatedGitStorage {
     root: tempfile::TempDir,
+}
+
+/// Operation-owned repository view for read-only status children.
+///
+/// HEAD, config, and attributes are frozen into owned files. The live index
+/// remains selected through the authority-pinned per-worktree Git directory,
+/// and the active object database is attached only as an authority-derived
+/// alternate. The owned common directory supplies the complete config and
+/// attribute view, so a final child cannot reload a late
+/// repository-selected helper namespace.
+pub(crate) struct IsolatedGitReadContext {
+    common: IsolatedGitCommonDir,
+    head_contents: Box<[u8]>,
+    runner_identity: Arc<GitRunnerIdentity>,
+    operation_identity: GuardedOperationIdentity,
+    config_contents: Option<Box<[u8]>>,
+    attributes_contents: Option<Box<[u8]>>,
 }
 
 impl IsolatedGitStorage {
@@ -89,6 +129,58 @@ impl IsolatedGitStorage {
                     "isolated Git scratch object directory changed at {}",
                     objects.display()
                 ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl IsolatedGitReadContext {
+    pub(crate) fn config_path(&self) -> PathBuf {
+        self.common.config_path()
+    }
+
+    pub(crate) fn attributes_path(&self) -> PathBuf {
+        self.common.attributes_path()
+    }
+
+    pub(crate) fn seal_projected_files(mut self) -> io::Result<Self> {
+        self.config_contents = Some(std::fs::read(self.config_path())?.into_boxed_slice());
+        self.attributes_contents = Some(std::fs::read(self.attributes_path())?.into_boxed_slice());
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        self.common.validate()?;
+        let head_path = self.common.root.path().join("HEAD");
+        let metadata = std::fs::symlink_metadata(&head_path)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("isolated Git HEAD changed at {}", head_path.display()),
+            ));
+        }
+        if std::fs::read(&head_path)? != self.head_contents.as_ref() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git HEAD contents changed",
+            ));
+        }
+        if let Some(expected) = &self.config_contents
+            && std::fs::read(self.config_path())? != expected.as_ref()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git config contents changed",
+            ));
+        }
+        if let Some(expected) = &self.attributes_contents
+            && std::fs::read(self.attributes_path())? != expected.as_ref()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git attributes contents changed",
             ));
         }
         Ok(())
@@ -188,6 +280,38 @@ impl GitCommand {
     }
 }
 
+impl GitAsyncCommand {
+    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg(arg);
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.inner.args(args);
+        self
+    }
+
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env(key, value);
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
+        self.stdin_configured = true;
+        self
+    }
+}
+
 impl GitRunner {
     pub(crate) fn for_cwd(cwd: &Path) -> Result<Self, GitReadError> {
         #[cfg(test)]
@@ -214,19 +338,64 @@ impl GitRunner {
         }
         harden_git_launch_environment(&mut command, &self.safe_path);
         self.config_environment.apply_to(&mut command);
+        match &self.replace_ref_base {
+            Some(value) => command.env("GIT_REPLACE_REF_BASE", value),
+            None => command.env_remove("GIT_REPLACE_REF_BASE"),
+        };
+        match &self.no_replace_objects {
+            Some(value) => command.env("GIT_NO_REPLACE_OBJECTS", value),
+            None => command.env_remove("GIT_NO_REPLACE_OBJECTS"),
+        };
+        match &self.attr_source {
+            Some(value) => command.env("GIT_ATTR_SOURCE", value),
+            None => command.env_remove("GIT_ATTR_SOURCE"),
+        };
+        match &self.attr_nosystem {
+            Some(value) => command.env("GIT_ATTR_NOSYSTEM", value),
+            None => command.env_remove("GIT_ATTR_NOSYSTEM"),
+        };
         GitCommand { inner: command }
     }
 
     pub(crate) fn command_for_cwd(&self, cwd: &Path) -> io::Result<GitCommand> {
+        let cwd = self.canonical_command_cwd(cwd)?;
+        let mut command = self.command();
+        command.arg("-C").arg(cwd);
+        Ok(command)
+    }
+
+    fn async_command(&self) -> GitAsyncCommand {
+        GitAsyncCommand {
+            inner: tokio::process::Command::from(self.command().inner),
+            stdin_configured: false,
+        }
+    }
+
+    pub(crate) fn async_command_for_cwd(&self, cwd: &Path) -> io::Result<GitAsyncCommand> {
+        let cwd = self.canonical_command_cwd(cwd)?;
+        let mut command = self.async_command();
+        command.arg("-C").arg(cwd);
+        Ok(command)
+    }
+
+    pub(crate) fn async_config_file_write_command(&self, config_path: &Path) -> GitAsyncCommand {
+        let mut command = self.async_command();
+        scrub_repository_and_config_environment(command.inner.as_std_mut());
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(["config", "--file"])
+            .arg(config_path)
+            .arg("--add");
+        command
+    }
+
+    fn canonical_command_cwd(&self, cwd: &Path) -> io::Result<PathBuf> {
         let cwd = if cwd.is_absolute() {
             cwd.to_path_buf()
         } else {
             std::env::current_dir()?.join(cwd)
         };
-        let cwd = self.authority.canonical_command_cwd(&cwd)?;
-        let mut command = self.command();
-        command.arg("-C").arg(cwd);
-        Ok(command)
+        self.authority.canonical_command_cwd(&cwd)
     }
 
     pub(crate) fn ensure_config_source_is_not_worktree_controlled(
@@ -236,6 +405,10 @@ impl GitRunner {
     ) -> io::Result<()> {
         self.authority
             .ensure_config_source_is_not_worktree_controlled(path, description)
+    }
+
+    pub(crate) fn active_worktree_root(&self) -> Option<&Path> {
+        self.authority.active_worktree_root()
     }
 
     pub(crate) fn ensure_active_worktree_root(&self, root: &Path) -> io::Result<()> {
@@ -248,6 +421,18 @@ impl GitRunner {
 
     pub(crate) fn config_environment_value(&self, name: &str) -> Option<&OsStr> {
         self.config_environment.value(name)
+    }
+
+    pub(crate) fn replacement_ref_base_is_custom(&self) -> bool {
+        self.replace_ref_base.is_some()
+    }
+
+    pub(crate) fn replacement_refs_are_disabled(&self) -> bool {
+        self.no_replace_objects.is_some()
+    }
+
+    pub(crate) fn attribute_source_is_custom(&self) -> bool {
+        self.attr_source.is_some()
     }
 
     /// Read repository-format keys from the authority-bound common config.
@@ -284,6 +469,55 @@ impl GitRunner {
         self.authority.revalidate_active_repository_metadata()?;
         let _post_read_identity = pinned_common.revalidate()?;
         Ok((output, config_path))
+    }
+
+    pub(crate) async fn read_active_common_config_without_includes_async(
+        &self,
+        pattern: &str,
+        show_scope: bool,
+    ) -> io::Result<(std::process::Output, PathBuf)> {
+        self.authority.revalidate_active_repository_metadata()?;
+        let common_dir = self.authority.active_common_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git common config is unavailable",
+            )
+        })?;
+        let pinned_common = git_child_directory(common_dir, "active Git common directory")?;
+        let config_path = pinned_common.join("config");
+        let mut command = self.async_command();
+        scrub_repository_and_config_environment(command.inner.as_std_mut());
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(["config", "--file"])
+            .arg(&config_path)
+            .args(["--null", "--show-origin", "--no-includes"]);
+        if show_scope {
+            command.arg("--show-scope");
+        }
+        command.args(["--get-regexp", pattern]);
+        let output = self
+            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+            .await?;
+        self.authority.revalidate_active_repository_metadata()?;
+        let _post_read_identity = pinned_common.revalidate()?;
+        Ok((output, config_path))
+    }
+
+    pub(crate) async fn read_active_info_attributes_bounded_async(
+        &self,
+        max_bytes: usize,
+    ) -> io::Result<Vec<u8>> {
+        self.revalidate_active_repository_metadata()?;
+        let common_dir = self.authority.active_common_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git common attributes are unavailable",
+            )
+        })?;
+        let contents = read_common_info_attributes_bounded_async(common_dir, max_bytes).await?;
+        self.revalidate_active_repository_metadata()?;
+        Ok(contents)
     }
 
     pub(crate) fn create_isolated_common_dir(&self) -> io::Result<IsolatedGitCommonDir> {
@@ -342,7 +576,13 @@ impl GitRunner {
                 // in operation-owned storage; an empty file is not a valid
                 // index, and hand-encoding one would couple this path to the
                 // repository hash algorithm and index checksum format.
-                let mut command = self.command_for_cwd(self.authority.active_worktree_root())?;
+                let worktree = self.authority.active_worktree_root().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "active Git worktree is unavailable for empty scratch index creation",
+                    )
+                })?;
+                let mut command = self.command_for_cwd(worktree)?;
                 let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
                 command.args([
                     "-c",
@@ -376,6 +616,37 @@ impl GitRunner {
         Ok(storage)
     }
 
+    pub(crate) fn create_isolated_read_context(
+        &self,
+        head_oid: Option<&str>,
+        operation_identity: &GuardedOperationIdentity,
+    ) -> io::Result<IsolatedGitReadContext> {
+        if head_oid.is_some_and(|oid| {
+            !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "isolated Git read context requires a full commit object ID",
+            ));
+        }
+        let common = self.create_isolated_common_dir()?;
+        let head_contents = head_oid
+            .map(|oid| format!("{}\n", oid.to_ascii_lowercase()).into_bytes())
+            .unwrap_or_else(|| b"ref: refs/heads/codex-unborn\n".to_vec())
+            .into_boxed_slice();
+        std::fs::write(common.root.path().join("HEAD"), &head_contents)?;
+        let context = IsolatedGitReadContext {
+            common,
+            head_contents,
+            runner_identity: Arc::clone(&self.identity),
+            operation_identity: operation_identity.clone(),
+            config_contents: None,
+            attributes_contents: None,
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
     fn output_with_new_isolated_index(
         &self,
         mut command: GitCommand,
@@ -398,10 +669,7 @@ impl GitRunner {
     }
 
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
-        self.revalidate_active_repository_metadata()?;
-        isolate_git_command_environment(&mut command.inner);
-        command.inner.envs(crate::local_only_git_env());
-        harden_git_launch_environment(&mut command.inner, &self.safe_path);
+        self.prepare_command_for_launch(&mut command.inner)?;
         command.inner.output()
     }
 
@@ -479,7 +747,12 @@ impl GitRunner {
                 "active Git common directory is unavailable for isolated three-way apply",
             )
         })?;
-        let canonical_worktree = self.authority.active_worktree_root();
+        let canonical_worktree = self.authority.active_worktree_root().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git worktree is unavailable for isolated three-way apply",
+            )
+        })?;
 
         // Repository authority retains canonical paths for identity and route
         // validation. Git for Windows does not recognize the verbatim
@@ -502,16 +775,8 @@ impl GitRunner {
         let object_directory = storage
             .map(IsolatedGitStorage::objects_path)
             .unwrap_or_else(|| real_object_directory.clone());
-        let alternate_object_directories = storage
-            .map(|_| {
-                std::env::join_paths([&real_object_directory]).map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("cannot encode isolated Git object alternate: {error}"),
-                    )
-                })
-            })
-            .transpose()?;
+        let alternate_object_directories =
+            storage.map(|_| encode_git_alternate_object_directory(&real_object_directory));
         let system_config = isolated_root.join("system.gitconfig");
         let global_config = isolated_root.join("global.gitconfig");
         let home = isolated_root.join("home");
@@ -575,6 +840,167 @@ impl GitRunner {
         self.authority.revalidate_active_repository_metadata()
     }
 
+    fn prepare_command_for_launch(&self, command: &mut Command) -> io::Result<()> {
+        self.revalidate_active_repository_metadata()?;
+        isolate_git_command_environment(command);
+        command.envs(crate::local_only_git_env());
+        harden_git_launch_environment(command, &self.safe_path);
+        Ok(())
+    }
+
+    /// Spawn a configured Tokio command after applying the final
+    /// repository-selector environment lock.
+    #[cfg(all(test, unix))]
+    pub(crate) async fn output_async(
+        &self,
+        mut command: GitAsyncCommand,
+    ) -> io::Result<std::process::Output> {
+        self.prepare_command_for_launch(command.inner.as_std_mut())?;
+        command.inner.kill_on_drop(true);
+        command.inner.output().await
+    }
+
+    pub(crate) async fn output_async_bounded(
+        &self,
+        mut command: GitAsyncCommand,
+        max_bytes_per_stream: usize,
+    ) -> io::Result<std::process::Output> {
+        self.prepare_command_for_launch(command.inner.as_std_mut())?;
+        output_async_bounded_inner(command, max_bytes_per_stream).await
+    }
+
+    pub(crate) async fn output_async_in_isolated_read_context(
+        &self,
+        mut command: GitAsyncCommand,
+        context: &IsolatedGitReadContext,
+        operation_identity: &GuardedOperationIdentity,
+        max_bytes_per_stream: usize,
+    ) -> io::Result<std::process::Output> {
+        if !Arc::ptr_eq(&self.identity, &context.runner_identity) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git read context belongs to another runner",
+            ));
+        }
+        if !context
+            .operation_identity
+            .same_operation(operation_identity)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git read context belongs to another operation",
+            ));
+        }
+        if context.config_contents.is_none() || context.attributes_contents.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated Git read context is not sealed",
+            ));
+        }
+        self.revalidate_active_repository_metadata()?;
+        context.validate()?;
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(
+                context.common.root.path(),
+                "owned isolated Git read context",
+            )?;
+        isolate_git_command_environment(command.inner.as_std_mut());
+        scrub_repository_and_config_environment(command.inner.as_std_mut());
+
+        let canonical_common_dir = self.authority.active_common_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git common directory is unavailable for isolated read",
+            )
+        })?;
+        let canonical_worktree = self.authority.active_worktree_root().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git worktree is unavailable for isolated read",
+            )
+        })?;
+        let common_dir = git_child_directory(canonical_common_dir, "active Git common directory")?;
+        let worktree = git_child_directory(canonical_worktree, "active Git worktree")?;
+        #[cfg(windows)]
+        let isolated_root_base = std::fs::canonicalize(context.common.root.path())?;
+        #[cfg(not(windows))]
+        let isolated_root_base = context.common.root.path().to_path_buf();
+        let isolated_root =
+            git_child_directory(&isolated_root_base, "owned isolated Git read directory")?;
+        let canonical_git_dir = self.authority.active_git_dir().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "active Git directory is unavailable for isolated read",
+            )
+        })?;
+        let git_dir = git_child_directory(canonical_git_dir, "active Git directory")?;
+
+        let real_object_directory = common_dir.join("objects");
+        let alternate_object_directories =
+            encode_git_alternate_object_directory(&real_object_directory);
+        let system_config = isolated_root.join("system.gitconfig");
+        let global_config = isolated_root.join("global.gitconfig");
+        command
+            .inner
+            .env("GIT_DIR", isolated_root.as_path())
+            .env("GIT_COMMON_DIR", isolated_root.as_path())
+            .env("GIT_WORK_TREE", worktree.as_path())
+            .env("GIT_INDEX_FILE", git_dir.join("index"))
+            .env("GIT_OBJECT_DIRECTORY", isolated_root.join("objects"))
+            .env(
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                alternate_object_directories,
+            )
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_SYSTEM", system_config)
+            .env("GIT_CONFIG_GLOBAL", global_config)
+            .env("GIT_CONFIG_COUNT", "0")
+            .env_remove("GIT_ATTR_SOURCE")
+            .env("GIT_NO_REPLACE_OBJECTS", "1");
+        self.apply_captured_attribute_environment(command.inner.as_std_mut());
+        command.inner.envs(crate::local_only_git_env());
+        harden_git_launch_environment(command.inner.as_std_mut(), &self.safe_path);
+
+        self.revalidate_active_repository_metadata()?;
+        context.validate()?;
+        let _child_directory_validations = [&git_dir, &common_dir, &worktree, &isolated_root]
+            .into_iter()
+            .map(GitChildDirectory::revalidate)
+            .collect::<io::Result<Vec<_>>>()?;
+        output_async_bounded_inner(command, max_bytes_per_stream).await
+    }
+
+    /// Restore only the runner-captured selectors that choose default global
+    /// and system attribute files. Config remains pinned to owned empty files;
+    /// `GIT_ATTR_SOURCE` remains removed so it cannot replace worktree
+    /// attributes in the synthetic repository view.
+    fn apply_captured_attribute_environment(&self, command: &mut Command) {
+        for name in ["HOME", "XDG_CONFIG_HOME"] {
+            match self.config_environment.value(name) {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        #[cfg(windows)]
+        for name in [
+            "APPDATA",
+            "PROGRAMDATA",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+        ] {
+            match self.config_environment.value(name) {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        match &self.attr_nosystem {
+            Some(value) => command.env("GIT_ATTR_NOSYSTEM", value),
+            None => command.env_remove("GIT_ATTR_NOSYSTEM"),
+        };
+        command.env_remove("GIT_ATTR_SOURCE");
+    }
+
     fn from_search_path(
         authority: RepositoryAuthority,
         search_path: &OsStr,
@@ -593,8 +1019,274 @@ impl GitRunner {
             safe_path: selected.safe_path,
             authority,
             config_environment,
+            replace_ref_base: std::env::var_os("GIT_REPLACE_REF_BASE"),
+            no_replace_objects: std::env::var_os("GIT_NO_REPLACE_OBJECTS"),
+            attr_source: std::env::var_os("GIT_ATTR_SOURCE"),
+            attr_nosystem: std::env::var_os("GIT_ATTR_NOSYSTEM"),
+            identity: Arc::new(GitRunnerIdentity),
         })
     }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn from_executable_for_test(
+        cwd: &Path,
+        executable: PathBuf,
+    ) -> Result<Self, GitReadError> {
+        let authority = repository_authority_for_cwd(cwd)?;
+        let safe_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
+        let config_environment = GitConfigEnvironmentSnapshot::capture().map_err(|error| {
+            GitReadError::InvalidConfigEnvironment {
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(Self {
+            argv0: executable.clone(),
+            executable,
+            safe_path,
+            authority,
+            config_environment,
+            replace_ref_base: std::env::var_os("GIT_REPLACE_REF_BASE"),
+            no_replace_objects: std::env::var_os("GIT_NO_REPLACE_OBJECTS"),
+            attr_source: std::env::var_os("GIT_ATTR_SOURCE"),
+            attr_nosystem: std::env::var_os("GIT_ATTR_NOSYSTEM"),
+            identity: Arc::new(GitRunnerIdentity),
+        })
+    }
+}
+
+async fn output_async_bounded_inner(
+    mut command: GitAsyncCommand,
+    max_bytes_per_stream: usize,
+) -> io::Result<std::process::Output> {
+    command.inner.kill_on_drop(true);
+    if !command.stdin_configured {
+        command.inner.stdin(Stdio::null());
+    }
+    command.inner.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.inner.spawn()?;
+    // No caller can obtain the pipe writer through this opaque command.
+    // Close it immediately so a child configured with `Stdio::piped()`
+    // observes EOF instead of waiting forever for unreachable input.
+    drop(child.stdin.take());
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing bounded Git stdout pipe"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing bounded Git stderr pipe"))?;
+    let output = tokio::try_join!(
+        read_bounded_output(stdout, max_bytes_per_stream),
+        read_bounded_output(stderr, max_bytes_per_stream)
+    );
+    let (stdout, stderr) = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+    };
+    let status = child.wait().await?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn read_bounded_output(
+    mut reader: impl AsyncRead + Unpin,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(read) > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Git output exceeded the {max_bytes}-byte stream limit"),
+            ));
+        }
+        output.extend_from_slice(&chunk[..read]);
+    }
+}
+
+#[cfg(unix)]
+async fn read_common_info_attributes_bounded_async(
+    root: &Path,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fn openat(directory: &std::fs::File, name: &str, flags: i32) -> io::Result<std::fs::File> {
+        let name = CString::new(name).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git attribute path component contains NUL",
+            )
+        })?;
+        // SAFETY: the directory descriptor is live and the fixed component is
+        // NUL-free. The returned descriptor is immediately owned by File.
+        let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            // SAFETY: openat returned a fresh owned descriptor.
+            Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+        }
+    }
+
+    let root = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(root)?;
+    let info = match openat(
+        &root,
+        "info",
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+    ) {
+        Ok(info) => info,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let attributes = match openat(
+        &info,
+        "attributes",
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+    ) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let _pins = (root, info);
+    read_regular_file_bounded_async(attributes, max_bytes, "Git info attributes").await
+}
+
+#[cfg(windows)]
+async fn read_common_info_attributes_bounded_async(
+    root: &Path,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::MetadataExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+
+    let open = |path: &Path, directory: bool| {
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(
+                FILE_FLAG_OPEN_REPARSE_POINT
+                    | if directory {
+                        FILE_FLAG_BACKUP_SEMANTICS
+                    } else {
+                        0
+                    },
+            );
+        options.open(path)
+    };
+    let root_pin = open(root, true)?;
+    if root_pin.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Git common directory is a reparse point",
+        ));
+    }
+    let info_path = root.join("info");
+    let info_pin = match open(&info_path, true) {
+        Ok(info) => info,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    if info_pin.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Git info directory is a reparse point",
+        ));
+    }
+    let attributes = match open(&info_path.join("attributes"), false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    if attributes.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Git info attributes are a reparse point",
+        ));
+    }
+    let _pins = (root_pin, info_pin);
+    read_regular_file_bounded_async(attributes, max_bytes, "Git info attributes").await
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn read_common_info_attributes_bounded_async(
+    root: &Path,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .open(root.join("info/attributes"))
+    {
+        Ok(file) => file,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    read_regular_file_bounded_async(file, max_bytes, "Git info attributes").await
+}
+
+async fn read_regular_file_bounded_async(
+    file: std::fs::File,
+    max_bytes: usize,
+    description: &str,
+) -> io::Result<Vec<u8>> {
+    let file = tokio::fs::File::from_std(file);
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{description} are not a regular file"),
+        ));
+    }
+    if metadata.len() > max_bytes as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{description} exceed their byte limit"),
+        ));
+    }
+    let mut contents = Vec::with_capacity(metadata.len() as usize);
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut contents)
+        .await?;
+    if contents.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{description} grew beyond their byte limit"),
+        ));
+    }
+    Ok(contents)
 }
 
 fn copy_shared_indexes(source_dir: &Path, destination_dir: &Path) -> io::Result<()> {
@@ -885,6 +1577,87 @@ fn ascii_u16_is_alphabetic(unit: u16) -> bool {
 #[cfg(any(windows, test))]
 fn ascii_u16_eq_ignore_case(unit: u16, ascii: u8) -> bool {
     unit == ascii.to_ascii_lowercase() as u16 || unit == ascii.to_ascii_uppercase() as u16
+}
+
+/// Encode one object directory using Git's alternate-object-directory grammar.
+///
+/// This environment variable is a Git path list, not a platform `PATH` list.
+/// Quoting every entry with Git's C-style syntax keeps the platform list
+/// separator literal and preserves backslashes as path data.
+#[cfg(unix)]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::OsStringExt;
+
+    OsString::from_vec(quote_git_c_style_bytes(path.as_os_str().as_bytes()))
+}
+
+#[cfg(windows)]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
+
+    let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    OsString::from_wide(&quote_git_c_style_windows_units(&units))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn encode_git_alternate_object_directory(path: &Path) -> OsString {
+    let encoded = quote_git_c_style_bytes(path.to_string_lossy().as_bytes());
+    OsString::from(String::from_utf8(encoded).expect("quoted UTF-8 path remains UTF-8"))
+}
+
+#[cfg(any(not(windows), test))]
+fn quote_git_c_style_bytes(value: &[u8]) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(value.len().saturating_add(2));
+    encoded.push(b'"');
+    for &byte in value {
+        match byte {
+            b'"' | b'\\' => {
+                encoded.push(b'\\');
+                encoded.push(byte);
+            }
+            0x00..=0x1f | 0x7f..=0xff => {
+                encoded.extend([
+                    b'\\',
+                    b'0' + ((byte >> 6) & 0o7),
+                    b'0' + ((byte >> 3) & 0o7),
+                    b'0' + (byte & 0o7),
+                ]);
+            }
+            _ => encoded.push(byte),
+        }
+    }
+    encoded.push(b'"');
+    encoded
+}
+
+#[cfg(any(windows, test))]
+fn quote_git_c_style_windows_units(value: &[u16]) -> Vec<u16> {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const DOUBLE_QUOTE: u16 = b'"' as u16;
+
+    let mut encoded = Vec::with_capacity(value.len().saturating_add(2));
+    encoded.push(DOUBLE_QUOTE);
+    for &unit in value {
+        match unit {
+            DOUBLE_QUOTE | BACKSLASH => {
+                encoded.push(BACKSLASH);
+                encoded.push(unit);
+            }
+            0x00..=0x1f | 0x7f => {
+                encoded.extend([
+                    BACKSLASH,
+                    b'0' as u16 + ((unit >> 6) & 0o7),
+                    b'0' as u16 + ((unit >> 3) & 0o7),
+                    b'0' as u16 + (unit & 0o7),
+                ]);
+            }
+            _ => encoded.push(unit),
+        }
+    }
+    encoded.push(DOUBLE_QUOTE);
+    encoded
 }
 
 fn scrub_repository_and_config_environment(command: &mut Command) {

@@ -4,6 +4,7 @@ use std::path::Component;
 use std::path::Path;
 
 use crate::git_command::GitRunner;
+use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 
 pub(crate) fn parse_git_boolean(value: &[u8]) -> Option<bool> {
     parse_git_boolean_with_minimum(value, i128::from(i32::MIN))
@@ -151,6 +152,21 @@ impl TryFrom<GitConfigValueEntry> for GitConfigEntry {
             value,
         })
     }
+}
+
+fn normalize_implicit_boolean_entry(
+    mut entry: GitConfigValueEntry,
+    implicit_boolean_keys: &[&str],
+) -> io::Result<GitConfigEntry> {
+    if entry.value == GitConfigValue::Implicit
+        && implicit_boolean_keys.contains(&entry.key.as_str())
+    {
+        // Git's config grammar defines a key without `=` as Boolean true.
+        // Normalize only keys whose consumer accepts Boolean values; all
+        // other implicit values retain the ordinary strict rejection.
+        entry.value = GitConfigValue::Explicit("true".to_string());
+    }
+    GitConfigEntry::try_from(entry)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,6 +389,26 @@ pub(crate) fn read_config_entries_without_includes(
     )
 }
 
+pub(crate) async fn read_config_entries_without_includes_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ false,
+        config_file,
+    )
+    .await
+}
+
 fn read_config_entries_with_fallback(
     git: &GitRunner,
     cwd: &Path,
@@ -445,6 +481,81 @@ fn read_config_value_entries_with_fallback(
     parse_config_value_entries_with_origins(&legacy.stdout)
 }
 
+async fn read_config_entries_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_value_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        follow_includes,
+        config_file,
+    )
+    .await?
+    .into_iter()
+    .map(GitConfigEntry::try_from)
+    .collect()
+}
+
+async fn read_config_value_entries_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigValueEntry>> {
+    let scoped = run_effective_config_query_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        /*show_scope*/ true,
+        follow_includes,
+        config_file,
+    )
+    .await?;
+    if scoped
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return parse_config_value_entries(&scoped.stdout);
+    }
+
+    let legacy = run_effective_config_query_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        /*show_scope*/ false,
+        follow_includes,
+        config_file,
+    )
+    .await?;
+    if !legacy
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return Err(io::Error::other(format!(
+            "git {probe} config probe failed with status {}: {}",
+            legacy.status,
+            String::from_utf8_lossy(&legacy.stderr).trim()
+        )));
+    }
+    parse_config_value_entries_with_origins(&legacy.stdout)
+}
+
 pub(crate) fn read_effective_config_with_fallback(
     git: &GitRunner,
     cwd: &Path,
@@ -458,6 +569,57 @@ pub(crate) fn read_effective_config_with_fallback(
             .map(|entry| (entry.key.clone(), entry))
             .collect(),
     )
+}
+
+pub(crate) async fn read_effective_config_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(read_config_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )
+    .await?
+    .into_iter()
+    .map(|entry| (entry.key.clone(), entry))
+    .collect())
+}
+
+/// Read effective config while accepting implicit values only for the named
+/// Boolean keys. Git defines an implicit Boolean as true; path-, enum-, and
+/// integer-valued consumers remain strict.
+pub(crate) async fn read_effective_config_with_implicit_booleans_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    implicit_boolean_keys: &[&str],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    read_config_value_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )
+    .await?
+    .into_iter()
+    .map(|entry| {
+        let entry = normalize_implicit_boolean_entry(entry, implicit_boolean_keys)?;
+        Ok((entry.key.clone(), entry))
+    })
+    .collect()
 }
 
 fn run_effective_config_query(
@@ -492,6 +654,41 @@ fn run_effective_config_query(
         pattern,
     ]);
     git.output(command)
+}
+
+async fn run_effective_config_query_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    show_scope: bool,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<std::process::Output> {
+    let mut command = git.async_command_for_cwd(cwd)?;
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(git_config_args)
+        .arg("config");
+    if let Some(config_file) = config_file {
+        command.arg("--file").arg(config_file);
+    }
+    command.arg("--null");
+    if show_scope {
+        command.arg("--show-scope");
+    }
+    command.args([
+        "--show-origin",
+        if follow_includes {
+            "--includes"
+        } else {
+            "--no-includes"
+        },
+        "--get-regexp",
+        pattern,
+    ]);
+    git.output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+        .await
 }
 
 pub(crate) fn path_is_within(path: &Path, root: &Path) -> bool {
