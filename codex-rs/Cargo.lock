@@ -414,6 +414,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "url",
  "uuid",
  "wiremock",
 ]
