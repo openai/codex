@@ -177,9 +177,43 @@ jobs:
           BAZEL_TEST_SHARD: ${{ matrix.shard }}
           BAZEL_TEST_SHARD_COUNT: 4
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          WINDOWS_BAZEL_ETL_PATH: ${{ runner.temp }}/windows-bazel-trace-shard-${{ matrix.shard }}.etl
+          WINDOWS_BAZEL_TELEMETRY_PATH: ${{ runner.temp }}/windows-bazel-telemetry-shard-${{ matrix.shard }}.csv
+          WINDOWS_BAZEL_TELEMETRY_STOP_FILE: ${{ runner.temp }}/windows-bazel-telemetry-stop-shard-${{ matrix.shard }}
         shell: bash
         run: |
           set -euo pipefail
+
+          rm -f "${WINDOWS_BAZEL_ETL_PATH}" "${WINDOWS_BAZEL_TELEMETRY_PATH}" "${WINDOWS_BAZEL_TELEMETRY_STOP_FILE}"
+          pwsh -NoProfile -File .github/scripts/measure-windows-bazel.ps1 \
+            -Mode monitor \
+            -OutputPath "${WINDOWS_BAZEL_TELEMETRY_PATH}" \
+            -StopFile "${WINDOWS_BAZEL_TELEMETRY_STOP_FILE}" &
+          telemetry_pid=$!
+          etw_started=0
+          # Keep the trace broad enough to distinguish CPU, filesystem, disk,
+          # and network waits, but use light profiles to limit observer cost.
+          if wpr.exe \
+            -start CPU.light \
+            -start DiskIO.light \
+            -start FileIO.light \
+            -start Network.light \
+            -filemode; then
+            etw_started=1
+          else
+            echo "WPR resource profiles could not start; continuing with counter telemetry only." >&2
+          fi
+          stop_telemetry() {
+            touch "${WINDOWS_BAZEL_TELEMETRY_STOP_FILE}"
+            wait "${telemetry_pid}" || true
+            if [[ "${etw_started}" -eq 1 ]]; then
+              if ! wpr.exe -stop "${WINDOWS_BAZEL_ETL_PATH}" -skipPdbGen -compress; then
+                echo "WPR resource trace could not be saved; cancelling its session." >&2
+                wpr.exe -cancel || true
+              fi
+            fi
+          }
+          trap stop_telemetry EXIT
 
           bazel_test_query='tests(//...) except tests(//third_party/v8:all) except attr(tags, "manual", tests(//...))'
           mapfile -t bazel_targets < <(
@@ -211,8 +245,13 @@ jobs:
             --skip_incompatible_explicit_targets
             --test_tag_filters=-argument-comment-lint
             --test_verbose_timeout_warnings
+            # Make every uploaded experiment revision execute its selected
+            # tests instead of reusing the prior revision's test action cache.
+            --test_env=CODEX_BAZEL_TEST_CACHE_BUST=${GITHUB_SHA}
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
+            --profile=${RUNNER_TEMP}/windows-bazel-profile-shard-${BAZEL_TEST_SHARD}.gz
+            --noslim_profile
           )
 
           ./.github/scripts/run-bazel-ci.sh \
@@ -224,6 +263,25 @@ jobs:
             "${bazel_test_args[@]}" \
             -- \
             "${selected_targets[@]}"
+
+      - name: Summarize Windows Bazel telemetry
+        if: always() && !cancelled()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./.github/scripts/measure-windows-bazel.ps1 -Mode summarize -OutputPath "${{ runner.temp }}/windows-bazel-telemetry-shard-${{ matrix.shard }}.csv"
+
+      - name: Upload Windows Bazel telemetry
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-bazel-telemetry-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/windows-bazel-telemetry-shard-${{ matrix.shard }}.csv
+            ${{ runner.temp }}/windows-bazel-profile-shard-${{ matrix.shard }}.gz
+            ${{ runner.temp }}/windows-bazel-trace-shard-${{ matrix.shard }}.etl
+          if-no-files-found: warn
 
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
