@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 
@@ -8,10 +7,7 @@ use codex_exec_server::WalkOptions;
 use codex_protocol::protocol::Product;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
-use codex_utils_plugins::plugin_namespace_for_root_uri;
-use codex_utils_plugins::plugin_namespace_for_skill_uri;
 use futures::StreamExt;
-use futures::future::join_all;
 
 use crate::model::SkillDependencies;
 use crate::model::SkillPolicy;
@@ -24,6 +20,7 @@ use super::SKILLS_FILENAME;
 use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
 use super::SkillMetadataFile;
+use super::namespace::SkillNamespaceResolver;
 use super::parse_skill_frontmatter_metadata_inner;
 use super::resolve_dependencies;
 use super::resolve_policy;
@@ -256,36 +253,18 @@ pub async fn load_environment_skills_from_root(
         }
     }
 
-    let namespace_roots = discovery.namespace_roots;
-    let plugin_namespaces = async {
-        let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
-            (
-                namespace_root.clone(),
-                plugin_namespace_for_skill_uri(file_system, namespace_root).await,
-            )
-        }));
-        let plugin_lookups = join_all(
-            discovery
-                .plugin_roots
-                .iter()
-                .filter(|plugin_root| skill_ancestors.contains(*plugin_root))
-                .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
-                .map(|plugin_root| async {
-                    (
-                        plugin_root.clone(),
-                        plugin_namespace_for_root_uri(file_system, plugin_root).await,
-                    )
-                }),
-        );
-        let (namespace_lookups, plugin_lookups) = tokio::join!(namespace_lookups, plugin_lookups);
-        namespace_lookups
-            .into_iter()
-            .chain(plugin_lookups)
-            .filter_map(|(plugin_root, namespace)| {
-                namespace.map(|namespace| (plugin_root, namespace))
-            })
-            .collect::<HashMap<_, _>>()
-    };
+    let plugin_roots = discovery
+        .plugin_roots
+        .into_iter()
+        .filter(|plugin_root| skill_ancestors.contains(plugin_root))
+        .collect();
+    let namespace_resolver = SkillNamespaceResolver::new(
+        file_system,
+        root,
+        /*provided_namespace*/ None,
+        plugin_roots,
+        discovery.namespace_roots,
+    );
 
     // Remote executors can multiplex these independent per-skill reads, so polling a bounded
     // number together allows the I/O for each skill and its metadata to happen concurrently.
@@ -301,23 +280,13 @@ pub async fn load_environment_skills_from_root(
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
         .collect::<Vec<_>>();
-    let (plugin_namespaces, skill_results) = tokio::join!(plugin_namespaces, skill_results);
+    let (namespace_resolver, skill_results) = tokio::join!(namespace_resolver, skill_results);
 
     for (path, result) in skill_results {
         let result = result.and_then(|skill| {
-            let mut ancestor = skill.path_to_skills_md.parent();
-            let plugin_namespace = loop {
-                let Some(current) = ancestor else {
-                    break None;
-                };
-                if let Some(namespace) = plugin_namespaces.get(&current) {
-                    break Some(namespace.as_str());
-                }
-                ancestor = current.parent();
-            };
-            let name = plugin_namespace
-                .map(|namespace| format!("{namespace}:{}", skill.base_name))
-                .unwrap_or(skill.base_name);
+            let name = namespace_resolver
+                .for_skill(&skill.path_to_skills_md)
+                .qualify(&skill.base_name);
             validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
                 .map_err(|err| err.to_string())?;
 
