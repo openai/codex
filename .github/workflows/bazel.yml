@@ -143,10 +143,14 @@ jobs:
           - 2
           - 3
           - 4
+          - 5
+          - 6
+          - 7
+          - 8
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-windows-x64
-    name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/4
+    name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/8
     environment:
       name: bazel
       deployment: false
@@ -175,7 +179,7 @@ jobs:
       - name: bazel test shard
         env:
           BAZEL_TEST_SHARD: ${{ matrix.shard }}
-          BAZEL_TEST_SHARD_COUNT: 4
+          BAZEL_TEST_SHARD_COUNT: 8
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           WINDOWS_BAZEL_TELEMETRY_PATH: ${{ runner.temp }}/windows-bazel-telemetry-shard-${{ matrix.shard }}.csv
           WINDOWS_BAZEL_TELEMETRY_STOP_FILE: ${{ runner.temp }}/windows-bazel-telemetry-stop-shard-${{ matrix.shard }}
