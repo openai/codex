@@ -93,6 +93,22 @@ impl CompactionTurnMetadata {
             strategy: CompactionStrategy::Memento,
         }
     }
+
+    pub(crate) fn trigger(self) -> CompactionTrigger {
+        self.trigger
+    }
+
+    pub(crate) fn reason(self) -> CompactionReason {
+        self.reason
+    }
+
+    pub(crate) fn implementation(self) -> CompactionImplementation {
+        self.implementation
+    }
+
+    pub(crate) fn phase(self) -> CompactionPhase {
+        self.phase
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

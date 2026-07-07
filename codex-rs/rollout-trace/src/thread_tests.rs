@@ -165,6 +165,40 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
 }
 
 #[test]
+fn compaction_contexts_share_identity_across_models() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let thread_trace =
+        ThreadTraceContext::start_root_in_root_for_test(temp.path(), minimal_metadata(thread_id))?;
+    thread_trace.record_codex_turn_started("turn-1");
+
+    for model in ["gpt-previous", "gpt-selected"] {
+        let compaction_trace =
+            thread_trace.compaction_trace_context("turn-1", "compaction-1", model, "test-provider");
+        compaction_trace
+            .start_attempt(&serde_json::json!({ "model": model }))
+            .record_failed("test failure");
+    }
+
+    let replayed = replay_bundle(&single_bundle_dir(temp.path())?)?;
+    let mut attempts = replayed
+        .compaction_requests
+        .values()
+        .map(|attempt| (attempt.model.clone(), attempt.compaction_id.clone()))
+        .collect::<Vec<_>>();
+    attempts.sort();
+    assert_eq!(
+        attempts,
+        vec![
+            ("gpt-previous".to_string(), "compaction-1".to_string()),
+            ("gpt-selected".to_string(), "compaction-1".to_string()),
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn protocol_wrapper_records_selected_events_as_raw_payloads() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let thread_id = ThreadId::new();
