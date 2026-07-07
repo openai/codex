@@ -2,10 +2,15 @@ use anyhow::Result;
 use codex_config::ConfigLayerStack;
 use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
+use codex_core::context::ApprovalPromptContext;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::PermissionsInstructions;
 use codex_core::load_exec_policy;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -31,6 +36,129 @@ fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
         .into_iter()
         .filter(|text| text.contains("<permissions instructions>"))
         .collect()
+}
+
+fn model_with_approval_messages(
+    slug: &str,
+    on_request: &str,
+    on_request_auto_review: &str,
+) -> codex_protocol::openai_models::ModelInfo {
+    let mut model = model_info_from_slug(slug);
+    model.model_messages = Some(ModelMessages {
+        instructions_template: None,
+        instructions_variables: None,
+        approvals: Some(ApprovalMessages {
+            on_request: Some(on_request.to_string()),
+            on_request_auto_review: Some(on_request_auto_review.to_string()),
+        }),
+    });
+    model
+}
+
+async fn submit_text_turn(
+    test: &core_test_support::test_codex::TestCodex,
+    text: &str,
+) -> Result<()> {
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_approval_message_is_sent_in_initial_permissions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let model_slug = "catalog-approvals-model";
+    let model = model_with_approval_messages(
+        model_slug,
+        "catalog user approval instructions",
+        "catalog auto-review approval instructions",
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    submit_text_turn(&test, "hello").await?;
+
+    let permissions = permissions_texts(&req.single_request());
+    assert_eq!(permissions.len(), 1);
+    assert!(permissions[0].contains("catalog user approval instructions"));
+    assert!(permissions[0].contains("Filesystem sandboxing defines"));
+    assert!(!permissions[0].contains("How to request escalation"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_change_appends_new_catalog_approval_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+    let first_slug = "catalog-approvals-model-a";
+    let second_slug = "catalog-approvals-model-b";
+    let first = model_with_approval_messages(first_slug, "model A approvals", "model A auto");
+    let second = model_with_approval_messages(second_slug, "model B approvals", "model B auto");
+    let mut builder = test_codex()
+        .with_model(first_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![first, second],
+            });
+        });
+    let test = builder.build(&server).await?;
+    submit_text_turn(&test, "first").await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            model: Some(second_slug.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    submit_text_turn(&test, "second").await?;
+
+    let permissions = permissions_texts(&req2.single_request());
+    assert_eq!(permissions.len(), 2);
+    assert!(
+        permissions
+            .last()
+            .is_some_and(|text| text.contains("model B approvals"))
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -563,7 +691,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let expected = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
-        test.config.approvals_reviewer,
+        ApprovalPromptContext::new(test.config.approvals_reviewer, /*messages*/ None),
         &exec_policy,
         test.config.cwd.as_path(),
         /*exec_permission_approvals_enabled*/ false,
