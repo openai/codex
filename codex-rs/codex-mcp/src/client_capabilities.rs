@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use rmcp::model::ExtensionCapabilities;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -26,20 +25,9 @@ pub fn supports_mcp_app_ui_webview(extensions: Option<&HashMap<String, Value>>) 
         })
 }
 
-pub(crate) fn mcp_app_ui_extensions() -> ExtensionCapabilities {
-    let mut settings = Map::new();
-    settings.insert(
-        "mimeTypes".to_string(),
-        serde_json::json!([MCP_APP_UI_WEBVIEW_MIME_TYPE]),
-    );
-    [(MCP_APP_UI_EXTENSION_ID.to_string(), settings)]
-        .into_iter()
-        .collect()
-}
-
 /// Adds trusted host capabilities to a Codex Apps request and removes any
 /// caller-supplied copy of the reserved metadata key.
-pub(crate) fn with_client_capabilities_meta(
+pub fn with_mcp_app_ui_client_capabilities_meta(
     meta: Option<Value>,
     supports_mcp_app_ui_webview: bool,
 ) -> Option<Value> {
@@ -53,13 +41,20 @@ pub(crate) fn with_client_capabilities_meta(
     if !supports_mcp_app_ui_webview {
         return meta;
     }
-    let extensions = mcp_app_ui_extensions();
-    let capabilities = serde_json::json!({ "extensions": extensions });
     let mut object = match meta {
         Some(Value::Object(object)) => object,
         _ => Map::new(),
     };
-    object.insert(MCP_CLIENT_CAPABILITIES_META_KEY.to_string(), capabilities);
+    object.insert(
+        MCP_CLIENT_CAPABILITIES_META_KEY.to_string(),
+        serde_json::json!({
+            "extensions": {
+                MCP_APP_UI_EXTENSION_ID: {
+                    "mimeTypes": [MCP_APP_UI_WEBVIEW_MIME_TYPE],
+                }
+            }
+        }),
+    );
     Some(Value::Object(object))
 }
 

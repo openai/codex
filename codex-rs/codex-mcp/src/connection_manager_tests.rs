@@ -81,7 +81,6 @@ fn create_codex_apps_tools_cache_context(
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
         },
-        /*supports_mcp_app_ui_webview*/ false,
     )
 }
 
@@ -1559,7 +1558,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         },
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
-        /*supports_mcp_app_ui_webview*/ false,
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         /*auth*/ None,

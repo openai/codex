@@ -7,7 +7,6 @@
 //! [`crate::connection_manager`].
 
 use std::borrow::Cow;
-#[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
@@ -276,7 +275,6 @@ struct ManagedClientStartup {
     runtime_context: McpRuntimeContext,
     runtime_auth_provider: Option<SharedAuthProvider>,
     client_elicitation_capability: ElicitationCapability,
-    supports_mcp_app_ui_webview: bool,
     supports_openai_form_elicitation: bool,
     cancel_token: CancellationToken,
     startup_complete: Arc<AtomicBool>,
@@ -295,7 +293,6 @@ impl ManagedClientStartup {
             runtime_context,
             runtime_auth_provider,
             client_elicitation_capability,
-            supports_mcp_app_ui_webview,
             supports_openai_form_elicitation,
             cancel_token,
             startup_complete,
@@ -341,7 +338,6 @@ impl ManagedClientStartup {
                         elicitation_requests,
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
-                        supports_mcp_app_ui_webview,
                         supports_openai_form_elicitation,
                     },
                 )
@@ -395,7 +391,6 @@ impl AsyncManagedClient {
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
-        supports_mcp_app_ui_webview: bool,
         supports_openai_form_elicitation: bool,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
@@ -424,7 +419,6 @@ impl AsyncManagedClient {
             runtime_context,
             runtime_auth_provider,
             client_elicitation_capability,
-            supports_mcp_app_ui_webview,
             supports_openai_form_elicitation,
             cancel_token: cancel_token.clone(),
             startup_complete: Arc::clone(&startup_complete),
@@ -805,12 +799,10 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
         client_elicitation_capability,
-        supports_mcp_app_ui_webview,
         supports_openai_form_elicitation,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
-        supports_mcp_app_ui_webview,
         supports_openai_form_elicitation,
     );
 
@@ -879,20 +871,16 @@ async fn start_server_task(
 
 fn mcp_initialize_request_params(
     client_elicitation_capability: ElicitationCapability,
-    supports_mcp_app_ui_webview: bool,
     supports_openai_form_elicitation: bool,
 ) -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
-    let mut extensions = if supports_mcp_app_ui_webview {
-        crate::client_capabilities::mcp_app_ui_extensions()
-    } else {
-        Default::default()
-    };
     if supports_openai_form_elicitation {
-        extensions.insert(OPENAI_FORM_CAPABILITY.to_string(), JsonObject::new());
+        capabilities.extensions = Some(BTreeMap::from([(
+            OPENAI_FORM_CAPABILITY.to_string(),
+            JsonObject::new(),
+        )]));
     }
-    capabilities.extensions = (!extensions.is_empty()).then_some(extensions);
     InitializeRequestParams::new(
         capabilities,
         Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
@@ -925,7 +913,6 @@ struct StartServerTaskParams {
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
-    supports_mcp_app_ui_webview: bool,
     supports_openai_form_elicitation: bool,
 }
 
@@ -1036,45 +1023,24 @@ mod tests {
     }
 
     #[test]
-    fn mcp_initialize_advertises_extensions_only_when_supported() {
+    fn mcp_initialize_advertises_openai_form_only_when_supported() {
         let unsupported = mcp_initialize_request_params(
             ElicitationCapability::default(),
-            /*supports_mcp_app_ui_webview*/ false,
             /*supports_openai_form_elicitation*/ false,
         );
         assert_eq!(unsupported.capabilities.extensions, None);
 
-        let form_supported = mcp_initialize_request_params(
+        let supported = mcp_initialize_request_params(
             ElicitationCapability::default(),
-            /*supports_mcp_app_ui_webview*/ false,
             /*supports_openai_form_elicitation*/ true,
         );
         assert_eq!(
-            form_supported.capabilities.extensions,
+            supported.capabilities.extensions,
             Some(BTreeMap::from([(
                 OPENAI_FORM_CAPABILITY.to_string(),
                 JsonObject::new(),
             )]))
         );
-
-        let ui_supported = mcp_initialize_request_params(
-            ElicitationCapability::default(),
-            /*supports_mcp_app_ui_webview*/ true,
-            /*supports_openai_form_elicitation*/ false,
-        );
-        assert_eq!(
-            ui_supported.capabilities.extensions,
-            Some(crate::client_capabilities::mcp_app_ui_extensions())
-        );
-
-        let both_supported = mcp_initialize_request_params(
-            ElicitationCapability::default(),
-            /*supports_mcp_app_ui_webview*/ true,
-            /*supports_openai_form_elicitation*/ true,
-        );
-        let mut expected = crate::client_capabilities::mcp_app_ui_extensions();
-        expected.insert(OPENAI_FORM_CAPABILITY.to_string(), JsonObject::new());
-        assert_eq!(both_supported.capabilities.extensions, Some(expected));
     }
 
     fn tool_with_connector_meta() -> RmcpTool {

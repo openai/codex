@@ -47,9 +47,8 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        supports_mcp_app_ui_webview: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_mcp_server_status(request_id, params, supports_mcp_app_ui_webview)
+        self.list_mcp_server_status(request_id, params)
             .await
             .map(|()| None)
     }
@@ -228,12 +227,11 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let (mut config, thread) = match params.thread_id.as_deref() {
+        let (config, thread) = match params.thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
                 let thread_config = thread.config().await;
@@ -246,7 +244,6 @@ impl McpRequestProcessor {
             }
             None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
         };
-        config.supports_mcp_app_ui_webview = supports_mcp_app_ui_webview;
         let mcp_manager = self.thread_manager.mcp_manager();
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let auth = self.auth_manager.auth().await;
@@ -465,17 +462,17 @@ impl McpRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
-        let mcp_runtime = thread
-            .current_mcp_runtime_with_mcp_app_ui_webview_support(supports_mcp_app_ui_webview)
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve MCP runtime: {err}")))?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
+        let meta = if params.server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME {
+            codex_mcp::with_mcp_app_ui_client_capabilities_meta(meta, supports_mcp_app_ui_webview)
+        } else {
+            meta
+        };
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
-            let result = mcp_runtime
-                .manager()
-                .call_tool(&params.server, &params.tool, params.arguments, meta)
+            let result = thread
+                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));

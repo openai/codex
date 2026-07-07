@@ -1219,7 +1219,6 @@ impl Session {
                     .config
                     .client_elicitation_capability
                     .clone(),
-                mcp_projection.config.supports_mcp_app_ui_webview,
                 sess.services
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),

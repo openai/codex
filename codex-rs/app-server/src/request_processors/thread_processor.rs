@@ -783,7 +783,6 @@ impl ThreadRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        supports_mcp_app_ui_webview: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -793,7 +792,6 @@ impl ThreadRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
-                Some(supports_mcp_app_ui_webview),
                 mcp_elicitations_auto_deny,
             )
             .await
@@ -1245,7 +1243,6 @@ impl ThreadRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
-            supports_mcp_app_ui_webview,
         )
         .await?;
 
@@ -2817,7 +2814,6 @@ impl ThreadRequestProcessor {
                     codex_thread.as_ref(),
                     app_server_client_name,
                     app_server_client_version,
-                    supports_mcp_app_ui_webview,
                 )
                 .await
                 {
@@ -3126,9 +3122,14 @@ impl ThreadRequestProcessor {
                 existing_thread.as_ref(),
                 app_server_client_name,
                 app_server_client_version,
-                supports_mcp_app_ui_webview,
             )
             .await?;
+            existing_thread
+                .set_mcp_app_ui_webview_capability(supports_mcp_app_ui_webview)
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to set MCP app UI capability: {err}"))
+                })?;
 
             let mut thread_summary = self.stored_thread_to_api_thread(
                 source_thread,
@@ -3562,7 +3563,6 @@ impl ThreadRequestProcessor {
             forked_thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
-            supports_mcp_app_ui_webview,
         )
         .await?;
         if session_configured.rollout_path.is_some()

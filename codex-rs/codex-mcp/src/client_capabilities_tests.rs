@@ -33,7 +33,7 @@ fn recognizes_only_the_webview_mime_type() {
 
 #[test]
 fn trusted_capabilities_replace_spoofed_request_metadata() {
-    let meta = with_client_capabilities_meta(
+    let meta = with_mcp_app_ui_client_capabilities_meta(
         Some(json!({
             MCP_CLIENT_CAPABILITIES_META_KEY: {"spoofed": true},
             "caller": "preserved",
@@ -61,7 +61,7 @@ fn trusted_capabilities_replace_spoofed_request_metadata() {
 #[test]
 fn absent_host_capabilities_remove_spoofed_request_metadata() {
     assert_eq!(
-        with_client_capabilities_meta(
+        with_mcp_app_ui_client_capabilities_meta(
             Some(json!({
                 MCP_CLIENT_CAPABILITIES_META_KEY: {"spoofed": true},
                 "caller": "preserved",
@@ -75,7 +75,7 @@ fn absent_host_capabilities_remove_spoofed_request_metadata() {
 #[test]
 fn invalid_caller_metadata_does_not_suppress_trusted_capabilities() {
     assert_eq!(
-        with_client_capabilities_meta(
+        with_mcp_app_ui_client_capabilities_meta(
             Some(json!("invalid")),
             /*supports_mcp_app_ui_webview*/ true,
         ),

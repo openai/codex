@@ -266,7 +266,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         codex_apps_tools_cache_key(auth.as_ref()),
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
-        mcp_config.supports_mcp_app_ui_webview,
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         auth.as_ref(),

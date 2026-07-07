@@ -43,6 +43,7 @@ use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
+use codex_mcp::with_mcp_app_ui_client_capabilities_meta;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
@@ -588,6 +589,14 @@ async fn execute_mcp_tool_call(
         .rollout_thread_trace
         .start_mcp_call_trace(call_id);
     let request_meta = mcp_call_trace.add_request_meta(request_meta);
+    let request_meta = if invocation.server == CODEX_APPS_MCP_SERVER_NAME {
+        with_mcp_app_ui_client_capabilities_meta(
+            request_meta,
+            turn_context.config.supports_mcp_app_ui_webview,
+        )
+    } else {
+        request_meta
+    };
     let result = manager
         .call_tool(
             &invocation.server,

@@ -1305,9 +1305,7 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_share_delete(params).await
             }
             ClientRequest::AppsList { params, .. } => {
-                self.apps_processor
-                    .apps_list(&request_id, params, supports_mcp_app_ui_webview)
-                    .await
+                self.apps_processor.apps_list(&request_id, params).await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
                 self.catalog_processor.skills_config_write(params).await
@@ -1346,7 +1344,6 @@ impl MessageProcessor {
                         client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
-                        supports_mcp_app_ui_webview,
                     )
                     .await
             }
@@ -1363,7 +1360,7 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadRealtimeStart { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_start(&request_id, params, supports_mcp_app_ui_webview)
+                    .thread_realtime_start(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeAppendAudio { params, .. } => {
@@ -1390,9 +1387,7 @@ impl MessageProcessor {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor
-                    .review_start(&request_id, params, supports_mcp_app_ui_webview)
-                    .await
+                self.turn_processor.review_start(&request_id, params).await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await
@@ -1402,7 +1397,7 @@ impl MessageProcessor {
             }
             ClientRequest::McpServerStatusList { params, .. } => {
                 self.mcp_processor
-                    .mcp_server_status_list(&request_id, params, supports_mcp_app_ui_webview)
+                    .mcp_server_status_list(&request_id, params)
                     .await
             }
             ClientRequest::McpResourceRead { params, .. } => {

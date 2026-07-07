@@ -116,21 +116,13 @@ impl Session {
         let available_environment_ids =
             Self::available_selected_environment_ids(selected_capability_roots);
         let current = self.services.latest_mcp_runtime();
-        let host_capability_matches = current.config().supports_mcp_app_ui_webview
-            == turn_context.config.supports_mcp_app_ui_webview;
-        if current.available_environment_ids() == available_environment_ids
-            && host_capability_matches
-        {
+        if current.available_environment_ids() == available_environment_ids {
             return current;
         }
 
         let _guard = self.services.mcp_projection_lock.lock().await;
         let current = self.services.latest_mcp_runtime();
-        let host_capability_matches = current.config().supports_mcp_app_ui_webview
-            == turn_context.config.supports_mcp_app_ui_webview;
-        if current.available_environment_ids() == available_environment_ids
-            && host_capability_matches
-        {
+        if current.available_environment_ids() == available_environment_ids {
             return current;
         }
         let mcp_projection = self
@@ -161,8 +153,6 @@ impl Session {
                 .mcp_server_catalog
                 .has_same_servers(&mcp_config.mcp_server_catalog)
             && current.config().connector_snapshot == mcp_config.connector_snapshot
-            && current.config().supports_mcp_app_ui_webview
-                == mcp_config.supports_mcp_app_ui_webview
         {
             // Availability is only an input to the MCP projection. When that input changes but
             // the projected servers and connectors do not, advance the input key without
@@ -387,7 +377,6 @@ impl Session {
             codex_apps_tools_cache_key(auth.as_ref()),
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability.clone(),
-            mcp_config.supports_mcp_app_ui_webview,
             self.services
                 .supports_openai_form_elicitation
                 .load(std::sync::atomic::Ordering::Relaxed),

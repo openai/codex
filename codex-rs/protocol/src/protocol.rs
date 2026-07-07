@@ -166,11 +166,6 @@ pub struct Submission {
     pub op: Op,
     /// Client-provided id for the user message represented by `Op::UserInput`.
     pub client_user_message_id: Option<String>,
-    /// Request-scoped host capability for turns submitted by app-server clients.
-    ///
-    /// This is carried with the queued operation so a later request on the same
-    /// thread cannot change which MCP runtime the turn initializes.
-    pub supports_mcp_app_ui_webview: Option<bool>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
 }

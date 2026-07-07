@@ -4288,6 +4288,35 @@ async fn session_settings_null_service_tier_update_uses_default_service_tier() {
 }
 
 #[tokio::test]
+async fn session_settings_update_replaces_mcp_app_ui_webview_capability() {
+    let session_configuration = make_session_configuration_for_tests().await;
+
+    let enabled = session_configuration
+        .apply(&SessionSettingsUpdate {
+            supports_mcp_app_ui_webview: Some(true),
+            ..Default::default()
+        })
+        .expect("enabled capability update should apply");
+    assert!(
+        enabled
+            .original_config_do_not_use
+            .supports_mcp_app_ui_webview
+    );
+
+    let disabled = enabled
+        .apply(&SessionSettingsUpdate {
+            supports_mcp_app_ui_webview: Some(false),
+            ..Default::default()
+        })
+        .expect("disabled capability update should apply");
+    assert!(
+        !disabled
+            .original_config_do_not_use
+            .supports_mcp_app_ui_webview
+    );
+}
+
+#[tokio::test]
 async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_value() {
     let session_configuration = make_session_configuration_for_tests().await;
 
@@ -6479,7 +6508,6 @@ async fn submit_with_id_captures_current_span_trace_context() {
                 id: "sub-1".into(),
                 op: Op::Interrupt,
                 client_user_message_id: None,
-                supports_mcp_app_ui_webview: None,
                 trace: None,
             })
             .await
@@ -6491,40 +6519,6 @@ async fn submit_with_id_captures_current_span_trace_context() {
 
     let submitted = rx_sub.recv().await.expect("submission");
     assert_eq!(submitted.trace, Some(expected_trace));
-}
-
-#[tokio::test]
-async fn user_input_submission_carries_request_scoped_mcp_app_ui_capability() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let (tx_sub, rx_sub) = async_channel::bounded(1);
-    let (_tx_event, rx_event) = async_channel::unbounded();
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-    let codex = Codex {
-        tx_sub,
-        rx_event,
-        agent_status,
-        session: Arc::new(session),
-        session_loop_termination: completed_session_loop_termination(),
-    };
-
-    codex
-        .submit_user_input_with_client_user_message_id(
-            Op::UserInput {
-                items: Vec::new(),
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            },
-            /*trace*/ None,
-            /*client_user_message_id*/ None,
-            /*supports_mcp_app_ui_webview*/ true,
-        )
-        .await
-        .expect("submit user input");
-
-    let submitted = rx_sub.recv().await.expect("submission");
-    assert_eq!(submitted.supports_mcp_app_ui_webview, Some(true));
 }
 
 #[tokio::test]
@@ -6586,7 +6580,6 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             id: "sub-1".into(),
             op: Op::Interrupt,
             client_user_message_id: None,
-            supports_mcp_app_ui_webview: None,
             trace: Some(submission_trace),
         })
     });
@@ -6614,7 +6607,6 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
             },
         }),
         client_user_message_id: None,
-        supports_mcp_app_ui_webview: None,
         trace: None,
     });
 
@@ -6681,7 +6673,6 @@ async fn user_turn_updates_approvals_reviewer() {
             },
         },
         /*client_user_message_id*/ None,
-        /*supports_mcp_app_ui_webview*/ None,
     )
     .await;
 
@@ -6690,27 +6681,6 @@ async fn user_turn_updates_approvals_reviewer() {
         state.session_configuration.approvals_reviewer,
         codex_config::types::ApprovalsReviewer::AutoReview
     );
-}
-
-#[tokio::test]
-async fn routed_realtime_text_uses_the_starting_client_mcp_app_ui_capability() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    session
-        .update_settings(SessionSettingsUpdate {
-            supports_mcp_app_ui_webview: Some(true),
-            ..Default::default()
-        })
-        .await
-        .expect("simulate a later widget-capable client update");
-
-    session
-        .route_realtime_text_input(
-            "hello from realtime".to_string(),
-            /*supports_mcp_app_ui_webview*/ Some(false),
-        )
-        .await;
-
-    assert!(!session.get_config().await.supports_mcp_app_ui_webview);
 }
 
 #[tokio::test]
@@ -6950,7 +6920,6 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         id: "sub-1".into(),
         op: Op::Interrupt,
         client_user_message_id: None,
-        supports_mcp_app_ui_webview: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -7817,65 +7786,6 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
         codex_mcp::configured_mcp_servers(new_runtime.config()),
         refreshed_mcp_servers
     );
-}
-
-#[tokio::test]
-async fn host_mcp_app_ui_capability_change_rebuilds_the_mcp_manager() {
-    let (session, _) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let old_runtime = session.services.latest_mcp_runtime();
-    let old_manager = old_runtime.manager_arc();
-    assert!(!old_runtime.config().supports_mcp_app_ui_webview);
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            supports_mcp_app_ui_webview: Some(true),
-            ..Default::default()
-        })
-        .await
-        .expect("update host MCP App UI capability");
-    let turn_context = session.new_default_turn().await;
-
-    let new_runtime = session
-        .mcp_runtime_for_step(
-            turn_context.as_ref(),
-            &turn_context.environments,
-            /*selected_capability_roots*/ &[],
-        )
-        .await;
-
-    assert!(new_runtime.config().supports_mcp_app_ui_webview);
-    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
-    assert!(!Arc::ptr_eq(&old_manager, &new_runtime.manager_arc()));
-}
-
-#[tokio::test]
-async fn request_scoped_host_mcp_app_ui_capability_survives_later_session_update() {
-    let (session, _) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let widget_turn_context = session
-        .new_default_turn_with_mcp_app_ui_webview_support(/*supports_mcp_app_ui_webview*/ true)
-        .await
-        .expect("capture widget client turn context");
-
-    session
-        .update_settings(SessionSettingsUpdate {
-            supports_mcp_app_ui_webview: Some(false),
-            ..Default::default()
-        })
-        .await
-        .expect("simulate a later text-only client update");
-
-    let widget_runtime = session
-        .mcp_runtime_for_step(
-            widget_turn_context.as_ref(),
-            &widget_turn_context.environments,
-            /*selected_capability_roots*/ &[],
-        )
-        .await;
-
-    assert!(widget_turn_context.config.supports_mcp_app_ui_webview);
-    assert!(widget_runtime.config().supports_mcp_app_ui_webview);
 }
 
 #[tokio::test]

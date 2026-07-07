@@ -258,27 +258,11 @@ impl CodexThread {
         self.codex.submit_with_trace(op, trace).await
     }
 
-    pub async fn submit_with_trace_and_mcp_app_ui_webview_support(
-        &self,
-        op: Op,
-        trace: Option<W3cTraceContext>,
-        supports_mcp_app_ui_webview: bool,
-    ) -> CodexResult<String> {
-        self.codex
-            .submit_with_trace_and_mcp_app_ui_webview_support(
-                op,
-                trace,
-                supports_mcp_app_ui_webview,
-            )
-            .await
-    }
-
     pub async fn submit_user_input_with_client_user_message_id(
         &self,
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
-        supports_mcp_app_ui_webview: bool,
     ) -> CodexResult<String> {
         self.codex
             .session
@@ -287,12 +271,7 @@ impl CodexThread {
             .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
             .await?;
         self.codex
-            .submit_user_input_with_client_user_message_id(
-                op,
-                trace,
-                client_user_message_id,
-                supports_mcp_app_ui_webview,
-            )
+            .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
             .await
     }
 
@@ -356,16 +335,24 @@ impl CodexThread {
         &self,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        supports_mcp_app_ui_webview: Option<bool>,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.codex
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
-                supports_mcp_app_ui_webview,
                 mcp_elicitations_auto_deny,
             )
+            .await
+    }
+
+    pub async fn set_mcp_app_ui_webview_capability(&self, enabled: bool) -> ConstraintResult<()> {
+        self.codex
+            .session
+            .update_settings(SessionSettingsUpdate {
+                supports_mcp_app_ui_webview: Some(enabled),
+                ..Default::default()
+            })
             .await
     }
 
@@ -635,25 +622,6 @@ impl CodexThread {
             .await
             .mcp
             .clone()
-    }
-
-    /// Captures the MCP runtime for one app-server request before detached work begins.
-    pub async fn current_mcp_runtime_with_mcp_app_ui_webview_support(
-        &self,
-        supports_mcp_app_ui_webview: bool,
-    ) -> CodexResult<Arc<crate::session::McpRuntimeSnapshot>> {
-        let turn_context = self
-            .codex
-            .session
-            .new_default_turn_with_mcp_app_ui_webview_support(supports_mcp_app_ui_webview)
-            .await?;
-        Ok(self
-            .codex
-            .session
-            .capture_step_context(turn_context)
-            .await
-            .mcp
-            .clone())
     }
 
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {

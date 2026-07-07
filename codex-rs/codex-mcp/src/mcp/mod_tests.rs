@@ -33,7 +33,6 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         apps_enabled: false,
         prefix_mcp_tool_names: true,
         client_elicitation_capability: ElicitationCapability::default(),
-        supports_mcp_app_ui_webview: false,
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
     }

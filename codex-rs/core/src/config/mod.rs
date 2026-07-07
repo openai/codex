@@ -1588,7 +1588,6 @@ impl Config {
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
-            supports_mcp_app_ui_webview: self.supports_mcp_app_ui_webview,
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             auth_keyring_backend_kind: self.auth_keyring_backend_kind(),

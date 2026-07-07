@@ -14,7 +14,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
-use crate::client_capabilities::with_client_capabilities_meta;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
@@ -117,7 +116,6 @@ pub struct McpConnectionManager {
     required_servers: Vec<String>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     prefix_mcp_tool_names: bool,
-    supports_mcp_app_ui_webview: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
 }
@@ -140,7 +138,6 @@ impl McpConnectionManager {
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
-        supports_mcp_app_ui_webview: bool,
         supports_openai_form_elicitation: bool,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
@@ -200,11 +197,8 @@ impl McpConnectionManager {
             let shares_codex_apps_tools_cache =
                 should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                codex_apps_tools_cache.context(
-                    codex_home.clone(),
-                    codex_apps_tools_cache_key.clone(),
-                    supports_mcp_app_ui_webview,
-                )
+                codex_apps_tools_cache
+                    .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
             });
             // If Codex Apps has an env bearer token, that is its auth path. Do
             // not also attach the ambient CodexAuth provider.
@@ -228,7 +222,6 @@ impl McpConnectionManager {
                 runtime_context.clone(),
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
-                server_name == CODEX_APPS_MCP_SERVER_NAME && supports_mcp_app_ui_webview,
                 supports_openai_form_elicitation,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
@@ -280,7 +273,6 @@ impl McpConnectionManager {
             required_servers,
             tool_plugin_provenance,
             prefix_mcp_tool_names,
-            supports_mcp_app_ui_webview,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
         };
@@ -366,7 +358,6 @@ impl McpConnectionManager {
             required_servers: Vec::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             prefix_mcp_tool_names,
-            supports_mcp_app_ui_webview: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.clone(),
@@ -758,11 +749,6 @@ impl McpConnectionManager {
             ));
         }
 
-        let meta = if server == CODEX_APPS_MCP_SERVER_NAME {
-            with_client_capabilities_meta(meta, self.supports_mcp_app_ui_webview)
-        } else {
-            meta
-        };
         let result: rmcp::model::CallToolResult = client
             .client
             .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)

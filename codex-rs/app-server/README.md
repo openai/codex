@@ -107,9 +107,8 @@ Clients that can render MCP App WebViews advertise the MCP UI extension:
 }
 ```
 
-App-server forwards this capability to the host-owned `codex_apps` MCP
-server during initialization and on each `tools/call`. Clients without an
-MCP App WebView omit the extension.
+App-server forwards this capability on host-owned `codex_apps` `tools/call`
+requests. Clients without an MCP App WebView omit the extension.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 

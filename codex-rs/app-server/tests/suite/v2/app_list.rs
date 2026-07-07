@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -29,8 +27,6 @@ use codex_app_server_protocol::AppReview;
 use codex_app_server_protocol::AppScreenshot;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -44,8 +40,6 @@ use codex_login::save_auth;
 use codex_protocol::auth::AuthMode;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
-use rmcp::model::InitializeRequestParams;
-use rmcp::model::InitializeResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Meta;
@@ -53,8 +47,6 @@ use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
-use rmcp::service::RequestContext;
-use rmcp::service::RoleServer;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -158,72 +150,6 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
     let AppsListResponse { data, next_cursor } = to_response(response)?;
     assert!(data.is_empty());
     assert!(next_cursor.is_none());
-
-    server_handle.abort();
-    let _ = server_handle.await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn list_apps_forwards_mcp_app_ui_capability_to_codex_apps() -> Result<()> {
-    let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
-        Vec::new(),
-        tools,
-        Duration::ZERO,
-        Duration::ZERO,
-    )
-    .await?;
-
-    let codex_home = TempDir::new()?;
-    write_connectors_config(codex_home.path(), &server_url)?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(
-        DEFAULT_TIMEOUT,
-        mcp.initialize_with_capabilities(
-            ClientInfo {
-                name: "widget-capable-client".to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            Some(InitializeCapabilities {
-                experimental_api: true,
-                extensions: Some(HashMap::from([(
-                    "io.modelcontextprotocol/ui".to_string(),
-                    json!({
-                        "mimeTypes": ["text/html;profile=mcp-app"],
-                    }),
-                )])),
-                ..Default::default()
-            }),
-        ),
-    )
-    .await??;
-
-    let request_id = mcp
-        .send_apps_list_request(AppsListParams {
-            limit: Some(50),
-            cursor: None,
-            thread_id: None,
-            force_refetch: true,
-        })
-        .await?;
-    let _: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    assert!(server_control.supports_mcp_app_ui_webview());
 
     server_handle.abort();
     let _ = server_handle.await;
@@ -1545,20 +1471,11 @@ struct AppsServerState {
 struct AppListMcpServer {
     tools: Arc<StdMutex<Vec<Tool>>>,
     tools_delay: Duration,
-    supports_mcp_app_ui_webview: Arc<AtomicBool>,
 }
 
 impl AppListMcpServer {
-    fn new(
-        tools: Arc<StdMutex<Vec<Tool>>>,
-        tools_delay: Duration,
-        supports_mcp_app_ui_webview: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            tools,
-            tools_delay,
-            supports_mcp_app_ui_webview,
-        }
+    fn new(tools: Arc<StdMutex<Vec<Tool>>>, tools_delay: Duration) -> Self {
+        Self { tools, tools_delay }
     }
 }
 
@@ -1566,7 +1483,6 @@ impl AppListMcpServer {
 struct AppsServerControl {
     response: Arc<StdMutex<serde_json::Value>>,
     tools: Arc<StdMutex<Vec<Tool>>>,
-    supports_mcp_app_ui_webview: Arc<AtomicBool>,
 }
 
 impl AppsServerControl {
@@ -1585,30 +1501,9 @@ impl AppsServerControl {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *tools_guard = tools;
     }
-
-    fn supports_mcp_app_ui_webview(&self) -> bool {
-        self.supports_mcp_app_ui_webview.load(Ordering::Relaxed)
-    }
 }
 
 impl ServerHandler for AppListMcpServer {
-    async fn initialize(
-        &self,
-        request: InitializeRequestParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<InitializeResult, rmcp::ErrorData> {
-        self.supports_mcp_app_ui_webview.store(
-            request
-                .capabilities
-                .extensions
-                .as_ref()
-                .is_some_and(|extensions| extensions.contains_key("io.modelcontextprotocol/ui")),
-            Ordering::Relaxed,
-        );
-        context.peer.set_peer_info(request);
-        Ok(self.get_info())
-    }
-
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
@@ -1694,7 +1589,6 @@ async fn start_apps_server_with_delays_and_control_inner(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
-    let supports_mcp_app_ui_webview = Arc::new(AtomicBool::new(false));
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
@@ -1706,7 +1600,6 @@ async fn start_apps_server_with_delays_and_control_inner(
     let server_control = AppsServerControl {
         response,
         tools: tools.clone(),
-        supports_mcp_app_ui_webview: Arc::clone(&supports_mcp_app_ui_webview),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1715,14 +1608,7 @@ async fn start_apps_server_with_delays_and_control_inner(
     let mcp_service = StreamableHttpService::new(
         {
             let tools = tools.clone();
-            let supports_mcp_app_ui_webview = Arc::clone(&supports_mcp_app_ui_webview);
-            move || {
-                Ok(AppListMcpServer::new(
-                    tools.clone(),
-                    tools_delay,
-                    Arc::clone(&supports_mcp_app_ui_webview),
-                ))
-            }
+            move || Ok(AppListMcpServer::new(tools.clone(), tools_delay))
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
