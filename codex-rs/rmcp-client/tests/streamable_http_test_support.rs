@@ -258,12 +258,14 @@ pub(crate) async fn arm_initialize_post_failure(
     base_url: &str,
     status: u16,
     remaining: usize,
+    www_authenticate_headers: &[&str],
 ) -> anyhow::Result<()> {
     let response = reqwest::Client::new()
         .post(format!("{base_url}{INITIALIZE_POST_FAILURE_CONTROL_PATH}"))
         .json(&json!({
             "status": status,
             "remaining": remaining,
+            "www_authenticate_headers": www_authenticate_headers,
         }))
         .send()
         .await?;

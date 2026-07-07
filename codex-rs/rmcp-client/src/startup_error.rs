@@ -34,7 +34,7 @@ fn client_initialize_error_requires_authentication(error: &ClientInitializeError
                 error,
                 StreamableHttpError::Auth(auth_error)
                     if auth_error_requires_authentication(auth_error)
-            )
+            ) || matches!(error, StreamableHttpError::AuthRequired(_))
         })
 }
 
