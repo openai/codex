@@ -629,11 +629,14 @@ impl Codex {
                 developer_instructions: None,
             },
         };
-        let service_tier = get_service_tier(
-            config.service_tier.clone(),
-            config.features.enabled(Feature::FastMode),
+        let fast_mode_enabled = config.features.enabled(Feature::FastMode);
+        let initial_service_tier_warning = unsupported_service_tier_warning(
+            config.service_tier.as_deref(),
+            fast_mode_enabled,
             &model_info,
         );
+        let service_tier =
+            get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -706,6 +709,14 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
+        if let Some(message) = initial_service_tier_warning {
+            session
+                .send_event_raw(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Warning(WarningEvent { message }),
+                })
+                .await;
+        }
         let thread_id = session.thread_id;
 
         // This task will run until Op::Shutdown is received.
@@ -906,6 +917,22 @@ fn get_service_tier(
         service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
             || model_info.supports_service_tier(service_tier)
     })
+}
+
+fn unsupported_service_tier_warning(
+    configured_service_tier: Option<&str>,
+    fast_mode_enabled: bool,
+    model_info: &ModelInfo,
+) -> Option<String> {
+    let service_tier = configured_service_tier.filter(|service_tier| {
+        fast_mode_enabled
+            && *service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE
+            && !model_info.supports_service_tier(service_tier)
+    })?;
+    Some(format!(
+        "Configured service tier `{service_tier}` is not advertised as supported for model `{}` and will be omitted from requests.",
+        model_info.slug
+    ))
 }
 
 fn session_permission_profile_state_from_config(
