@@ -140,6 +140,18 @@ fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> 
 }
 
 #[test]
+fn test_apply_patch_cli_appends_after_trailing_blank_crlf_line() -> anyhow::Result<()> {
+    let patch = "*** Begin Patch\n*** Update File: trailing_blank.txt\n@@\n+new\n*** End Patch";
+
+    assert_apply_patch_updates_file(
+        "trailing_blank.txt",
+        b"a\r\n\r\n",
+        patch,
+        b"a\r\n\r\nnew\r\n",
+    )
+}
+
+#[test]
 fn test_apply_patch_cli_uses_legacy_line_handling_without_rollout_env() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("crlf.txt");
