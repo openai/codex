@@ -1879,7 +1879,9 @@ review when allowed by configuration requirements.
 
 Use `apps._default.default_tools_approval_mode` to set the approval mode for
 tools without a per-app or per-tool override. Supported values are `"auto"`,
-`"prompt"`, and `"approve"`. Tool-level `approval_mode` takes precedence over
+`"prompt"`, `"writes"`, and `"approve"`. The `"writes"` mode prompts for tools
+that do not advertise `readOnlyHint = true` and skips declared read-only tools.
+Tool-level `approval_mode` takes precedence over
 the per-app `default_tools_approval_mode`, which takes precedence over the
 `apps._default` value. Managed tool requirements take precedence over all of
 these settings. When none are configured, the mode defaults to `"auto"`.
@@ -1993,6 +1995,11 @@ Field notes:
    { "id": 3, "result": { "type": "chatgpt", "loginId": "<uuid>", "authUrl": "https://chatgpt.com/…&redirect_uri=http%3A%2F%2Flocalhost%3A<port>%2Fauth%2Fcallback" } }
    ```
 2. Open `authUrl` in a browser; the app-server hosts the local callback.
+   By default, a successful callback redirects to the local success page. Clients may set
+   `useHostedLoginSuccessPage: true` to redirect successful callbacks that do not require
+   organization setup to the hosted Codex success page instead. When hosted login success is
+   enabled, clients may set `appBrand` to `"codex"` or `"chatgpt"` to select the matching hosted
+   page artwork; omitted or `null` values default to `"codex"`.
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }

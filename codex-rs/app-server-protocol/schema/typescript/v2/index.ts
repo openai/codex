@@ -194,6 +194,7 @@ export type { ListMcpServerStatusParams } from "./ListMcpServerStatusParams";
 export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse";
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
+export type { LoginAppBrand } from "./LoginAppBrand";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
 export type { ManagedHooksRequirements } from "./ManagedHooksRequirements";
 export type { MarketplaceAddParams } from "./MarketplaceAddParams";
