@@ -206,6 +206,21 @@ impl ConnectorRuntimeContext {
         server_info: &McpServerInfo,
         tools: Vec<ToolInfo>,
     ) -> Result<Arc<ConnectorRuntimeSnapshot>, ConnectorRuntimeContextDiscarded> {
+        self.publish_runtime_if_newest_accepted_with(
+            ticket,
+            server_info,
+            tools,
+            persist_codex_apps_cache,
+        )
+    }
+
+    fn publish_runtime_if_newest_accepted_with(
+        &self,
+        ticket: CodexAppsToolsFetchTicket,
+        server_info: &McpServerInfo,
+        tools: Vec<ToolInfo>,
+        persist: impl FnOnce(&ConnectorRuntimeContext, &McpServerInfo, &ConnectorRuntimeSnapshot),
+    ) -> Result<Arc<ConnectorRuntimeSnapshot>, ConnectorRuntimeContextDiscarded> {
         let publish_start = Instant::now();
         let active = lock_unpoisoned(&self.manager.active);
         if !self.matches_active(active.as_ref()) {
@@ -241,9 +256,11 @@ impl ConnectorRuntimeContext {
         self.entry
             .current_snapshot
             .store(Some(Arc::clone(&snapshot)));
+        // Keep both guards through persistence so accepted generations cannot reach disk out of
+        // order, and the same account cannot be reactivated with stale disk state mid-commit.
+        persist(self, server_info, snapshot.as_ref());
         drop(last_accepted_generation);
         drop(active);
-        persist_codex_apps_cache(self, server_info, snapshot.as_ref());
         emit_duration(
             MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC,
             publish_start.elapsed(),
@@ -275,7 +292,7 @@ impl ConnectorRuntimeContext {
         self.entry.current_snapshot.store(Some(Arc::new(snapshot)));
     }
 
-    fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.matches_active(lock_unpoisoned(&self.manager.active).as_ref())
     }
 

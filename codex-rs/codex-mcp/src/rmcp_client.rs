@@ -517,6 +517,14 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+        if self.is_codex_apps_mcp_server
+            && self
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .is_some_and(|context| !context.is_active())
+        {
+            return None;
+        }
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if !self.startup_complete.load(Ordering::Acquire)
             && let Some(startup_tools) = self.cached_tools()

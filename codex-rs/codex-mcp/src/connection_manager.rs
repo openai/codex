@@ -871,12 +871,19 @@ impl McpConnectionManager {
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        self.clients
+        let client = self
+            .clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
-            .await
-            .context("failed to get client")
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
+        if client.is_codex_apps_mcp_server
+            && client
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .is_some_and(|context| !context.is_active())
+        {
+            return Err(anyhow!("connector runtime context was discarded"));
+        }
+        client.client().await.context("failed to get client")
     }
 
     #[cfg(test)]

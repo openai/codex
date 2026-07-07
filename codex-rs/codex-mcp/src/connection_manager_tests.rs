@@ -1413,6 +1413,59 @@ async fn list_all_tools_adds_server_metadata_to_tools() {
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
 }
 
+#[tokio::test]
+async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let mut client = create_ready_async_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "old_tool",
+    )])
+    .await;
+    client.is_codex_apps_mcp_server = true;
+    client.codex_apps_tools_cache_context = Some(context);
+
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert!(manager.list_all_tools().await.is_empty());
+    let error = manager
+        .call_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "old_tool",
+            /*arguments*/ None,
+            /*meta*/ None,
+        )
+        .await
+        .expect_err("discarded context should reject tool calls");
+    assert_eq!(error.to_string(), "connector runtime context was discarded");
+}
+
 #[test]
 fn server_metadata_preserves_tool_approval_policy() {
     let mut config = crate::codex_apps_mcp_server_config(
