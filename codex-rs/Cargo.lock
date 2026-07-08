@@ -3620,6 +3620,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-rustls-provider",
  "globset",
+ "hickory-proto",
  "pretty_assertions",
  "rama-core",
  "rama-http",

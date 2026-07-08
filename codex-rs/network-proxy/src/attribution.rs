@@ -72,16 +72,19 @@ where
 }
 
 async fn read_attribution_token(stream: &mut TcpStream) -> Result<Option<String>, BoxError> {
-    let mut marker = [0_u8; 1];
-    let read = stream.stream.peek(&mut marker).await?;
-    if read == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty proxy connection").into());
-    }
-    if marker[0] != ATTRIBUTION_FRAME_MAGIC[0] {
-        return Ok(None);
-    }
+    Ok(tokio::time::timeout(ATTRIBUTION_FRAME_TIMEOUT, async {
+        let mut marker = [0_u8; 1];
+        let read = stream.stream.peek(&mut marker).await?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "empty proxy connection",
+            ));
+        }
+        if marker[0] != ATTRIBUTION_FRAME_MAGIC[0] {
+            return Ok(None);
+        }
 
-    let token = tokio::time::timeout(ATTRIBUTION_FRAME_TIMEOUT, async {
         let mut magic = [0_u8; ATTRIBUTION_FRAME_MAGIC.len()];
         stream.read_exact(&mut magic).await?;
         if &magic != ATTRIBUTION_FRAME_MAGIC {
@@ -100,12 +103,13 @@ async fn read_attribution_token(stream: &mut TcpStream) -> Result<Option<String>
         }
         let mut token = vec![0_u8; token_len];
         stream.read_exact(&mut token).await?;
-        String::from_utf8(token).map_err(|_| {
+        let token = String::from_utf8(token).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "network proxy attribution token is not UTF-8",
             )
-        })
+        })?;
+        Ok(Some(token))
     })
     .await
     .map_err(|_| {
@@ -113,9 +117,7 @@ async fn read_attribution_token(stream: &mut TcpStream) -> Result<Option<String>
             io::ErrorKind::TimedOut,
             "network proxy attribution frame timed out",
         )
-    })??;
-
-    Ok(Some(token))
+    })??)
 }
 
 /// Writes the trusted bridge preface consumed by the shared proxy ingress.

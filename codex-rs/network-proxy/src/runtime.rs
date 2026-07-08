@@ -89,6 +89,12 @@ pub enum HostBlockDecision {
     Blocked(HostBlockReason),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostResolutionPolicy {
+    Allowed { allow_non_public_ips: bool },
+    Blocked(HostBlockReason),
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct BlockedRequest {
     pub host: String,
@@ -522,6 +528,60 @@ impl NetworkProxyState {
             Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed))
         } else {
             Ok(HostBlockDecision::Allowed)
+        }
+    }
+
+    /// Checks the live domain policy without resolving `host`.
+    ///
+    /// DNS callers use this before their single host lookup so denied names are not leaked to the
+    /// host resolver and the addresses returned to the sandbox are the same addresses checked for
+    /// local/private network access.
+    pub(crate) async fn host_resolution_policy(&self, host: &str) -> Result<HostResolutionPolicy> {
+        self.reload_if_needed().await?;
+        let host = match Host::parse(host) {
+            Ok(host) => host,
+            Err(_) => {
+                return Ok(HostResolutionPolicy::Blocked(HostBlockReason::NotAllowed));
+            }
+        };
+        let (deny_set, allow_set, allow_local_binding, allowed_domains) = {
+            let guard = self.state.read().await;
+            let allowed_domains = guard.config.network.allowed_domains();
+            (
+                guard.deny_set.clone(),
+                guard.allow_set.clone(),
+                guard.config.network.allow_local_binding,
+                allowed_domains,
+            )
+        };
+        let allowed_domains_empty = allowed_domains.is_none();
+        let allowed_domains = allowed_domains.unwrap_or_default();
+        let host_str = host.as_str();
+
+        if globset_matches_host_or_unscoped(&deny_set, host_str) {
+            return Ok(HostResolutionPolicy::Blocked(HostBlockReason::Denied));
+        }
+
+        let is_allowlisted = globset_matches_host_or_unscoped(&allow_set, host_str);
+        let mut explicitly_allowed_local_literal = false;
+        if !allow_local_binding {
+            let host_no_scope = unscoped_ip_literal(host_str).unwrap_or(host_str);
+            let local_literal = is_loopback_host(&host)
+                || host_no_scope.parse::<IpAddr>().is_ok_and(is_non_public_ip);
+            if local_literal && !is_explicit_local_allowlisted(&allowed_domains, &host) {
+                return Ok(HostResolutionPolicy::Blocked(
+                    HostBlockReason::NotAllowedLocal,
+                ));
+            }
+            explicitly_allowed_local_literal = local_literal;
+        }
+
+        if allowed_domains_empty || !is_allowlisted {
+            Ok(HostResolutionPolicy::Blocked(HostBlockReason::NotAllowed))
+        } else {
+            Ok(HostResolutionPolicy::Allowed {
+                allow_non_public_ips: allow_local_binding || explicitly_allowed_local_literal,
+            })
         }
     }
 
