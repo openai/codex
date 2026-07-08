@@ -1639,6 +1639,61 @@ async fn context_discard_during_startup_hides_codex_apps_tools() {
 }
 
 #[tokio::test]
+async fn context_discard_during_startup_is_not_reported_ready() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) =
+        create_blocked_codex_apps_client(Vec::new(), context, ToolFilter::default()).await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let ready_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::from_secs(1))
+                .await
+        }
+    });
+
+    startup_started
+        .await
+        .expect("readiness check should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    assert!(!ready_task.await.expect("readiness check should not panic"));
+    assert!(
+        !manager
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
+            .await
+    );
+}
+
+#[tokio::test]
 async fn context_discard_during_startup_rejects_codex_apps_calls() {
     let codex_home = tempdir().expect("tempdir");
     let cache = CodexAppsToolsCache::default();

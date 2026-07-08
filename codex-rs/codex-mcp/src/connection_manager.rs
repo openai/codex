@@ -475,11 +475,15 @@ impl McpConnectionManager {
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;
         };
+        if !async_managed_client.connector_runtime_context_is_active() {
+            return false;
+        }
 
-        match tokio::time::timeout(timeout, async_managed_client.client()).await {
+        let ready = match tokio::time::timeout(timeout, async_managed_client.client()).await {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
-        }
+        };
+        ready && async_managed_client.connector_runtime_context_is_active()
     }
 
     /// Returns all tools with model-visible names normalized.
