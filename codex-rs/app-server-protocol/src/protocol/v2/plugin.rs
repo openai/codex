@@ -915,11 +915,15 @@ impl From<CoreSkillScope> for SkillScope {
         }
     }
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Notification emitted when watched local skill files change.
+/// Notification emitted when the available skills catalog changes.
 ///
 /// Treat this as an invalidation signal and re-run `skills/list` with the
 /// client's current parameters when refreshed skill metadata is needed.
-pub struct SkillsChangedNotification {}
+pub struct SkillsChangedNotification {
+    /// The affected thread, or `None` for a process-wide local skill change.
+    #[experimental("skills/changed.threadId")]
+    pub thread_id: Option<String>,
+}

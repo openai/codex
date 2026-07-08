@@ -8,6 +8,7 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -636,6 +637,11 @@ impl CodexThread {
         T: std::any::Any + Send + Sync,
     {
         self.codex.session.services.thread_extension_data.get::<T>()
+    }
+
+    /// Returns the selected capability roots persisted for this thread.
+    pub fn selected_capability_roots(&self) -> &[SelectedCapabilityRoot] {
+        &self.codex.session.services.selected_capability_roots
     }
 
     /// Passively inspects the selected capability roots whose environments are ready now.

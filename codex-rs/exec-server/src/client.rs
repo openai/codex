@@ -189,6 +189,7 @@ pub(crate) struct Session {
 struct Inner {
     connection: StdMutex<ConnectionState>,
     connection_changed: watch::Sender<()>,
+    readiness_changed: StdMutex<Option<watch::Sender<()>>>,
     // The remote transport delivers one shared notification stream for every
     // process on the connection. Keep a local process_id -> session registry so
     // we can turn those connection-global notifications into process wakeups
@@ -252,6 +253,8 @@ pub(crate) struct LazyRemoteExecServerClient {
     recovery_policy: RecoveryPolicy,
     // Saves the first startup result so callers share it and failures remain final.
     startup: Arc<ConnectionAttempt>,
+    // Broadcasts readiness transitions without allowing observers to initiate them.
+    readiness_changed: watch::Sender<()>,
     // The latest successful client, replaced whenever reconnecting succeeds.
     current_client: Arc<StdMutex<Option<ExecServerClient>>>,
     reconnect: Arc<StdMutex<Option<Arc<ConnectionAttempt>>>>,
@@ -259,10 +262,12 @@ pub(crate) struct LazyRemoteExecServerClient {
 
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
+        let (readiness_changed, _readiness_changed_rx) = watch::channel(());
         Self {
             transport_params,
             recovery_policy: RecoveryPolicy::Wait,
             startup: Arc::new(ConnectionAttempt::new()),
+            readiness_changed,
             current_client: Arc::new(StdMutex::new(None)),
             reconnect: Arc::new(StdMutex::new(None)),
         }
@@ -309,6 +314,10 @@ impl LazyRemoteExecServerClient {
         self.initial_client().await.map(drop)
     }
 
+    pub(crate) fn observe_readiness(&self) -> watch::Receiver<()> {
+        self.readiness_changed.subscribe()
+    }
+
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         if matches!(self.recovery_policy, RecoveryPolicy::FailFast) {
             let client = match self.cached_client() {
@@ -348,21 +357,32 @@ impl LazyRemoteExecServerClient {
 
     async fn initial_client(&self) -> Result<ExecServerClient, ExecServerError> {
         // The first caller starts the work; every other caller waits for that same result.
+        let transport_params = self.transport_params.clone();
+        let current_client = Arc::clone(&self.current_client);
+        let readiness_changed = self.readiness_changed.clone();
+        let mut initialized = false;
         let result = self
             .startup
-            .get_or_init(|| connect_once(self.transport_params.clone()))
-            .await;
-        match result {
-            Ok(client) => {
-                let mut current_client = self
-                    .current_client
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if current_client.is_none() {
-                    *current_client = Some(client.clone());
+            .get_or_init(|| {
+                initialized = true;
+                async move {
+                    let result = connect_once(transport_params).await;
+                    if let Ok(client) = &result {
+                        client.set_readiness_observer(Some(readiness_changed));
+                        *current_client
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(client.clone());
+                    }
+                    result
                 }
-                Ok(client.clone())
-            }
+            })
+            .await;
+        if initialized {
+            self.readiness_changed.send_replace(());
+        }
+        match result {
+            Ok(client) => Ok(client.clone()),
             Err(error) => Err(ExecServerError::ConnectionAttempt(Arc::clone(error))),
         }
     }
@@ -385,11 +405,16 @@ impl LazyRemoteExecServerClient {
             .get_or_init(|| async {
                 let result = connect_once(self.transport_params.clone()).await;
                 if let Ok(client) = &result {
-                    *self
+                    let mut current_client = self
                         .current_client
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(client.clone());
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if let Some(previous) = current_client.replace(client.clone()) {
+                        previous.set_readiness_observer(/*observer*/ None);
+                    }
+                    client.set_readiness_observer(Some(self.readiness_changed.clone()));
                 }
+                self.readiness_changed.send_replace(());
                 result
             })
             .await;
@@ -502,6 +527,14 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
+    fn set_readiness_observer(&self, observer: Option<watch::Sender<()>>) {
+        *self
+            .inner
+            .readiness_changed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = observer;
+    }
+
     fn fail_fast(&self) -> Result<Self, ExecServerError> {
         self.rpc_client_without_recovery()?;
         Ok(Self {
@@ -846,6 +879,7 @@ impl ExecServerClient {
                 active_process_starts: 0,
             }),
             connection_changed,
+            readiness_changed: StdMutex::new(None),
             sessions: ArcSwap::from_pointee(HashMap::new()),
             sessions_write_lock: StdMutex::new(()),
             http_body_streams: ArcSwap::from_pointee(HashMap::new()),

@@ -13,6 +13,7 @@ mod world_state;
 pub use config::SkillsExtensionConfig;
 pub use extension::install;
 pub use extension::install_with_providers;
+pub use extension::install_with_providers_and_catalog_updates;
 pub use provider::ExecutorSkillProvider;
 pub use provider::HostSkillProvider;
 pub use provider::OrchestratorSkillProvider;

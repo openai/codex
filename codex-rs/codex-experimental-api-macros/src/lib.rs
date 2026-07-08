@@ -163,17 +163,40 @@ fn derive_for_enum(input: &DeriveInput, data: &DataEnum) -> TokenStream {
 
     for variant in &data.variants {
         let variant_name = &variant.ident;
-        let pattern = match &variant.fields {
-            Fields::Named(_) => quote!(Self::#variant_name { .. }),
-            Fields::Unnamed(_) => quote!(Self::#variant_name ( .. )),
-            Fields::Unit => quote!(Self::#variant_name),
-        };
         let reason = experimental_reason(&variant.attrs);
         if let Some(reason) = reason {
+            let pattern = match &variant.fields {
+                Fields::Named(_) => quote!(Self::#variant_name { .. }),
+                Fields::Unnamed(_) => quote!(Self::#variant_name ( .. )),
+                Fields::Unit => quote!(Self::#variant_name),
+            };
             match_arms.push(quote! {
                 #pattern => Some(#reason),
             });
+        } else if variant.attrs.iter().any(experimental_nested_attr) {
+            match &variant.fields {
+                Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
+                    match_arms.push(quote! {
+                        Self::#variant_name(payload) => {
+                            crate::experimental_api::ExperimentalApi::experimental_reason(payload)
+                        }
+                    });
+                }
+                Fields::Named(_) | Fields::Unnamed(_) | Fields::Unit => {
+                    return syn::Error::new_spanned(
+                        variant,
+                        "#[experimental(nested)] requires a single-field tuple variant",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
         } else {
+            let pattern = match &variant.fields {
+                Fields::Named(_) => quote!(Self::#variant_name { .. }),
+                Fields::Unnamed(_) => quote!(Self::#variant_name ( .. )),
+                Fields::Unit => quote!(Self::#variant_name),
+            };
             match_arms.push(quote! {
                 #pattern => None,
             });

@@ -266,6 +266,16 @@ impl EnvironmentManager {
         environment_ids
     }
 
+    /// Returns a snapshot of every currently registered environment.
+    pub fn registered_environments(&self) -> Vec<(String, Arc<Environment>)> {
+        self.environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(environment_id, environment)| (environment_id.clone(), Arc::clone(environment)))
+            .collect()
+    }
+
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)
@@ -614,6 +624,13 @@ impl Environment {
             Some(client) => client.readiness_result(),
             None => Some(Ok(())),
         }
+    }
+
+    /// Observes readiness transitions without initiating startup or recovery.
+    pub fn observe_readiness(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.remote_client
+            .as_ref()
+            .map(LazyRemoteExecServerClient::observe_readiness)
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -1070,7 +1087,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_leaves_stdio_environment_lazy() {
+    async fn environment_readiness_observer_keeps_stdio_environment_lazy() {
         let environment = Environment::remote_with_transport(
             ExecServerTransportParams::StdioCommand {
                 command: StdioExecServerCommand {
@@ -1094,8 +1111,19 @@ mod tests {
         .expect("environment manager");
         let environment = manager.get_environment("stdio").expect("stdio environment");
 
+        let mut readiness = environment
+            .observe_readiness()
+            .expect("remote environment should expose readiness changes");
+        tokio::task::yield_now().await;
         assert!(!environment.startup_finished());
-        assert!(environment.wait_until_ready().await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), readiness.changed())
+                .await
+                .is_err()
+        );
+
+        Environment::start_connecting_for_use(&environment);
+        assert!(readiness.changed().await.is_ok());
         assert!(environment.startup_finished());
     }
 
