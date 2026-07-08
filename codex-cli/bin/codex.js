@@ -126,7 +126,7 @@ function detectPackageManager() {
   const entrypointDir = path.dirname(path.resolve(process.argv[1]));
   for (let currentDir of new Set([codexPackageRoot, entrypointDir])) {
     while (true) {
-      if (existsSync(path.join(currentDir, "node_modules", ".modules.yaml"))) {
+      if (existsSync(path.join(currentDir, ".modules.yaml"))) {
         return "pnpm";
       }
 
