@@ -2320,9 +2320,9 @@ impl ChatComposer {
     ///   second `@` in `@scope/pkg@latest`), keep treating the surrounding
     ///   whitespace-delimited token as the active token rather than starting a
     ///   new token at that nested prefix.
-    /// - For adjacent `$` skill mentions, an editable left-side fragment wins when
-    ///   the cursor is immediately before the next `$`; if the left token is already
-    ///   bound, the editable token on the right wins instead.
+    /// - At an adjacent sigil, a bound left mention gives way to the editable token on the right.
+    ///   Editable `$` fragments keep left affinity, while editable `@` fragments retain the
+    ///   surrounding whitespace-delimited token so nested package prefixes keep working.
     /// - If the token under the cursor starts with `prefix`, its byte range and
     ///   text without the leading prefix are returned. When `allow_empty` is
     ///   true, a lone prefix character yields `Some(String::new())` to surface hints.
@@ -2359,7 +2359,7 @@ impl ChatComposer {
                 )
         };
 
-        if prefix == '$' && allow_empty && after_cursor.starts_with(prefix) {
+        if allow_empty && after_cursor.starts_with(prefix) {
             let left_fragment_start = before_cursor
                 .char_indices()
                 .rfind(|(_, c)| c.is_whitespace())
@@ -2370,23 +2370,29 @@ impl ChatComposer {
                 && left_token
                     .as_bytes()
                     .iter()
-                    .all(|byte| is_mention_name_char(*byte) || *byte == b':')
+                    .all(|byte| is_mention_name_char(*byte) || prefix == '$' && *byte == b':')
             {
                 let left_range = left_fragment_start..safe_cursor;
-                if Self::prefixed_token_range_is_editable(textarea, prefix, &left_range, left_token)
-                {
+                let left_is_editable = Self::prefixed_token_range_is_editable(
+                    textarea,
+                    prefix,
+                    &left_range,
+                    left_token,
+                );
+                if prefix == '$' && left_is_editable {
                     return Some((left_range, left_token.to_string()));
                 }
-
-                let right_len = after_cursor
-                    .char_indices()
-                    .find(|(_, c)| c.is_whitespace())
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(after_cursor.len());
-                return Some((
-                    safe_cursor..safe_cursor + right_len,
-                    after_cursor[prefix_len..right_len].to_string(),
-                ));
+                if !left_is_editable {
+                    let right_len = after_cursor
+                        .char_indices()
+                        .find(|(_, c)| c.is_whitespace())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(after_cursor.len());
+                    return Some((
+                        safe_cursor..safe_cursor + right_len,
+                        after_cursor[prefix_len..right_len].to_string(),
+                    ));
+                }
             }
         }
 
@@ -6461,6 +6467,30 @@ mod tests {
         composer.sync_popups();
     }
 
+    fn configure_bound_plugin_left_of_unbound_plugin(composer: &mut ChatComposer) {
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "other@test".to_string(),
+            display_name: "other".to_string(),
+            description: Some("Plugin used to test adjacent mention targeting.".to_string()),
+            has_skills: false,
+            mcp_server_names: vec!["other".to_string()],
+            app_connector_ids: Vec::new(),
+        }]));
+        composer.set_text_content_with_mention_bindings(
+            "@sample@other".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                sigil: '@',
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+        composer.draft.textarea.set_cursor("@sample".len());
+        composer.sync_popups();
+    }
+
     #[test]
     fn skill_popup_targets_unbound_mention_left_of_bound_mention() {
         let (mut composer, _rx) = new_test_composer();
@@ -6543,6 +6573,35 @@ mod tests {
             "skill_popup_targets_colon_qualified_mention_left_of_adjacent_skill",
             /*enhanced_keys_supported*/ false,
             configure_colon_qualified_skill_left_of_adjacent_skill,
+        );
+    }
+
+    #[test]
+    fn unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin() {
+        let (mut composer, _rx) = new_test_composer();
+        configure_bound_plugin_left_of_unbound_plugin(&mut composer);
+
+        let ActivePopup::MentionV2(popup) = &composer.popups.active else {
+            panic!("expected unified mention popup for unbound right mention");
+        };
+        let Some(MentionV2Selection::Tool { insert_text, path }) = popup.selected() else {
+            panic!("expected unbound right plugin mention to be selected");
+        };
+        assert_eq!(
+            (insert_text, path),
+            (
+                "@other".to_string(),
+                Some("plugin://other@test".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin_snapshot() {
+        snapshot_composer_state(
+            "unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin",
+            /*enhanced_keys_supported*/ false,
+            configure_bound_plugin_left_of_unbound_plugin,
         );
     }
 
