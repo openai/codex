@@ -71,6 +71,7 @@ pub(crate) struct AccountRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
+    installation_id: String,
 }
 
 impl AccountRequestProcessor {
@@ -80,6 +81,7 @@ impl AccountRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         config_manager: ConfigManager,
+        installation_id: String,
     ) -> Self {
         Self {
             auth_manager,
@@ -88,6 +90,7 @@ impl AccountRequestProcessor {
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
+            installation_id,
         }
     }
 
@@ -378,6 +381,9 @@ impl AccountRequestProcessor {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
+            device_auth_metadata: Some(codex_login::DeviceAuthMetadata {
+                installation_id: self.installation_id.clone(),
+            }),
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -394,6 +400,7 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
+                opts.device_auth_metadata = None;
             }
             if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
                 && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)

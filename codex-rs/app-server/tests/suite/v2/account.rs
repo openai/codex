@@ -17,6 +17,7 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -1172,7 +1173,17 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         ])
         .build()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let client_name = "device-auth-app-server-test";
+    let client_version = "1.2.3";
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: client_name.to_string(),
+            title: None,
+            version: client_version.to_string(),
+        }),
+    )
+    .await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -1220,6 +1231,29 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
     );
+    let requests = mock_server.received_requests().await.unwrap();
+    let device_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path().starts_with("/api/accounts/deviceauth/"))
+        .collect();
+    assert_eq!(device_requests.len(), 2);
+    for request in device_requests {
+        assert_eq!(
+            request
+                .headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some(client_name)
+        );
+        assert!(
+            request
+                .headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains(&format!("({client_name}; {client_version})")))
+        );
+        assert!(request.headers.get("x-codex-installation-id").is_none());
+    }
     Ok(())
 }
 

@@ -287,7 +287,7 @@ impl MessageProcessor {
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
-                installation_id,
+                installation_id.clone(),
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),
@@ -318,6 +318,7 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&config),
             config_manager.clone(),
+            installation_id.clone(),
         );
         let apps_processor = AppsRequestProcessor::new(
             auth_manager.clone(),

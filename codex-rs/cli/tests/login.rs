@@ -169,6 +169,26 @@ async fn device_login_revokes_existing_auth_before_requesting_new_tokens() -> Re
             "client_id": CLIENT_ID,
         })
     );
+    let expected_originator =
+        std::env::var(codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+            .unwrap_or_else(|_| codex_login::default_client::DEFAULT_ORIGINATOR.to_string());
+    for request in &requests[1..=2] {
+        assert_eq!(
+            request
+                .headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_originator.as_str())
+        );
+        assert!(
+            request
+                .headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with(&format!("{expected_originator}/")))
+        );
+        assert!(request.headers.get("x-codex-installation-id").is_none());
+    }
 
     let auth = read_auth_json(codex_home.path())?;
     assert_eq!(auth["tokens"]["refresh_token"], "new-refresh");

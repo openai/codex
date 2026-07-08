@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::DeviceAuthMetadata;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
@@ -144,7 +145,11 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     mock_oauth_token_single(&mock_server, jwt.clone()).await;
 
     let issuer = mock_server.uri();
-    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
+    let installation_id = "123e4567-e89b-42d3-a456-426614174099";
+    let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
+    opts.device_auth_metadata = Some(DeviceAuthMetadata {
+        installation_id: installation_id.to_string(),
+    });
 
     run_device_code_login(opts)
         .await
@@ -163,6 +168,38 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some(WORKSPACE_ID_ALLOWED));
+
+    let requests = mock_server.received_requests().await.unwrap();
+    let device_requests: Vec<&Request> = requests
+        .iter()
+        .filter(|request| request.url.path().starts_with("/api/accounts/deviceauth/"))
+        .collect();
+    assert_eq!(device_requests.len(), 3);
+    let expected_originator = codex_login::default_client::originator().value;
+    let expected_user_agent = codex_login::default_client::get_codex_user_agent();
+    for request in device_requests {
+        assert_eq!(
+            request
+                .headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_originator.as_str())
+        );
+        assert_eq!(
+            request
+                .headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_user_agent.as_str())
+        );
+        assert_eq!(
+            request
+                .headers
+                .get("x-codex-installation-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(installation_id)
+        );
+    }
     Ok(())
 }
 

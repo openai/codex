@@ -6,7 +6,7 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::default_client::build_raw_auth_reqwest_client;
+use crate::default_client::build_default_auth_reqwest_client;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
 use std::io;
@@ -14,6 +14,7 @@ use std::io;
 const ANSI_BLUE: &str = "\x1b[94m";
 const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
+const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 
 #[derive(Debug, Clone)]
 pub struct DeviceCode {
@@ -63,19 +64,21 @@ async fn request_user_code(
     client: &reqwest::Client,
     auth_base_url: &str,
     client_id: &str,
+    installation_id: Option<&str>,
 ) -> std::io::Result<UserCodeResp> {
     let url = format!("{auth_base_url}/deviceauth/usercode");
     let body = serde_json::to_string(&UserCodeReq {
         client_id: client_id.to_string(),
     })
     .map_err(std::io::Error::other)?;
-    let resp = client
+    let mut request = client
         .post(url)
         .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(std::io::Error::other)?;
+        .body(body);
+    if let Some(installation_id) = installation_id {
+        request = request.header(X_CODEX_INSTALLATION_ID_HEADER, installation_id);
+    }
+    let resp = request.send().await.map_err(std::io::Error::other)?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -102,6 +105,7 @@ async fn poll_for_token(
     device_auth_id: &str,
     user_code: &str,
     interval: u64,
+    installation_id: Option<&str>,
 ) -> std::io::Result<CodeSuccessResp> {
     let url = format!("{auth_base_url}/deviceauth/token");
     let max_wait = Duration::from_secs(15 * 60);
@@ -113,13 +117,14 @@ async fn poll_for_token(
             user_code: user_code.to_string(),
         })
         .map_err(std::io::Error::other)?;
-        let resp = client
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(std::io::Error::other)?;
+            .body(body);
+        if let Some(installation_id) = installation_id {
+            request = request.header(X_CODEX_INSTALLATION_ID_HEADER, installation_id);
+        }
+        let resp = request.send().await.map_err(std::io::Error::other)?;
 
         let status = resp.status();
 
@@ -160,9 +165,13 @@ pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<Device
     let base_url = opts.issuer.trim_end_matches('/');
     // The route selected for the issuer is reused for all device-auth endpoint paths; the endpoint
     // paths are not resolved separately.
-    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
+    let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
+    let installation_id = opts
+        .device_auth_metadata
+        .as_ref()
+        .map(|metadata| metadata.installation_id.as_str());
+    let uc = request_user_code(&client, &api_base_url, &opts.client_id, installation_id).await?;
 
     Ok(DeviceCode {
         verification_url: format!("{base_url}/codex/device"),
@@ -177,8 +186,12 @@ pub async fn complete_device_code_login(
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
-    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
+    let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
+    let installation_id = opts
+        .device_auth_metadata
+        .as_ref()
+        .map(|metadata| metadata.installation_id.as_str());
 
     let code_resp = poll_for_token(
         &client,
@@ -186,6 +199,7 @@ pub async fn complete_device_code_login(
         &device_code.device_auth_id,
         &device_code.user_code,
         device_code.interval,
+        installation_id,
     )
     .await?;
 
