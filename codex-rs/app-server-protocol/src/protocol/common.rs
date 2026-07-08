@@ -31,6 +31,11 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// Backend auth supplied as request headers.
+    #[serde(rename = "headers")]
+    #[ts(rename = "headers")]
+    #[strum(serialize = "headers")]
+    Headers,
     /// Programmatic Codex auth backed by a registered Agent Identity.
     #[serde(rename = "agentIdentity")]
     #[ts(rename = "agentIdentity")]
@@ -53,7 +58,7 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::Headers | Self::AgentIdentity | Self::BedrockApiKey => false,
         }
     }
 
@@ -62,6 +67,7 @@ impl AuthMode {
         match self {
             Self::Chatgpt
             | Self::ChatgptAuthTokens
+            | Self::Headers
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
             Self::ApiKey | Self::BedrockApiKey => false,
@@ -2721,7 +2727,9 @@ mod tests {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
+                app_brand: None,
                 codex_streamlined_login: false,
+                use_hosted_login_success_page: false,
             },
         };
         assert_eq!(
@@ -2729,7 +2737,8 @@ mod tests {
                 "method": "account/login/start",
                 "id": 3,
                 "params": {
-                    "type": "chatgpt"
+                    "type": "chatgpt",
+                    "appBrand": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2742,7 +2751,9 @@ mod tests {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
+                app_brand: None,
                 codex_streamlined_login: true,
+                use_hosted_login_success_page: false,
             },
         };
         assert_eq!(
@@ -2751,7 +2762,34 @@ mod tests {
                 "id": 3,
                 "params": {
                     "type": "chatgpt",
+                    "appBrand": null,
                     "codexStreamlinedLogin": true
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_login_chatgpt_with_hosted_success_page() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(3),
+            params: v2::LoginAccountParams::Chatgpt {
+                app_brand: Some(v2::LoginAppBrand::Chatgpt),
+                codex_streamlined_login: true,
+                use_hosted_login_success_page: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 3,
+                "params": {
+                    "type": "chatgpt",
+                    "appBrand": "chatgpt",
+                    "codexStreamlinedLogin": true,
+                    "useHostedLoginSuccessPage": true
                 }
             }),
             serde_json::to_value(&request)?,

@@ -7,7 +7,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
-use codex_login::ExternalAuthTokens;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelsResponse;
@@ -118,27 +117,15 @@ impl TestModelsEndpoint {
 struct TestExternalApiKeyAuth;
 
 impl ExternalAuth for TestExternalApiKeyAuth {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
-    }
-
-    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
-        Box::pin(async {
-            Ok(Some(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            )))
-        })
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key("test-external-api-key")) })
     }
 
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
-        Box::pin(async {
-            Ok(ExternalAuthTokens::access_token_only(
-                "test-external-api-key",
-            ))
-        })
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key("test-external-api-key")) })
     }
 }
 
@@ -146,14 +133,14 @@ impl ExternalAuth for TestExternalApiKeyAuth {
 struct TestUnresolvedExternalApiKeyAuth;
 
 impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Err(std::io::Error::other("unresolved test auth")) })
     }
 
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
         Box::pin(async { Err(std::io::Error::other("unresolved test auth")) })
     }
 }
@@ -867,7 +854,10 @@ async fn refresh_available_models_skips_network_when_external_api_key_overrides_
     let codex_home = tempdir().expect("temp dir");
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    auth_manager.set_external_auth(Arc::new(TestExternalApiKeyAuth));
+    auth_manager
+        .set_external_auth(Arc::new(TestExternalApiKeyAuth))
+        .await
+        .expect("external API key auth should resolve");
     let endpoint = TestAuthAwareModelsEndpoint::new(
         Some(Arc::clone(&auth_manager)),
         vec![vec![remote_model(
@@ -907,7 +897,10 @@ async fn refresh_available_models_uses_cached_chatgpt_when_external_api_key_is_u
     let codex_home = tempdir().expect("temp dir");
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    auth_manager.set_external_auth(Arc::new(TestUnresolvedExternalApiKeyAuth));
+    auth_manager
+        .set_external_auth(Arc::new(TestUnresolvedExternalApiKeyAuth))
+        .await
+        .expect_err("unresolved external auth should be rejected");
     let endpoint = TestAuthAwareModelsEndpoint::new(
         Some(Arc::clone(&auth_manager)),
         vec![vec![remote_model(
@@ -1022,7 +1015,10 @@ async fn static_manager_reads_latest_auth_mode() {
         vec!["chatgpt-only", "api-model"]
     );
 
-    auth_manager.set_external_auth(Arc::new(TestExternalApiKeyAuth));
+    auth_manager
+        .set_external_auth(Arc::new(TestExternalApiKeyAuth))
+        .await
+        .expect("external API key auth should resolve");
     let api_models = manager.list_models(RefreshStrategy::Online).await;
 
     assert_eq!(

@@ -6728,6 +6728,7 @@
         "enum": [
           "auto",
           "prompt",
+          "writes",
           "approve"
         ],
         "type": "string"
@@ -6947,6 +6948,13 @@
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nChatGPT auth tokens are supplied by an external host app and are only stored in memory. Token refresh must be handled by the external host app.",
             "enum": [
               "chatgptAuthTokens"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Backend auth supplied as request headers.",
+            "enum": [
+              "headers"
             ],
             "type": "string"
           },
@@ -11503,6 +11511,17 @@
           },
           {
             "properties": {
+              "appBrand": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/LoginAppBrand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "codexStreamlinedLogin": {
                 "type": "boolean"
               },
@@ -11512,6 +11531,9 @@
                 ],
                 "title": "Chatgptv2::LoginAccountParamsType",
                 "type": "string"
+              },
+              "useHostedLoginSuccessPage": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -11665,6 +11687,13 @@
           }
         ],
         "title": "LoginAccountResponse"
+      },
+      "LoginAppBrand": {
+        "enum": [
+          "codex",
+          "chatgpt"
+        ],
+        "type": "string"
       },
       "LogoutAccountResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",

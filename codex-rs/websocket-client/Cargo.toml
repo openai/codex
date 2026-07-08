@@ -1,0 +1,26 @@
+[package]
+name = "codex-websocket-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+codex-http-client = { workspace = true }
+futures = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "time"] }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+codex-utils-rustls-provider = { workspace = true }
+pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
+tokio = { workspace = true, features = ["macros", "test-util"] }
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false

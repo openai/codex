@@ -103,6 +103,7 @@ use codex_app_server_protocol::GuardianApprovalReview;
 use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
+use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -139,6 +140,7 @@ use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_app_server_protocol::WebSearchItem;
 use codex_login::default_client::DEFAULT_ORIGINATOR;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
@@ -4400,18 +4402,18 @@ async fn turn_event_counts_completed_tool_items() {
             agent_thread_id: "thread-child".to_string(),
             agent_path: "/root/child".to_string(),
         },
-        ThreadItem::WebSearch {
+        ThreadItem::WebSearch(WebSearchItem {
             id: "web-1".to_string(),
             query: "codex".to_string(),
             action: None,
-        },
-        ThreadItem::ImageGeneration {
+        }),
+        ThreadItem::ImageGeneration(ImageGenerationItem {
             id: "image-1".to_string(),
             status: "completed".to_string(),
             revised_prompt: None,
             result: "ok".to_string(),
             saved_path: None,
-        },
+        }),
     ];
 
     for item in completed_tool_items {

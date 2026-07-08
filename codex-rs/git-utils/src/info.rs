@@ -864,8 +864,11 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
 /// Returns a list of local git branches.
 /// Includes the default branch at the beginning of the list, if it exists.
 pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
-    let mut branches: Vec<String> = if let Some(out) =
-        run_git_command_with_timeout(&["branch", "--format=%(refname:short)"], cwd).await
+    let mut branches: Vec<String> = if let Some(out) = run_git_command_with_timeout(
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        cwd,
+    )
+    .await
         && out.status.success()
     {
         String::from_utf8_lossy(&out.stdout)
@@ -943,6 +946,45 @@ mod tests {
         for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
             assert_eq!(canonicalize_git_remote_url(remote), None);
         }
+    }
+
+    #[tokio::test]
+    async fn local_git_branches_excludes_detached_head_entry() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = temp_dir.path();
+        let envs = vec![
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ];
+        let run_git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .envs(envs.clone())
+                .args(args)
+                .current_dir(repo)
+                .status()
+                .expect("run Git command");
+            assert_eq!(status.code(), Some(0), "Git command failed: {args:?}");
+        };
+
+        run_git(&["init", "-q", "--initial-branch=main"]);
+        run_git(&[
+            "-c",
+            "user.name=Codex Tests",
+            "-c",
+            "user.email=codex-tests@example.com",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "initial",
+        ]);
+        run_git(&["branch", "feature/local"]);
+        run_git(&["checkout", "--detach", "-q"]);
+
+        assert_eq!(
+            local_git_branches(repo).await,
+            vec!["main".to_string(), "feature/local".to_string()]
+        );
     }
 
     #[cfg(unix)]

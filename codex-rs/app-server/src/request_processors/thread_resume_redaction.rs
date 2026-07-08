@@ -32,7 +32,7 @@ pub(super) fn redact_thread_resume_payloads(turns: &mut [Turn]) {
                 }
                 true
             }
-            ThreadItem::ImageGeneration { .. } => false,
+            ThreadItem::ImageGeneration(_) => false,
             _ => true,
         });
     }
@@ -52,6 +52,7 @@ fn redacted_mcp_tool_call_result() -> McpToolCallResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::ImageGenerationItem;
     use codex_app_server_protocol::McpToolCallAppContext;
     use codex_app_server_protocol::McpToolCallError;
     use codex_app_server_protocol::McpToolCallStatus;
@@ -100,13 +101,13 @@ mod tests {
                 error: None,
                 duration_ms: Some(8),
             },
-            ThreadItem::ImageGeneration {
+            ThreadItem::ImageGeneration(ImageGenerationItem {
                 id: "ig-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("revised".to_string()),
                 result: "base64-result".to_string(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
-            },
+            }),
         ]);
 
         redact_thread_resume_payloads(&mut thread.turns);
