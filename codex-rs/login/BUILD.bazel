@@ -8,4 +8,7 @@ codex_rust_crate(
         "src/assets/success_legacy.html",
     ],
     crate_name = "codex_login",
+    test_data_extra = [
+        "src/snapshots/codex_login__device_code_auth__tests__device_code_prompt_uses_terminal_relative_styles.snap",
+    ],
 )

@@ -45,6 +45,7 @@ webbrowser = { workspace = true }
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
 jsonwebtoken = { workspace = true }
+insta = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }
 regex-lite = { workspace = true }

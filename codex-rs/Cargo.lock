@@ -3343,6 +3343,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
+ "insta",
  "jsonwebtoken",
  "keyring",
  "once_cell",
