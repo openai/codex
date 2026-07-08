@@ -314,9 +314,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2022
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
-          - runner: windows-2022
+          - runner: windows-2025
             target: aarch64-pc-windows-msvc
 
     steps:
@@ -368,9 +368,9 @@ jobs:
           path: |
             ${{ env.CARGO_TARGET_DIR }}/sccache
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/gn_out
-          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+          key: rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
           restore-keys: |
-            rusty-v8-source-${{ matrix.target }}-sandbox-
+            rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-
 
       - name: Install and start sccache
         shell: pwsh
