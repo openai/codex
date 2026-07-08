@@ -481,13 +481,18 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn reconnect_failed_startup(&self) {
+        if !self.connector_runtime_context_is_active() {
+            return;
+        }
         let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;
         };
         if !self.startup_complete.load(Ordering::Acquire) {
             return;
         }
-        if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. })) {
+        if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. }))
+            && self.connector_runtime_context_is_active()
+        {
             startup_reconnect.reconnect_in_background();
         }
     }
@@ -875,9 +880,9 @@ async fn start_server_task(
     .map_err(StartupOutcomeError::from)?;
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
-        (Some(cache_context), Some(fetch_ticket)) => {
-            cache_context.publish_if_newest_accepted(fetch_ticket, &server_info, tools)
-        }
+        (Some(cache_context), Some(fetch_ticket)) => cache_context
+            .publish_if_newest_accepted(fetch_ticket, &server_info, tools)
+            .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?,
         (None, None) => tools,
         _ => unreachable!("Codex Apps fetch ticket requires cache context"),
     };

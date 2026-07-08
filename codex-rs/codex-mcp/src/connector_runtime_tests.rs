@@ -382,8 +382,9 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
     let newer_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer")];
     let older_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "older")];
 
-    let published_tools =
-        cache_context_2.publish_if_newest_accepted(newer_ticket, &server_info, newer_tools);
+    let published_tools = cache_context_2
+        .publish_if_newest_accepted(newer_ticket, &server_info, newer_tools)
+        .expect("publish newer tools");
     assert_eq!(
         model_tool_names(&published_tools),
         model_tool_names(
@@ -392,8 +393,9 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
                 .expect("new snapshot should publish")
         )
     );
-    let current_tools =
-        cache_context_1.publish_if_newest_accepted(older_ticket, &server_info, older_tools);
+    let current_tools = cache_context_1
+        .publish_if_newest_accepted(older_ticket, &server_info, older_tools)
+        .expect("stale publish should return current tools");
 
     assert_eq!(current_tools[0].callable_name, "newer");
     assert_eq!(
@@ -421,11 +423,13 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
         },
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
-    let published_tools = cache_context.publish_if_newest_accepted(
-        cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh),
-        &create_test_server_info("Codex Apps"),
-        tools.clone(),
-    );
+    let published_tools = cache_context
+        .publish_if_newest_accepted(
+            cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh),
+            &create_test_server_info("Codex Apps"),
+            tools.clone(),
+        )
+        .expect("live publish should survive persistence failure");
 
     assert_eq!(model_tool_names(&published_tools), model_tool_names(&tools));
     assert_eq!(
@@ -530,6 +534,38 @@ fn activating_new_context_discards_old_context_without_state_bleed() {
     assert!(Arc::ptr_eq(
         &snapshot_b,
         &context_b.current_snapshot().expect("context B snapshot")
+    ));
+}
+
+#[test]
+fn discarded_compatibility_publish_reports_an_error() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = ConnectorRuntimeManager::default();
+    let context_a = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-a".to_string()),
+            chatgpt_user_id: Some("user-a".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let ticket = context_a.begin_fetch(CodexAppsToolsFetchSource::HardRefresh);
+    let _context_b = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-b".to_string()),
+            chatgpt_user_id: Some("user-b".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert!(matches!(
+        context_a.publish_if_newest_accepted(
+            ticket,
+            &create_test_server_info("Codex Apps"),
+            vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "stale-a")],
+        ),
+        Err(ConnectorRuntimeContextDiscarded)
     ));
 }
 

@@ -557,7 +557,7 @@ impl McpConnectionManager {
                 fetch_ticket,
             ) {
                 (Some(cache_context), Some(fetch_ticket)) => cache_context
-                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools),
+                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools)?,
                 (None, None) => tools,
                 _ => unreachable!("Codex Apps fetch ticket requires cache context"),
             };

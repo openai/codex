@@ -274,10 +274,9 @@ impl ConnectorRuntimeContext {
         ticket: CodexAppsToolsFetchTicket,
         server_info: &McpServerInfo,
         tools: Vec<ToolInfo>,
-    ) -> Vec<ToolInfo> {
+    ) -> Result<Vec<ToolInfo>, ConnectorRuntimeContextDiscarded> {
         self.publish_runtime_if_newest_accepted(ticket, server_info, tools)
             .map(|snapshot| snapshot.tools.clone())
-            .unwrap_or_default()
     }
 
     #[cfg(test)]
