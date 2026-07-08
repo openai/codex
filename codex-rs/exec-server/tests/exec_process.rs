@@ -101,27 +101,98 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn assert_bash_env_exports_are_cached(use_remote: bool) -> Result<()> {
+async fn assert_bash_env_startup_state_is_cached(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let temp = tempfile::tempdir()?;
     let bash_env = temp.path().join("bash_env.sh");
     let counter = temp.path().join("counter");
+    let nested = temp.path().join("nested");
+    std::fs::create_dir(&nested)?;
     std::fs::write(
         &bash_env,
-        "printf x >> \"$COUNTER_FILE\"\nexport CACHED_VALUE=ready\nexport PATH=\"$PATH:/from-bash-env\"\n",
+        format!(
+            "printf '%s\\n' \"$PROFILE\" >> \"$COUNTER_FILE\"\n\
+             LOCAL_VALUE=ready\n\
+             snapshot_func() {{ printf function-ok; }}\n\
+             export PATH=\"$PATH:/from-bash-env\"\n\
+             umask 077\n\
+             cd -L -- '{}'\n\
+             set +B\n\
+             shopt -s expand_aliases\n\
+             alias snapshot_alias='printf alias-ok'\n",
+            nested.display()
+        ),
     )?;
     let cwd = PathUri::from_host_native_path(temp.path())?;
 
-    for index in 0..2 {
+    for (index, profile) in ["A", "B", "A"].into_iter().enumerate() {
+        let script = format!(
+            "printf '%s|%s|%s|%s|%s|<%s>|%s|' \"$PROFILE\" \"$LOCAL_VALUE\" \
+             \"$(snapshot_func)\" \"$PWD\" \"$(umask)\" {{a,b}} \"$PATH\"; snapshot_alias; \
+             printf '|%s|{index}' \"$BASH_EXECUTION_STRING\""
+        );
         let process = context
             .backend
             .start(ExecParams {
                 process_id: format!("bash-env-cache-{index}").into(),
-                argv: vec![
-                    "/bin/bash".to_string(),
-                    "-c".to_string(),
-                    "printf '%s|%s' \"$CACHED_VALUE\" \"$PATH\"".to_string(),
-                ],
+                argv: vec!["/bin/bash".to_string(), "-c".to_string(), script.clone()],
+                cwd: cwd.clone(),
+                env_policy: Some(ExecEnvPolicy {
+                    inherit: ShellEnvironmentPolicyInherit::None,
+                    ignore_default_excludes: true,
+                    exclude: Vec::new(),
+                    r#set: HashMap::new(),
+                    include_only: Vec::new(),
+                    bash_env_cache_scope: Some(cwd.clone()),
+                }),
+                env: HashMap::from([
+                    (
+                        "BASH_ENV".to_string(),
+                        bash_env.to_string_lossy().into_owned(),
+                    ),
+                    (
+                        "COUNTER_FILE".to_string(),
+                        counter.to_string_lossy().into_owned(),
+                    ),
+                    ("PROFILE".to_string(), profile.to_string()),
+                    ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ]),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: None,
+                enforce_managed_network: false,
+                managed_network: None,
+            })
+            .await?;
+        let wake = process.process.subscribe_wake();
+        let (output, exit_code, closed) =
+            collect_process_output_from_reads(process.process, wake).await?;
+        assert_eq!(
+            output,
+            format!(
+                "{profile}|ready|function-ok|{}|0077|<{{a,b}}>|\
+                 /usr/bin:/bin:/from-bash-env|alias-ok|{script}|{index}",
+                nested.display()
+            )
+        );
+        assert_eq!(exit_code, Some(0));
+        assert!(closed);
+    }
+
+    assert_eq!(std::fs::read_to_string(&counter)?, "A\nB\n");
+
+    std::fs::write(
+        &bash_env,
+        "printf 'fallback\\n' >> \"$COUNTER_FILE\"\nSEEN=$BASH_EXECUTION_STRING\n",
+    )?;
+    for index in 0..2 {
+        let script = format!("printf '%s|{index}' \"$SEEN\"");
+        let process = context
+            .backend
+            .start(ExecParams {
+                process_id: format!("bash-env-fallback-{index}").into(),
+                argv: vec!["/bin/bash".to_string(), "-c".to_string(), script.clone()],
                 cwd: cwd.clone(),
                 env_policy: Some(ExecEnvPolicy {
                     inherit: ShellEnvironmentPolicyInherit::None,
@@ -153,12 +224,14 @@ async fn assert_bash_env_exports_are_cached(use_remote: bool) -> Result<()> {
         let wake = process.process.subscribe_wake();
         let (output, exit_code, closed) =
             collect_process_output_from_reads(process.process, wake).await?;
-        assert_eq!(output, "ready|/usr/bin:/bin:/from-bash-env");
+        assert_eq!(output, format!("{script}|{index}"));
         assert_eq!(exit_code, Some(0));
         assert!(closed);
     }
-
-    assert_eq!(std::fs::read_to_string(counter)?, "x");
+    assert_eq!(
+        std::fs::read_to_string(counter)?,
+        "A\nB\nfallback\nfallback\n"
+    );
     Ok(())
 }
 
@@ -1001,6 +1074,6 @@ async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // Serialize tests that launch a real exec-server process through the full CLI.
 #[serial_test::serial(remote_exec_server)]
-async fn bash_env_exports_are_cached(use_remote: bool) -> Result<()> {
-    assert_bash_env_exports_are_cached(use_remote).await
+async fn bash_env_startup_state_is_cached(use_remote: bool) -> Result<()> {
+    assert_bash_env_startup_state_is_cached(use_remote).await
 }

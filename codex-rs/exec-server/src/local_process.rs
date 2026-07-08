@@ -234,14 +234,16 @@ impl LocalProcess {
 
     async fn start_process(
         &self,
-        params: ExecParams,
+        mut params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let environment = self
+        let environment = child_env(&params);
+        let (argv, environment) = self
             .inner
             .bash_env_cache
-            .environment_for_launch(&params, child_env(&params), self.runtime_paths.as_ref())
+            .prepare_launch(&params, &environment, self.runtime_paths.as_ref())
             .await;
+        params.argv = argv;
         let prepared = prepare_exec_request(&params, environment, self.runtime_paths.as_ref())?;
         let (program, args) = prepared
             .command
