@@ -543,73 +543,10 @@ jobs:
         working-directory: upstream-rusty-v8
         run: cargo +1.91.0 build --locked --release --target "${TARGET}" --features v8_enable_sandbox
 
-      - name: Mark upstream build end and staging start
+      - name: Stop Windows I/O trace after upstream build
         if: always() && !cancelled()
         shell: pwsh
-        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From build-upstream-rusty-v8 -To stage-upstream-pair
-
-      - name: Stage upstream sandbox release pair
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
-            --target-dir "${CARGO_TARGET_DIR}" \
-            --target "${TARGET}" \
-            --output-dir "dist/${TARGET}" \
-            --sandbox
-
-      - name: Mark staging end and Cargo smoke link start
-        if: always() && !cancelled()
-        shell: pwsh
-        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From stage-upstream-pair -To smoke-link-cargo
-
-      - name: Smoke link staged artifact with Cargo
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'rusty_v8_*.lib.gz' -print -quit)"
-          binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
-          if [[ -z "${archive}" || -z "${binding}" ]]; then
-            echo "Missing staged archive or binding for ${TARGET}." >&2
-            exit 1
-          fi
-
-          (
-            cd codex-rs
-            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
-            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
-            cargo +1.95.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
-          )
-
-      - name: Mark Cargo smoke link end and staged-artifact upload start
-        if: always() && !cancelled()
-        shell: pwsh
-        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From smoke-link-cargo -To upload-staged-artifacts
-
-      - name: Upload staged artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
-        with:
-          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
-          path: dist/${{ matrix.target }}/*
-
-      - name: Mark staged-artifact upload end and clean-worktree check start
-        if: always() && !cancelled()
-        shell: pwsh
-        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From upload-staged-artifacts -To check-clean-worktree
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
-
-      - name: Stop Windows I/O trace
-        if: always() && !cancelled()
-        shell: pwsh
-        run: ./.github/scripts/windows-io-trace.ps1 -Action stop -Label check-clean-worktree
+        run: ./.github/scripts/windows-io-trace.ps1 -Action stop -Label build-upstream-rusty-v8
 
       - name: Install ETWAnalyzer
         if: always() && !cancelled()
@@ -647,3 +584,46 @@ jobs:
           name: windows-io-v8-source-${{ matrix.target }}-analysis
           path: ${{ runner.temp }}/codex-io-trace/Extract/*.json
           if-no-files-found: error
+
+      - name: Stage upstream sandbox release pair
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
+            --target-dir "${CARGO_TARGET_DIR}" \
+            --target "${TARGET}" \
+            --output-dir "dist/${TARGET}" \
+            --sandbox
+
+      - name: Smoke link staged artifact with Cargo
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'rusty_v8_*.lib.gz' -print -quit)"
+          binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
+          if [[ -z "${archive}" || -z "${binding}" ]]; then
+            echo "Missing staged archive or binding for ${TARGET}." >&2
+            exit 1
+          fi
+
+          (
+            cd codex-rs
+            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
+            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
+            cargo +1.95.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
+          )
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
