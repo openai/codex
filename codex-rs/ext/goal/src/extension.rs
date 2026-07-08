@@ -311,6 +311,7 @@ where
             let runtime = goal_runtime_handle(input.thread_store)?;
 
             if input.error == CodexErrorInfo::ServerOverloaded
+                && runtime.tools_visible()
                 && runtime
                     .accounting_state()
                     .turn_is_current_active_goal(input.turn_id)

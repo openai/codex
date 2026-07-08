@@ -351,7 +351,7 @@ pub(crate) async fn run_turn(
                 if needs_follow_up
                     && (sess.take_new_context_window_request().await || token_limit_reached)
                 {
-                    if let Err(err) = run_auto_compact(
+                    while let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
                         /*fallback_step_context*/ None,
@@ -365,10 +365,16 @@ pub(crate) async fn run_turn(
                         if matches!(err, CodexErr::TurnAborted) {
                             return Err(err);
                         }
-                        let error = err.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
+                        let retry_delay = sess
+                            .emit_turn_error_lifecycle(
+                                turn_context.as_ref(),
+                                err.to_codex_protocol_error(),
+                            )
                             .await;
-                        return Ok(None);
+                        let Some(delay) = retry_delay else {
+                            return Ok(None);
+                        };
+                        tokio::time::sleep(delay).await;
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -458,7 +464,21 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 if let Some(delay) = retry_delay {
                     // Keep this turn alive so its recorded input is not appended again.
-                    tokio::time::sleep(delay).await;
+                    let turn_state = sess
+                        .input_queue
+                        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
+                        .await;
+                    let (mut activity_rx, pending_activity) = sess
+                        .input_queue
+                        .subscribe_activity(turn_state.as_deref())
+                        .await;
+                    // Let queued input interrupt the backoff instead of parking the live turn.
+                    if pending_activity.is_none() {
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {}
+                            _ = activity_rx.changed() => {}
+                        }
+                    }
                     can_drain_pending_input = true;
                     continue;
                 }

@@ -43,14 +43,14 @@ use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
 
-struct RetryTurnErrors;
+struct RetryTurnErrors(std::time::Duration);
 
 impl TurnLifecycleContributor for RetryTurnErrors {
     fn on_turn_error<'a>(
         &'a self,
         _input: codex_extension_api::TurnErrorInput<'a>,
     ) -> codex_extension_api::ExtensionFuture<'a, Option<std::time::Duration>> {
-        Box::pin(async { Some(std::time::Duration::ZERO) })
+        Box::pin(async { Some(self.0) })
     }
 }
 
@@ -307,6 +307,7 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
 
     const CONTINUATION: &str = "GOAL_CONTINUATION";
     const MAIL: &str = "CHILD_UPDATE";
+    const STEER: &str = "USER_STEER";
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -321,7 +322,9 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
     )
     .await;
     let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.turn_lifecycle_contributor(Arc::new(RetryTurnErrors));
+    extensions.turn_lifecycle_contributor(Arc::new(RetryTurnErrors(
+        std::time::Duration::from_secs(60),
+    )));
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| config.model_provider.stream_max_retries = Some(0))
@@ -334,6 +337,8 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
         .try_start_turn_if_idle(vec![responses::user_message_item(CONTINUATION)])
         .await
         .expect("start automatic turn");
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    steer_user_input(&test.codex, STEER).await;
     wait_for_turn_complete(&test.codex).await;
 
     let requests = response_mock.requests();
@@ -342,6 +347,7 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
     };
     assert_eq!(1, first.inputs_of_type("agent_message").len());
     assert!(first.body_contains_text(MAIL));
+    assert!(second.body_contains_text(STEER));
     assert_eq!(
         1,
         second
