@@ -257,6 +257,7 @@ fn build_model_visible_specs_and_registry(
         runtimes,
         hosted_specs,
     } = planned_tools;
+    let server_only = server_registered_tools_only(turn_context);
     let mut specs = Vec::new();
     let mut seen_tool_names = HashSet::new();
     for runtime in &runtimes {
@@ -266,11 +267,10 @@ fn build_model_visible_specs_and_registry(
         }
         let exposure = runtime.exposure();
         if exposure.is_direct()
-            && (server_registered_tools_only(turn_context)
-                || !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure))
+            && (server_only || !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure))
         {
             let spec = runtime.spec();
-            specs.push(if server_registered_tools_only(turn_context) {
+            specs.push(if server_only {
                 spec
             } else {
                 spec_for_model_request(turn_context, exposure, &tool_name, spec)
