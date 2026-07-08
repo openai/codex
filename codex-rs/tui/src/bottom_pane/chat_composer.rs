@@ -2361,54 +2361,6 @@ impl ChatComposer {
                 )
         };
 
-        if allow_empty && after_cursor.starts_with(prefix) {
-            let left_fragment_start = before_cursor
-                .char_indices()
-                .rfind(|(_, c)| c.is_whitespace())
-                .map(|(idx, c)| idx + c.len_utf8())
-                .unwrap_or(0);
-            let left_fragment = &text[left_fragment_start..safe_cursor];
-            if let Some(left_token) = left_fragment.strip_prefix(prefix)
-                && left_token
-                    .as_bytes()
-                    .iter()
-                    .all(|byte| is_mention_name_char(*byte) || prefix == '$' && *byte == b':')
-            {
-                let left_range = left_fragment_start..safe_cursor;
-                let left_is_editable = Self::prefixed_token_range_is_editable(
-                    textarea,
-                    prefix,
-                    &left_range,
-                    left_token,
-                );
-                if prefix == '$' && left_is_editable {
-                    return Some((left_range, left_token.to_string()));
-                }
-                if !left_is_editable {
-                    let right_len = after_cursor
-                        .char_indices()
-                        .find(|(_, c)| c.is_whitespace())
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(after_cursor.len());
-                    return Some((
-                        safe_cursor..safe_cursor + right_len,
-                        after_cursor[prefix_len..right_len].to_string(),
-                    ));
-                }
-            }
-        }
-
-        if allow_empty && after_cursor.starts_with(prefix) && before_cursor.ends_with(prefix) {
-            let left_prefix_start = safe_cursor.saturating_sub(prefix_len);
-            let left_prefix_starts_token = text[..left_prefix_start]
-                .chars()
-                .next_back()
-                .is_none_or(char::is_whitespace);
-            if left_prefix_starts_token {
-                return Some((left_prefix_start..safe_cursor, String::new()));
-            }
-        }
-
         // Detect whether we're on whitespace at the cursor boundary.
         let at_whitespace = if safe_cursor < text.len() {
             text[safe_cursor..]
@@ -2471,6 +2423,30 @@ impl ChatComposer {
         let left_prefixed = left_match.map(|t| (start_left..end_left, t[prefix_len..].to_string()));
         let right_prefixed =
             right_match.map(|t| (start_right..end_right, t[prefix_len..].to_string()));
+
+        if allow_empty && after_cursor.starts_with(prefix) {
+            let left_fragment = &text[start_left..safe_cursor];
+            if let Some(left_token) = left_fragment.strip_prefix(prefix)
+                && left_token
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| is_mention_name_char(*byte) || prefix == '$' && *byte == b':')
+            {
+                let left_range = start_left..safe_cursor;
+                let left_is_editable = Self::prefixed_token_range_is_editable(
+                    textarea,
+                    prefix,
+                    &left_range,
+                    left_token,
+                );
+                if left_token.is_empty() || prefix == '$' && left_is_editable {
+                    return Some((left_range, left_token.to_string()));
+                }
+                if !left_is_editable {
+                    return right_prefixed;
+                }
+            }
+        }
 
         if at_whitespace {
             if prefix == '@' && right_prefixed.is_some() {
@@ -6394,19 +6370,27 @@ mod tests {
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
     }
 
-    fn configure_partially_bound_skill_mentions(composer: &mut ChatComposer) {
-        let bound_skill_path = test_path_buf("/tmp/bound-skill/SKILL.md").abs();
-        composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "unbound-skill".to_string(),
-            description: "Example skill used in tests.".to_string(),
+    fn test_skill_metadata(name: &str, description: &str, path: &str) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: description.to_string(),
             short_description: None,
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/unbound-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf(path).abs(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,
-        }]));
+        }
+    }
+
+    fn configure_partially_bound_skill_mentions(composer: &mut ChatComposer) {
+        let bound_skill_path = test_path_buf("/tmp/bound-skill/SKILL.md").abs();
+        composer.set_skill_mentions(Some(vec![test_skill_metadata(
+            "unbound-skill",
+            "Example skill used in tests.",
+            "/tmp/unbound-skill/SKILL.md",
+        )]));
 
         composer.set_text_content_with_mention_bindings(
             "$unbound-skill  $bound-skill continue".to_string(),
@@ -6423,17 +6407,11 @@ mod tests {
     }
 
     fn configure_bound_skill_left_of_unbound_skill(composer: &mut ChatComposer) {
-        composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "unbound-skill".to_string(),
-            description: "Example skill used in tests.".to_string(),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path_to_skills_md: test_path_buf("/tmp/unbound-skill/SKILL.md").abs(),
-            scope: crate::test_support::skill_scope_user(),
-            plugin_id: None,
-        }]));
+        composer.set_skill_mentions(Some(vec![test_skill_metadata(
+            "unbound-skill",
+            "Example skill used in tests.",
+            "/tmp/unbound-skill/SKILL.md",
+        )]));
         composer.set_text_content_with_mention_bindings(
             "$bound-skill$unbound-skill".to_string(),
             Vec::new(),
@@ -6452,17 +6430,11 @@ mod tests {
     }
 
     fn configure_colon_qualified_skill_left_of_adjacent_skill(composer: &mut ChatComposer) {
-        composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "google-calendar:availability".to_string(),
-            description: "Find availability and plan event changes.".to_string(),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path_to_skills_md: test_path_buf("/tmp/google-calendar/availability/SKILL.md").abs(),
-            scope: crate::test_support::skill_scope_user(),
-            plugin_id: None,
-        }]));
+        composer.set_skill_mentions(Some(vec![test_skill_metadata(
+            "google-calendar:availability",
+            "Find availability and plan event changes.",
+            "/tmp/google-calendar/availability/SKILL.md",
+        )]));
         let text = "$google-calendar:availability$unbound-skill";
         composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
         composer
@@ -6545,20 +6517,31 @@ mod tests {
     }
 
     #[test]
-    fn skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention() {
-        let (mut composer, _rx) = new_test_composer();
-        configure_bound_skill_left_of_unbound_skill(&mut composer);
+    fn skill_popup_targets_expected_adjacent_mention() {
+        for (setup, expected) in [
+            (
+                configure_bound_skill_left_of_unbound_skill as fn(&mut ChatComposer),
+                "$unbound-skill",
+            ),
+            (
+                configure_colon_qualified_skill_left_of_adjacent_skill,
+                "$google-calendar:availability",
+            ),
+        ] {
+            let (mut composer, _rx) = new_test_composer();
+            setup(&mut composer);
 
-        let ActivePopup::Skill(popup) = &composer.popups.active else {
-            panic!("expected skill popup for unbound right mention");
-        };
-        assert_eq!(
-            popup
-                .selected_mention()
-                .expect("expected unbound skill mention to be selected")
-                .insert_text,
-            "$unbound-skill"
-        );
+            let ActivePopup::Skill(popup) = &composer.popups.active else {
+                panic!("expected skill popup for {expected}");
+            };
+            assert_eq!(
+                popup
+                    .selected_mention()
+                    .expect("expected adjacent skill mention to be selected")
+                    .insert_text,
+                expected
+            );
+        }
     }
 
     #[test]
@@ -6567,23 +6550,6 @@ mod tests {
             "skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention",
             /*enhanced_keys_supported*/ false,
             configure_bound_skill_left_of_unbound_skill,
-        );
-    }
-
-    #[test]
-    fn skill_popup_targets_colon_qualified_mention_left_of_adjacent_skill() {
-        let (mut composer, _rx) = new_test_composer();
-        configure_colon_qualified_skill_left_of_adjacent_skill(&mut composer);
-
-        let ActivePopup::Skill(popup) = &composer.popups.active else {
-            panic!("expected skill popup for colon-qualified left mention");
-        };
-        assert_eq!(
-            popup
-                .selected_mention()
-                .expect("expected colon-qualified skill mention to be selected")
-                .insert_text,
-            "$google-calendar:availability"
         );
     }
 
@@ -6597,23 +6563,31 @@ mod tests {
     }
 
     #[test]
-    fn unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin() {
-        let (mut composer, _rx) = new_test_composer();
-        configure_bound_plugin_left_of_unbound_plugin(&mut composer);
-
-        let ActivePopup::MentionV2(popup) = &composer.popups.active else {
-            panic!("expected unified mention popup for unbound right mention");
-        };
-        let Some(MentionV2Selection::Tool { insert_text, path }) = popup.selected() else {
-            panic!("expected unbound right plugin mention to be selected");
-        };
-        assert_eq!(
-            (insert_text, path),
+    fn unified_mention_popup_targets_expected_plugin() {
+        for (setup, expected) in [
             (
-                "@other".to_string(),
-                Some("plugin://other@test".to_string())
-            )
-        );
+                configure_bound_plugin_left_of_unbound_plugin as fn(&mut ChatComposer),
+                ("@other", "plugin://other@test"),
+            ),
+            (
+                configure_whitespace_separated_plugin_mentions,
+                ("@new", "plugin://new@test"),
+            ),
+        ] {
+            let (mut composer, _rx) = new_test_composer();
+            setup(&mut composer);
+
+            let ActivePopup::MentionV2(popup) = &composer.popups.active else {
+                panic!("expected unified mention popup for {}", expected.0);
+            };
+            let Some(MentionV2Selection::Tool { insert_text, path }) = popup.selected() else {
+                panic!("expected plugin mention {} to be selected", expected.0);
+            };
+            assert_eq!(
+                (insert_text.as_str(), path.as_deref()),
+                (expected.0, Some(expected.1))
+            );
+        }
     }
 
     #[test]
@@ -6622,23 +6596,6 @@ mod tests {
             "unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin",
             /*enhanced_keys_supported*/ false,
             configure_bound_plugin_left_of_unbound_plugin,
-        );
-    }
-
-    #[test]
-    fn unified_mention_popup_targets_plugin_right_of_whitespace() {
-        let (mut composer, _rx) = new_test_composer();
-        configure_whitespace_separated_plugin_mentions(&mut composer);
-
-        let ActivePopup::MentionV2(popup) = &composer.popups.active else {
-            panic!("expected unified mention popup for the right mention");
-        };
-        let Some(MentionV2Selection::Tool { insert_text, path }) = popup.selected() else {
-            panic!("expected the right plugin mention to be selected");
-        };
-        assert_eq!(
-            (insert_text, path),
-            ("@new".to_string(), Some("plugin://new@test".to_string()))
         );
     }
 
@@ -6668,17 +6625,11 @@ mod tests {
     #[test]
     fn skill_completion_does_not_dismiss_identical_next_mention() {
         let (mut composer, _rx) = new_test_composer();
-        composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "skill".to_string(),
-            description: "Example skill used in tests.".to_string(),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path_to_skills_md: test_path_buf("/tmp/skill/SKILL.md").abs(),
-            scope: crate::test_support::skill_scope_user(),
-            plugin_id: None,
-        }]));
+        composer.set_skill_mentions(Some(vec![test_skill_metadata(
+            "skill",
+            "Example skill used in tests.",
+            "/tmp/skill/SKILL.md",
+        )]));
         composer.set_text_content("$skill $skill".to_string(), Vec::new(), Vec::new());
         composer.draft.textarea.set_cursor("$skill".len());
         composer.sync_popups();
@@ -6694,17 +6645,11 @@ mod tests {
         for inserted in ["$", "$r"] {
             let (mut composer, _rx) = new_test_composer();
             let rustdoc_path = test_path_buf("/tmp/rustdoc/SKILL.md").abs();
-            composer.set_skill_mentions(Some(vec![SkillMetadata {
-                name: "rustdoc".to_string(),
-                description: "Add focused RustDoc comments.".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: rustdoc_path.clone(),
-                scope: crate::test_support::skill_scope_user(),
-                plugin_id: None,
-            }]));
+            composer.set_skill_mentions(Some(vec![test_skill_metadata(
+                "rustdoc",
+                "Add focused RustDoc comments.",
+                "/tmp/rustdoc/SKILL.md",
+            )]));
             composer.set_text_content("$simplify-code".to_string(), Vec::new(), Vec::new());
             composer.draft.textarea.set_cursor(/*pos*/ 0);
 
