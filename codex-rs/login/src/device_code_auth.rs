@@ -6,9 +6,9 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::default_client::CodexClientIdentity;
 use crate::default_client::build_default_auth_reqwest_client;
 use crate::pkce::PkceCodes;
+use crate::server::DeviceAuthMetadata;
 use crate::server::ServerOptions;
 use std::io;
 
@@ -16,6 +16,19 @@ const ANSI_BLUE: &str = "\x1b[94m";
 const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
 const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
+
+fn with_device_auth_headers(
+    mut request: reqwest::RequestBuilder,
+    metadata: &DeviceAuthMetadata,
+) -> reqwest::RequestBuilder {
+    if let Some(installation_id) = metadata.installation_id.as_deref() {
+        request = request.header(X_CODEX_INSTALLATION_ID_HEADER, installation_id);
+    }
+    if let Some(client_identity) = metadata.client_identity.as_ref() {
+        request = request.headers(client_identity.headers());
+    }
+    request
+}
 
 #[derive(Debug, Clone)]
 pub struct DeviceCode {
@@ -65,24 +78,18 @@ async fn request_user_code(
     client: &reqwest::Client,
     auth_base_url: &str,
     client_id: &str,
-    installation_id: Option<&str>,
-    client_identity: Option<&CodexClientIdentity>,
+    metadata: &DeviceAuthMetadata,
 ) -> std::io::Result<UserCodeResp> {
     let url = format!("{auth_base_url}/deviceauth/usercode");
     let body = serde_json::to_string(&UserCodeReq {
         client_id: client_id.to_string(),
     })
     .map_err(std::io::Error::other)?;
-    let mut request = client
+    let request = client
         .post(url)
         .header("Content-Type", "application/json")
         .body(body);
-    if let Some(installation_id) = installation_id {
-        request = request.header(X_CODEX_INSTALLATION_ID_HEADER, installation_id);
-    }
-    if let Some(client_identity) = client_identity {
-        request = request.headers(client_identity.headers());
-    }
+    let request = with_device_auth_headers(request, metadata);
     let resp = request.send().await.map_err(std::io::Error::other)?;
 
     if !resp.status().is_success() {
@@ -110,8 +117,7 @@ async fn poll_for_token(
     device_auth_id: &str,
     user_code: &str,
     interval: u64,
-    installation_id: Option<&str>,
-    client_identity: Option<&CodexClientIdentity>,
+    metadata: &DeviceAuthMetadata,
 ) -> std::io::Result<CodeSuccessResp> {
     let url = format!("{auth_base_url}/deviceauth/token");
     let max_wait = Duration::from_secs(15 * 60);
@@ -123,16 +129,11 @@ async fn poll_for_token(
             user_code: user_code.to_string(),
         })
         .map_err(std::io::Error::other)?;
-        let mut request = client
+        let request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .body(body);
-        if let Some(installation_id) = installation_id {
-            request = request.header(X_CODEX_INSTALLATION_ID_HEADER, installation_id);
-        }
-        if let Some(client_identity) = client_identity {
-            request = request.headers(client_identity.headers());
-        }
+        let request = with_device_auth_headers(request, metadata);
         let resp = request.send().await.map_err(std::io::Error::other)?;
 
         let status = resp.status();
@@ -176,13 +177,11 @@ pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<Device
     // paths are not resolved separately.
     let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let installation_id = opts.device_auth_installation_id.as_deref();
     let uc = request_user_code(
         &client,
         &api_base_url,
         &opts.client_id,
-        installation_id,
-        opts.device_auth_client_identity.as_ref(),
+        &opts.device_auth_metadata,
     )
     .await?;
 
@@ -201,17 +200,13 @@ pub async fn complete_device_code_login(
     let base_url = opts.issuer.trim_end_matches('/');
     let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let installation_id = opts.device_auth_installation_id.as_deref();
-    let client_identity = opts.device_auth_client_identity.as_ref();
-
     let code_resp = poll_for_token(
         &client,
         &api_base_url,
         &device_code.device_auth_id,
         &device_code.user_code,
         device_code.interval,
-        installation_id,
-        client_identity,
+        &opts.device_auth_metadata,
     )
     .await?;
 

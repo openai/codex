@@ -65,14 +65,6 @@ impl CodexClientIdentity {
         }
     }
 
-    pub fn originator(&self) -> &str {
-        &self.originator
-    }
-
-    pub fn user_agent_suffix(&self) -> &str {
-        &self.user_agent_suffix
-    }
-
     pub(crate) fn headers(&self) -> HeaderMap {
         default_headers_for_identity(Some(self))
     }

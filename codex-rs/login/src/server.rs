@@ -64,6 +64,12 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
 
+#[derive(Debug, Clone, Default)]
+pub struct DeviceAuthMetadata {
+    pub installation_id: Option<String>,
+    pub client_identity: Option<CodexClientIdentity>,
+}
+
 /// Options for launching the local login callback server.
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -79,10 +85,7 @@ pub struct ServerOptions {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
     pub auth_route_config: Option<AuthRouteConfig>,
-    /// Installation ID attached only to device authorization requests sent to a trusted issuer.
-    pub device_auth_installation_id: Option<String>,
-    /// Per-caller identity for device authorization requests, when available.
-    pub device_auth_client_identity: Option<CodexClientIdentity>,
+    pub device_auth_metadata: DeviceAuthMetadata,
 }
 
 impl ServerOptions {
@@ -108,8 +111,7 @@ impl ServerOptions {
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
             auth_route_config,
-            device_auth_installation_id: None,
-            device_auth_client_identity: None,
+            device_auth_metadata: DeviceAuthMetadata::default(),
         }
     }
 }

@@ -3,7 +3,6 @@ use std::sync::atomic::Ordering;
 
 use axum::http::HeaderValue;
 use codex_analytics::AppServerRpcTransport;
-use codex_login::default_client::CodexClientIdentity;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -87,9 +86,8 @@ impl InitializeRequestProcessor {
                 "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
             )));
         }
-        let client_identity = CodexClientIdentity::new(name.clone(), version.clone());
-        let originator = client_identity.originator().to_string();
-        let user_agent_suffix = client_identity.user_agent_suffix().to_string();
+        let originator = name.clone();
+        let user_agent_suffix = format!("{name}; {version}");
         let mutates_global_identity = !NON_ORIGINATING_CLIENT_NAMES.contains(&name.as_str());
         let codex_home = self.config.codex_home.clone();
         if session

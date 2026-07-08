@@ -70,6 +70,7 @@ use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
+use codex_login::default_client::CodexClientIdentity;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -1316,13 +1317,11 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::LoginAccount { params, .. } => {
+                let client_identity = app_server_client_name
+                    .zip(client_version)
+                    .map(|(name, version)| CodexClientIdentity::new(name, version));
                 self.account_processor
-                    .login_account(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name,
-                        client_version,
-                    )
+                    .login_account(request_id.clone(), params, client_identity)
                     .await
             }
             ClientRequest::LogoutAccount { .. } => {

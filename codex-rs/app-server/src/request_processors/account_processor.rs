@@ -2,6 +2,8 @@ use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
+use codex_login::DeviceAuthMetadata;
+use codex_login::default_client::CodexClientIdentity;
 
 mod rate_limit_resets;
 
@@ -98,10 +100,9 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
+        client_identity: Option<CodexClientIdentity>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.login_v2(request_id, params, app_server_client_name, client_version)
+        self.login_v2(request_id, params, client_identity)
             .await
             .map(|()| None)
     }
@@ -256,8 +257,7 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
+        client_identity: Option<CodexClientIdentity>,
     ) -> Result<(), JSONRPCErrorError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
@@ -287,12 +287,8 @@ impl AccountRequestProcessor {
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(
-                    request_id,
-                    app_server_client_name,
-                    client_version,
-                )
-                .await;
+                self.login_chatgpt_device_code_v2(request_id, client_identity)
+                    .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -392,7 +388,10 @@ impl AccountRequestProcessor {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
-            device_auth_installation_id: Some(self.installation_id.clone()),
+            device_auth_metadata: DeviceAuthMetadata {
+                installation_id: Some(self.installation_id.clone()),
+                ..Default::default()
+            },
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -409,7 +408,7 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
-                opts.device_auth_installation_id = None;
+                opts.device_auth_metadata.installation_id = None;
             }
             if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
                 && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
@@ -519,19 +518,17 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_device_code_v2(
         &self,
         request_id: ConnectionRequestId,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
+        client_identity: Option<CodexClientIdentity>,
     ) {
         let result = self
-            .login_chatgpt_device_code_response(app_server_client_name, client_version)
+            .login_chatgpt_device_code_response(client_identity)
             .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
+        client_identity: Option<CodexClientIdentity>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let mut opts = self
             .login_chatgpt_common(
@@ -539,12 +536,7 @@ impl AccountRequestProcessor {
                 LoginSuccessPage::default(),
             )
             .await?;
-        if let (Some(client_name), Some(client_version)) = (app_server_client_name, client_version)
-        {
-            opts.device_auth_client_identity = Some(
-                codex_login::default_client::CodexClientIdentity::new(client_name, client_version),
-            );
-        }
+        opts.device_auth_metadata.client_identity = client_identity;
         let device_code = request_device_code(&opts)
             .await
             .map_err(Self::login_chatgpt_device_code_start_error)?;
