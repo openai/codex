@@ -72,6 +72,8 @@ pub(crate) enum TerminalTitleItem {
     TotalInputTokens,
     /// Total output tokens generated.
     TotalOutputTokens,
+    /// Number of context compactions in the current thread.
+    Compactions,
     /// Full thread UUID.
     #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
@@ -118,6 +120,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             TerminalTitleItem::TotalInputTokens => "Total input tokens used in session",
             TerminalTitleItem::TotalOutputTokens => "Total output tokens used in session",
+            TerminalTitleItem::Compactions => "Number of context compactions in the current thread",
             TerminalTitleItem::SessionId => {
                 "Current thread identifier (omitted until thread starts)"
             }
@@ -150,6 +153,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::TotalOutputTokens => {
                 Some(StatusSurfacePreviewItem::TotalOutputTokens)
             }
+            TerminalTitleItem::Compactions => Some(StatusSurfacePreviewItem::Compactions),
             TerminalTitleItem::SessionId => Some(StatusSurfacePreviewItem::SessionId),
             TerminalTitleItem::FastMode => Some(StatusSurfacePreviewItem::FastMode),
             TerminalTitleItem::Model => Some(StatusSurfacePreviewItem::Model),

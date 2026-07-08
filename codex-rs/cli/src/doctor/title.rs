@@ -139,6 +139,7 @@ fn terminal_title_item_id(item: &str) -> Option<&'static str> {
         "used-tokens" => Some("used-tokens"),
         "total-input-tokens" => Some("total-input-tokens"),
         "total-output-tokens" => Some("total-output-tokens"),
+        "compactions" => Some("compactions"),
         "thread-id" | "session-id" => Some("thread-id"),
         "fast-mode" => Some("fast-mode"),
         "model" | "model-name" => Some("model"),

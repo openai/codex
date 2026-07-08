@@ -727,6 +727,7 @@ impl ChatWidget {
                 "{} out",
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
+            StatusLineItem::Compactions => Some(format!("{} compactions", self.window_number)),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
                 if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
@@ -785,6 +786,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
+            StatusSurfacePreviewItem::Compactions => StatusLineItem::Compactions,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
@@ -842,6 +844,9 @@ impl ChatWidget {
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::TotalOutputTokens => self
                 .status_line_value_for_item(StatusLineItem::TotalOutputTokens)
+                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
+            TerminalTitleItem::Compactions => self
+                .status_line_value_for_item(StatusLineItem::Compactions)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::SessionId => self
                 .status_line_value_for_item(StatusLineItem::SessionId)

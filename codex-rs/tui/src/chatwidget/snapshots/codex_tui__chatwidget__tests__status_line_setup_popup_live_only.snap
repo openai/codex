@@ -12,9 +12,9 @@ expression: status_line_popup_snapshot(&mut chat)
   [x] project-name          Project name (omitted when unavailable)
   [x] git-branch            Current Git branch (omitted when unavailable)
   [x] thread-title          Current thread title, or thread identifier when unnamed
+  [x] compactions           Number of context compactions in the current thread
   [ ] model                 Current model name
   [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
 
-  preview-live-root · feature/live-preview-branch · Live preview thread
+  preview-live-root · feature/live-preview-branch · Live preview thread · 3 compactions
   Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

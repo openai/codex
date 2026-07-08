@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: terminal_title_popup_snapshot(&mut chat)
+---
+  Configure Terminal Title
+  Select which items to display in the terminal title.
+
+  Type to search
+  >
+› [x] app-name      Codex app name
+  [x] model         Current model name
+  [x] reasoning     Current reasoning level
+  [x] fast-mode     Whether Fast mode is currently active
+  [x] compactions   Number of context compactions in the current thread
+  [ ] project-name  Project name (falls back to current directory name)
+  [ ] current-dir   Current working directory
+  [ ] activity      Spinner while working, action-required message while blocked.
+
+  codex | gpt-5.5 | default | Fast off | 3 compactions
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

@@ -1125,22 +1125,34 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
     let mut app = make_test_app().await;
     app.chat_widget.setup_status_line(
-        vec![crate::bottom_pane::StatusLineItem::ContextWindowSize],
+        vec![
+            crate::bottom_pane::StatusLineItem::ContextWindowSize,
+            crate::bottom_pane::StatusLineItem::Compactions,
+        ],
         /*use_theme_colors*/ true,
     );
+    app.chat_widget
+        .setup_terminal_title(vec![crate::bottom_pane::TerminalTitleItem::Compactions]);
 
-    assert_eq!(app.chat_widget.status_line_text(), None);
+    assert_eq!(
+        app.chat_widget.status_line_text(),
+        Some("0 compactions".into())
+    );
 
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(token_usage_notification(
         ThreadId::new(),
         "turn-1",
         Some(950_000),
-        /*window_number*/ 0,
+        /*window_number*/ 3,
     )));
 
     assert_eq!(
         app.chat_widget.status_line_text(),
-        Some("950K window".into())
+        Some("950K window · 3 compactions".into())
+    );
+    assert_eq!(
+        app.chat_widget.last_terminal_title,
+        Some("3 compactions".to_string())
     );
 }
 
