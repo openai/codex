@@ -65,7 +65,7 @@ pub(crate) async fn run_auto_compact_fallback(
     let responses_metadata = restricted_turn.turn_metadata_state.to_responses_metadata(
         sess.installation_id.clone(),
         window_id,
-        CodexResponsesRequestKind::Turn,
+        CodexResponsesRequestKind::AutoCompactFallback,
     );
     let input = sess
         .clone_history()

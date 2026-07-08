@@ -736,6 +736,18 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     assert_eq!(regular_json["request_kind"].as_str(), Some("turn"));
     assert_eq!(regular_json[WINDOW_ID_KEY].as_str(), Some("thread-a:3"));
     assert!(regular_json.get("compaction").is_none());
+
+    let fallback_header = test_responses_metadata_json(
+        &state,
+        "thread-a:3",
+        CodexResponsesRequestKind::AutoCompactFallback,
+    );
+    let fallback_json: Value = serde_json::from_str(&fallback_header).expect("json");
+    assert_eq!(
+        fallback_json["request_kind"].as_str(),
+        Some("auto_compact_fallback")
+    );
+    assert!(fallback_json.get("compaction").is_none());
 }
 
 #[tokio::test]
