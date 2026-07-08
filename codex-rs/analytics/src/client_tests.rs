@@ -8,16 +8,32 @@ use super::send_track_events;
 #[cfg(debug_assertions)]
 use super::send_track_events_request;
 use super::track_event_request_batches;
+#[cfg(debug_assertions)]
+use crate::events::AppServerRpcTransport;
 use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
+#[cfg(debug_assertions)]
+use crate::events::CodexAppServerClientMetadata;
+#[cfg(debug_assertions)]
+use crate::events::CodexMcpToolCallEventParams;
+#[cfg(debug_assertions)]
+use crate::events::CodexMcpToolCallEventRequest;
 #[cfg(debug_assertions)]
 use crate::events::CodexPluginMetadata;
 #[cfg(debug_assertions)]
 use crate::events::CodexPluginUsedEventRequest;
 #[cfg(debug_assertions)]
 use crate::events::CodexPluginUsedMetadata;
+#[cfg(debug_assertions)]
+use crate::events::CodexRuntimeMetadata;
+#[cfg(debug_assertions)]
+use crate::events::CodexToolItemEventBase;
+#[cfg(debug_assertions)]
+use crate::events::FinalApprovalOutcome;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
+#[cfg(debug_assertions)]
+use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
 use crate::facts::InvocationType;
@@ -75,7 +91,7 @@ fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest 
     ))
 }
 
-fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
+fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEventRequest {
     TrackEventRequest::SkillInvocation(SkillInvocationEventRequest {
         event_type: "skill_invocation",
         skill_id: format!("skill-{thread_id}"),
@@ -83,12 +99,63 @@ fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
         event_params: SkillInvocationEventParams {
             product_client_id: None,
             skill_scope: None,
-            plugin_id: None,
+            plugin_id: plugin_id.map(str::to_string),
             repo_url: None,
             thread_id: Some(thread_id.to_string()),
             turn_id: Some("turn-1".to_string()),
             invoke_type: Some(InvocationType::Explicit),
             model_slug: Some("gpt-5.1-codex".to_string()),
+        },
+    })
+}
+
+fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
+    sample_skill_track_event(thread_id, /*plugin_id*/ None)
+}
+
+#[cfg(debug_assertions)]
+fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEventRequest {
+    TrackEventRequest::McpToolCall(CodexMcpToolCallEventRequest {
+        event_type: "codex_mcp_tool_call_event",
+        event_params: CodexMcpToolCallEventParams {
+            base: CodexToolItemEventBase {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: format!("item-{thread_id}"),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id: "codex_desktop".to_string(),
+                    client_name: None,
+                    client_version: None,
+                    rpc_transport: AppServerRpcTransport::InProcess,
+                    experimental_api_enabled: None,
+                },
+                runtime: CodexRuntimeMetadata {
+                    codex_rs_version: "0.0.0".to_string(),
+                    runtime_os: "test".to_string(),
+                    runtime_os_version: "test".to_string(),
+                    runtime_arch: "test".to_string(),
+                },
+                thread_source: None,
+                subagent_source: None,
+                parent_thread_id: None,
+                tool_name: "search".to_string(),
+                started_at_ms: 1,
+                completed_at_ms: 2,
+                duration_ms: Some(1),
+                execution_duration_ms: Some(1),
+                review_count: 0,
+                guardian_review_count: 0,
+                user_review_count: 0,
+                final_approval_outcome: FinalApprovalOutcome::NotNeeded,
+                terminal_status: ToolItemTerminalStatus::Completed,
+                failure_kind: None,
+                requested_additional_permissions: false,
+                requested_network_access: false,
+            },
+            mcp_server_name: "sample".to_string(),
+            mcp_tool_name: "search".to_string(),
+            mcp_error_present: false,
+            plugin_id: plugin_id.map(str::to_string),
         },
     })
 }
@@ -260,8 +327,8 @@ async fn capture_file_writes_final_batches_as_separate_lines() {
 
 #[tokio::test]
 #[cfg(debug_assertions)]
-async fn api_key_auth_sends_only_plugin_used_events_to_codex_backend() {
-    let capture_path = unique_capture_path("api-key-plugin-used-events");
+async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
+    let capture_path = unique_capture_path("api-key-plugin-events");
     let destination = AnalyticsEventsDestination::CaptureFile {
         path: capture_path.clone(),
     };
@@ -274,9 +341,12 @@ async fn api_key_auth_sends_only_plugin_used_events_to_codex_backend() {
         &destination,
         vec![
             sample_regular_track_event("non-plugin-skill"),
+            sample_mcp_tool_call_event("non-plugin-mcp", /*plugin_id*/ None),
             sample_plugin_used_track_event("non-plugin-used", /*plugin_id*/ None),
             sample_accepted_line_fingerprint_event("other-event"),
             sample_plugin_used_track_event("plugin-used", Some("sample@test")),
+            sample_skill_track_event("plugin-skill", Some("sample@test")),
+            sample_mcp_tool_call_event("plugin-mcp", Some("sample@test")),
         ],
     )
     .await;
@@ -310,11 +380,23 @@ async fn api_key_auth_sends_only_plugin_used_events_to_codex_backend() {
         .collect::<Vec<_>>();
     assert_eq!(
         delivered_events,
-        vec![serde_json::json!({
-            "event_type": "codex_plugin_used",
-            "plugin_id": "sample@test",
-            "thread_id": "plugin-used",
-        })]
+        vec![
+            serde_json::json!({
+                "event_type": "codex_plugin_used",
+                "plugin_id": "sample@test",
+                "thread_id": "plugin-used",
+            }),
+            serde_json::json!({
+                "event_type": "skill_invocation",
+                "plugin_id": "sample@test",
+                "thread_id": "plugin-skill",
+            }),
+            serde_json::json!({
+                "event_type": "codex_mcp_tool_call_event",
+                "plugin_id": "sample@test",
+                "thread_id": "plugin-mcp",
+            }),
+        ]
     );
 
     fs::remove_file(capture_path).expect("remove capture file");

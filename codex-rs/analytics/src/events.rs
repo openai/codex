@@ -99,6 +99,8 @@ impl TrackEventRequest {
     pub(crate) fn can_send_with_api_key_auth(&self) -> bool {
         match self {
             Self::PluginUsed(event) => event.event_params.plugin.plugin_id.is_some(),
+            Self::SkillInvocation(event) => event.event_params.plugin_id.is_some(),
+            Self::McpToolCall(event) => event.event_params.plugin_id.is_some(),
             _ => false,
         }
     }
