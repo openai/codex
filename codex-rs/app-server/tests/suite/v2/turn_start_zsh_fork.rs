@@ -34,7 +34,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -49,8 +49,11 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork tests can target a Windows executor.
-    skip_if_wine_exec!(Ok(()), "zsh-fork fixtures require a POSIX zsh executor");
+    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "zsh-fork fixtures use host-local zsh and workspace paths"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -180,8 +183,11 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork tests can target a Windows executor.
-    skip_if_wine_exec!(Ok(()), "zsh-fork fixtures require a POSIX zsh executor");
+    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "zsh-fork fixtures use host-local zsh and workspace paths"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -318,8 +324,11 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork tests can target a Windows executor.
-    skip_if_wine_exec!(Ok(()), "zsh-fork fixtures require a POSIX zsh executor");
+    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "zsh-fork fixtures use host-local zsh and workspace paths"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -451,8 +460,11 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork tests can target a Windows executor.
-    skip_if_wine_exec!(Ok(()), "zsh-fork fixtures require a POSIX zsh executor");
+    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "zsh-fork fixtures use host-local zsh and workspace paths"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;

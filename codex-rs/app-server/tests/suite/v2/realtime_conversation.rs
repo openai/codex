@@ -56,7 +56,7 @@ use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -2519,10 +2519,10 @@ async fn websocket_v2_background_agent_progress_is_sent_before_function_output()
 
 #[tokio::test]
 async fn websocket_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
-    // TODO(anp): Remove after delegated shell commands resolve target-native cwd under Wine-exec.
-    skip_if_wine_exec!(
+    // TODO(anp): Remove after delegated shell commands resolve target-native cwd in remote environments.
+    skip_if_remote!(
         Ok(()),
-        "delegated shell commands receive a Windows cwd on the Linux host"
+        "delegated shell command cwd is only materialized on the host"
     );
     skip_if_no_network!(Ok(()));
 

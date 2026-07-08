@@ -3350,10 +3350,10 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
 #[tokio::test]
 async fn thread_resume_replays_pending_file_change_request_approval() -> Result<()> {
-    // TODO(anp): Remove after apply_patch emits file-change approval events under Wine-exec.
-    skip_if_wine_exec!(
+    // TODO(anp): Remove after apply-patch approval fixtures use a target-native workspace.
+    skip_if_remote!(
         Ok(()),
-        "Wine-exec surfaces apply_patch as command execution instead of file change"
+        "apply-patch approval fixture is only materialized on the host"
     );
 
     let tmp = TempDir::new()?;

@@ -607,8 +607,6 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        // This test sends an intentionally unknown explicit environment id.
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -647,16 +645,15 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        // This test sends an intentionally invalid explicit environment cwd.
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let environment_id = mcp.auto_env_params()?.environment_id;
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: "local".to_string(),
+                environment_id: environment_id.clone(),
                 cwd: serde_json::from_value(json!("relative"))?,
             }]),
             ..Default::default()
@@ -672,7 +669,9 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(
         error.error.message,
-        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
+        format!(
+            "invalid cwd for environment `{environment_id}`: path `relative` does not use absolute POSIX or Windows path syntax"
+        )
     );
 
     Ok(())
@@ -791,8 +790,6 @@ async fn thread_start_without_selected_environment_includes_only_global_instruct
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        // This test explicitly verifies behavior with no selected environment.
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

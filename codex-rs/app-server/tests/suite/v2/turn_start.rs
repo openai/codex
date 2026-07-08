@@ -80,6 +80,7 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -2211,7 +2212,7 @@ async fn turn_start_forwards_custom_local_image_detail() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
-    // TODO(anp): Remove after shell-command approval routing supports target-native remote cwd.
+    // TODO(anp): Remove after shell-command approval routing supports target-native Windows cwd.
     skip_if_wine_exec!(
         Ok(()),
         "shell-command approval routing requires a host-native cwd under Wine-exec"
@@ -2261,6 +2262,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let expected_environment_id = mcp.auto_env_params()?.environment_id;
 
     // thread/start
     let start_id = mcp
@@ -2305,7 +2307,10 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
-    assert_eq!(params.environment_id.as_deref(), Some("local"));
+    assert_eq!(
+        params.environment_id.as_deref(),
+        Some(expected_environment_id.as_str())
+    );
     let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion
@@ -2525,11 +2530,8 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
-    // TODO(anp): Remove after cwd and shell-display fixtures use target-native paths and commands.
-    skip_if_wine_exec!(
-        Ok(()),
-        "asserts host shell formatting for a Windows executor"
-    );
+    // TODO(anp): Materialize cwd and shell-display fixtures in the selected remote environment.
+    skip_if_remote!(Ok(()), "cwd fixtures are only materialized on the host");
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -3013,10 +3015,10 @@ fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnviro
 
 #[tokio::test]
 async fn turn_start_file_change_approval_v2() -> Result<()> {
-    // TODO(anp): Remove after apply-patch approval fixtures use a target-native Windows invocation.
-    skip_if_wine_exec!(
+    // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
+    skip_if_remote!(
         Ok(()),
-        "POSIX apply-patch heredocs are not file changes under Wine-exec"
+        "apply-patch workspace fixture is only materialized on the host"
     );
     skip_if_no_network!(Ok(()));
 
@@ -3190,6 +3192,11 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v2() -> Result<()> {
+    // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "apply-patch workspace fixture is only materialized on the host"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -3291,6 +3298,11 @@ async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v
 
 #[tokio::test]
 async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
+    // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "apply-patch workspace fixture is only materialized on the host"
+    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -4027,10 +4039,10 @@ config_file = "./custom-role.toml"
 
 #[tokio::test]
 async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Result<()> {
-    // TODO(anp): Remove after apply-patch approval fixtures use a target-native Windows invocation.
-    skip_if_wine_exec!(
+    // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
+    skip_if_remote!(
         Ok(()),
-        "POSIX apply-patch heredocs are not file changes under Wine-exec"
+        "apply-patch workspace fixture is only materialized on the host"
     );
     skip_if_no_network!(Ok(()));
 
@@ -4218,10 +4230,10 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 
 #[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
-    // TODO(anp): Remove after apply-patch approval fixtures use a target-native Windows invocation.
-    skip_if_wine_exec!(
+    // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
+    skip_if_remote!(
         Ok(()),
-        "POSIX apply-patch heredocs are not file changes under Wine-exec"
+        "apply-patch workspace fixture is only materialized on the host"
     );
     skip_if_no_network!(Ok(()));
 
@@ -4382,6 +4394,11 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 #[tokio::test]
 #[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
 async fn command_execution_notifications_include_process_id() -> Result<()> {
+    // TODO(anp): Add target-Windows process-id expectations for remote executors.
+    skip_if_wine_exec!(
+        Ok(()),
+        "process id reporting differs for a Windows executor"
+    );
     skip_if_no_network!(Ok(()));
 
     let responses = vec![

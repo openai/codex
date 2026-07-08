@@ -142,7 +142,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(fixture.codex_home.path())
-        // These tests select host-local capability roots and environments explicitly.
+        // This fixture owns environments.toml and selects its environments explicitly.
         .without_auto_env()
         .build()
         .await?;
@@ -193,7 +193,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(fixture.codex_home.path())
-        // These tests select host-local capability roots and environments explicitly.
+        // This fixture owns environments.toml and selects its environments explicitly.
         .without_auto_env()
         .build()
         .await?;
@@ -345,7 +345,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(fixture.codex_home.path())
-        // These tests select host-local capability roots and environments explicitly.
+        // This fixture owns environments.toml and selects its environments explicitly.
         .without_auto_env()
         .build()
         .await?;

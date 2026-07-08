@@ -140,8 +140,7 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     let (_codex_home, mut mcp) = start_resource_test_app_server(
         &apps_server_url,
         &responses_server_uri,
-        // This test starts a thread with no executor.
-        ResourceTestEnvironment::Local,
+        ResourceTestEnvironment::Auto,
     )
     .await?;
 
@@ -720,7 +719,7 @@ stream_max_retries = 0
     let builder = TestAppServer::builder().with_codex_home(codex_home.path());
     let builder = match environment {
         ResourceTestEnvironment::Auto => builder,
-        // These callers explicitly exercise no-executor or local-executor behavior.
+        // The Local caller explicitly exercises the implicit local executor.
         ResourceTestEnvironment::Local => builder.without_auto_env(),
     };
     let mut mcp = builder.build().await?;

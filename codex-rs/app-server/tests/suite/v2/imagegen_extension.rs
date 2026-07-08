@@ -19,7 +19,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
-use core_test_support::skip_if_wine_exec;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -235,9 +235,9 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
 
 #[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
-    skip_if_wine_exec!(
+    skip_if_remote!(
         Ok(()),
-        "remote executors use different imagegen storage, so host-local image paths are unavailable"
+        "remote executors use different imagegen storage approaches, so host-local image paths are unavailable"
     );
 
     let edit_request = run_image_edit_test(|codex_home| {
