@@ -28,17 +28,17 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             ),
             gpt_5_6_bedrock_model(
                 AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID,
-                "Sol",
+                "GPT-5.6 Sol",
                 /*priority*/ 2,
             ),
             gpt_5_6_bedrock_model(
                 AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
-                "Terra",
+                "GPT-5.6 Terra",
                 /*priority*/ 3,
             ),
             gpt_5_6_bedrock_model(
                 AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
-                "Luna",
+                "GPT-5.6 Luna",
                 /*priority*/ 4,
             ),
         ],
@@ -148,9 +148,9 @@ mod tests {
             .expect("Bedrock catalog should include GPT-5.5");
 
         for (slug, display_name, priority) in [
-            (AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID, "Sol", 2),
-            (AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID, "Terra", 3),
-            (AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID, "Luna", 4),
+            (AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID, "GPT-5.6 Sol", 2),
+            (AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID, "GPT-5.6 Terra", 3),
+            (AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID, "GPT-5.6 Luna", 4),
         ] {
             let mut expected = gpt_5_5.clone();
             expected.slug = slug.to_string();
