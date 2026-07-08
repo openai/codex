@@ -26,6 +26,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_mcp::SandboxState;
@@ -692,10 +693,12 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_skips_pending_optional_mcp_without_cached_tools() -> anyhow::Result<()> {
+async fn apps_enabled_turn_skips_pending_optional_mcp_without_cached_tools() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
     let response_mock = responses::mount_sse_once(
         &server,
         responses::sse(vec![
@@ -709,7 +712,13 @@ async fn turn_skips_pending_optional_mcp_without_cached_tools() -> anyhow::Resul
     let pending_mcp_url = format!("http://{}/mcp", pending_mcp_listener.local_addr()?);
 
     let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow Apps override");
+            config.chatgpt_base_url = apps_base_url;
             insert_mcp_server(
                 config,
                 "pending_optional",
@@ -735,6 +744,11 @@ async fn turn_skips_pending_optional_mcp_without_cached_tools() -> anyhow::Resul
 
     let request = response_mock.single_request();
     let body = request.body_json();
+    assert!(
+        body["input"].to_string().contains("<apps_instructions>"),
+        "Apps-enabled turn should include apps instructions: {:?}",
+        body["input"]
+    );
     let tools = body["tools"].as_array().expect("model request tools");
     assert!(
         tools.iter().all(|tool| {

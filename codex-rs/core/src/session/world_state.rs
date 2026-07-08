@@ -41,7 +41,7 @@ impl Session {
         }
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                let tools = step_context.mcp.manager().list_all_tools().await;
+                let tools = step_context.mcp.manager().list_all_tools_for_turn().await;
                 connectors::with_app_enabled_state(
                     connectors::accessible_connectors_from_mcp_tools(&tools),
                     &turn_context.config,
