@@ -402,6 +402,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -413,29 +414,35 @@ async fn file_system_walk_returns_a_bounded_tree(
             entries: vec![
                 WalkEntry {
                     path: PathUri::from_host_native_path(&nested_dir)?,
+                    canonical_path: None,
                     kind: WalkEntryKind::Directory,
                 },
                 WalkEntry {
                     path: PathUri::from_host_native_path(source_dir.join("root.txt"))?,
+                    canonical_path: None,
                     kind: WalkEntryKind::File,
                 },
                 WalkEntry {
                     path: PathUri::from_host_native_path(nested_dir.join("note.txt"))?,
+                    canonical_path: None,
                     kind: WalkEntryKind::File,
                 },
             ],
             errors: Vec::new(),
             truncated: false,
+            canonical_paths_complete: true,
         }
     );
 
     let root_entries = vec![
         WalkEntry {
             path: PathUri::from_host_native_path(&nested_dir)?,
+            canonical_path: None,
             kind: WalkEntryKind::Directory,
         },
         WalkEntry {
             path: PathUri::from_host_native_path(source_dir.join("root.txt"))?,
+            canonical_path: None,
             kind: WalkEntryKind::File,
         },
     ];
@@ -447,6 +454,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -458,6 +466,7 @@ async fn file_system_walk_returns_a_bounded_tree(
             entries: root_entries.clone(),
             errors: Vec::new(),
             truncated: false,
+            canonical_paths_complete: true,
         }
     );
 
@@ -469,6 +478,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 1,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -480,6 +490,7 @@ async fn file_system_walk_returns_a_bounded_tree(
             entries: root_entries,
             errors: Vec::new(),
             truncated: true,
+            canonical_paths_complete: true,
         }
     );
 
@@ -491,6 +502,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 1,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -501,12 +513,42 @@ async fn file_system_walk_returns_a_bounded_tree(
         WalkOutcome {
             entries: vec![WalkEntry {
                 path: PathUri::from_host_native_path(&nested_dir)?,
+                canonical_path: None,
                 kind: WalkEntryKind::Directory,
             }],
             errors: Vec::new(),
             truncated: true,
+            canonical_paths_complete: true,
         }
     );
+
+    let hidden_dir = source_dir.join(".hidden");
+    std::fs::create_dir_all(&hidden_dir)?;
+    std::fs::write(hidden_dir.join("secret.txt"), "secret")?;
+    let hidden_pruned = file_system
+        .walk(
+            &source_uri,
+            WalkOptions {
+                max_depth: 4,
+                max_directories: 10,
+                max_entries: 10,
+                follow_directory_symlinks: false,
+                skip_hidden_directories: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert!(hidden_pruned.entries.contains(&WalkEntry {
+        path: PathUri::from_host_native_path(&hidden_dir)?,
+        canonical_path: None,
+        kind: WalkEntryKind::Directory,
+    }));
+    assert!(!hidden_pruned.entries.contains(&WalkEntry {
+        path: PathUri::from_host_native_path(hidden_dir.join("secret.txt"))?,
+        canonical_path: None,
+        kind: WalkEntryKind::File,
+    }));
 
     Ok(())
 }
@@ -535,6 +577,7 @@ async fn file_system_walk_honors_read_sandbox(
                 max_directories: 2,
                 max_entries: 2,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             Some(&sandbox),
         )
@@ -545,10 +588,12 @@ async fn file_system_walk_honors_read_sandbox(
         WalkOutcome {
             entries: vec![WalkEntry {
                 path: PathUri::from_host_native_path(file_path)?,
+                canonical_path: None,
                 kind: WalkEntryKind::File,
             }],
             errors: Vec::new(),
             truncated: false,
+            canonical_paths_complete: true,
         }
     );
 

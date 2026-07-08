@@ -8,6 +8,8 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
+use crate::MAX_BATCH_READ_PATHS;
+use crate::MAX_BATCH_READ_RESPONSE_BYTES;
 use crate::RemoveOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
@@ -31,6 +33,9 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadFilesParams;
+use crate::protocol::FsReadFilesResponse;
+use crate::protocol::FsReadFilesResult;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
@@ -116,6 +121,60 @@ impl FileSystemHandler {
         Ok(FsReadFileResponse {
             data_base64: STANDARD.encode(bytes),
         })
+    }
+
+    pub(crate) async fn read_files(
+        &self,
+        params: FsReadFilesParams,
+    ) -> Result<FsReadFilesResponse, JSONRPCErrorError> {
+        if params.paths.is_empty() || params.paths.len() > MAX_BATCH_READ_PATHS {
+            return Err(invalid_request(format!(
+                "fs/readFiles requires 1 to {MAX_BATCH_READ_PATHS} paths"
+            )));
+        }
+
+        let mut total_bytes = 0usize;
+        let mut files = Vec::with_capacity(params.paths.len());
+        for result in self
+            .file_system
+            .read_files(&params.paths, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?
+        {
+            let path = result.path;
+            match result.result {
+                Ok(bytes) => {
+                    let Some(next_total) = total_bytes.checked_add(bytes.len()) else {
+                        files.push(FsReadFilesResult::Error {
+                            path,
+                            error: invalid_request(
+                                "fs/readFiles response is too large".to_string(),
+                            ),
+                        });
+                        continue;
+                    };
+                    if next_total > MAX_BATCH_READ_RESPONSE_BYTES {
+                        files.push(FsReadFilesResult::Error {
+                            path,
+                            error: invalid_request(format!(
+                                "fs/readFiles response exceeds {MAX_BATCH_READ_RESPONSE_BYTES} bytes"
+                            )),
+                        });
+                        continue;
+                    }
+                    total_bytes = next_total;
+                    files.push(FsReadFilesResult::Ok {
+                        path,
+                        data_base64: STANDARD.encode(bytes),
+                    });
+                }
+                Err(error) => files.push(FsReadFilesResult::Error {
+                    path,
+                    error: map_fs_error(error),
+                }),
+            }
+        }
+        Ok(FsReadFilesResponse { files })
     }
 
     pub(crate) async fn write_file(
@@ -275,6 +334,8 @@ mod tests {
     use super::*;
     use crate::FileSystemSandboxContext;
     use crate::protocol::FsReadFileParams;
+    use crate::protocol::FsReadFilesParams;
+    use crate::protocol::FsReadFilesResult;
     use crate::protocol::FsWriteFileParams;
 
     #[tokio::test]
@@ -341,5 +402,52 @@ mod tests {
 
             assert_eq!(response.data_base64, STANDARD.encode("ok"));
         }
+    }
+
+    #[tokio::test]
+    async fn batched_reads_return_per_path_errors_and_reject_too_many_paths() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let handler = FileSystemHandler::new(runtime_paths);
+        let present = temp_dir.path().join("present.txt");
+        std::fs::write(&present, "present").expect("write fixture");
+        let paths = vec![
+            PathUri::from_host_native_path(&present).expect("present URI"),
+            PathUri::from_host_native_path(temp_dir.path().join("missing.txt"))
+                .expect("missing URI"),
+        ];
+
+        let response = handler
+            .read_files(FsReadFilesParams {
+                paths: paths.clone(),
+                sandbox: None,
+            })
+            .await
+            .expect("batch read should return partial results");
+
+        assert_eq!(response.files.len(), 2);
+        assert!(matches!(
+            &response.files[0],
+            FsReadFilesResult::Ok { path, data_base64 }
+                if path == &paths[0] && data_base64 == &STANDARD.encode("present")
+        ));
+        assert!(matches!(
+            &response.files[1],
+            FsReadFilesResult::Error { path, error }
+                if path == &paths[1] && error.code == -32004
+        ));
+
+        let error = handler
+            .read_files(FsReadFilesParams {
+                paths: vec![paths[0].clone(); MAX_BATCH_READ_PATHS + 1],
+                sandbox: None,
+            })
+            .await
+            .expect_err("oversized batch should fail");
+        assert_eq!(error.code, -32600);
     }
 }

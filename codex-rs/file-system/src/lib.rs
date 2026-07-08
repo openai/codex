@@ -29,6 +29,17 @@ use std::task::Poll;
 
 /// Maximum chunk size returned by [`ExecutorFileSystem::read_file_stream`].
 pub const FILE_READ_CHUNK_SIZE: usize = 1024 * 1024;
+/// Maximum number of paths accepted by one batched file-read request.
+pub const MAX_BATCH_READ_PATHS: usize = 128;
+/// Maximum decoded payload returned by one batched file-read request.
+pub const MAX_BATCH_READ_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+fn batch_read_response_too_large_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("batched file read exceeds {MAX_BATCH_READ_RESPONSE_BYTES} bytes"),
+    )
+}
 const MAX_WALK_DEPTH: usize = 64;
 const MAX_WALK_DIRECTORIES: usize = 10_000;
 const MAX_WALK_ENTRIES: usize = 50_000;
@@ -69,6 +80,13 @@ pub struct ReadDirectoryEntry {
     pub is_file: bool,
 }
 
+/// Result for one path requested through a batched file read.
+#[derive(Debug)]
+pub struct ReadFileResult {
+    pub path: PathUri,
+    pub result: FileSystemResult<Vec<u8>>,
+}
+
 /// Bounds for a recursive filesystem walk.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +99,9 @@ pub struct WalkOptions {
     pub max_entries: usize,
     /// Whether directory symlinks should be followed.
     pub follow_directory_symlinks: bool,
+    /// Whether hidden directory entries should be returned without traversing descendants.
+    #[serde(default)]
+    pub skip_hidden_directories: bool,
 }
 
 /// Type of a filesystem entry returned by a walk.
@@ -96,6 +117,9 @@ pub enum WalkEntryKind {
 #[serde(rename_all = "camelCase")]
 pub struct WalkEntry {
     pub path: PathUri,
+    /// Canonical identity when it differs from the traversed path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_path: Option<PathUri>,
     pub kind: WalkEntryKind,
 }
 
@@ -114,6 +138,9 @@ pub struct WalkOutcome {
     pub entries: Vec<WalkEntry>,
     pub errors: Vec<WalkError>,
     pub truncated: bool,
+    /// Whether every entry includes canonical identity information when its path is an alias.
+    #[serde(default)]
+    pub canonical_paths_complete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -264,6 +291,41 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
+    /// Reads several files while preserving an independent result for every requested path.
+    ///
+    /// Implementations with a native batch transport should override this. The fallback keeps
+    /// the same sandbox and path semantics as repeated single-file reads.
+    fn read_files<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadFileResult>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(paths.len());
+            let mut total_bytes = 0usize;
+            for path in paths {
+                let result = match self.read_file(path, sandbox).await {
+                    Ok(bytes) => {
+                        if let Some(next_total) = total_bytes.checked_add(bytes.len())
+                            && next_total <= MAX_BATCH_READ_RESPONSE_BYTES
+                        {
+                            total_bytes = next_total;
+                            Ok(bytes)
+                        } else {
+                            Err(batch_read_response_too_large_error())
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                results.push(ReadFileResult {
+                    path: path.clone(),
+                    result,
+                });
+            }
+            Ok(results)
+        })
+    }
+
     /// Reads a file as a stream of chunks no larger than [`FILE_READ_CHUNK_SIZE`].
     fn read_file_stream<'a>(
         &'a self,
@@ -383,14 +445,17 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
     } else {
         root.clone()
     };
-    let mut outcome = WalkOutcome::default();
-    let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+    let mut outcome = WalkOutcome {
+        canonical_paths_complete: true,
+        ..Default::default()
+    };
+    let mut queue = VecDeque::from([(root.clone(), root_identity.clone(), 0usize)]);
     let mut visited_directories = HashSet::from([root_identity]);
     let mut directory_count = 1usize;
     let mut entry_count = 0usize;
     let mut response_bytes = 0usize;
 
-    while let Some((directory, depth)) = queue.pop_front() {
+    while let Some((directory, canonical_directory, depth)) = queue.pop_front() {
         let mut entries = match file_system.read_directory(&directory, sandbox).await {
             Ok(entries) => entries,
             Err(error) => {
@@ -450,20 +515,8 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
             } else {
                 continue;
             };
-            if !reserve_walk_response_bytes(
-                &mut outcome,
-                &mut response_bytes,
-                path.to_string().len(),
-            ) {
-                return Ok(outcome);
-            }
-            outcome.entries.push(WalkEntry {
-                path: path.clone(),
-                kind,
-            });
-
-            if kind == WalkEntryKind::Directory && depth < options.max_depth {
-                let directory_identity = if options.follow_directory_symlinks {
+            let canonical_path = if options.follow_directory_symlinks {
+                if metadata.is_symlink {
                     match file_system.canonicalize(&path, sandbox).await {
                         Ok(path) => path,
                         Err(error) => {
@@ -479,16 +532,47 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
                         }
                     }
                 } else {
-                    path.clone()
-                };
-                if !visited_directories.insert(directory_identity) {
+                    canonical_directory
+                        .join(&entry.file_name)
+                        .unwrap_or_else(|_| path.clone())
+                }
+            } else {
+                path.clone()
+            };
+            let canonical_path = (canonical_path != path).then_some(canonical_path);
+            if !reserve_walk_response_bytes(
+                &mut outcome,
+                &mut response_bytes,
+                path.to_string().len()
+                    + canonical_path
+                        .as_ref()
+                        .map_or(0, |path| path.to_string().len()),
+            ) {
+                return Ok(outcome);
+            }
+            outcome.entries.push(WalkEntry {
+                path: path.clone(),
+                canonical_path: canonical_path.clone(),
+                kind,
+            });
+
+            if kind == WalkEntryKind::Directory
+                && options.skip_hidden_directories
+                && entry.file_name.starts_with('.')
+            {
+                continue;
+            }
+
+            if kind == WalkEntryKind::Directory && depth < options.max_depth {
+                let directory_identity = canonical_path.unwrap_or_else(|| path.clone());
+                if !visited_directories.insert(directory_identity.clone()) {
                     continue;
                 }
                 if directory_count == options.max_directories {
                     outcome.truncated = true;
                 } else {
                     directory_count += 1;
-                    queue.push_back((path, depth + 1));
+                    queue.push_back((path, directory_identity, depth + 1));
                 }
             }
         }

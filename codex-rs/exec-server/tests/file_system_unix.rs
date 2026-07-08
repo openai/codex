@@ -299,17 +299,22 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: false,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={implementation}"))?;
+    let canonical_target = std::fs::canonicalize(&target)?;
+    let canonical_target_file = std::fs::canonicalize(&target_file)?;
+    let canonical_root = std::fs::canonicalize(&root)?;
     assert_eq!(
         outcome,
         WalkOutcome {
             entries: Vec::new(),
             errors: Vec::new(),
             truncated: false,
+            canonical_paths_complete: true,
         }
     );
 
@@ -321,6 +326,7 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: true,
+                skip_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -332,19 +338,23 @@ async fn file_system_walk_handles_directory_symlinks(
             entries: vec![
                 WalkEntry {
                     path: PathUri::from_host_native_path(&target_link)?,
+                    canonical_path: Some(PathUri::from_host_native_path(&canonical_target)?),
                     kind: WalkEntryKind::Directory,
                 },
                 WalkEntry {
                     path: PathUri::from_host_native_path(target_link.join("note.txt"))?,
+                    canonical_path: Some(PathUri::from_host_native_path(&canonical_target_file)?),
                     kind: WalkEntryKind::File,
                 },
                 WalkEntry {
                     path: PathUri::from_host_native_path(target_link.join("root-link"))?,
+                    canonical_path: Some(PathUri::from_host_native_path(&canonical_root)?),
                     kind: WalkEntryKind::Directory,
                 },
             ],
             errors: Vec::new(),
             truncated: false,
+            canonical_paths_complete: true,
         }
     );
 

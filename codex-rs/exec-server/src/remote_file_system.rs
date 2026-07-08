@@ -14,6 +14,7 @@ use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
+use crate::ReadFileResult;
 use crate::RemoveOptions;
 use crate::WalkOptions;
 use crate::WalkOutcome;
@@ -24,6 +25,8 @@ use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFilesParams;
+use crate::protocol::FsReadFilesResult;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
@@ -82,6 +85,75 @@ impl RemoteFileSystem {
                 format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
             )
         })
+    }
+
+    async fn read_files(
+        &self,
+        paths: &[PathUri],
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<ReadFileResult>> {
+        trace!("remote fs read_files");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let response = match client
+            .fs_read_files(FsReadFilesParams {
+                paths: paths.to_vec(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(ExecServerError::Server {
+                code: METHOD_NOT_FOUND_ERROR_CODE,
+                ..
+            }) => {
+                let mut results = Vec::with_capacity(paths.len());
+                for path in paths {
+                    results.push(ReadFileResult {
+                        path: path.clone(),
+                        result: RemoteFileSystem::read_file(self, path, sandbox).await,
+                    });
+                }
+                return Ok(results);
+            }
+            Err(error) => return Err(map_remote_error(error)),
+        };
+        if response.files.len() != paths.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "remote fs/readFiles returned a different number of results",
+            ));
+        }
+
+        response
+            .files
+            .into_iter()
+            .zip(paths)
+            .map(|(result, requested_path)| {
+                let (path, result) = match result {
+                    FsReadFilesResult::Ok { path, data_base64 } => {
+                        let result = STANDARD.decode(data_base64).map_err(|err| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "remote fs/readFiles returned invalid base64 dataBase64: {err}"
+                                ),
+                            )
+                        });
+                        (path, result)
+                    }
+                    FsReadFilesResult::Error { path, error } => {
+                        (path, Err(map_remote_rpc_error(error)))
+                    }
+                };
+                if &path != requested_path {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "remote fs/readFiles returned results out of order",
+                    ));
+                }
+                Ok(ReadFileResult { path, result })
+            })
+            .collect()
     }
 
     async fn read_file_stream(
@@ -277,6 +349,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
     }
 
+    fn read_files<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadFileResult>> {
+        Box::pin(RemoteFileSystem::read_files(self, paths, sandbox))
+    }
+
     fn read_file_stream<'a>(
         &'a self,
         path: &'a PathUri,
@@ -377,6 +457,16 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
             io::Error::new(io::ErrorKind::BrokenPipe, "exec-server transport closed")
         }
         _ => io::Error::other(error.to_string()),
+    }
+}
+
+fn map_remote_rpc_error(error: codex_exec_server_protocol::JSONRPCErrorError) -> io::Error {
+    if error.code == NOT_FOUND_ERROR_CODE {
+        io::Error::new(io::ErrorKind::NotFound, error.message)
+    } else if error.code == INVALID_REQUEST_ERROR_CODE {
+        io::Error::new(io::ErrorKind::InvalidInput, error.message)
+    } else {
+        io::Error::other(error.message)
     }
 }
 

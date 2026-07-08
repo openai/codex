@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
 use codex_protocol::models::PermissionProfile;
@@ -26,8 +28,12 @@ use super::*;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_READ_FILES_METHOD;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadFilesParams;
+use crate::protocol::FsReadFilesResponse;
+use crate::protocol::FsReadFilesResult;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
@@ -78,6 +84,88 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
     assert_eq!(
         captured_params.await.expect("captured params"),
         expected_params
+    );
+    server.await.expect("recording server should succeed");
+}
+
+#[tokio::test]
+async fn remote_file_system_batches_paths_and_keeps_per_path_errors() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let paths = vec![
+        PathUri::parse("file:///C:/Users/Alice/src/SKILL.md").expect("valid drive URI"),
+        PathUri::parse("file://server/share/src/agents/openai.yaml").expect("valid UNC URI"),
+    ];
+    let expected_paths = paths.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket).await;
+
+        let request = match read_jsonrpc_websocket(&mut websocket).await {
+            JSONRPCMessage::Request(request) if request.method == FS_READ_FILES_METHOD => request,
+            other => panic!("expected fs/readFiles request, got {other:?}"),
+        };
+        let params: FsReadFilesParams =
+            serde_json::from_value(request.params.expect("fs/readFiles params should exist"))
+                .expect("fs/readFiles params should deserialize");
+        assert_eq!(params.paths, expected_paths);
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(FsReadFilesResponse {
+                    files: vec![
+                        FsReadFilesResult::Ok {
+                            path: params.paths[0].clone(),
+                            data_base64: BASE64_STANDARD.encode("skill"),
+                        },
+                        FsReadFilesResult::Error {
+                            path: params.paths[1].clone(),
+                            error: codex_exec_server_protocol::JSONRPCErrorError {
+                                code: -32004,
+                                data: None,
+                                message: "missing metadata".to_string(),
+                            },
+                        },
+                    ],
+                })
+                .expect("fs/readFiles response should serialize"),
+            }),
+        )
+        .await;
+    });
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+    ));
+
+    let results = file_system
+        .read_files(&paths, /*sandbox*/ None)
+        .await
+        .expect("batch read should succeed");
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results[0]
+            .result
+            .as_ref()
+            .expect("first read should succeed"),
+        b"skill"
+    );
+    assert_eq!(
+        results[1]
+            .result
+            .as_ref()
+            .expect_err("second read should fail")
+            .kind(),
+        std::io::ErrorKind::NotFound
     );
     server.await.expect("recording server should succeed");
 }

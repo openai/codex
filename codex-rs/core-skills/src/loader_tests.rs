@@ -4,7 +4,19 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorFileSystemFuture;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::ReadFileResult;
+use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -16,6 +28,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -24,6 +39,136 @@ const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 struct TestConfig {
     cwd: AbsolutePathBuf,
     config_layer_stack: ConfigLayerStack,
+}
+
+struct RecordingReadFiles {
+    inner: Arc<dyn ExecutorFileSystem>,
+    batches: Mutex<Vec<Vec<PathUri>>>,
+    single_reads: Mutex<Vec<PathUri>>,
+    canonicalizes: AtomicUsize,
+    walks: AtomicUsize,
+    directory_reads: AtomicUsize,
+}
+
+impl RecordingReadFiles {
+    fn new(inner: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self {
+            inner,
+            batches: Mutex::new(Vec::new()),
+            single_reads: Mutex::new(Vec::new()),
+            canonicalizes: AtomicUsize::new(0),
+            walks: AtomicUsize::new(0),
+            directory_reads: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ExecutorFileSystem for RecordingReadFiles {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        self.canonicalizes.fetch_add(1, Ordering::Relaxed);
+        self.inner.canonicalize(path, sandbox)
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        self.single_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.clone());
+        self.inner.read_file(path, sandbox)
+    }
+
+    fn read_files<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadFileResult>> {
+        self.batches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(paths.to_vec());
+        self.inner.read_files(paths, sandbox)
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        self.inner.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        self.inner.get_metadata(path, sandbox)
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        self.directory_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.read_directory(path, sandbox)
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        self.walks.fetch_add(1, Ordering::Relaxed);
+        self.inner.walk(path, options, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner
+            .copy(source_path, destination_path, options, sandbox)
+    }
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
@@ -382,6 +527,79 @@ fn write_skill_metadata_at(skill_dir: &Path, contents: &str) -> PathBuf {
     }
     fs::write(&path, contents).unwrap();
     path
+}
+
+#[tokio::test]
+async fn batches_discovered_skill_and_optional_metadata_reads() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let first_skill = write_skill_at(root.path(), "first", "first", "first description");
+    let second_skill = write_skill_at(root.path(), "second", "second", "second description");
+    write_skill_metadata_at(
+        first_skill.parent().expect("skill parent"),
+        "policy:\n  allow_implicit_invocation: false\n",
+    );
+    let file_system = Arc::new(RecordingReadFiles::new(Arc::clone(&LOCAL_FS)));
+
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: root.path().abs(),
+            scope: SkillScope::User,
+            file_system: file_system.clone(),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(outcome.skills.len(), 2);
+    // The root keeps its existing identity canonicalization; discovered files should not add N
+    // more remote calls.
+    assert_eq!(file_system.canonicalizes.load(Ordering::Relaxed), 1);
+    assert_eq!(file_system.walks.load(Ordering::Relaxed), 1);
+    assert_eq!(file_system.directory_reads.load(Ordering::Relaxed), 0);
+    let batches = file_system
+        .batches
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(batches.len(), 1);
+    let mut actual_paths = batches[0].clone();
+    actual_paths.sort_by_key(ToString::to_string);
+    let first_skill = normalized(&first_skill);
+    let second_skill = normalized(&second_skill);
+    let first_metadata = first_skill
+        .parent()
+        .expect("skill parent")
+        .join(SKILLS_METADATA_DIR)
+        .join(SKILLS_METADATA_FILENAME);
+    let second_metadata = second_skill
+        .parent()
+        .expect("skill parent")
+        .join(SKILLS_METADATA_DIR)
+        .join(SKILLS_METADATA_FILENAME);
+    let mut expected_paths = vec![
+        PathUri::from_abs_path(&first_skill),
+        PathUri::from_abs_path(&second_skill),
+        PathUri::from_abs_path(&first_metadata),
+        PathUri::from_abs_path(&second_metadata),
+    ];
+    expected_paths.sort_by_key(ToString::to_string);
+    assert_eq!(actual_paths, expected_paths);
+    assert_eq!(
+        file_system
+            .single_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+        Vec::<PathUri>::new()
+    );
 }
 
 fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {

@@ -25,6 +25,7 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
+pub const FS_READ_FILES_METHOD: &str = "fs/readFiles";
 pub const FS_OPEN_METHOD: &str = "fs/open";
 pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
 pub const FS_CLOSE_METHOD: &str = "fs/close";
@@ -256,6 +257,33 @@ pub struct FsReadFileParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileResponse {
     pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadFilesParams {
+    pub paths: Vec<PathUri>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadFilesResponse {
+    pub files: Vec<FsReadFilesResult>,
+}
+
+/// One independently successful or failed entry returned by fs/readFiles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum FsReadFilesResult {
+    Ok {
+        path: PathUri,
+        data_base64: String,
+    },
+    Error {
+        path: PathUri,
+        error: crate::JSONRPCErrorError,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -351,6 +351,8 @@ for invalid or unavailable paths. Native absolute path strings are rejected;
 callers must convert them to `file:` URIs before sending requests:
 
 - `fs/readFile`
+- `fs/readFiles` (up to 128 paths; each result succeeds or fails independently,
+  with at most 64 MiB of decoded file data in one response)
 - `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
   `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`

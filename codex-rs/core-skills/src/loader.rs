@@ -20,6 +20,9 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::MAX_BATCH_READ_PATHS;
+use codex_exec_server::WalkEntryKind;
+use codex_exec_server::WalkOptions;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -29,10 +32,9 @@ use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
-use futures::future::join_all;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -149,6 +151,68 @@ struct SkillFileDiscovery {
     plugin_roots: HashSet<PathUri>,
     namespace_roots: HashSet<PathUri>,
     warnings: Vec<String>,
+}
+
+struct SkillReadCache {
+    files: HashMap<PathUri, io::Result<String>>,
+}
+
+impl SkillReadCache {
+    async fn load(fs: &dyn ExecutorFileSystem, skill_files: &[PathUri]) -> Self {
+        let mut paths = Vec::with_capacity(skill_files.len() * 2);
+        let mut seen = HashSet::new();
+        for skill_path in skill_files {
+            if seen.insert(skill_path.clone()) {
+                paths.push(skill_path.clone());
+            }
+            let Some(skill_dir) = skill_path.parent() else {
+                continue;
+            };
+            let Ok(metadata_dir) = skill_dir.join(SKILLS_METADATA_DIR) else {
+                continue;
+            };
+            let Ok(metadata_path) = metadata_dir.join(SKILLS_METADATA_FILENAME) else {
+                continue;
+            };
+            if seen.insert(metadata_path.clone()) {
+                paths.push(metadata_path);
+            }
+        }
+
+        let mut files = HashMap::with_capacity(paths.len());
+        for chunk in paths.chunks(MAX_BATCH_READ_PATHS) {
+            match fs.read_files(chunk, /*sandbox*/ None).await {
+                Ok(results) => {
+                    for result in results {
+                        files.insert(
+                            result.path,
+                            result.result.and_then(|bytes| {
+                                String::from_utf8(bytes)
+                                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+                            }),
+                        );
+                    }
+                }
+                Err(error) => {
+                    let kind = error.kind();
+                    let message = error.to_string();
+                    for path in chunk {
+                        files.insert(path.clone(), Err(io::Error::new(kind, message.clone())));
+                    }
+                }
+            }
+        }
+        Self { files }
+    }
+
+    fn read_text(&mut self, path: &PathUri) -> io::Result<String> {
+        self.files.remove(path).unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("batched read omitted {path}"),
+            ))
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -500,165 +564,121 @@ async fn discover_skills_under_root(
     root: &PathUri,
     symlink_policy: SymlinkPolicy,
 ) -> SkillFileDiscovery {
-    let root = root.clone();
     let mut discovery = SkillFileDiscovery {
         skill_files: Vec::new(),
         plugin_roots: HashSet::new(),
         namespace_roots: HashSet::from([root.clone()]),
         warnings: Vec::new(),
     };
-    match fs.get_metadata(&root, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_directory => {}
-        Ok(_) => return discovery,
+    let walk = match fs
+        .walk(
+            root,
+            WalkOptions {
+                max_depth: MAX_SCAN_DEPTH,
+                max_directories: MAX_SKILLS_DIRS_PER_ROOT,
+                max_entries: MAX_SKILLS_DIRS_PER_ROOT * 10,
+                follow_directory_symlinks: matches!(
+                    symlink_policy,
+                    SymlinkPolicy::FollowDirectories
+                ),
+                skip_hidden_directories: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+    {
+        Ok(walk) => walk,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return discovery,
         Err(err) => {
             discovery
                 .warnings
-                .push(format!("failed to stat skills root {root}: {err:#}"));
+                .push(format!("failed to walk skills root {root}: {err:#}"));
             return discovery;
         }
+    };
+    let canonical_paths_complete = walk.canonical_paths_complete;
+    discovery
+        .warnings
+        .extend(walk.errors.into_iter().map(|error| {
+            format!(
+                "failed to scan skill path {}: {}",
+                error.path, error.message
+            )
+        }));
+    if walk.truncated {
+        discovery.warnings.push(format!(
+            "skills scan reached its traversal limit (root: {root})"
+        ));
     }
-
-    fn enqueue_dir(
-        queue: &mut VecDeque<(PathUri, usize)>,
-        visited_dirs: &mut HashSet<PathUri>,
-        truncated_by_dir_limit: &mut bool,
-        path: PathUri,
-        depth: usize,
-    ) {
-        if depth > MAX_SCAN_DEPTH {
-            return;
-        }
-        if visited_dirs.len() >= MAX_SKILLS_DIRS_PER_ROOT {
-            *truncated_by_dir_limit = true;
-            return;
-        }
-        if visited_dirs.insert(path.clone()) {
-            queue.push_back((path, depth));
-        }
-    }
-
-    let follow_symlinks = matches!(symlink_policy, SymlinkPolicy::FollowDirectories);
-    let mut visited_dirs: HashSet<PathUri> = HashSet::from([root.clone()]);
-    let mut queue: VecDeque<(PathUri, usize)> = VecDeque::from([(root.clone(), 0)]);
-    let mut truncated_by_dir_limit = false;
-
-    while let Some((dir, depth)) = queue.pop_front() {
-        let entries = match fs.read_directory(&dir, /*sandbox*/ None).await {
-            Ok(entries) => entries,
-            Err(err) => {
-                discovery
-                    .warnings
-                    .push(format!("failed to read skills directory {dir}: {err:#}"));
-                continue;
-            }
-        };
-
-        let paths = entries
-            .into_iter()
-            .filter_map(|entry| {
-                let file_name = entry.file_name;
-                if DISCOVERABLE_PLUGIN_MANIFEST_PATHS
-                    .iter()
-                    .any(|path| path.split('/').next() == Some(file_name.as_str()))
+    for entry in walk.entries {
+        match entry.kind {
+            WalkEntryKind::Directory => {
+                if !has_hidden_ancestor_below_root(&entry.path, root)
+                    && DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+                        .iter()
+                        .any(|path| path.split('/').next() == entry.path.basename().as_deref())
+                    && let Some(plugin_root) = entry
+                        .canonical_path
+                        .as_ref()
+                        .unwrap_or(&entry.path)
+                        .parent()
                 {
-                    discovery.plugin_roots.insert(dir.clone());
+                    discovery.plugin_roots.insert(plugin_root);
                 }
-                if file_name.starts_with('.') {
-                    return None;
-                }
-                match dir.join(&file_name) {
-                    Ok(path) => Some((file_name, path)),
-                    Err(err) => {
-                        discovery.warnings.push(format!(
-                            "failed to resolve skill path {dir}/{file_name}: {err}"
-                        ));
-                        None
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        let metadata_results = join_all(
-            paths
-                .iter()
-                .map(|(_, path)| fs.get_metadata(path, /*sandbox*/ None)),
-        )
-        .await;
-
-        for ((file_name, path), metadata_result) in paths.into_iter().zip(metadata_results) {
-            let metadata = match metadata_result {
-                Ok(metadata) => metadata,
-                Err(err) => {
-                    discovery
-                        .warnings
-                        .push(format!("failed to stat skill path {path}: {err:#}"));
-                    continue;
-                }
-            };
-
-            if metadata.is_symlink {
-                if !follow_symlinks {
-                    continue;
-                }
-                match fs.read_directory(&path, /*sandbox*/ None).await {
-                    Ok(_) => {
-                        let resolved_dir = canonicalize_uri_for_skill_identity(fs, &path).await;
-                        discovery.namespace_roots.insert(resolved_dir.clone());
-                        enqueue_dir(
-                            &mut queue,
-                            &mut visited_dirs,
-                            &mut truncated_by_dir_limit,
-                            resolved_dir,
-                            depth + 1,
-                        );
-                    }
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            io::ErrorKind::NotADirectory | io::ErrorKind::NotFound
-                        ) => {}
-                    Err(err) => discovery.warnings.push(format!(
-                        "failed to read skills symlink directory {path}: {err:#}"
-                    )),
-                }
-                continue;
             }
-
-            if metadata.is_directory {
-                enqueue_dir(
-                    &mut queue,
-                    &mut visited_dirs,
-                    &mut truncated_by_dir_limit,
-                    path,
-                    depth + 1,
-                );
-                continue;
+            WalkEntryKind::File
+                if !has_hidden_ancestor_below_root(&entry.path, root)
+                    && entry.path.basename().as_deref() == Some(SKILLS_FILENAME) =>
+            {
+                let (skill_path, has_canonical_alias) = match entry.canonical_path {
+                    Some(canonical_path) => (canonical_path, true),
+                    None => (entry.path, false),
+                };
+                if has_canonical_alias && let Some(namespace_root) = skill_path.parent() {
+                    discovery.namespace_roots.insert(namespace_root);
+                }
+                discovery.skill_files.push(skill_path);
             }
-
-            if metadata.is_file && file_name == SKILLS_FILENAME {
-                discovery.skill_files.push(path);
-            }
+            WalkEntryKind::File => {}
         }
     }
-
-    if truncated_by_dir_limit {
-        tracing::warn!(
-            "skills scan truncated after {} directories (root: {})",
-            MAX_SKILLS_DIRS_PER_ROOT,
-            root
-        );
+    if !canonical_paths_complete {
+        let canonicalized_skill_files =
+            futures::future::join_all(discovery.skill_files.into_iter().map(|path| async move {
+                let canonical_path = fs
+                    .canonicalize(&path, /*sandbox*/ None)
+                    .await
+                    .unwrap_or_else(|_| path.clone());
+                (path, canonical_path)
+            }))
+            .await;
+        discovery.skill_files = canonicalized_skill_files
+            .into_iter()
+            .map(|(walk_path, canonical_path)| {
+                if walk_path != canonical_path
+                    && let Some(namespace_root) = canonical_path.parent()
+                {
+                    discovery.namespace_roots.insert(namespace_root);
+                }
+                canonical_path
+            })
+            .collect();
     }
     discovery
 }
 
-async fn canonicalize_uri_for_skill_identity(
-    file_system: &dyn ExecutorFileSystem,
-    path: &PathUri,
-) -> PathUri {
-    file_system
-        .canonicalize(path, /*sandbox*/ None)
-        .await
-        .unwrap_or_else(|_| path.clone())
+fn has_hidden_ancestor_below_root(path: &PathUri, root: &PathUri) -> bool {
+    let mut ancestor = path.parent();
+    while let Some(current) = ancestor {
+        if &current == root {
+            return false;
+        }
+        if current.basename().is_some_and(|name| name.starts_with('.')) {
+            return true;
+        }
+        ancestor = current.parent();
+    }
+    false
 }
 
 async fn load_skills_under_root(
@@ -680,12 +700,14 @@ async fn load_skills_under_root(
     };
     let SkillFileDiscovery {
         skill_files,
+        namespace_roots: _namespace_roots,
         warnings,
         ..
     } = discover_skills_under_root(fs, &PathUri::from_abs_path(root), symlink_policy).await;
     for warning in warnings {
         error!("{warning}");
     }
+    let mut read_cache = SkillReadCache::load(fs, &skill_files).await;
     for path_uri in skill_files {
         let path = match path_uri.to_abs_path() {
             Ok(path) => path,
@@ -701,6 +723,7 @@ async fn load_skills_under_root(
             plugin_id,
             plugin_namespace,
             plugin_root.as_ref(),
+            &mut read_cache,
         )
         .await
         {
@@ -721,11 +744,11 @@ async fn parse_skill_file(
     plugin_id: Option<&str>,
     plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
+    read_cache: &mut SkillReadCache,
 ) -> Result<SkillMetadata, SkillParseError> {
     let path_uri = PathUri::from_abs_path(path);
-    let contents = fs
-        .read_file_text(&path_uri, /*sandbox*/ None)
-        .await
+    let contents = read_cache
+        .read_text(&path_uri)
         .map_err(SkillParseError::Read)?;
     let ParsedSkillFrontmatter {
         name: base_name,
@@ -737,11 +760,9 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-    } = load_skill_metadata(fs, path, plugin_root).await;
+    } = load_skill_metadata(path, plugin_root, read_cache);
 
     validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
-
-    let resolved_path = canonicalize_for_skill_identity(fs, path).await;
 
     Ok(SkillMetadata {
         name,
@@ -750,7 +771,7 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: resolved_path,
+        path_to_skills_md: path.clone(),
         scope,
         plugin_id: plugin_id.map(str::to_string),
     })
@@ -833,10 +854,10 @@ async fn namespaced_skill_name(
         .unwrap_or_else(|| base_name.to_string())
 }
 
-async fn load_skill_metadata(
-    fs: &dyn ExecutorFileSystem,
+fn load_skill_metadata(
     skill_path: &AbsolutePathBuf,
     plugin_root: Option<&AbsolutePathBuf>,
+    read_cache: &mut SkillReadCache,
 ) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
     let Some(skill_dir) = skill_path.parent() else {
@@ -846,27 +867,16 @@ async fn load_skill_metadata(
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
     let metadata_path_uri = PathUri::from_abs_path(&metadata_path);
-    match fs.get_metadata(&metadata_path_uri, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_file => {}
-        Ok(_) => return LoadedSkillMetadata::default(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return LoadedSkillMetadata::default();
-        }
-        Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: failed to stat {label}: {error}",
-                path = metadata_path.display(),
-                label = SKILLS_METADATA_FILENAME
-            );
-            return LoadedSkillMetadata::default();
-        }
-    }
-
-    let contents = match fs
-        .read_file_text(&metadata_path_uri, /*sandbox*/ None)
-        .await
-    {
+    let contents = match read_cache.read_text(&metadata_path_uri) {
         Ok(contents) => contents,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::IsADirectory
+            ) =>
+        {
+            return LoadedSkillMetadata::default();
+        }
         Err(error) => {
             tracing::warn!(
                 "ignoring {path}: failed to read {label}: {error}",
