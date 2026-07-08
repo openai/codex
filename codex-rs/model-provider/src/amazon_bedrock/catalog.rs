@@ -19,11 +19,13 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             gpt_5_bedrock_model(
                 GPT_5_5_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
+                "GPT-5.5",
                 /*priority*/ 0,
             ),
             gpt_5_bedrock_model(
                 GPT_5_4_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
+                "GPT-5.4",
                 /*priority*/ 1,
             ),
             gpt_5_6_bedrock_model(
@@ -55,9 +57,15 @@ pub(crate) fn with_default_only_service_tier(mut catalog: ModelsResponse) -> Mod
     catalog
 }
 
-fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> ModelInfo {
+fn gpt_5_bedrock_model(
+    openai_slug: &str,
+    bedrock_slug: &str,
+    display_name: &str,
+    priority: i32,
+) -> ModelInfo {
     let mut model = bundled_openai_model(openai_slug);
     model.slug = bedrock_slug.to_string();
+    model.display_name = display_name.to_string();
     model.priority = priority;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
@@ -67,8 +75,12 @@ fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> 
 }
 
 fn gpt_5_6_bedrock_model(bedrock_slug: &str, display_name: &str, priority: i32) -> ModelInfo {
-    let mut model = gpt_5_bedrock_model(GPT_5_5_OPENAI_MODEL_ID, bedrock_slug, priority);
-    model.display_name = display_name.to_string();
+    let mut model = gpt_5_bedrock_model(
+        GPT_5_5_OPENAI_MODEL_ID,
+        bedrock_slug,
+        display_name,
+        priority,
+    );
     model
         .supported_reasoning_levels
         .push(ReasoningEffortPreset {
