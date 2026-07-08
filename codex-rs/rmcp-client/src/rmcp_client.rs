@@ -228,7 +228,7 @@ where
 enum ClientOperationError {
     #[error(transparent)]
     Service(#[from] rmcp::service::ServiceError),
-    #[error("timed out awaiting {label} after {duration:?}")]
+    #[error("timed out awaiting {label} after {duration:.0?}")]
     Timeout { label: String, duration: Duration },
 }
 
@@ -1218,6 +1218,16 @@ mod tests {
     use tokio::time;
 
     use super::*;
+
+    #[test]
+    fn client_operation_timeout_rounds_duration() {
+        let error = ClientOperationError::Timeout {
+            label: "tools/list".to_string(),
+            duration: Duration::from_nanos(29_999_999_875),
+        };
+
+        assert_eq!(error.to_string(), "timed out awaiting tools/list after 30s");
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {
