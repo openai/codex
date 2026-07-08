@@ -86,6 +86,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert!(properties.contains_key("environment_ids"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -142,6 +143,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .expect("spawn_agent should use object params");
 
     assert!(properties.contains_key("fork_context"));
+    assert!(properties.contains_key("environment_ids"));
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties

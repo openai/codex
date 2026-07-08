@@ -69,6 +69,8 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    /// Explicit child environment subset used to filter fork-inherited capability roots.
+    pub(crate) restricted_environment_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]

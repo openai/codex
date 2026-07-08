@@ -106,6 +106,18 @@ fn thread_manager() -> ThreadManager {
     )
 }
 
+fn with_windows_environment(mut turn: TurnContext) -> TurnContext {
+    let mut windows = turn
+        .environments
+        .turn_environments
+        .first()
+        .expect("test turn should have a local environment")
+        .clone();
+    windows.environment_id = "windows".to_string();
+    turn.environments.turn_environments.push(windows);
+    turn
+}
+
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
     let role_name = "fork-context-role".to_string();
     tokio::fs::create_dir_all(&turn.config.codex_home)
@@ -169,6 +181,81 @@ where
         }
         other => panic!("expected function output, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn spawn_agent_environment_ids_omitted_inherits_parent_environments() {
+    let (_session, turn) = make_session_and_context().await;
+    let turn = with_windows_environment(turn);
+
+    let selections =
+        spawn_agent_environment_selections(&turn, None).expect("omitted ids should inherit");
+
+    assert_eq!(selections, turn.environments.to_selections());
+}
+
+#[tokio::test]
+async fn spawn_agent_environment_ids_restrict_child_to_requested_environment() {
+    let (_session, turn) = make_session_and_context().await;
+    let turn = with_windows_environment(turn);
+    let environment_ids = vec!["windows".to_string()];
+    let expected = vec![
+        turn.environments
+            .turn_environments
+            .iter()
+            .find(|environment| environment.environment_id == "windows")
+            .expect("windows environment should exist")
+            .selection(),
+    ];
+
+    let selections = spawn_agent_environment_selections(&turn, Some(&environment_ids))
+        .expect("attached environment id should be accepted");
+
+    assert_eq!(selections, expected);
+}
+
+#[tokio::test]
+async fn spawn_agent_environment_ids_empty_attaches_no_environments() {
+    let (_session, turn) = make_session_and_context().await;
+    let turn = with_windows_environment(turn);
+    let environment_ids = Vec::new();
+
+    let selections = spawn_agent_environment_selections(&turn, Some(&environment_ids))
+        .expect("empty environment ids should be accepted");
+
+    assert_eq!(selections, Vec::new());
+}
+
+#[tokio::test]
+async fn spawn_agent_environment_ids_rejects_unknown_environment() {
+    let (_session, turn) = make_session_and_context().await;
+    let turn = with_windows_environment(turn);
+    let environment_ids = vec!["missing".to_string()];
+
+    let err = spawn_agent_environment_selections(&turn, Some(&environment_ids))
+        .expect_err("unknown environment id should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spawn environment id `missing` is not a ready parent-turn environment".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_environment_ids_rejects_duplicate_environment() {
+    let (_session, turn) = make_session_and_context().await;
+    let turn = with_windows_environment(turn);
+    let environment_ids = vec!["windows".to_string(), "windows".to_string()];
+
+    let err = spawn_agent_environment_selections(&turn, Some(&environment_ids))
+        .expect_err("duplicate environment id should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel("duplicate spawn environment id `windows`".to_string())
+    );
 }
 
 #[derive(Debug, Deserialize)]

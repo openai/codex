@@ -17,9 +17,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
@@ -149,6 +151,42 @@ pub(crate) fn parse_collab_input(
             Ok(items)
         }
     }
+}
+
+/// Returns the initial environment selections a spawned agent should inherit.
+///
+/// An explicit subset may only narrow the parent's ready turn environments. Keep the parent's
+/// selection order so narrowing a child does not implicitly reorder its primary environment.
+pub(crate) fn spawn_agent_environment_selections(
+    turn: &TurnContext,
+    environment_ids: Option<&[String]>,
+) -> Result<Vec<TurnEnvironmentSelection>, FunctionCallError> {
+    let parent_selections = turn.environments.to_selections();
+    let Some(environment_ids) = environment_ids else {
+        return Ok(parent_selections);
+    };
+
+    let mut requested_ids = HashSet::with_capacity(environment_ids.len());
+    for environment_id in environment_ids {
+        if !requested_ids.insert(environment_id.as_str()) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "duplicate spawn environment id `{environment_id}`"
+            )));
+        }
+        if !parent_selections
+            .iter()
+            .any(|selection| selection.environment_id.as_str() == environment_id.as_str())
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "spawn environment id `{environment_id}` is not a ready parent-turn environment"
+            )));
+        }
+    }
+
+    Ok(parent_selections
+        .into_iter()
+        .filter(|selection| requested_ids.contains(selection.environment_id.as_str()))
+        .collect())
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.

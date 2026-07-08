@@ -2,6 +2,8 @@ use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -17,6 +19,7 @@ use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
@@ -29,6 +32,7 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -49,6 +53,7 @@ use tracing_test::internal::MockWriter;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
+const LOCAL_EXEC_CALL_ID: &str = "child-local-exec-call";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
@@ -495,6 +500,129 @@ async fn spawn_child_and_capture_snapshot(
         .await?
         .config_snapshot()
         .await)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_agent_can_restrict_inherited_environments() -> Result<()> {
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "child",
+        "environment_ids": [REMOTE_ENVIRONMENT_ID],
+    }))?;
+
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| request_has_input_type(req, "agent_message"),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_function_call(
+                LOCAL_EXEC_CALL_ID,
+                "exec_command",
+                &serde_json::to_string(&json!({
+                    "cmd": "touch local-only-marker",
+                    "environment_id": LOCAL_ENVIRONMENT_ID,
+                    "login": false,
+                }))?,
+            ),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let child_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, LOCAL_EXEC_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-2"),
+            ev_assistant_message("msg-child-2", "child done"),
+            ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !request_has_input_type(req, "agent_message")
+        },
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config.use_experimental_unified_exec_tool = true;
+        config.model = Some(INHERITED_MODEL.to_string());
+        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let expected_remote_selection = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .find(|selection| selection.environment_id == REMOTE_ENVIRONMENT_ID)
+        .ok_or_else(|| anyhow::anyhow!("parent should have the remote environment selected"))?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = wait_for_requests(&child_request_log).await?;
+    let child_followup_requests = wait_for_requests(&child_followup).await?;
+
+    let spawned_id = wait_for_spawned_thread_id(&test).await?;
+    let child_thread = test
+        .thread_manager
+        .get_thread(ThreadId::from_string(&spawned_id)?)
+        .await?;
+
+    assert_eq!(
+        child_thread.environment_selections().await,
+        vec![expected_remote_selection]
+    );
+    let local_exec_output = child_followup_requests
+        .last()
+        .and_then(|request| request.function_call_output_text(LOCAL_EXEC_CALL_ID))
+        .expect("child should report the rejected local exec call");
+    assert!(
+        local_exec_output.contains("unknown turn environment id `local`"),
+        "unexpected local exec rejection: {local_exec_output}"
+    );
+    assert!(!test.cwd_path().join("local-only-marker").exists());
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

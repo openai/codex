@@ -91,6 +91,8 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let environments =
+        spawn_agent_environment_selections(turn.as_ref(), args.environment_ids.as_deref())?;
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -123,7 +125,8 @@ async fn handle_spawn_agent(
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
                     parent_thread_id: Some(session.thread_id),
-                    environments: Some(turn.environments.to_selections()),
+                    environments: Some(environments),
+                    restricted_environment_ids: args.environment_ids.clone(),
                 },
             ),
     )
@@ -184,6 +187,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     service_tier: Option<String>,
+    environment_ids: Option<Vec<String>>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }

@@ -1600,6 +1600,96 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
 }
 
 #[tokio::test]
+async fn spawn_agent_restricted_fork_filters_selected_capability_roots() {
+    let harness = AgentControlHarness::new().await;
+    let allowed_root = SelectedCapabilityRoot {
+        id: "local@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::parse("file:///local").expect("local root URI"),
+        },
+    };
+    let omitted_root = SelectedCapabilityRoot {
+        id: "remote@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "remote".to_string(),
+            path: PathUri::parse("file:///remote").expect("remote root URI"),
+        },
+    };
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(vec![allowed_root.clone(), omitted_root]);
+    let parent = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: harness.config.clone(),
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::New,
+            history_mode: None,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: harness
+                .manager
+                .default_environment_selections(&harness.config.cwd),
+            thread_extension_init,
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start parent thread");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spawn-call-restricted-roots".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                restricted_environment_ids: Some(vec!["local".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("restricted forked spawn should succeed")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .selected_capability_roots,
+        vec![allowed_root]
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();

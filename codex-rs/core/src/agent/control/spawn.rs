@@ -1,6 +1,7 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
 use codex_extension_api::ExtensionDataInit;
+use codex_protocol::capabilities::CapabilityRootLocation;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -480,7 +481,7 @@ impl AgentControl {
                 ))
             })?;
 
-        let selected_capability_roots = parent_history
+        let mut selected_capability_roots = parent_history
             .items
             .iter()
             .find_map(|item| {
@@ -490,6 +491,12 @@ impl AgentControl {
                 Some(meta_line.meta.selected_capability_roots.clone())
             })
             .unwrap_or_default();
+        if let Some(restricted_environment_ids) = options.restricted_environment_ids.as_ref() {
+            selected_capability_roots.retain(|root| {
+                let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+                restricted_environment_ids.contains(environment_id)
+            });
+        }
         let mut forked_rollout_items = parent_history.items;
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =

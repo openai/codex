@@ -16,6 +16,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
+const SPAWN_AGENT_ENVIRONMENT_IDS_DESCRIPTION: &str = "Optional subset of ready environment ids attached to the parent turn to attach when starting the child. Omit to inherit all ready parent environments; pass an empty list to attach none. The child keeps matching environments in the parent's order.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
 const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
@@ -589,6 +590,13 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                 SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
             )),
         ),
+        (
+            "environment_ids".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some(SPAWN_AGENT_ENVIRONMENT_IDS_DESCRIPTION.to_string()),
+            ),
+        ),
     ])
 }
 
@@ -630,6 +638,13 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             JsonSchema::string(Some(
                 SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
             )),
+        ),
+        (
+            "environment_ids".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some(SPAWN_AGENT_ENVIRONMENT_IDS_DESCRIPTION.to_string()),
+            ),
         ),
     ])
 }
@@ -721,7 +736,7 @@ fn spawn_agent_tool_description_v2(
         {agent_role_guidance}
         Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
-The spawned agent will have the same tools as you and the ability to spawn its own subagents.
+The spawned agent will have the same tools as you and the ability to spawn its own subagents, unless you choose a subset of its initially attached execution environments with `environment_ids`.
 {inherited_model_guidance}
 Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
