@@ -830,6 +830,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::os::unix::fs::MetadataExt;
     use std::path::PathBuf;
 
     #[test]
@@ -971,6 +972,23 @@ mod tests {
             serialized,
             r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}],"host_netns_inode":42,"transparent_networking":true}"#
         );
+    }
+
+    #[test]
+    fn transparent_routes_refuse_the_host_network_namespace() {
+        let spec = ProxyRouteSpec {
+            routes: vec![ProxyRouteEntry {
+                env_key: String::new(),
+                uds_path: PathBuf::new(),
+            }],
+            host_netns_inode: std::fs::metadata("/proc/self/ns/net")
+                .expect("network namespace metadata")
+                .ino(),
+            transparent_networking: true,
+        };
+        let serialized = serde_json::to_string(&spec).expect("serialize proxy route spec");
+        let err = super::activate_proxy_routes_in_netns(&serialized).expect_err("must fail closed");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[test]

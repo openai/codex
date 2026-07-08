@@ -410,10 +410,8 @@ fn anonymous_data_file(contents: &[u8]) -> io::Result<File> {
 
     // SAFETY: pipe2 initialized both descriptors, and each is moved into exactly one File.
     let read_file = unsafe { File::from_raw_fd(pipe_fds[0]) };
-    // SAFETY: see above.
     let mut write_file = unsafe { File::from_raw_fd(pipe_fds[1]) };
     write_file.write_all(contents)?;
-    drop(write_file);
     Ok(read_file)
 }
 

@@ -293,21 +293,18 @@ async fn managed_proxy_mode_routes_proxy_aware_and_direct_ipv4_traffic() {
         stdout.ends_with("pong"),
         "expected HTTPS tunnel payload, got: {stdout}"
     );
-    let request = request_rx
-        .recv_timeout(Duration::from_secs(3))
-        .expect("expected direct HTTP request at proxy");
-    assert!(
-        request.starts_with("GET /direct HTTP/1.1\r\n"),
-        "expected captured origin-form request, got request: {request}"
-    );
-
-    let request = request_rx
-        .recv_timeout(Duration::from_secs(3))
-        .expect("expected CONNECT request at proxy");
-    assert!(
-        request.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"),
-        "expected captured hostname in CONNECT request, got: {request}"
-    );
+    for expected in [
+        "GET /direct HTTP/1.1\r\n",
+        "CONNECT example.com:443 HTTP/1.1\r\n",
+    ] {
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("expected direct request at proxy");
+        assert!(
+            request.starts_with(expected),
+            "expected captured request starting with {expected:?}, got: {request}"
+        );
+    }
 }
 
 #[tokio::test]

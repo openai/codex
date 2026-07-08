@@ -93,9 +93,7 @@ impl FakeIpPool {
             return Some(*address);
         }
         let slot = u32::try_from(self.ip_to_host.len()).ok()?.checked_add(1)?;
-        if slot >= 1 << 16 {
-            return None;
-        }
+        (slot < 1 << 16).then_some(())?;
         let address = Ipv4Addr::from(FAKE_POOL_BASE + slot);
         self.host_to_ip.insert(hostname.clone(), address);
         self.ip_to_host.insert(address, hostname);

@@ -35,7 +35,11 @@ struct SystemBwrapCapabilities {
 }
 
 pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
-    if requests_setup_capabilities(&argv) {
+    if argv
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--cap-add")
+    {
         clear_loader_environment();
     }
     match preferred_bwrap_launcher() {
@@ -50,12 +54,6 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
             )
         }
     }
-}
-
-fn requests_setup_capabilities(argv: &[String]) -> bool {
-    argv.iter()
-        .take_while(|arg| arg.as_str() != "--")
-        .any(|arg| arg == "--cap-add")
 }
 
 fn clear_loader_environment() {
