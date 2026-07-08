@@ -110,7 +110,6 @@ pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
-pub mod review_format;
 pub use codex_prompts as review_prompts;
 mod thread_manager;
 pub(crate) mod web_search;

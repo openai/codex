@@ -113,8 +113,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let started: ItemStartedNotification =
             serde_json::from_value(item_started.params.expect("params must be present"))?;
         match started.item {
-            ThreadItem::EnteredReviewMode { id, review } => {
-                assert_eq!(id, turn_id);
+            ThreadItem::EnteredReviewMode { review, .. } => {
+                assert_eq!(started.turn_id, turn_id);
                 assert_eq!(review, "commit 1234567: Tidy UI colors");
                 saw_entered_review_mode = true;
                 break;
@@ -139,8 +139,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::ExitedReviewMode { id, review } => {
-                assert_eq!(id, turn_id);
+            ThreadItem::ExitedReviewMode { review, .. } => {
+                assert_eq!(completed.turn_id, turn_id);
                 review_body = Some(review);
                 break;
             }

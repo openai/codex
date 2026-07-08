@@ -256,6 +256,8 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::Sleep(_) => "sleep",
         TurnItem::Extension(_) => "extension",
         TurnItem::ImageGeneration(_) => "image_generation",
+        TurnItem::EnteredReviewMode(_) => "entered_review_mode",
+        TurnItem::ExitedReviewMode(_) => "exited_review_mode",
         TurnItem::FileChange(_) => "file_change",
         TurnItem::McpToolCall(_) => "mcp_tool_call",
         TurnItem::ContextCompaction(_) => "context_compaction",

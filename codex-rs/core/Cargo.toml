@@ -118,7 +118,7 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4", "v5"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5", "v7"] }
 which = { workspace = true }
 whoami = { workspace = true }
 

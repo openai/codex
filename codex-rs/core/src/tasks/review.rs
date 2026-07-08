@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_prompts::render_review_exit_interrupted;
 use codex_prompts::render_review_exit_success;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -10,16 +11,15 @@ use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::review_format::format_review_findings_block;
+use codex_protocol::review_format::render_review_output_text;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
-use crate::review_format::format_review_findings_block;
-use crate::review_format::render_review_output_text;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -210,8 +210,8 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput,
-/// and records a developer message with the review output.
+/// Emits ExitedReviewMode item lifecycle with optional ReviewOutput,
+/// and records the review output back into conversation history.
 pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
@@ -253,12 +253,12 @@ pub(crate) async fn exit_review_mode(
         )
         .await;
 
-    session
-        .send_event(
-            ctx.as_ref(),
-            EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
-        )
-        .await;
+    let item = TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+        id: uuid::Uuid::now_v7().to_string(),
+        review_output,
+    });
+    session.emit_turn_item_started(ctx.as_ref(), &item).await;
+    session.emit_turn_item_completed(ctx.as_ref(), item).await;
     session
         .record_response_item_and_emit_turn_item(
             ctx.as_ref(),
