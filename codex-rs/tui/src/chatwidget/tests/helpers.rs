@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::PluginAvailability;
 use pretty_assertions::assert_eq;
 
@@ -707,13 +708,13 @@ pub(super) fn handle_image_generation_end(
             thread_id: thread_id(chat),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,
-            item: AppServerThreadItem::ImageGeneration {
+            item: AppServerThreadItem::ImageGeneration(ImageGenerationItem {
                 id: call_id.into(),
                 status: status.into(),
                 revised_prompt,
                 result: String::new(),
                 saved_path,
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );
@@ -1341,6 +1342,7 @@ pub(super) fn plugins_test_summary(
         installed,
         enabled,
         install_policy,
+        install_policy_source: None,
         auth_policy: PluginAuthPolicy::OnInstall,
         availability: PluginAvailability::Available,
         interface: Some(plugins_test_interface(
@@ -1370,6 +1372,7 @@ pub(super) fn plugins_test_remote_summary(
         installed,
         enabled: true,
         install_policy: PluginInstallPolicy::Available,
+        install_policy_source: None,
         auth_policy: PluginAuthPolicy::OnInstall,
         availability: PluginAvailability::Available,
         interface: Some(plugins_test_interface(

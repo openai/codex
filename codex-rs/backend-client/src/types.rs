@@ -1,6 +1,7 @@
 pub use codex_backend_openapi_models::models::ConfigBundleResponse;
 pub use codex_backend_openapi_models::models::CreditStatusDetails;
 pub use codex_backend_openapi_models::models::DeliveredConfigToml;
+pub use codex_backend_openapi_models::models::DeliveredManagedLayers;
 pub use codex_backend_openapi_models::models::DeliveredRequirementsToml;
 pub use codex_backend_openapi_models::models::DeliveredTomlFragment;
 pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;
@@ -21,6 +22,23 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RateLimitResetCreditsDetails {
+    pub credits: Vec<RateLimitResetCreditDetails>,
+    pub available_count: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RateLimitResetCreditDetails {
+    pub id: String,
+    pub reset_type: String,
+    pub status: String,
+    pub granted_at: String,
+    pub expires_at: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

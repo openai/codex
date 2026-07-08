@@ -8,6 +8,8 @@ use codex_apply_patch::AppliedPatchDelta;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::items::CommandExecutionItem;
+use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::FileChangeItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::parse_command::ParsedCommand;
@@ -102,19 +104,43 @@ pub(crate) async fn emit_exec_command_begin(
     interaction_input: Option<String>,
     process_id: Option<&str>,
 ) {
+    if matches!(source, ExecCommandSource::UnifiedExecInteraction) {
+        ctx.session
+            .send_event(
+                ctx.turn,
+                EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                    call_id: ctx.call_id.to_string(),
+                    process_id: process_id.map(str::to_owned),
+                    turn_id: ctx.turn.sub_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
+                    command: command.to_vec(),
+                    cwd: cwd.clone(),
+                    parsed_cmd: parsed_cmd.to_vec(),
+                    source,
+                    interaction_input,
+                }),
+            )
+            .await;
+        return;
+    }
     ctx.session
-        .send_event(
+        .emit_turn_item_started(
             ctx.turn,
-            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: ctx.call_id.to_string(),
+            &TurnItem::CommandExecution(CommandExecutionItem {
+                id: ctx.call_id.to_string(),
                 process_id: process_id.map(str::to_owned),
-                turn_id: ctx.turn.sub_id.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
                 command: command.to_vec(),
                 cwd: cwd.clone(),
                 parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
+                status: CommandExecutionStatus::InProgress,
+                stdout: None,
+                stderr: None,
+                aggregated_output: None,
+                exit_code: None,
+                duration: None,
+                formatted_output: None,
             }),
         )
         .await;
@@ -542,26 +568,50 @@ async fn emit_exec_end(
     exec_input: ExecCommandInput<'_>,
     exec_result: ExecCommandResult,
 ) {
+    if matches!(exec_input.source, ExecCommandSource::UnifiedExecInteraction) {
+        ctx.session
+            .send_event(
+                ctx.turn,
+                EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                    call_id: ctx.call_id.to_string(),
+                    process_id: exec_input.process_id.map(str::to_owned),
+                    turn_id: ctx.turn.sub_id.clone(),
+                    completed_at_ms: now_unix_timestamp_ms(),
+                    command: exec_input.command.to_vec(),
+                    cwd: exec_input.cwd.clone(),
+                    parsed_cmd: exec_input.parsed_cmd.to_vec(),
+                    source: exec_input.source,
+                    interaction_input: exec_input.interaction_input.map(str::to_owned),
+                    stdout: exec_result.stdout,
+                    stderr: exec_result.stderr,
+                    aggregated_output: exec_result.aggregated_output,
+                    exit_code: exec_result.exit_code,
+                    duration: exec_result.duration,
+                    formatted_output: exec_result.formatted_output,
+                    status: exec_result.status,
+                }),
+            )
+            .await;
+        return;
+    }
     ctx.session
-        .send_event(
+        .emit_turn_item_completed(
             ctx.turn,
-            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id: ctx.call_id.to_string(),
+            TurnItem::CommandExecution(CommandExecutionItem {
+                id: ctx.call_id.to_string(),
                 process_id: exec_input.process_id.map(str::to_owned),
-                turn_id: ctx.turn.sub_id.clone(),
-                completed_at_ms: now_unix_timestamp_ms(),
                 command: exec_input.command.to_vec(),
                 cwd: exec_input.cwd.clone(),
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
                 interaction_input: exec_input.interaction_input.map(str::to_owned),
-                stdout: exec_result.stdout,
-                stderr: exec_result.stderr,
-                aggregated_output: exec_result.aggregated_output,
-                exit_code: exec_result.exit_code,
-                duration: exec_result.duration,
-                formatted_output: exec_result.formatted_output,
-                status: exec_result.status,
+                status: exec_result.status.into(),
+                stdout: Some(exec_result.stdout),
+                stderr: Some(exec_result.stderr),
+                aggregated_output: Some(exec_result.aggregated_output),
+                exit_code: Some(exec_result.exit_code),
+                duration: Some(exec_result.duration),
+                formatted_output: Some(exec_result.formatted_output),
             }),
         )
         .await;

@@ -46,7 +46,11 @@ shell_snapshot = false
 
 async fn initialized_mcp(codex_home: &TempDir) -> Result<TestAppServer> {
     create_config_toml(codex_home.path())?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }
@@ -236,7 +240,11 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
         .to_string();
 
     // Start MCP server and initialize.
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
@@ -302,7 +310,11 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     std::fs::write(root.path().join("alpha.txt"), "contents")?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();

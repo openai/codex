@@ -27,7 +27,11 @@ async fn environment_add_applies_connect_timeout() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
     let codex_home = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(RPC_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server

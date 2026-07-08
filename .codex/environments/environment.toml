@@ -2,8 +2,9 @@
 version = 1
 name = "codex"
 
+# TODO(anp) make it optional to specify this field
 [setup]
-script = "python ./.codex/environments/setup.py"
+script = ""
 
 [[actions]]
 name = "Run"
