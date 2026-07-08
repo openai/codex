@@ -4489,6 +4489,53 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_idle_turn_does_not_retry_failed_pre_turn_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ]),
+            sse_failed(
+                "compact-overloaded",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    test.submit_turn("USER_ONE").await.expect("submit turn");
+
+    test.codex
+        .try_start_turn_if_idle(vec![responses::user_message_item("GOAL_CONTINUATION")])
+        .await
+        .expect("start automatic idle turn");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))),
+    )
+    .await
+    .expect("failed pre-turn compaction should end the automatic turn");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
     skip_if_no_network!();
 
