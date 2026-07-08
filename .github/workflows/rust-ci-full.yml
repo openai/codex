@@ -403,7 +403,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
-          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          path: ${{ env.CARGO_TARGET_DIR }}/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
       # Save caches explicitly; make non-fatal so cache packaging

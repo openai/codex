@@ -4,6 +4,12 @@ description: Prepare common tools and environment shared by CI jobs.
 runs:
   using: composite
   steps:
+    # TODO(anp): Move this under CI_BUILD_ROOT once all consumers use the
+    # shared build-path contract.
+    - name: Configure Cargo target directory
+      shell: bash
+      run: echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/codex-rs/target}" >> "$GITHUB_ENV"
+
     - name: Prefer the Git CLI for Cargo git dependencies
       shell: bash
       run: echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
