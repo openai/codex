@@ -941,6 +941,19 @@ fn normalize_string(value: &str) -> String {
     normalize_tmp_prefix_before_marker(&mut text, "/skills/");
     normalize_tmp_prefix_before_marker(&mut text, "\\skills\\");
 
+    let skills_open_tag = "<skills_instructions>";
+    let skills_close_tag = "</skills_instructions>";
+    let mut search_start = 0;
+    while let Some(relative_start) = text[search_start..].find(skills_open_tag) {
+        let body_start = search_start + relative_start + skills_open_tag.len();
+        let Some(relative_end) = text[body_start..].find(skills_close_tag) else {
+            break;
+        };
+        let body_end = body_start + relative_end;
+        text.replace_range(body_start..body_end, "\n...\n");
+        search_start = body_start + "\n...\n".len() + skills_close_tag.len();
+    }
+
     let mut search_start = 0;
     let wall_time_prefix = "Wall time: ";
     let wall_time_suffix = " seconds";
@@ -962,6 +975,19 @@ fn normalize_string(value: &str) -> String {
         }
     }
     text
+}
+
+#[test]
+fn normalize_string_rewrites_dynamic_skill_instructions() {
+    let text = normalize_string(
+        "before\n<skills_instructions>\n## Skills\n- demo: Dynamic description\n\
+         </skills_instructions>\nafter",
+    );
+
+    assert_eq!(
+        text,
+        "before\n<skills_instructions>\n...\n</skills_instructions>\nafter"
+    );
 }
 
 fn is_uuid_like(value: &str) -> bool {
