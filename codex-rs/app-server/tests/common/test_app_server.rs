@@ -192,6 +192,7 @@ impl TestAppServer {
         Ok(TurnEnvironmentParams {
             environment_id: selection.environment_id.clone(),
             cwd: selection.cwd.clone().into(),
+            runtime_workspace_roots: None,
         })
     }
 

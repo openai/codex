@@ -208,6 +208,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn turn_environment<'a>(&self, req: &'a ShellRequest) -> Option<&'a TurnEnvironment> {
+        Some(&req.turn_environment)
+    }
+
     fn network_approval_spec(
         &self,
         req: &ShellRequest,

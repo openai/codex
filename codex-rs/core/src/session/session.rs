@@ -80,9 +80,6 @@ pub(crate) struct SessionConfiguration {
     /// Sticky thread-level environment selections plus the legacy cwd used
     /// when a turn does not select an environment.
     pub(super) environments: TurnEnvironmentSelections,
-    /// Thread-scoped runtime workspace roots for materializing symbolic
-    /// workspace permissions at session runtime.
-    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -119,6 +116,21 @@ impl SessionConfiguration {
         &self.environments.environments
     }
 
+    pub(super) fn workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        self.environments
+            .environments
+            .first()
+            .and_then(|environment| {
+                environment
+                    .workspace_roots
+                    .iter()
+                    .map(PathUri::to_abs_path)
+                    .collect::<std::io::Result<Vec<_>>>()
+                    .ok()
+            })
+            .unwrap_or_else(|| vec![self.cwd().clone()])
+    }
+
     pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
         &self.codex_home
     }
@@ -131,7 +143,7 @@ impl SessionConfiguration {
         self.permission_profile_state
             .permission_profile()
             .clone()
-            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots())
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -186,7 +198,7 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             environments: self.environments.clone(),
-            workspace_roots: self.workspace_roots.clone(),
+            workspace_roots: self.workspace_roots(),
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
@@ -265,25 +277,8 @@ impl SessionConfiguration {
             .environments
             .clone()
             .unwrap_or_else(|| self.environments.clone());
-        let cwd_changed = next_environments.legacy_fallback_cwd.as_path() != current_cwd.as_path();
+        let cwd_changed = next_environments.legacy_fallback_cwd != current_cwd;
         next_configuration.environments = next_environments;
-        if let Some(workspace_roots) = updates.workspace_roots.clone() {
-            next_configuration.workspace_roots = workspace_roots;
-        } else if cwd_changed && self.workspace_roots.contains(&current_cwd) {
-            let mut retargeted_workspace_roots =
-                Vec::with_capacity(next_configuration.workspace_roots.len());
-            for root in &self.workspace_roots {
-                let root = if root == &current_cwd {
-                    next_configuration.cwd().clone()
-                } else {
-                    root.clone()
-                };
-                if !retargeted_workspace_roots.contains(&root) {
-                    retargeted_workspace_roots.push(root);
-                }
-            }
-            next_configuration.workspace_roots = retargeted_workspace_roots;
-        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -416,7 +411,6 @@ impl SessionConfiguration {
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) environments: Option<TurnEnvironmentSelections>,
-    pub(crate) workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,

@@ -13,6 +13,7 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -265,16 +266,33 @@ impl ToolOrchestrator {
             .sandbox_cwd(req)
             .cloned()
             .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
-        let workspace_roots = turn_ctx.config.effective_workspace_roots();
+        let workspace_roots = tool
+            .turn_environment(req)
+            .or_else(|| turn_ctx.environments.primary())
+            .map(TurnEnvironment::workspace_roots)
+            .unwrap_or_default();
+        let permissions = workspace_roots
+            .iter()
+            .map(PathUri::to_abs_path)
+            .collect::<std::io::Result<Vec<_>>>()
+            .map(|workspace_roots| {
+                turn_ctx
+                    .config
+                    .permissions
+                    .permission_profile()
+                    .clone()
+                    .materialize_project_roots_with_workspace_roots(&workspace_roots)
+            })
+            .unwrap_or_else(|_| turn_ctx.permission_profile.clone());
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             sandbox_requested,
-            permissions: &turn_ctx.permission_profile,
+            permissions: &permissions,
             exec_server_permissions: turn_ctx.config.permissions.permission_profile(),
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
             sandbox_cwd: &sandbox_policy_cwd,
-            workspace_roots: workspace_roots.as_slice(),
+            workspace_roots,
             codex_linux_sandbox_exe: turn_ctx.config.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -452,12 +470,12 @@ impl ToolOrchestrator {
                 let retry_attempt = SandboxAttempt {
                     sandbox: retry_sandbox,
                     sandbox_requested: retry_sandbox_requested,
-                    permissions: &turn_ctx.permission_profile,
+                    permissions: &permissions,
                     exec_server_permissions: turn_ctx.config.permissions.permission_profile(),
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd: &sandbox_policy_cwd,
-                    workspace_roots: workspace_roots.as_slice(),
+                    workspace_roots,
                     codex_linux_sandbox_exe: retry_codex_linux_sandbox_exe,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,

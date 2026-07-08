@@ -829,6 +829,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
         cwd: PathUri::from_abs_path(&selected_cwd),
+        workspace_roots: Vec::new(),
     }];
     let default_cwd = config.cwd.clone();
     let mut source_config = config.clone();

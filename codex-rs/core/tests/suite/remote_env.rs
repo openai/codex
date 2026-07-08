@@ -302,6 +302,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         Some(vec![TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
+            workspace_roots: Vec::new(),
         }]),
     )
     .await?;
@@ -1134,6 +1135,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
+        workspace_roots: Vec::new(),
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -1290,6 +1292,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: Vec::new(),
             },
         ],
         AskForApproval::OnRequest,
@@ -1431,6 +1434,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: Vec::new(),
             },
         ]),
     )
@@ -1514,6 +1518,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
+            workspace_roots: Vec::new(),
         },
     ];
     let local_patch = format!(
@@ -1715,6 +1720,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: Vec::new(),
             },
         ]),
     )

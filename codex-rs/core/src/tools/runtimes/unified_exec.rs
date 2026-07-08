@@ -255,6 +255,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn turn_environment<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b TurnEnvironment> {
+        Some(&req.turn_environment)
+    }
+
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {
         Some(&req.sandbox_cwd)
     }

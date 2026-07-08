@@ -381,6 +381,7 @@ url = "{mcp_server_url}/mcp"
                     capability_root.path().to_path_buf(),
                 )?
                 .into(),
+                runtime_workspace_roots: None,
             }]),
             selected_capability_roots: Some(vec![SelectedCapabilityRoot {
                 id: "late-plugin@1".to_string(),

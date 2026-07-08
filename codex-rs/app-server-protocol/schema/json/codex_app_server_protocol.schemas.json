@@ -20170,6 +20170,16 @@
           },
           "environmentId": {
             "type": "string"
+          },
+          "runtimeWorkspaceRoots": {
+            "description": "Environment-native runtime workspace roots. Omitted inherits the request's top-level `runtimeWorkspaceRoots` fallback.",
+            "items": {
+              "$ref": "#/definitions/v2/LegacyAppPathString"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [

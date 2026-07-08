@@ -324,7 +324,7 @@ impl MemoryStartupContext {
     ) -> anyhow::Result<SpawnedConsolidationAgent> {
         let environments = self
             .thread_manager
-            .default_environment_selections(&config.cwd);
+            .default_environment_selections(&config.cwd, &config.workspace_roots);
         let NewThread {
             thread_id, thread, ..
         } = self

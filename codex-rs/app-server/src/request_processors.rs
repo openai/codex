@@ -368,7 +368,6 @@ use codex_core_plugins::remote::RemotePluginShareContext as RemoteCatalogPluginS
 use codex_core_plugins::remote::RemotePluginShareSummary as RemoteCatalogPluginShareSummary;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -465,6 +464,7 @@ use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -564,6 +564,7 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
 fn resolve_turn_environment_selections(
     thread_manager: &ThreadManager,
     environments: Option<Vec<TurnEnvironmentParams>>,
+    fallback_workspace_roots: &[AbsolutePathBuf],
 ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
     let Some(environments) = environments else {
         return Ok(None);
@@ -580,9 +581,33 @@ fn resolve_turn_environment_selections(
                     environment.cwd
                 ))
             })?;
+        let workspace_roots = environment
+            .runtime_workspace_roots
+            .map(|roots| {
+                let mut resolved_roots = Vec::new();
+                for root in roots {
+                    let root = root.to_inferred_path_uri().ok_or_else(|| {
+                        invalid_request(format!(
+                            "invalid runtime workspace root for environment `{environment_id}`: path `{root}` does not use absolute POSIX or Windows path syntax"
+                        ))
+                    })?;
+                    if !resolved_roots.contains(&root) {
+                        resolved_roots.push(root);
+                    }
+                }
+                Ok::<_, JSONRPCErrorError>(resolved_roots)
+            })
+            .transpose()?
+            .unwrap_or_else(|| {
+                fallback_workspace_roots
+                    .iter()
+                    .map(PathUri::from_abs_path)
+                    .collect()
+            });
         selections.push(TurnEnvironmentSelection {
             environment_id,
             cwd,
+            workspace_roots,
         });
     }
     thread_manager

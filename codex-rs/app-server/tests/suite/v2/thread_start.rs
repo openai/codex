@@ -619,6 +619,7 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
                     codex_home.path().to_path_buf(),
                 )?
                 .into(),
+                runtime_workspace_roots: None,
             }]),
             ..Default::default()
         })
@@ -655,6 +656,7 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: environment_id.clone(),
                 cwd: serde_json::from_value(json!("relative"))?,
+                runtime_workspace_roots: None,
             }]),
             ..Default::default()
         })
