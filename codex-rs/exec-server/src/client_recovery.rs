@@ -135,17 +135,16 @@ impl SessionState {
                     published_closed |= self.publish_ready(&mut ordered_events);
                 }
             }
-            if closed {
-                if !ordered_events.closed_published
-                    && !matches!(
-                        ordered_events.pending.get(&target_seq),
-                        Some(ExecProcessEvent::Closed { .. })
-                    )
-                {
-                    ordered_events
-                        .insert_pending(ExecProcessEvent::Closed { seq: target_seq })
-                        .map_err(ExecServerError::Protocol)?;
-                }
+            if closed
+                && !ordered_events.closed_published
+                && !matches!(
+                    ordered_events.pending.get(&target_seq),
+                    Some(ExecProcessEvent::Closed { .. })
+                )
+            {
+                ordered_events
+                    .insert_pending(ExecProcessEvent::Closed { seq: target_seq })
+                    .map_err(ExecServerError::Protocol)?;
             }
 
             let event_count = target_seq.saturating_sub(ordered_events.last_published_seq);
