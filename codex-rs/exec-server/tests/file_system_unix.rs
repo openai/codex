@@ -273,6 +273,31 @@ async fn file_system_get_metadata_reports_symlink_targets(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_get_metadata_reports_broken_symlinks_as_missing(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let symlink_path = tmp.path().join("missing-link.txt");
+    symlink(tmp.path().join("missing.txt"), &symlink_path)?;
+
+    let error = file_system
+        .get_metadata(
+            &PathUri::from_host_native_path(&symlink_path)?,
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("broken symlink metadata should follow the missing target");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_walk_handles_directory_symlinks(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
