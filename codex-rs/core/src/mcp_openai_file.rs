@@ -19,6 +19,8 @@ use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
+const OPENAI_FILE_UPLOAD_ATTEMPTS: usize = 2;
+
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
     turn_context: &TurnContext,
@@ -149,25 +151,41 @@ async fn build_uploaded_argument_value(
             OPENAI_FILE_UPLOAD_LIMIT_BYTES,
         )));
     }
-    let contents = fs
-        .read_file_stream(&path_uri, /*sandbox*/ None)
-        .await
-        .map_err(|error| contextualize_error(error.to_string()))?;
     let file_name = resolved_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("file")
         .to_string();
     let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
-    let uploaded = upload_openai_file(
-        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        upload_auth.as_ref(),
-        file_name,
-        metadata.size,
-        contents,
-    )
-    .await
-    .map_err(|error| contextualize_error(error.to_string()))?;
+    let mut attempt = 0;
+    let uploaded = loop {
+        attempt += 1;
+        let contents = fs
+            .read_file_stream(&path_uri, /*sandbox*/ None)
+            .await
+            .map_err(|error| contextualize_error(error.to_string()))?;
+        match upload_openai_file(
+            turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+            upload_auth.as_ref(),
+            file_name.clone(),
+            metadata.size,
+            contents,
+        )
+        .await
+        {
+            Ok(uploaded) => break uploaded,
+            Err(error)
+                if attempt < OPENAI_FILE_UPLOAD_ATTEMPTS && error.is_retryable_upload_failure() =>
+            {
+                tracing::warn!(
+                    attempt,
+                    error = %error,
+                    "retrying OpenAI file upload with a fresh URL"
+                );
+            }
+            Err(error) => return Err(contextualize_error(error.to_string())),
+        }
+    };
     Ok(serde_json::json!({
         "download_url": uploaded.download_url,
         "file_id": uploaded.file_id,
@@ -304,6 +322,82 @@ mod tests {
                 "file_size_bytes": 5,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_argument_value_retries_upload_with_fresh_url() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::Request;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        let create_attempts = Arc::new(AtomicUsize::new(0));
+        let responder_attempts = Arc::clone(&create_attempts);
+        let server_uri = server.uri();
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .respond_with(move |_request: &Request| {
+                if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "file_id": "file_1",
+                        "upload_url": "http://127.0.0.1:1/upload/file_1?sig=secret",
+                    }));
+                }
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "file_id": "file_2",
+                    "upload_url": format!("{server_uri}/upload/file_2"),
+                }))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_2"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_2/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_2", server.uri()),
+                "file_name": "file_report.csv",
+                "mime_type": "text/csv",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        tokio::fs::write(dir.path().join("file_report.csv"), b"hello")
+            .await
+            .expect("write local file");
+        set_primary_environment_cwd(&mut turn_context, dir.path());
+
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+        turn_context.config = Arc::new(config);
+
+        let rewritten = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "file_report.csv",
+        )
+        .await
+        .expect("second upload attempt should succeed");
+
+        assert_eq!(rewritten["file_id"], "file_2");
+        assert_eq!(create_attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
