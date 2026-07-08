@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use codex_extension_api::ExtensionData;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::TokenUsage;
@@ -76,9 +78,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         error: CodexErrorInfo,
-    ) {
+    ) -> Option<Duration> {
+        let mut retry_delay: Option<Duration> = None;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
-            contributor
+            retry_delay = retry_delay.or(contributor
                 .on_turn_error(codex_extension_api::TurnErrorInput {
                     turn_id: turn_context.sub_id.as_str(),
                     error: error.clone(),
@@ -86,7 +89,8 @@ impl Session {
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
                 })
-                .await;
+                .await);
         }
+        retry_delay
     }
 }

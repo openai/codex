@@ -153,15 +153,18 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+    while let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
         if matches!(err, CodexErr::TurnAborted) {
             return Err(err);
         }
-        let error = err.to_codex_protocol_error();
-        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+        let retry_delay = sess
+            .emit_turn_error_lifecycle(turn_context.as_ref(), err.to_codex_protocol_error())
             .await;
         error!("Failed to run pre-sampling compact");
-        return Ok(None);
+        let Some(delay) = retry_delay else {
+            return Ok(None);
+        };
+        tokio::time::sleep(delay).await;
     }
 
     // run_turn owns the step used to seed context and make the first sampling request.
@@ -186,7 +189,9 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return Ok(None);
     }
-    let mut can_drain_pending_input = input.is_empty();
+    let mut can_drain_pending_input = !input
+        .iter()
+        .any(|item| matches!(item, TurnInput::UserInput { .. }));
     if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
         return Ok(None);
     }
@@ -218,7 +223,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
-    // 1. At the start of a turn, so the fresh turn input in `input` gets sampled first.
+    // 1. At the start of a user turn, so the submitted user input gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     let mut next_step_context = Some(first_step_context);
@@ -361,7 +366,7 @@ pub(crate) async fn run_turn(
                             return Err(err);
                         }
                         let error = err.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
                             .await;
                         return Ok(None);
                     }
@@ -445,11 +450,18 @@ pub(crate) async fn run_turn(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
-                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                let retry_delay = sess
+                    .emit_turn_error_lifecycle(turn_context.as_ref(), error)
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
+                if let Some(delay) = retry_delay {
+                    // Keep this turn alive so its recorded input is not appended again.
+                    tokio::time::sleep(delay).await;
+                    can_drain_pending_input = true;
+                    continue;
+                }
                 // let the user continue the conversation
                 break;
             }

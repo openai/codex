@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
@@ -44,6 +45,10 @@ use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
+
+// Capacity failures do not consume user tokens, but retrying immediately can
+// create a tight loop. Keep the retry cadence deliberately low.
+const DEFERRED_GOAL_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -296,23 +301,21 @@ where
         })
     }
 
-    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+    fn on_turn_error<'a>(
+        &'a self,
+        input: TurnErrorInput<'a>,
+    ) -> ExtensionFuture<'a, Option<Duration>> {
         Box::pin(async move {
-            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
-                return;
-            };
+            let runtime = goal_runtime_handle(input.thread_store)?;
 
+            if input.error == CodexErrorInfo::ServerOverloaded
+                && runtime
+                    .accounting_state()
+                    .turn_is_current_active_goal(input.turn_id)
+            {
+                return Some(DEFERRED_GOAL_RETRY_DELAY);
+            }
             let reason = match input.error {
-                // Capacity retries do not consume the user's token budget, so
-                // leave the goal active for a delayed idle continuation.
-                CodexErrorInfo::ServerOverloaded
-                    if runtime
-                        .accounting_state()
-                        .turn_is_current_active_goal(input.turn_id) =>
-                {
-                    runtime.defer_retry();
-                    return;
-                }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic
@@ -329,6 +332,7 @@ where
                     "failed to stop active goal after turn error: {err}"
                 );
             }
+            None
         })
     }
 }

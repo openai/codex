@@ -576,7 +576,7 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
 #[tokio::test]
 async fn turn_error_blocks_goal() -> anyhow::Result<()> {
     assert_eq!(
-        codex_state::ThreadGoalStatus::Blocked,
+        (codex_state::ThreadGoalStatus::Blocked, false),
         goal_status_after_turn_error(CodexErrorInfo::Other).await?
     );
     Ok(())
@@ -585,7 +585,7 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
 #[tokio::test]
 async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
     assert_eq!(
-        codex_state::ThreadGoalStatus::Active,
+        (codex_state::ThreadGoalStatus::Active, true),
         goal_status_after_turn_error(CodexErrorInfo::ServerOverloaded).await?
     );
     Ok(())
@@ -593,7 +593,7 @@ async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
 
 async fn goal_status_after_turn_error(
     error: CodexErrorInfo,
-) -> anyhow::Result<codex_state::ThreadGoalStatus> {
+) -> anyhow::Result<(codex_state::ThreadGoalStatus, bool)> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -609,14 +609,14 @@ async fn goal_status_after_turn_error(
         ))
         .await?;
 
-    harness.notify_turn_error("turn-1", error).await;
+    let retry_delay = harness.notify_turn_error("turn-1", error).await;
 
     let goal = runtime
         .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-    Ok(goal.status)
+    Ok((goal.status, retry_delay.is_some()))
 }
 
 #[tokio::test]
@@ -1321,10 +1321,15 @@ impl GoalExtensionHarness {
         }
     }
 
-    async fn notify_turn_error(&self, turn_id: &str, error: CodexErrorInfo) {
+    async fn notify_turn_error(
+        &self,
+        turn_id: &str,
+        error: CodexErrorInfo,
+    ) -> Option<std::time::Duration> {
         let turn_store = ExtensionData::new(turn_id);
+        let mut retry_delay = None;
         for contributor in self.registry.turn_lifecycle_contributors() {
-            contributor
+            retry_delay = contributor
                 .on_turn_error(TurnErrorInput {
                     turn_id,
                     error: error.clone(),
@@ -1334,6 +1339,7 @@ impl GoalExtensionHarness {
                 })
                 .await;
         }
+        retry_delay
     }
 
     fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {

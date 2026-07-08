@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use codex_core::CodexThread;
 use codex_core::config::CurrentTimeReminderConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::TurnLifecycleContributor;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::SleepItem;
@@ -27,6 +29,7 @@ use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_response_created;
+use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -39,6 +42,17 @@ use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
+
+struct RetryTurnErrors;
+
+impl TurnLifecycleContributor for RetryTurnErrors {
+    fn on_turn_error<'a>(
+        &'a self,
+        _input: codex_extension_api::TurnErrorInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Option<std::time::Duration>> {
+        Box::pin(async { Some(std::time::Duration::ZERO) })
+    }
+}
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -284,6 +298,57 @@ async fn wait_for_sleep_item_completed(codex: &CodexThread, call_id: &str, durat
             id: call_id.to_string(),
             duration_ms,
         }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
+    skip_if_no_network!();
+
+    const CONTINUATION: &str = "GOAL_CONTINUATION";
+    const MAIL: &str = "CHILD_UPDATE";
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_failed(
+                "overloaded",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+            responses::sse_completed("response-2"),
+        ],
+    )
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(Arc::new(RetryTurnErrors));
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| config.model_provider.stream_max_retries = Some(0))
+        .build(&server)
+        .await
+        .expect("build Codex test session");
+
+    submit_queue_only_agent_mail(&test.codex, MAIL).await;
+    test.codex
+        .try_start_turn_if_idle(vec![responses::user_message_item(CONTINUATION)])
+        .await
+        .expect("start automatic turn");
+    wait_for_turn_complete(&test.codex).await;
+
+    let requests = response_mock.requests();
+    let [first, second] = requests.as_slice() else {
+        panic!("expected two requests, got {}", requests.len());
+    };
+    assert_eq!(1, first.inputs_of_type("agent_message").len());
+    assert!(first.body_contains_text(MAIL));
+    assert_eq!(
+        1,
+        second
+            .message_input_texts("user")
+            .iter()
+            .filter(|text| text.as_str() == CONTINUATION)
+            .count()
     );
 }
 
