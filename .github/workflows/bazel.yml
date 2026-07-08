@@ -152,15 +152,40 @@ jobs:
       deployment: false
 
     steps:
+      - name: Start Windows I/O trace
+        shell: pwsh
+        run: |
+          $traceRoot = Join-Path $env:RUNNER_TEMP "codex-io-trace"
+          New-Item -ItemType Directory -Force -Path $traceRoot | Out-Null
+          $null = & wpr -cancel 2>&1
+          & wpr -start FileIO -start DiskIO -filemode -recordtempto $traceRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to start Windows I/O trace"
+          }
+          & wpr -marker "step:start:checkout"
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to mark checkout start"
+          }
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Mark checkout end and wrapper test start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From checkout -To test-buildbuddy-wrapper
+
       - name: Test BuildBuddy Bazel wrapper
         if: matrix.shard == 1
         shell: pwsh
         run: python .github/scripts/test_run_bazel_with_buildbuddy.py
+
+      - name: Mark wrapper test end and Bazel setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From test-buildbuddy-wrapper -To prepare-bazel-ci
 
       - name: Prepare Bazel CI
         id: prepare_bazel
@@ -171,6 +196,11 @@ jobs:
           # not save it from every shard below; duplicate uploads would sit on
           # the PR-blocking critical path after the useful test work is done.
           cache-scope: bazel-test
+
+      - name: Mark Bazel setup end and test shard start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From prepare-bazel-ci -To bazel-test-shard
 
       - name: bazel test shard
         env:
@@ -211,6 +241,10 @@ jobs:
             --skip_incompatible_explicit_targets
             --test_tag_filters=-argument-comment-lint
             --test_verbose_timeout_warnings
+            "--action_env=CODEX_IO_TRACE_CACHE_BUST=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BAZEL_TEST_SHARD}"
+            "--host_action_env=CODEX_IO_TRACE_CACHE_BUST=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BAZEL_TEST_SHARD}"
+            "--test_env=CODEX_IO_TRACE_CACHE_BUST=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BAZEL_TEST_SHARD}"
+            --nocache_test_results
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
           )
@@ -225,6 +259,11 @@ jobs:
             -- \
             "${selected_targets[@]}"
 
+      - name: Mark test shard end and execution-log upload start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From bazel-test-shard -To upload-bazel-execution-logs
+
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
@@ -234,9 +273,28 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
+      - name: Mark execution-log upload end and clean-worktree check start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From upload-bazel-execution-logs -To check-clean-worktree
+
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+      - name: Stop Windows I/O trace
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action stop -Label check-clean-worktree
+
+      - name: Upload Windows I/O trace
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-io-bazel-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/codex-io-trace
+          if-no-files-found: error
 
   test-windows:
     # Preserve the existing required-check surface while the real work happens

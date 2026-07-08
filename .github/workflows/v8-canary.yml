@@ -320,13 +320,43 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     steps:
+      - name: Start Windows I/O trace
+        shell: pwsh
+        run: |
+          $traceRoot = Join-Path $env:RUNNER_TEMP "codex-io-trace"
+          New-Item -ItemType Directory -Force -Path $traceRoot | Out-Null
+          $null = & wpr -cancel 2>&1
+          & wpr -start FileIO -start DiskIO -filemode -recordtempto $traceRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to start Windows I/O trace"
+          }
+          & wpr -marker "step:start:checkout-codex"
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to mark Codex checkout start"
+          }
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: Mark Codex checkout end and CI setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From checkout-codex -To setup-ci
+
       - uses: ./.github/actions/setup-ci
+
+      - name: Mark CI setup end and git configuration start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-ci -To configure-git
 
       - name: Configure git for upstream checkout
         shell: bash
         run: git config --global core.symlinks true
+
+      - name: Mark git configuration end and upstream checkout start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From configure-git -To checkout-upstream
 
       - name: Check out upstream rusty_v8
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -336,17 +366,32 @@ jobs:
           path: upstream-rusty-v8
           submodules: recursive
 
+      - name: Mark upstream checkout end and Python setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From checkout-upstream -To setup-python
+
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.11"
           architecture: x64
 
+      - name: Mark Python setup end and Codex Rust setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-python -To setup-codex-rust
+
       - name: Set up Codex Rust toolchain for Cargo smoke
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           toolchain: "1.95.0"
           targets: ${{ matrix.target }}
+
+      - name: Mark Codex Rust setup end and rusty_v8 Rust setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-codex-rust -To setup-rusty-v8-rust
 
       - name: Install rusty_v8 Rust toolchain
         env:
@@ -357,20 +402,33 @@ jobs:
           rustup toolchain install 1.91.0 --profile minimal --no-self-update
           rustup target add --toolchain 1.91.0 "${TARGET}"
 
+      - name: Mark rusty_v8 Rust setup end and submodule-status write start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-rusty-v8-rust -To write-submodule-status
+
       - name: Write upstream submodule status
         shell: bash
         working-directory: upstream-rusty-v8
         run: git submodule status --recursive > git_submodule_status.txt
 
+      - name: Mark submodule-status write end and source-cache restore start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From write-submodule-status -To restore-source-cache
+
       - name: Restore upstream source-build cache
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
             ${{ env.CARGO_TARGET_DIR }}/sccache
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/gn_out
-          key: rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
-          restore-keys: |
-            rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-
+          key: rusty-v8-source-io-trace-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Mark source-cache restore end and sccache setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From restore-source-cache -To setup-sccache
 
       - name: Install and start sccache
         shell: pwsh
@@ -389,11 +447,34 @@ jobs:
           . $basename/sccache --start-server
           echo "$(pwd)/$basename" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Mark sccache setup end and Chromium clang setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-sccache -To setup-chromium-clang
+
       - name: Install Chromium clang for ARM64 MSVC cross build
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: bash
         working-directory: upstream-rusty-v8
         run: python3 tools/clang/scripts/update.py
+
+      - name: Mark Chromium clang setup end and cold-graph setup start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From setup-chromium-clang -To force-cold-source-graph
+
+      - name: Force cold source-build graph
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:CARGO_TARGET_DIR "sccache")
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:CARGO_TARGET_DIR "$env:TARGET/release/gn_out")
+
+      - name: Mark cold-graph setup end and upstream build start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From force-cold-source-graph -To build-upstream-rusty-v8
 
       - name: Build upstream rusty_v8 sandbox release pair
         env:
@@ -403,6 +484,11 @@ jobs:
         shell: bash
         working-directory: upstream-rusty-v8
         run: cargo +1.91.0 build --locked --release --target "${TARGET}" --features v8_enable_sandbox
+
+      - name: Mark upstream build end and staging start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From build-upstream-rusty-v8 -To stage-upstream-pair
 
       - name: Stage upstream sandbox release pair
         env:
@@ -415,6 +501,11 @@ jobs:
             --target "${TARGET}" \
             --output-dir "dist/${TARGET}" \
             --sandbox
+
+      - name: Mark staging end and Cargo smoke link start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From stage-upstream-pair -To smoke-link-cargo
 
       - name: Smoke link staged artifact with Cargo
         env:
@@ -437,12 +528,36 @@ jobs:
             cargo +1.95.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
           )
 
+      - name: Mark Cargo smoke link end and staged-artifact upload start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From smoke-link-cargo -To upload-staged-artifacts
+
       - name: Upload staged artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: v8-canary-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
 
+      - name: Mark staged-artifact upload end and clean-worktree check start
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action transition -From upload-staged-artifacts -To check-clean-worktree
+
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+      - name: Stop Windows I/O trace
+        if: always() && !cancelled()
+        shell: pwsh
+        run: ./.github/scripts/windows-io-trace.ps1 -Action stop -Label check-clean-worktree
+
+      - name: Upload Windows I/O trace
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: windows-io-v8-source-${{ matrix.target }}
+          path: ${{ runner.temp }}/codex-io-trace
+          if-no-files-found: error
