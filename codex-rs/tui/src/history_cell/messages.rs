@@ -227,6 +227,24 @@ impl ReasoningSummaryCell {
     /// Create a reasoning summary cell that will render local file links relative to the session
     /// cwd active when the summary was recorded.
     pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
+        // Empty reasoning-summary parts can arrive as an HTML comment. Remove that placeholder;
+        // when no prose remains, suppress orphaned status headers instead of rendering them as
+        // transcript content.
+        let content = if content.contains("<!-- -->") {
+            let content = content.replace("<!-- -->", "");
+            let contains_only_headers = content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .all(|line| line.len() > 4 && line.starts_with("**") && line.ends_with("**"));
+            if contains_only_headers {
+                String::new()
+            } else {
+                content
+            }
+        } else {
+            content
+        };
         Self {
             _header: header,
             content,

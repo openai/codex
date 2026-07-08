@@ -2373,6 +2373,21 @@ fn reasoning_summary_block_splits_header_and_summary_when_present() {
 }
 
 #[test]
+fn reasoning_summary_block_hides_empty_html_comment_parts() {
+    let cell = new_reasoning_summary_block(
+        "**Checking the first thing**\n\n<!-- -->\n\n**Checking the second thing**\n\n<!-- -->"
+            .to_string(),
+        &test_cwd(),
+    );
+
+    let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+    insta::assert_snapshot!(rendered_display.join("\n"), @"");
+
+    let rendered_transcript = render_transcript(cell.as_ref());
+    assert_eq!(rendered_transcript, Vec::<String>::new());
+}
+
+#[test]
 fn deprecation_notice_renders_summary_with_details() {
     let cell = new_deprecation_notice(
         "Feature flag `foo`".to_string(),
