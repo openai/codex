@@ -122,8 +122,9 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Applies a literal metadata patch and returns the updated thread.
     ///
-    /// Implementations should apply the supplied fields directly. Policy such as deciding whether
-    /// an append-derived preview should be emitted belongs above the store.
+    /// Implementations should apply the supplied fields directly. Metadata derived from appended
+    /// history is implementation-owned and does not flow through this method from
+    /// [`crate::LiveThread`].
     fn update_thread_metadata(
         &self,
         params: UpdateThreadMetadataParams,

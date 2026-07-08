@@ -38,6 +38,8 @@ use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::error::reject_paginated_history_mode;
+use crate::thread_metadata_sync::PendingThreadMetadataPatch;
+use crate::thread_metadata_sync::ThreadMetadataSync;
 use crate::types::canonical_history_mode_from_rollout_items;
 
 static IN_MEMORY_THREAD_STORES: OnceLock<Mutex<HashMap<String, Arc<InMemoryThreadStore>>>> =
@@ -393,9 +395,45 @@ struct InMemoryThreadStoreState {
     calls: InMemoryThreadStoreCalls,
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
+    metadata_syncs: HashMap<ThreadId, ThreadMetadataSync>,
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
+}
+
+impl InMemoryThreadStoreState {
+    fn apply_pending_metadata_update(
+        &mut self,
+        thread_id: ThreadId,
+        update: Option<PendingThreadMetadataPatch>,
+    ) {
+        let Some(update) = update else {
+            return;
+        };
+        self.metadata_updates
+            .entry(thread_id)
+            .or_default()
+            .merge(update.patch.clone());
+        if let Some(metadata_sync) = self.metadata_syncs.get_mut(&thread_id) {
+            metadata_sync.mark_pending_update_applied(&update);
+        }
+    }
+
+    fn flush_pending_metadata_update(&mut self, thread_id: ThreadId) {
+        let update = self
+            .metadata_syncs
+            .get(&thread_id)
+            .and_then(ThreadMetadataSync::take_pending_update);
+        self.apply_pending_metadata_update(thread_id, update);
+    }
+
+    fn flush_pending_metadata_update_for_existing_history(&mut self, thread_id: ThreadId) {
+        let update = self
+            .metadata_syncs
+            .get(&thread_id)
+            .and_then(ThreadMetadataSync::take_pending_update_for_existing_history);
+        self.apply_pending_metadata_update(thread_id, update);
+    }
 }
 
 impl InMemoryThreadStore {
@@ -421,6 +459,7 @@ impl InMemoryThreadStore {
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
         reject_paginated_history_mode(params.history_mode)?;
+        let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
         let session_meta = SessionMeta {
@@ -454,30 +493,36 @@ impl InMemoryThreadStore {
                 meta: session_meta,
                 git: None,
             }));
-        state.created_threads.insert(params.thread_id, params);
+        let thread_id = params.thread_id;
+        state.created_threads.insert(thread_id, params);
+        state.metadata_syncs.insert(thread_id, metadata_sync);
         Ok(())
     }
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
+        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
+        let thread_id = params.thread_id;
         let history_mode = params
             .history
             .as_deref()
             .map(Vec::as_slice)
             .map(canonical_history_mode_from_rollout_items)
-            .unwrap_or_else(|| history_mode_from_state(&state, params.thread_id));
+            .unwrap_or_else(|| history_mode_from_state(&state, thread_id));
         reject_paginated_history_mode(history_mode)?;
         if let Some(history) = params.history {
             state
                 .histories
-                .insert(params.thread_id, Arc::unwrap_or_clone(history));
+                .insert(thread_id, Arc::unwrap_or_clone(history));
         } else {
-            state.histories.entry(params.thread_id).or_default();
+            let history = state.histories.entry(thread_id).or_default();
+            metadata_sync.record_resume_history(history);
         }
         if let Some(rollout_path) = params.rollout_path {
-            state.rollout_paths.insert(rollout_path, params.thread_id);
+            state.rollout_paths.insert(rollout_path, thread_id);
         }
+        state.metadata_syncs.insert(thread_id, metadata_sync);
         Ok(())
     }
 
@@ -488,11 +533,16 @@ impl InMemoryThreadStore {
         }
         let mut state = self.state.lock().await;
         state.calls.append_items += 1;
+        let update = state
+            .metadata_syncs
+            .get_mut(&params.thread_id)
+            .and_then(|metadata_sync| metadata_sync.observe_appended_items(&canonical_items));
         state
             .histories
             .entry(params.thread_id)
             .or_default()
             .extend(canonical_items);
+        state.apply_pending_metadata_update(params.thread_id, update);
         Ok(())
     }
 
@@ -572,6 +622,7 @@ impl InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.update_thread_metadata += 1;
+        state.flush_pending_metadata_update(params.thread_id);
         if let Some(name) = params.patch.name.clone() {
             state.names.insert(params.thread_id, name);
         }
@@ -588,6 +639,7 @@ impl InMemoryThreadStore {
         state.calls.delete_thread += 1;
         let existed = state.histories.remove(&params.thread_id).is_some();
         state.created_threads.remove(&params.thread_id);
+        state.metadata_syncs.remove(&params.thread_id);
         state.names.remove(&params.thread_id);
         state.metadata_updates.remove(&params.thread_id);
         state
@@ -620,30 +672,39 @@ impl ThreadStore for InMemoryThreadStore {
         Box::pin(InMemoryThreadStore::append_items(self, params))
     }
 
-    fn persist_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+    fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
-            self.state.lock().await.calls.persist_thread += 1;
+            let mut state = self.state.lock().await;
+            state.calls.persist_thread += 1;
+            state.flush_pending_metadata_update(thread_id);
             Ok(())
         })
     }
 
-    fn flush_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+    fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
-            self.state.lock().await.calls.flush_thread += 1;
+            let mut state = self.state.lock().await;
+            state.calls.flush_thread += 1;
+            state.flush_pending_metadata_update_for_existing_history(thread_id);
             Ok(())
         })
     }
 
-    fn shutdown_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
-            self.state.lock().await.calls.shutdown_thread += 1;
+            let mut state = self.state.lock().await;
+            state.calls.shutdown_thread += 1;
+            state.flush_pending_metadata_update_for_existing_history(thread_id);
+            state.metadata_syncs.remove(&thread_id);
             Ok(())
         })
     }
 
-    fn discard_thread(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
-            self.state.lock().await.calls.discard_thread += 1;
+            let mut state = self.state.lock().await;
+            state.calls.discard_thread += 1;
+            state.metadata_syncs.remove(&thread_id);
             Ok(())
         })
     }

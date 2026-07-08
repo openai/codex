@@ -83,7 +83,7 @@ pub(super) async fn update_thread_metadata(
     }
 
     if live_writer::rollout_path(store, thread_id).await.is_ok() {
-        live_writer::persist_thread(store, thread_id).await?;
+        live_writer::persist_history(store, thread_id).await?;
     }
     let mut resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;

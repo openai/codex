@@ -6,8 +6,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutPersistenceTelemetry;
 use codex_rollout::measure_and_filter_rollout_items;
-use codex_rollout::persisted_rollout_items;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::AppendThreadItemsParams;
@@ -22,7 +20,6 @@ use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
-use crate::thread_metadata_sync::ThreadMetadataSync;
 
 /// Handle for an active thread's persistence lifecycle.
 ///
@@ -33,7 +30,6 @@ use crate::thread_metadata_sync::ThreadMetadataSync;
 pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
-    metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
     persistence_telemetry: RolloutPersistenceTelemetry,
 }
 
@@ -92,12 +88,10 @@ impl LiveThread {
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,
             thread_store,
-            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
@@ -107,33 +101,10 @@ impl LiveThread {
         params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let should_load_history = params.history.is_none();
-        let include_archived = params.include_archived;
-        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
         thread_store.resume_thread(params).await?;
-        if should_load_history {
-            match thread_store
-                .load_history(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived,
-                })
-                .await
-            {
-                Ok(history) => metadata_sync.record_resume_history(&history.items),
-                Err(err) => {
-                    if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
-                        warn!(
-                            "failed to discard thread persistence after resume history load failed: {discard_err}"
-                        );
-                    }
-                    return Err(err);
-                }
-            }
-        }
         Ok(Self {
             thread_id,
             thread_store,
-            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
@@ -148,11 +119,10 @@ impl LiveThread {
         if items.is_empty() {
             return Ok(());
         }
-        let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
-            let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
-            (canonical_items, Some(measurement))
+        let measurement = if self.persistence_telemetry.is_enabled() {
+            Some(measure_and_filter_rollout_items(items).1)
         } else {
-            (persisted_rollout_items(items), None)
+            None
         };
         self.thread_store
             .append_items(AppendThreadItemsParams {
@@ -163,44 +133,18 @@ impl LiveThread {
         if let Some(measurement) = measurement.as_ref() {
             self.persistence_telemetry.record_batch(items, measurement);
         }
-        if canonical_items.is_empty() {
-            return Ok(());
-        }
-        let update = self
-            .metadata_sync
-            .lock()
-            .await
-            .observe_appended_items(canonical_items.as_slice());
-        if let Some(update) = update {
-            self.thread_store
-                .update_thread_metadata(UpdateThreadMetadataParams {
-                    thread_id: self.thread_id,
-                    patch: update.patch.clone(),
-                    include_archived: true,
-                })
-                .await?;
-            self.metadata_sync
-                .lock()
-                .await
-                .mark_pending_update_applied(&update);
-        }
         Ok(())
     }
 
     pub async fn persist(&self) -> ThreadStoreResult<()> {
-        self.thread_store.persist_thread(self.thread_id).await?;
-        self.flush_pending_metadata_update().await
+        self.thread_store.persist_thread(self.thread_id).await
     }
 
     pub async fn flush(&self) -> ThreadStoreResult<()> {
-        self.thread_store.flush_thread(self.thread_id).await?;
-        self.flush_pending_metadata_update_for_existing_history()
-            .await
+        self.thread_store.flush_thread(self.thread_id).await
     }
 
     pub async fn shutdown(&self) -> ThreadStoreResult<()> {
-        self.flush_pending_metadata_update_for_existing_history()
-            .await?;
         self.thread_store.shutdown_thread(self.thread_id).await
     }
 
@@ -239,7 +183,6 @@ impl LiveThread {
         mode: ThreadMemoryMode,
         include_archived: bool,
     ) -> ThreadStoreResult<()> {
-        self.flush_pending_metadata_update().await?;
         self.thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
@@ -258,7 +201,6 @@ impl LiveThread {
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
-        self.flush_pending_metadata_update().await?;
         self.thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
@@ -283,40 +225,5 @@ impl LiveThread {
             .live_rollout_path(self.thread_id)
             .await
             .map(Some)
-    }
-
-    async fn flush_pending_metadata_update(&self) -> ThreadStoreResult<()> {
-        let update = self.metadata_sync.lock().await.take_pending_update();
-        self.apply_pending_metadata_update(update).await
-    }
-
-    async fn flush_pending_metadata_update_for_existing_history(&self) -> ThreadStoreResult<()> {
-        let update = self
-            .metadata_sync
-            .lock()
-            .await
-            .take_pending_update_for_existing_history();
-        self.apply_pending_metadata_update(update).await
-    }
-
-    async fn apply_pending_metadata_update(
-        &self,
-        update: Option<crate::thread_metadata_sync::PendingThreadMetadataPatch>,
-    ) -> ThreadStoreResult<()> {
-        let Some(update) = update else {
-            return Ok(());
-        };
-        self.thread_store
-            .update_thread_metadata(UpdateThreadMetadataParams {
-                thread_id: self.thread_id,
-                patch: update.patch.clone(),
-                include_archived: true,
-            })
-            .await?;
-        self.metadata_sync
-            .lock()
-            .await
-            .mark_pending_update_applied(&update);
-        Ok(())
     }
 }

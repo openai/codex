@@ -714,7 +714,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
     let thread = &data[0];
     assert_eq!(thread.id, thread_id.to_string());
     assert_eq!(thread.path, None);
-    assert_eq!(thread.preview, "");
+    assert_eq!(thread.preview, "history from store");
     assert_eq!(thread.name.as_deref(), Some("named pathless thread"));
 
     client.shutdown().await?;

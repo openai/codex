@@ -32,6 +32,8 @@ use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -143,8 +145,27 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
+    assert_eq!(data[0].preview, "Hello");
+    assert_eq!(data[0].model_provider, "mock_provider");
 
-    delete_thread(&client, /*request_id*/ 4, thread.id.clone()).await?;
+    let response = client
+        .request(ClientRequest::ThreadRead {
+            request_id: RequestId::Integer(4),
+            params: ThreadReadParams {
+                thread_id: thread.id.clone(),
+                include_turns: false,
+            },
+        })
+        .await?
+        .expect("thread/read should succeed");
+    let ThreadReadResponse {
+        thread: read_thread,
+    } = serde_json::from_value(response).expect("thread/read response should parse");
+    assert_eq!(read_thread.preview, "Hello");
+    assert_eq!(read_thread.model_provider, "mock_provider");
+    assert_eq!(read_thread.path, None);
+
+    delete_thread(&client, /*request_id*/ 5, thread.id.clone()).await?;
     let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
     thread_store
         .create_thread(StoreCreateThreadParams {
@@ -171,7 +192,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
         .await?;
     delete_thread(
         &client,
-        /*request_id*/ 5,
+        /*request_id*/ 6,
         unloaded_thread_id.to_string(),
     )
     .await?;
