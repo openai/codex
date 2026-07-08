@@ -160,6 +160,7 @@ pub async fn load_environment_skills_from_root(
                 max_directories: MAX_SKILLS_DIRS_PER_ROOT,
                 max_entries: MAX_SKILLS_ENTRIES_PER_ROOT,
                 follow_directory_symlinks: true,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
