@@ -35,4 +35,14 @@ impl StepContext {
             loaded_agents_md,
         }
     }
+
+    pub(crate) fn with_turn(&self, turn: Arc<TurnContext>) -> Self {
+        Self {
+            turn,
+            environments: self.environments.clone(),
+            selected_capability_roots: self.selected_capability_roots.clone(),
+            mcp: Arc::clone(&self.mcp),
+            loaded_agents_md: self.loaded_agents_md.clone(),
+        }
+    }
 }

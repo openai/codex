@@ -289,6 +289,7 @@ pub(crate) async fn run_turn(
                 &mut client_session,
                 &responses_metadata,
                 sampling_request_input,
+                SamplingRequestOptions::default(),
                 cancellation_token.child_token(),
             )
             .await
@@ -967,6 +968,7 @@ async fn run_auto_compact(
         crate::compact_token_budget::run_inline_auto_compact_task(
             Arc::clone(sess),
             step_context,
+            client_session,
             initial_context_injection,
         )
         .await?;
@@ -1005,7 +1007,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             step_context,
             fallback_step_context,
-            client_session.turn_state(),
+            client_session,
             initial_context_injection,
             reason,
             phase,
@@ -1019,7 +1021,8 @@ async fn run_auto_compact(
         );
         run_inline_auto_compact_task(
             Arc::clone(sess),
-            Arc::clone(turn_context),
+            step_context,
+            client_session,
             initial_context_injection,
             reason,
             phase,
@@ -1109,7 +1112,7 @@ pub(crate) fn build_prompt(
         cwd = %step_context.turn.cwd.display()
     )
 )]
-async fn run_sampling_request(
+pub(crate) async fn run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
@@ -1117,6 +1120,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
+    options: SamplingRequestOptions,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1130,11 +1134,15 @@ async fn run_sampling_request(
         Arc::clone(&step_context),
         Arc::clone(&turn_diff_tracker),
     );
+    let tool_runtime = if options.auto_compact_fallback {
+        tool_runtime.with_auto_compact_fallback_policy()
+    } else {
+        tool_runtime
+    };
     let _code_mode_worker = sess.services.code_mode_service.start_turn_worker(
         &sess,
         Arc::clone(&step_context),
-        Arc::clone(&router),
-        Arc::clone(&turn_diff_tracker),
+        tool_runtime.for_code_mode_nested_dispatch(),
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
@@ -1148,12 +1156,27 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        let prompt = build_prompt(
+        let mut prompt = build_prompt(
             prompt_input,
             router.as_ref(),
             turn_context.as_ref(),
             base_instructions.clone(),
         );
+        if let Some(parallel_tool_calls) = options.parallel_tool_calls {
+            prompt.parallel_tool_calls = parallel_tool_calls;
+        }
+        if options.auto_compact_fallback {
+            // Hosted tools execute server-side before core can enforce the one-call budget. Keep
+            // the fallback surface to client-dispatched tools whose admission we control.
+            prompt.tools.retain(|tool| match tool {
+                codex_tools::ToolSpec::Function(_)
+                | codex_tools::ToolSpec::Namespace(_)
+                | codex_tools::ToolSpec::Freeform(_) => true,
+                codex_tools::ToolSpec::ToolSearch { execution, .. } => execution == "client",
+                codex_tools::ToolSpec::ImageGeneration { .. }
+                | codex_tools::ToolSpec::WebSearch { .. } => false,
+            });
+        }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -1350,9 +1373,24 @@ pub(crate) async fn built_tools(
 }
 
 #[derive(Debug)]
-struct SamplingRequestResult {
+pub(crate) struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SamplingRequestOptions {
+    pub(crate) parallel_tool_calls: Option<bool>,
+    pub(crate) auto_compact_fallback: bool,
+}
+
+impl SamplingRequestOptions {
+    pub(crate) fn auto_compact_fallback() -> Self {
+        Self {
+            parallel_tool_calls: Some(false),
+            auto_compact_fallback: true,
+        }
+    }
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.

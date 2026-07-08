@@ -228,6 +228,12 @@ pub(crate) async fn run_permission_request_hooks(
     run_id_suffix: &str,
     payload: PermissionRequestPayload,
 ) -> Option<PermissionRequestDecision> {
+    if turn_context.approvals_disabled {
+        return Some(PermissionRequestDecision::Deny {
+            message: "approval requests are disabled during auto-compaction fallback".to_string(),
+        });
+    }
+
     let request = PermissionRequestRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),

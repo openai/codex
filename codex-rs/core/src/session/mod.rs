@@ -2022,7 +2022,7 @@ impl Session {
             .map(|task| Arc::clone(&task.turn_context))
     }
 
-    async fn active_turn_context_and_cancellation_token(
+    pub(crate) async fn active_turn_context_and_cancellation_token(
         &self,
     ) -> Option<(Arc<TurnContext>, CancellationToken)> {
         let active = self.active_turn.lock().await;
@@ -2158,6 +2158,10 @@ impl Session {
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
+        if turn_context.approvals_disabled {
+            return ReviewDecision::Denied;
+        }
+
         //  command-level approvals use `call_id`.
         // `approval_id` is only present for subcommand callbacks (execve intercept)
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
@@ -2230,6 +2234,12 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        if turn_context.approvals_disabled {
+            let (tx_approve, rx_approve) = oneshot::channel();
+            let _ = tx_approve.send(ReviewDecision::Denied);
+            return rx_approve;
+        }
+
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
@@ -2475,6 +2485,10 @@ impl Session {
         call_id: String,
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
+        if turn_context.approvals_disabled {
+            return None;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
         let event_id = sub_id.clone();

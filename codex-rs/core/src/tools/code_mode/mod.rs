@@ -27,9 +27,7 @@ use crate::original_image_detail::sanitize_original_image_detail as sanitize_ima
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::effective_tool_mode;
 use crate::tools::parallel::ToolCallRuntime;
@@ -135,8 +133,7 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         step_context: Arc<StepContext>,
-        router: Arc<ToolRouter>,
-        tracker: SharedTurnDiffTracker,
+        tool_runtime: ToolCallRuntime,
     ) -> Option<CodeModeDispatchWorker> {
         let turn = &step_context.turn;
         let tool_mode = effective_tool_mode(turn);
@@ -148,10 +145,7 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
-        Some(
-            self.dispatch_broker
-                .start_turn_worker(exec, router, step_context, tracker),
-        )
+        Some(self.dispatch_broker.start_turn_worker(exec, tool_runtime))
     }
 
     async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {

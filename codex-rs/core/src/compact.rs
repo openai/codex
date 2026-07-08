@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::Prompt;
+use crate::auto_compact_fallback::run_auto_compact_fallback;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::context::world_state::WorldState;
@@ -15,6 +16,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
@@ -90,11 +92,13 @@ pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bo
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    let turn_context = Arc::clone(&step_context.turn);
     let prompt = turn_context
         .config
         .compact_prompt
@@ -115,6 +119,8 @@ pub(crate) async fn run_inline_auto_compact_task(
         CompactionTrigger::Auto,
         reason,
         phase,
+        Some(&step_context),
+        Some(client_session),
     )
     .await?;
     Ok(())
@@ -141,6 +147,8 @@ pub(crate) async fn run_compact_task(
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
         CompactionPhase::StandaloneTurn,
+        None,
+        None,
     )
     .await?;
     Ok(())
@@ -154,6 +162,8 @@ async fn run_compact_task_inner(
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
+    auto_step_context: Option<&Arc<StepContext>>,
+    fallback_client_session: Option<&mut ModelClientSession>,
 ) -> CodexResult<()> {
     let compaction_metadata =
         CompactionTurnMetadata::new(trigger, reason, CompactionImplementation::Responses, phase);
@@ -188,6 +198,8 @@ async fn run_compact_task_inner(
         input,
         initial_context_injection,
         compaction_metadata,
+        auto_step_context,
+        fallback_client_session,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -223,6 +235,8 @@ async fn run_compact_task_inner_impl(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    auto_step_context: Option<&Arc<StepContext>>,
+    fallback_client_session: Option<&mut ModelClientSession>,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -331,7 +345,24 @@ async fn run_compact_task_inner_impl(
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
     }
-    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+
+    let fallback_step_context = match (auto_step_context, fallback_client_session) {
+        (Some(step_context), Some(client_session)) => {
+            run_auto_compact_fallback(&sess, step_context, client_session).await
+        }
+        _ => None,
+    };
+    let initial_context_injection = match fallback_step_context.as_ref() {
+        Some(step_context) => match initial_context_injection {
+            InitialContextInjection::BeforeLastUserMessage(_) => {
+                InitialContextInjection::BeforeLastUserMessage(Arc::new(
+                    sess.build_world_state_for_step(step_context).await,
+                ))
+            }
+            InitialContextInjection::DoNotInject => InitialContextInjection::DoNotInject,
+        },
+        None => initial_context_injection,
+    };
 
     let (initial_context, world_state_baseline) = build_compaction_initial_context(
         sess.as_ref(),
@@ -343,6 +374,7 @@ async fn run_compact_task_inner_impl(
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
+    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {

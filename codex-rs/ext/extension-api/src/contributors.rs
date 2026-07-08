@@ -20,6 +20,7 @@ mod turn_input;
 mod turn_lifecycle;
 mod world_state;
 
+pub use context::AutoCompactFallbackContributionInput;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
@@ -106,6 +107,23 @@ pub trait ContextContributor: Send + Sync {
             let _self = self;
             let _input = input;
             Vec::new()
+        })
+    }
+
+    /// Returns an optional developer-message fragment for the single
+    /// best-effort turn run before an automatic compaction rollover.
+    ///
+    /// The host combines non-empty contributions in registration order into
+    /// one developer message. Implementations should keep the contribution
+    /// bounded and return `None` when they do not need the fallback turn.
+    fn contribute_auto_compact_fallback_prompt<'a>(
+        &'a self,
+        input: AutoCompactFallbackContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+            None
         })
     }
 }

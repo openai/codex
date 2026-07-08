@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::auto_compact_fallback::run_auto_compact_fallback;
+use crate::client::ModelClientSession;
 use crate::compact::InitialContextInjection;
 use crate::context::world_state::WorldState;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -38,7 +40,15 @@ pub(crate) async fn run_manual_compact_task(
     // Manual compaction runs outside run_turn, so it captures its own current step.
     let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
-    run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Manual).await
+    run_compact_task_inner(
+        &sess,
+        &turn_context,
+        world_state,
+        CompactionTrigger::Manual,
+        None,
+        None,
+    )
+    .await
 }
 
 /// Runs token-budget inline auto-compaction as a normal compaction lifecycle.
@@ -49,6 +59,7 @@ pub(crate) async fn run_manual_compact_task(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
@@ -58,14 +69,24 @@ pub(crate) async fn run_inline_auto_compact_task(
             Arc::new(sess.build_world_state_for_step(&step_context).await)
         }
     };
-    run_compact_task_inner(&sess, turn_context, world_state, CompactionTrigger::Auto).await
+    run_compact_task_inner(
+        &sess,
+        turn_context,
+        world_state,
+        CompactionTrigger::Auto,
+        Some(&step_context),
+        Some(client_session),
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    world_state: Arc<WorldState>,
+    mut world_state: Arc<WorldState>,
     trigger: CompactionTrigger,
+    auto_step_context: Option<&Arc<StepContext>>,
+    fallback_client_session: Option<&mut ModelClientSession>,
 ) -> CodexResult<()> {
     let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
     match pre_compact_outcome {
@@ -76,6 +97,15 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
+    if let (Some(step_context), Some(client_session)) = (auto_step_context, fallback_client_session)
+        && let Some(refreshed_step_context) =
+            run_auto_compact_fallback(sess, step_context, client_session).await
+    {
+        world_state = Arc::new(
+            sess.build_world_state_for_step(&refreshed_step_context)
+                .await,
+        );
+    }
     sess.start_new_context_window(turn_context.as_ref(), world_state)
         .await;
     sess.emit_turn_item_completed(turn_context, compaction_item)

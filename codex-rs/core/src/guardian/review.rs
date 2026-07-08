@@ -174,10 +174,12 @@ pub(crate) fn routes_approval_to_guardian_with_reviewer(
     turn: &TurnContext,
     approvals_reviewer: ApprovalsReviewer,
 ) -> bool {
-    matches!(
-        turn.approval_policy.value(),
-        AskForApproval::OnRequest | AskForApproval::Granular(_)
-    ) && approvals_reviewer == ApprovalsReviewer::AutoReview
+    !turn.approvals_disabled
+        && matches!(
+            turn.approval_policy.value(),
+            AskForApproval::OnRequest | AskForApproval::Granular(_)
+        )
+        && approvals_reviewer == ApprovalsReviewer::AutoReview
 }
 
 pub(crate) fn is_guardian_reviewer_source(

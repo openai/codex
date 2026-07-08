@@ -7095,6 +7095,29 @@ async fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn loads_auto_compact_fallback_prompt() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        auto_compact_fallback_prompt: Some("  write notes immediately  ".to_string()),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.auto_compact_fallback_prompt.as_deref(),
+        Some("write notes immediately")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(

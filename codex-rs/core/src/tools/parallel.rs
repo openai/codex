@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -26,6 +27,8 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
@@ -46,6 +49,11 @@ pub(crate) struct ToolCallRuntime {
     step_context: Arc<StepContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
+    max_tool_calls: Option<usize>,
+    tool_calls_started: Arc<AtomicUsize>,
+    max_nested_tool_calls: Option<usize>,
+    nested_tool_calls_started: Arc<AtomicUsize>,
+    deny_interactive_tools: bool,
 }
 
 impl ToolCallRuntime {
@@ -61,6 +69,36 @@ impl ToolCallRuntime {
             step_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
+            max_tool_calls: None,
+            tool_calls_started: Arc::new(AtomicUsize::new(0)),
+            max_nested_tool_calls: None,
+            nested_tool_calls_started: Arc::new(AtomicUsize::new(0)),
+            deny_interactive_tools: false,
+        }
+    }
+
+    pub(crate) fn with_auto_compact_fallback_policy(mut self) -> Self {
+        self.max_tool_calls = Some(1);
+        self.max_nested_tool_calls = Some(1);
+        self.deny_interactive_tools = true;
+        self
+    }
+
+    /// Code-mode nested dispatch must share fallback admission counters with the outer model
+    /// response, but it needs an independent execution gate so a nested call does not deadlock
+    /// behind the top-level `exec` call that is waiting for it.
+    pub(crate) fn for_code_mode_nested_dispatch(&self) -> Self {
+        Self {
+            router: Arc::clone(&self.router),
+            session: Arc::clone(&self.session),
+            step_context: Arc::clone(&self.step_context),
+            tracker: Arc::clone(&self.tracker),
+            parallel_execution: Arc::new(RwLock::new(())),
+            max_tool_calls: self.max_tool_calls,
+            tool_calls_started: Arc::clone(&self.tool_calls_started),
+            max_nested_tool_calls: self.max_nested_tool_calls,
+            nested_tool_calls_started: Arc::clone(&self.nested_tool_calls_started),
+            deny_interactive_tools: self.deny_interactive_tools,
         }
     }
 
@@ -78,10 +116,11 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let error_call = call.clone();
-        let future =
-            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
         async move {
-            match future.await {
+            match self
+                .handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token)
+                .await
+            {
                 Ok(response) => Ok(response.into_response()),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
                 Err(other) => Ok(Self::failure_response(error_call, other)),
@@ -92,6 +131,78 @@ impl ToolCallRuntime {
 
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call_with_source(
+        self,
+        call: ToolCall,
+        source: ToolCallSource,
+        cancellation_token: CancellationToken,
+    ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        let limit_exceeded = match &source {
+            ToolCallSource::Direct => self.max_tool_calls.is_some_and(|max_tool_calls| {
+                self.tool_calls_started.fetch_add(1, Ordering::AcqRel) >= max_tool_calls
+            }),
+            ToolCallSource::CodeMode { .. } => {
+                self.max_nested_tool_calls
+                    .is_some_and(|max_nested_tool_calls| {
+                        self.nested_tool_calls_started
+                            .fetch_add(1, Ordering::AcqRel)
+                            >= max_nested_tool_calls
+                    })
+            }
+        };
+        let interactive_tool_denied = self.deny_interactive_tools
+            && (self.is_dynamic_tool(&call.tool_name)
+                || (call.tool_name.namespace.is_none()
+                    && matches!(
+                        call.tool_name.name.as_str(),
+                        "request_permissions" | "request_plugin_install" | "request_user_input"
+                    )));
+        let rejection = if limit_exceeded {
+            Some(FunctionCallError::RespondToModel(
+                "only one tool call is allowed at this level during auto-compaction fallback"
+                    .to_string(),
+            ))
+        } else if interactive_tool_denied {
+            Some(FunctionCallError::RespondToModel(format!(
+                "{} is unavailable during auto-compaction fallback",
+                call.tool_name
+            )))
+        } else {
+            None
+        };
+        let future = rejection
+            .is_none()
+            .then(|| self.handle_tool_call_with_source_unchecked(call, source, cancellation_token));
+        async move {
+            if let Some(rejection) = rejection {
+                return Err(rejection);
+            }
+            future
+                .expect("tool future should exist without a rejection")
+                .await
+        }
+        .in_current_span()
+    }
+
+    fn is_dynamic_tool(&self, tool_name: &codex_tools::ToolName) -> bool {
+        self.step_context
+            .turn
+            .dynamic_tools
+            .iter()
+            .any(|spec| match spec {
+                DynamicToolSpec::Function(tool) => {
+                    tool_name.namespace.is_none() && tool_name.name == tool.name
+                }
+                DynamicToolSpec::Namespace(namespace) => {
+                    tool_name.namespace.as_deref() == Some(namespace.name.as_str())
+                        && namespace.tools.iter().any(|tool| {
+                            let DynamicToolNamespaceTool::Function(tool) = tool;
+                            tool_name.name == tool.name
+                        })
+                }
+            })
+    }
+
+    fn handle_tool_call_with_source_unchecked(
         self,
         call: ToolCall,
         source: ToolCallSource,
@@ -539,6 +650,266 @@ mod tests {
     }
 
     impl CoreToolRuntime for ImmediateHandler {}
+
+    struct CountingHandler {
+        tool_name: codex_tools::ToolName,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ToolExecutor<ToolInvocation> for CountingHandler {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            self.tool_name.clone()
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Counting test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
+        }
+
+        fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async {
+                Ok(
+                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+                        as Box<dyn crate::tools::context::ToolOutput>,
+                )
+            })
+        }
+    }
+
+    impl CoreToolRuntime for CountingHandler {}
+
+    #[tokio::test]
+    async fn auto_compact_fallback_executes_only_the_first_tool_call() -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler = Arc::new(CountingHandler {
+            tool_name: tool_name.clone(),
+            calls: Arc::clone(&calls),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, step_context, tracker)
+            .with_auto_compact_fallback_policy();
+        let make_call = |call_id: &str| ToolCall {
+            tool_name: tool_name.clone(),
+            call_id: call_id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        let first = runtime
+            .clone()
+            .handle_tool_call(make_call("call-1"), CancellationToken::new())
+            .await?;
+        let second = runtime
+            .handle_tool_call(make_call("call-2"), CancellationToken::new())
+            .await?;
+
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let ResponseInputItem::FunctionCallOutput { output, .. } = first else {
+            anyhow::bail!("first tool call should return function output");
+        };
+        assert_eq!(output.success, Some(true));
+        assert_eq!(output.body, FunctionCallOutputBody::Text("ok".to_string()));
+        let ResponseInputItem::FunctionCallOutput { output, .. } = second else {
+            anyhow::bail!("second tool call should return function output");
+        };
+        assert_eq!(output.success, Some(false));
+        let FunctionCallOutputBody::Text(message) = output.body else {
+            anyhow::bail!("rejected tool output should be text");
+        };
+        assert!(message.contains("only one tool call is allowed"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_compact_fallback_has_separate_one_call_limits_for_code_mode() -> anyhow::Result<()>
+    {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler = Arc::new(CountingHandler {
+            tool_name: tool_name.clone(),
+            calls: Arc::clone(&calls),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, step_context, tracker)
+            .with_auto_compact_fallback_policy();
+        let make_call = |call_id: &str| ToolCall {
+            tool_name: tool_name.clone(),
+            call_id: call_id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        runtime
+            .clone()
+            .handle_tool_call(make_call("direct-1"), CancellationToken::new())
+            .await?;
+        let nested_runtime = runtime.for_code_mode_nested_dispatch();
+        nested_runtime
+            .clone()
+            .handle_tool_call_with_source(
+                make_call("nested-1"),
+                ToolCallSource::CodeMode {
+                    cell_id: "cell-1".to_string(),
+                    runtime_tool_call_id: "runtime-call-1".to_string(),
+                },
+                CancellationToken::new(),
+            )
+            .await?;
+        let second_direct = runtime
+            .handle_tool_call_with_source(
+                make_call("direct-2"),
+                ToolCallSource::Direct,
+                CancellationToken::new(),
+            )
+            .await;
+        let second_nested = nested_runtime
+            .handle_tool_call_with_source(
+                make_call("nested-2"),
+                ToolCallSource::CodeMode {
+                    cell_id: "cell-1".to_string(),
+                    runtime_tool_call_id: "runtime-call-2".to_string(),
+                },
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        let Err(FunctionCallError::RespondToModel(message)) = second_direct else {
+            anyhow::bail!("second direct tool call should be rejected");
+        };
+        assert!(message.contains("only one tool call is allowed"));
+        let Err(FunctionCallError::RespondToModel(message)) = second_nested else {
+            anyhow::bail!("second nested tool call should be rejected");
+        };
+        assert!(message.contains("only one tool call is allowed"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_compact_fallback_rejects_request_user_input_before_dispatch() -> anyhow::Result<()>
+    {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("request_user_input");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler = Arc::new(CountingHandler {
+            tool_name: tool_name.clone(),
+            calls: Arc::clone(&calls),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, step_context, tracker)
+            .with_auto_compact_fallback_policy();
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        let response = runtime
+            .handle_tool_call(call, CancellationToken::new())
+            .await?;
+
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+            anyhow::bail!("rejected tool call should return function output");
+        };
+        assert_eq!(output.success, Some(false));
+        let FunctionCallOutputBody::Text(message) = output.body else {
+            anyhow::bail!("rejected tool output should be text");
+        };
+        assert!(message.contains("unavailable during auto-compaction fallback"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_compact_fallback_rejects_dynamic_tool_before_dispatch() -> anyhow::Result<()> {
+        let tool_name = codex_tools::ToolName::plain("dynamic_tool");
+        let dynamic_tools = vec![DynamicToolSpec::Function(
+            codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
+                name: tool_name.name.clone(),
+                description: "Dynamic test tool.".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                defer_loading: false,
+            },
+        )];
+        let (session, mut turn_context) = crate::session::tests::make_session_and_context().await;
+        turn_context.dynamic_tools = dynamic_tools;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler = Arc::new(CountingHandler {
+            tool_name: tool_name.clone(),
+            calls: Arc::clone(&calls),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, step_context, tracker)
+            .with_auto_compact_fallback_policy();
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        let response = runtime
+            .handle_tool_call(call, CancellationToken::new())
+            .await?;
+
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+            anyhow::bail!("rejected tool call should return function output");
+        };
+        assert_eq!(output.success, Some(false));
+        let FunctionCallOutputBody::Text(message) = output.body else {
+            anyhow::bail!("rejected tool output should be text");
+        };
+        assert!(message.contains("unavailable during auto-compaction fallback"));
+
+        Ok(())
+    }
 
     struct CancellationCleanupHandler {
         tool_name: codex_tools::ToolName,

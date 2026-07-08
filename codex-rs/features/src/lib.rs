@@ -220,6 +220,8 @@ pub enum Feature {
     Goals,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
+    /// Run one extension-configured fallback turn before automatic compaction rolls over.
+    AutoCompactFallback,
     /// Track and report a shared token budget across a session's agent threads.
     RolloutBudget,
     /// Add current-time reminders to model-visible context.
@@ -1243,6 +1245,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TokenBudget,
         key: "token_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AutoCompactFallback,
+        key: "auto_compact_fallback",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

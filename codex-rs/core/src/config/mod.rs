@@ -711,6 +711,9 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Developer message contributed for the optional pre-rollover fallback turn.
+    pub auto_compact_fallback_prompt: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -3599,6 +3602,14 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
+        let auto_compact_fallback_prompt = cfg.auto_compact_fallback_prompt.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -3815,6 +3826,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            auto_compact_fallback_prompt,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,

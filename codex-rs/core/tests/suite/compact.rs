@@ -3,6 +3,20 @@ use anyhow::anyhow;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_extension_api::AutoCompactFallbackContributionInput;
+use codex_extension_api::ContextContributor;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::JsonToolOutput;
+use codex_extension_api::ResponsesApiTool;
+use codex_extension_api::ToolCall as ExtensionToolCall;
+use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
+use codex_extension_api::ToolExecutorFuture;
+use codex_extension_api::ToolName;
+use codex_extension_api::ToolOutput;
+use codex_extension_api::ToolSpec;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -63,6 +77,8 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
@@ -90,6 +106,9 @@ const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
 const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
 const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
 const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
+const AUTO_COMPACT_FALLBACK_PROMPT: &str =
+    "Persist the important state once before the context window rolls over.";
+const AUTO_COMPACT_FALLBACK_TOOL_NAME: &str = "record_fallback_state";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
@@ -99,6 +118,86 @@ fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
         "shell_command",
         &json!({ "command": command }).to_string(),
     )
+}
+
+struct AutoCompactFallbackTestExtension {
+    prompt_calls: Arc<AtomicUsize>,
+    tool_calls: Arc<AtomicUsize>,
+}
+
+impl ContextContributor for AutoCompactFallbackTestExtension {
+    fn contribute_auto_compact_fallback_prompt<'a>(
+        &'a self,
+        _input: AutoCompactFallbackContributionInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Option<String>> {
+        self.prompt_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()) })
+    }
+}
+
+impl ToolContributor for AutoCompactFallbackTestExtension {
+    fn tools(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
+        vec![Arc::new(AutoCompactFallbackTestTool {
+            calls: Arc::clone(&self.tool_calls),
+        })]
+    }
+}
+
+struct AutoCompactFallbackTestTool {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ToolExecutor<ExtensionToolCall> for AutoCompactFallbackTestTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(AUTO_COMPACT_FALLBACK_TOOL_NAME)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: AUTO_COMPACT_FALLBACK_TOOL_NAME.to_string(),
+            description: "Records fallback state for the auto-compaction test.".to_string(),
+            strict: true,
+            parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                "type": "object",
+                "properties": {
+                    "state": { "type": "string" }
+                },
+                "required": ["state"],
+                "additionalProperties": false
+            }))
+            .expect("fallback test tool schema should parse"),
+            output_schema: None,
+            defer_loading: None,
+        })
+    }
+
+    fn handle(&self, _call: ExtensionToolCall) -> ToolExecutorFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(Box::new(JsonToolOutput::new(json!({ "recorded": true }))) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+fn auto_compact_fallback_test_extensions() -> (
+    Arc<ExtensionRegistry<Config>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
+    let prompt_calls = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let extension = Arc::new(AutoCompactFallbackTestExtension {
+        prompt_calls: Arc::clone(&prompt_calls),
+        tool_calls: Arc::clone(&tool_calls),
+    });
+    let mut builder = ExtensionRegistryBuilder::<Config>::new();
+    builder.prompt_contributor(extension.clone());
+    builder.tool_contributor(extension);
+    (Arc::new(builder.build()), prompt_calls, tool_calls)
 }
 
 fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: String) -> Op {
@@ -1799,6 +1898,248 @@ async fn auto_compact_runs_after_token_limit_hit() {
             .any(|text| text.contains(prefixed_auto_summary)),
         "auto compact follow-up request should include the summary message"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_fallback_is_gated_by_feature_flag() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("initial-message", FIRST_REPLY),
+                ev_completed_with_tokens("initial-response", /*total_tokens*/ 95),
+            ]),
+            sse(vec![
+                ev_assistant_message("compact-message", AUTO_SUMMARY_TEXT),
+                ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("next-message", FINAL_REPLY),
+                ev_completed_with_tokens("next-response", /*total_tokens*/ 10),
+            ]),
+        ],
+    )
+    .await;
+    let (extensions, prompt_calls, tool_calls) = auto_compact_fallback_test_extensions();
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+            config
+                .features
+                .disable(Feature::AutoCompactFallback)
+                .expect("auto compact fallback feature should be known");
+        });
+    let test = builder.build(&server).await.expect("build codex");
+
+    test.submit_turn("fill the first context window")
+        .await
+        .expect("submit first turn");
+    test.submit_turn("continue after compaction")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "feature-off auto compaction should not add a fallback request"
+    );
+    assert!(
+        requests[1].body_contains_text(SUMMARIZATION_PROMPT),
+        "second request should be local auto compaction"
+    );
+    assert_eq!(prompt_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("initial-message", FIRST_REPLY),
+                ev_completed_with_tokens("initial-response", /*total_tokens*/ 95),
+            ]),
+            sse(vec![
+                ev_assistant_message("compact-message", AUTO_SUMMARY_TEXT),
+                ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
+            ]),
+            // Deliberately violate `parallel_tool_calls: false`: the fallback
+            // runtime must still execute no more than one tool call.
+            sse(vec![
+                ev_function_call(
+                    "fallback-call-1",
+                    AUTO_COMPACT_FALLBACK_TOOL_NAME,
+                    &json!({ "state": "first" }).to_string(),
+                ),
+                ev_function_call(
+                    "fallback-call-2",
+                    AUTO_COMPACT_FALLBACK_TOOL_NAME,
+                    &json!({ "state": "second" }).to_string(),
+                ),
+                ev_completed_with_tokens("fallback-response", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("next-message", FINAL_REPLY),
+                ev_completed_with_tokens("next-response", /*total_tokens*/ 10),
+            ]),
+        ],
+    )
+    .await;
+    let (extensions, prompt_calls, tool_calls) = auto_compact_fallback_test_extensions();
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+            config
+                .features
+                .enable(Feature::AutoCompactFallback)
+                .expect("auto compact fallback feature should be known");
+        });
+    let test = builder.build(&server).await.expect("build codex");
+
+    test.submit_turn("fill the first context window")
+        .await
+        .expect("submit first turn");
+    test.submit_turn("continue after compaction")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected initial, compact, one fallback sample, and post-rollover requests"
+    );
+    assert!(
+        requests[1].body_contains_text(SUMMARIZATION_PROMPT),
+        "fallback must run only after local auto compaction completes"
+    );
+
+    let fallback_request = &requests[2];
+    assert!(
+        fallback_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT),
+        "fallback request should contain the contributor prompt as a developer message"
+    );
+    assert_eq!(
+        fallback_request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(false)),
+        "fallback sampling must disable parallel tool calls"
+    );
+    assert_eq!(prompt_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        tool_calls.load(Ordering::SeqCst),
+        1,
+        "fallback runtime should execute at most one tool call"
+    );
+
+    let post_rollover_request = &requests[3];
+    let post_rollover_body = post_rollover_request.body_json().to_string();
+    assert!(
+        post_rollover_body.contains("continue after compaction"),
+        "post-rollover request should retain the pending user turn"
+    );
+    assert!(
+        post_rollover_body.contains(AUTO_SUMMARY_TEXT),
+        "post-rollover request should contain the compacted summary"
+    );
+    assert!(
+        !post_rollover_body.contains(AUTO_COMPACT_FALLBACK_PROMPT)
+            && !post_rollover_body.contains("fallback-call-1")
+            && !post_rollover_body.contains("fallback-call-2"),
+        "fallback-only prompt and tool artifacts should stay in the old window"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_fallback_sampling_failure_still_rolls_over() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("initial-message", FIRST_REPLY),
+                ev_completed_with_tokens("initial-response", /*total_tokens*/ 95),
+            ]),
+            sse(vec![
+                ev_assistant_message("compact-message", AUTO_SUMMARY_TEXT),
+                ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
+            ]),
+            sse_failed(
+                "fallback-failed",
+                "internal_error",
+                "fallback sampling failed",
+            ),
+            sse(vec![
+                ev_assistant_message("next-message", FINAL_REPLY),
+                ev_completed_with_tokens("next-response", /*total_tokens*/ 10),
+            ]),
+        ],
+    )
+    .await;
+    let (extensions, prompt_calls, tool_calls) = auto_compact_fallback_test_extensions();
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
+    let mut builder = test_codex()
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+            config
+                .features
+                .enable(Feature::AutoCompactFallback)
+                .expect("auto compact fallback feature should be known");
+        });
+    let test = builder.build(&server).await.expect("build codex");
+
+    test.submit_turn("fill the first context window")
+        .await
+        .expect("submit first turn");
+    test.submit_turn("continue despite fallback failure")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "failed fallback sample should not prevent post-rollover sampling"
+    );
+    assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(
+        requests[2]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT)
+    );
+    let post_rollover_body = requests[3].body_json().to_string();
+    assert!(post_rollover_body.contains("continue despite fallback failure"));
+    assert!(post_rollover_body.contains(AUTO_SUMMARY_TEXT));
+    assert_eq!(prompt_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
 }
 
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.

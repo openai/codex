@@ -127,6 +127,7 @@ pub struct TurnContext {
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) approvals_disabled: bool,
     pub(crate) permission_profile: PermissionProfile,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
@@ -149,6 +150,57 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn with_approvals_disabled(&self) -> Self {
+        let approval_policy = Constrained::allow_any(AskForApproval::Never);
+        let mut config = (*self.config).clone();
+        config.permissions.approval_policy = approval_policy.clone();
+        Self {
+            sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
+            realtime_active: self.realtime_active,
+            config: Arc::new(config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: self.model_info.clone(),
+            session_telemetry: self.session_telemetry.clone(),
+            provider: self.provider.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
+            originator: self.originator.clone(),
+            environments: self.environments.clone(),
+            #[allow(deprecated)]
+            cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
+            multi_agent_version: self.multi_agent_version,
+            personality: self.personality,
+            approval_policy,
+            approvals_disabled: true,
+            permission_profile: self.permission_profile.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            available_models: self.available_models.clone(),
+            unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_state: Arc::clone(&self.turn_metadata_state),
+            extension_data: Arc::clone(&self.extension_data),
+            turn_skills: self.turn_skills.clone(),
+            turn_timing_state: Arc::clone(&self.turn_timing_state),
+            terminal_error: Arc::clone(&self.terminal_error),
+            server_model_warning_emitted: AtomicBool::new(
+                self.server_model_warning_emitted.load(Ordering::Relaxed),
+            ),
+            model_verification_emitted: AtomicBool::new(
+                self.model_verification_emitted.load(Ordering::Relaxed),
+            ),
+        }
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
@@ -275,6 +327,7 @@ impl TurnContext {
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
+            approvals_disabled: self.approvals_disabled,
             permission_profile: self.permission_profile.clone(),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
@@ -553,6 +606,7 @@ impl Session {
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
+            approvals_disabled: false,
             permission_profile: session_configuration.permission_profile(),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,

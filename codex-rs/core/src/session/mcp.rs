@@ -211,6 +211,17 @@ impl Session {
         request_id: RequestId,
         request: ElicitationRequest,
     ) -> McpServerElicitationOutcome {
+        if turn_context.approvals_disabled {
+            return McpServerElicitationOutcome {
+                response: Some(ElicitationResponse {
+                    action: codex_rmcp_client::ElicitationAction::Decline,
+                    content: None,
+                    meta: None,
+                }),
+                sent: false,
+            };
+        }
+
         if self
             .services
             .latest_mcp_runtime()

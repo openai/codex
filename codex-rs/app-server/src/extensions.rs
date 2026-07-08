@@ -12,9 +12,16 @@ use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
+use codex_extension_api::AutoCompactFallbackContributionInput;
+use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContextContributor;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_goal_extension::GoalService;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
@@ -60,6 +67,10 @@ where
         thread_store: _thread_store,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    let auto_compact_fallback_prompt = Arc::new(AutoCompactFallbackPromptExtension);
+    builder.thread_lifecycle_contributor(auto_compact_fallback_prompt.clone());
+    builder.config_contributor(auto_compact_fallback_prompt.clone());
+    builder.prompt_contributor(auto_compact_fallback_prompt);
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,
@@ -94,6 +105,56 @@ where
         },
     );
     Arc::new(builder.build())
+}
+
+struct AutoCompactFallbackPromptExtension;
+
+#[derive(Clone)]
+struct AutoCompactFallbackPrompt(Option<String>);
+
+impl AutoCompactFallbackPromptExtension {
+    fn store(thread_store: &ExtensionData, config: &Config) {
+        thread_store.insert(AutoCompactFallbackPrompt(
+            config.auto_compact_fallback_prompt.clone(),
+        ));
+    }
+}
+
+impl ThreadLifecycleContributor<Config> for AutoCompactFallbackPromptExtension {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            Self::store(input.thread_store, input.config);
+        })
+    }
+}
+
+impl ConfigContributor<Config> for AutoCompactFallbackPromptExtension {
+    fn on_config_changed(
+        &self,
+        _session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        _previous_config: &Config,
+        new_config: &Config,
+    ) {
+        Self::store(thread_store, new_config);
+    }
+}
+
+impl ContextContributor for AutoCompactFallbackPromptExtension {
+    fn contribute_auto_compact_fallback_prompt<'a>(
+        &'a self,
+        input: AutoCompactFallbackContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Option<String>> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .get::<AutoCompactFallbackPrompt>()
+                .and_then(|prompt| prompt.0.clone())
+        })
+    }
 }
 
 pub(crate) fn app_server_extension_event_sink(

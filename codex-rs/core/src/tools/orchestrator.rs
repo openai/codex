@@ -72,7 +72,7 @@ impl ToolOrchestrator {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
             &tool_ctx.turn.sub_id,
-            managed_network_active,
+            managed_network_active && !tool_ctx.turn.approvals_disabled,
             attempt.sandbox,
             tool.network_approval_spec(req, tool_ctx),
         )
@@ -154,8 +154,10 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
-        let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
+        let strict_auto_review = !turn_ctx.approvals_disabled
+            && tool_ctx.session.strict_auto_review_enabled_for_turn().await;
+        let use_guardian = !turn_ctx.approvals_disabled
+            && (routes_approval_to_guardian(turn_ctx) || strict_auto_review);
 
         // 1) Approval
         let mut already_approved = false;
@@ -166,6 +168,11 @@ impl ToolOrchestrator {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
         match &requirement {
+            ExecApprovalRequirement::NeedsApproval { .. } if turn_ctx.approvals_disabled => {
+                return Err(ToolError::Rejected(
+                    "approvals are disabled during auto-compaction fallback".to_string(),
+                ));
+            }
             ExecApprovalRequirement::Skip { .. } => {
                 if strict_auto_review {
                     let guardian_review_id = Some(new_guardian_review_id());
@@ -400,6 +407,11 @@ impl ToolOrchestrator {
                     && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
+                    if turn_ctx.approvals_disabled {
+                        return Err(ToolError::Rejected(
+                            "approvals are disabled during auto-compaction fallback".to_string(),
+                        ));
+                    }
                     let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,

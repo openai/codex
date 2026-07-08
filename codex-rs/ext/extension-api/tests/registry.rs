@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_extension_api::ApprovalReviewContributor;
+use codex_extension_api::AutoCompactFallbackContributionInput;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -172,6 +173,70 @@ impl ContextContributor for NamedTurnContextContributor {
             self.0,
         )]))
     }
+}
+
+struct DefaultAutoCompactFallbackContributor;
+
+impl ContextContributor for DefaultAutoCompactFallbackContributor {}
+
+struct CustomAutoCompactFallbackContributor;
+
+impl ContextContributor for CustomAutoCompactFallbackContributor {
+    fn contribute_auto_compact_fallback_prompt<'a>(
+        &'a self,
+        input: AutoCompactFallbackContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Option<String>> {
+        Box::pin(async move {
+            Some(format!(
+                "thread={} turn={} session_store={} thread_store={} turn_store={} context_window={:?}",
+                input.thread_id,
+                input.turn_id,
+                input.session_store.level_id(),
+                input.thread_store.level_id(),
+                input.turn_store.level_id(),
+                input.model_context_window,
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn auto_compact_fallback_prompt_supports_default_and_custom_contributors() {
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    builder.prompt_contributor(Arc::new(DefaultAutoCompactFallbackContributor));
+    builder.prompt_contributor(Arc::new(CustomAutoCompactFallbackContributor));
+    let registry = builder.build();
+    let thread_id = codex_protocol::ThreadId::default();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
+    let input = AutoCompactFallbackContributionInput {
+        thread_id,
+        turn_id: turn_store.level_id(),
+        session_store: &session_store,
+        thread_store: &thread_store,
+        turn_store: &turn_store,
+        model_context_window: Some(123),
+    };
+
+    let mut contributions = Vec::new();
+    for contributor in registry.context_contributors() {
+        contributions.push(
+            contributor
+                .contribute_auto_compact_fallback_prompt(input)
+                .await,
+        );
+    }
+
+    assert_eq!(
+        contributions,
+        vec![
+            None,
+            Some(format!(
+                "thread={thread_id} turn=turn session_store=session thread_store=thread turn_store=turn context_window=Some(123)"
+            )),
+        ]
+    );
 }
 
 struct RecordingTurnItemContributor {

@@ -1,7 +1,22 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_core::config::TokenBudgetConfig;
+use codex_extension_api::AutoCompactFallbackContributionInput;
+use codex_extension_api::ContextContributor;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::JsonToolOutput;
+use codex_extension_api::ResponsesApiTool;
+use codex_extension_api::ToolCall as ExtensionToolCall;
+use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
+use codex_extension_api::ToolExecutorFuture;
+use codex_extension_api::ToolName;
+use codex_extension_api::ToolOutput;
+use codex_extension_api::ToolSpec;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -43,9 +58,89 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
+const TOKEN_BUDGET_FALLBACK_PROMPT: &str =
+    "Persist token-budget state once before this context window rolls over.";
+const TOKEN_BUDGET_FALLBACK_TOOL_NAME: &str = "record_token_budget_fallback_state";
+
+struct TokenBudgetAutoCompactFallbackExtension {
+    tool_calls: Arc<AtomicUsize>,
+}
+
+impl ContextContributor for TokenBudgetAutoCompactFallbackExtension {
+    fn contribute_auto_compact_fallback_prompt<'a>(
+        &'a self,
+        _input: AutoCompactFallbackContributionInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Option<String>> {
+        Box::pin(async { Some(TOKEN_BUDGET_FALLBACK_PROMPT.to_string()) })
+    }
+}
+
+impl ToolContributor for TokenBudgetAutoCompactFallbackExtension {
+    fn tools(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
+        vec![Arc::new(TokenBudgetAutoCompactFallbackTool {
+            calls: Arc::clone(&self.tool_calls),
+        })]
+    }
+}
+
+struct TokenBudgetAutoCompactFallbackTool {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ToolExecutor<ExtensionToolCall> for TokenBudgetAutoCompactFallbackTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(TOKEN_BUDGET_FALLBACK_TOOL_NAME)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: TOKEN_BUDGET_FALLBACK_TOOL_NAME.to_string(),
+            description: "Records fallback state for the token-budget integration test."
+                .to_string(),
+            strict: true,
+            parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                "type": "object",
+                "properties": {
+                    "state": { "type": "string" }
+                },
+                "required": ["state"],
+                "additionalProperties": false
+            }))
+            .expect("token-budget fallback tool schema should parse"),
+            output_schema: None,
+            defer_loading: None,
+        })
+    }
+
+    fn handle(&self, _call: ExtensionToolCall) -> ToolExecutorFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(Box::new(JsonToolOutput::new(json!({ "recorded": true }))) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+fn token_budget_auto_compact_fallback_extensions()
+-> (Arc<ExtensionRegistry<Config>>, Arc<AtomicUsize>) {
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let extension = Arc::new(TokenBudgetAutoCompactFallbackExtension {
+        tool_calls: Arc::clone(&tool_calls),
+    });
+    let mut builder = ExtensionRegistryBuilder::<Config>::new();
+    builder.prompt_contributor(extension.clone());
+    builder.tool_contributor(extension);
+    (Arc::new(builder.build()), tool_calls)
+}
 
 fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\nThread id: ");
@@ -854,6 +949,131 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
         follow_up_window_id, initial_window_id,
         "mid-turn token-budget auto-compaction should reset the context window"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let trigger_call_id = "token-budget-trigger-call";
+    let first_fallback_call_id = "token-budget-fallback-call-1";
+    let second_fallback_call_id = "token-budget-fallback-call-2";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(trigger_call_id, "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
+            ]),
+            // Deliberately return two calls even though the request disables parallel tool calls.
+            // The fallback runtime must execute only the first one.
+            sse(vec![
+                ev_response_created("fallback-resp"),
+                ev_function_call(
+                    first_fallback_call_id,
+                    TOKEN_BUDGET_FALLBACK_TOOL_NAME,
+                    &json!({ "state": "first-fallback-state" }).to_string(),
+                ),
+                ev_function_call(
+                    second_fallback_call_id,
+                    TOKEN_BUDGET_FALLBACK_TOOL_NAME,
+                    &json!({ "state": "second-fallback-state" }).to_string(),
+                ),
+                ev_completed_with_tokens("fallback-resp", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done in the new window"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let (extensions, tool_calls) = token_budget_auto_compact_fallback_extensions();
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.name = "OpenAI (test)".into();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.supports_websockets = false;
+    let test = test_codex()
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_context_window = Some(10_000);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+            config
+                .features
+                .enable(Feature::AutoCompactFallback)
+                .expect("auto compact fallback feature should be known");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("trigger token-budget fallback compaction")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected initial, fallback, and post-rollover sampling requests"
+    );
+
+    let thread_id = test.session_configured.thread_id;
+    let initial_context = token_budget_contexts(&requests[0]);
+    assert_eq!(initial_context.len(), 1);
+    let (first_window_id, _, old_window_id) =
+        token_budget_window_ids(&initial_context[0], thread_id);
+
+    let fallback_request = &requests[1];
+    assert_eq!(
+        token_budget_contexts(fallback_request),
+        initial_context,
+        "fallback sampling should still use the old context window"
+    );
+    assert!(
+        fallback_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text == TOKEN_BUDGET_FALLBACK_PROMPT),
+        "fallback request should include the extension-provided developer message"
+    );
+    assert_eq!(
+        fallback_request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(false))
+    );
+    assert_eq!(
+        tool_calls.load(Ordering::SeqCst),
+        1,
+        "only one extension tool call may execute during fallback"
+    );
+
+    let post_rollover_request = &requests[2];
+    let post_rollover_context = token_budget_contexts(post_rollover_request);
+    assert_eq!(post_rollover_context.len(), 1);
+    let (new_first_window_id, previous_window_id, new_window_id) =
+        token_budget_window_ids(&post_rollover_context[0], thread_id);
+    assert_eq!(new_first_window_id, first_window_id);
+    assert_eq!(previous_window_id.as_deref(), Some(old_window_id.as_str()));
+    assert_ne!(new_window_id, old_window_id);
+    for fallback_artifact in [
+        TOKEN_BUDGET_FALLBACK_PROMPT,
+        first_fallback_call_id,
+        second_fallback_call_id,
+        "first-fallback-state",
+        "second-fallback-state",
+    ] {
+        assert!(
+            !post_rollover_request.body_contains_text(fallback_artifact),
+            "new-window sampling should exclude fallback artifact: {fallback_artifact}"
+        );
+    }
 
     Ok(())
 }
