@@ -65,6 +65,8 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const WRITE_ROOT_ALLOW_MASK: u32 =
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
 mod sandbox_users;
 mod setup_runtime_bin;
@@ -156,6 +158,23 @@ fn workspace_write_cap_sids_for_path(
         }
     }
     Ok(sid_strs)
+}
+
+fn write_root_needs_refresh(root: &Path, psid: *mut c_void) -> Result<bool> {
+    if !path_mask_allows(
+        root,
+        &[psid],
+        WRITE_ROOT_ALLOW_MASK,
+        /*require_all_bits*/ true,
+    )? {
+        return Ok(true);
+    }
+    path_mask_allows(
+        root,
+        &[psid],
+        FILE_DELETE_CHILD,
+        /*require_all_bits*/ false,
+    )
 }
 
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
@@ -826,8 +845,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         )?;
     }
 
-    let write_mask =
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<(PathBuf, String)> = Vec::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
@@ -862,27 +879,26 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             ("sandbox_group", sandbox_group_psid),
             (cap_label, root_cap_psid),
         ] {
-            let has =
-                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        refresh_errors.push(format!(
-                            "write mask check failed on {} for {label}: {}",
+            let needs_refresh = match write_root_needs_refresh(root, psid) {
+                Ok(needs_refresh) => needs_refresh,
+                Err(e) => {
+                    refresh_errors.push(format!(
+                        "write ACE check failed on {} for {label}: {}",
+                        root.display(),
+                        e
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "write ACE check failed on {} for {label}: {}; continuing",
                             root.display(),
                             e
-                        ));
-                        log_line(
-                            log,
-                            &format!(
-                                "write mask check failed on {} for {label}: {}; continuing",
-                                root.display(),
-                                e
-                            ),
-                        )?;
-                        false
-                    }
-                };
-            if !has {
+                        ),
+                    )?;
+                    true
+                }
+            };
+            if needs_refresh {
                 need_grant = true;
             }
         }
@@ -1036,13 +1052,21 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::WRITE_ROOT_ALLOW_MASK;
+    use super::convert_string_sid_to_sid;
     use super::workspace_write_cap_sids_for_path;
+    use super::write_root_needs_refresh;
     use codex_otel::StatsigMetricsSettings;
+    use codex_windows_sandbox::ensure_allow_mask_aces;
+    use codex_windows_sandbox::ensure_allow_write_aces;
     use codex_windows_sandbox::load_or_create_cap_sids;
     use codex_windows_sandbox::workspace_write_cap_sid_for_root;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::fs;
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -1087,6 +1111,36 @@ mod tests {
             Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn write_root_refresh_replaces_stale_delete_child_grant() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&workspace).expect("create workspace");
+
+        let sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
+        let psid = unsafe { convert_string_sid_to_sid(&sid).expect("convert workspace sid") };
+        let stale_write_mask = WRITE_ROOT_ALLOW_MASK | FILE_DELETE_CHILD;
+        let seeded = unsafe { ensure_allow_mask_aces(&workspace, &[psid], stale_write_mask) }
+            .expect("seed stale write ACE");
+        let needs_refresh_before =
+            write_root_needs_refresh(&workspace, psid).expect("check stale write ACE");
+        let replaced = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
+            .expect("replace stale write ACE");
+        let needs_refresh_after =
+            write_root_needs_refresh(&workspace, psid).expect("check refreshed write ACE");
+        unsafe {
+            LocalFree(psid as HLOCAL);
+        }
+
+        assert_eq!(
+            (seeded, needs_refresh_before, replaced, needs_refresh_after),
+            (true, true, true, false)
         );
     }
 

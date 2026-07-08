@@ -409,11 +409,13 @@ pub struct ContextCompactionItem {
     pub id: String,
 }
 
+fn new_item_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 impl ContextCompactionItem {
     pub fn new() -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-        }
+        Self { id: new_item_id() }
     }
 }
 
@@ -426,7 +428,7 @@ impl Default for ContextCompactionItem {
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             client_id: None,
             content: content.to_vec(),
         }
@@ -528,9 +530,7 @@ fn trim_trailing_default_image_details(
 impl HookPromptItem {
     pub fn from_fragments(id: Option<&String>, fragments: Vec<HookPromptFragment>) -> Self {
         Self {
-            id: id
-                .cloned()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: id.cloned().unwrap_or_else(new_item_id),
             fragments,
         }
     }
@@ -560,7 +560,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
-        id: Some(uuid::Uuid::new_v4().to_string()),
+        id: Some(new_item_id()),
         role: "user".to_string(),
         content,
         phase: None,
@@ -613,7 +613,7 @@ fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<Strin
 impl AgentMessageItem {
     pub fn new(content: &[AgentMessageContent]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             content: content.to_vec(),
             phase: None,
             memory_citation: None,

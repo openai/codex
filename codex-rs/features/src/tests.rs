@@ -124,6 +124,16 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn code_mode_host_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::CodeModeHost.stage(), Stage::Stable);
+    assert_eq!(Feature::CodeModeHost.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("code_mode_host"),
+        Some(Feature::CodeModeHost)
+    );
+}
+
+#[test]
 fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
 
