@@ -137,7 +137,6 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -309,7 +308,6 @@ async fn hooks_list_warms_plugin_capabilities_for_thread_start() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -328,7 +326,7 @@ async fn hooks_list_warms_plugin_capabilities_for_thread_start() -> Result<()> {
     std::fs::remove_file(plugin_mcp_path)?;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let _: ThreadStartResponse = to_response(
         timeout(
@@ -737,7 +735,6 @@ command = "python3 {hook_script_path}"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -757,7 +754,7 @@ command = "python3 {hook_script_path}"
     assert_eq!(hook.trust_status, HookTrustStatus::Untrusted);
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -991,7 +988,6 @@ command = "python3 {hook_script_path}"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -1034,7 +1030,7 @@ command = "python3 {hook_script_path}"
     let _: codex_app_server_protocol::ConfigWriteResponse = to_response(response)?;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

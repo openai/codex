@@ -52,14 +52,13 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -143,14 +142,13 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -262,14 +260,13 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -404,14 +401,13 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

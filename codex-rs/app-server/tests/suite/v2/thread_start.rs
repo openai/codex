@@ -525,13 +525,12 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
@@ -570,13 +569,12 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             ..Default::default()
         })
@@ -609,6 +607,7 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test sends an intentionally unknown explicit environment id.
         .without_auto_env()
         .build()
         .await?;
@@ -648,6 +647,7 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test sends an intentionally invalid explicit environment cwd.
         .without_auto_env()
         .build()
         .await?;
@@ -691,6 +691,7 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // TODO(anp): Move the instruction-source fixture into the auto environment cwd.
         .without_auto_env()
         .build()
         .await?;
@@ -742,6 +743,7 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // TODO(anp): Move the instruction-source fixture into the auto environment cwd.
         .without_auto_env()
         .build()
         .await?;
@@ -789,6 +791,7 @@ async fn thread_start_without_selected_environment_includes_only_global_instruct
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test explicitly verifies behavior with no selected environment.
         .without_auto_env()
         .build()
         .await?;
@@ -883,14 +886,13 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             thread_source: Some(ThreadSource::User),
             service_name: Some("codex_work_desktop".to_string()),
             ..Default::default()
@@ -938,13 +940,12 @@ model_reasoning_effort = "high"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -1294,7 +1295,6 @@ async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let refresh_token_url = format!("{}/oauth/token", server.uri());
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (
@@ -1307,7 +1307,7 @@ async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
 
     let err: JSONRPCError = timeout(
@@ -1355,13 +1355,12 @@ model_reasoning_effort = "high"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let first_request = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1374,7 +1373,7 @@ model_reasoning_effort = "high"
     .await??;
 
     let second_request = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             ..Default::default()
         })
@@ -1419,13 +1418,12 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(nested.display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1461,13 +1459,12 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             ..Default::default()
         })
@@ -1503,13 +1500,12 @@ async fn thread_start_preserves_untrusted_project_trust() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
@@ -1548,13 +1544,12 @@ model_reasoning_effort = "high"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()

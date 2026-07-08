@@ -253,6 +253,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test disables experimentalApi; the auto-env helper adds environments.
         .without_auto_env()
         .build()
         .await?;
@@ -296,6 +297,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test disables experimentalApi; the auto-env helper adds environments.
         .without_auto_env()
         .build()
         .await?;
@@ -338,6 +340,7 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test disables experimentalApi; the auto-env helper adds environments.
         .without_auto_env()
         .build()
         .await?;

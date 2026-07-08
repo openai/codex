@@ -74,7 +74,6 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
     let sqlite_home = codex_home.path().to_string_lossy();
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .with_env_overrides(&[("CODEX_SQLITE_HOME", Some(sqlite_home.as_ref()))])
         .build()
@@ -105,7 +104,7 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
     );
 
     let thread_id = app_server
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
