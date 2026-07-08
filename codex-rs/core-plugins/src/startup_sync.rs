@@ -99,7 +99,14 @@ fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
 }
 
 pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
-    let git_transport = resolve_git_transport("git");
+    #[cfg(target_os = "macos")]
+    let git_transport = match which::which("git") {
+        Ok(git_path) => macos_git_transport_from_path(git_path, apple_developer_tools_available()),
+        Err(_) => GitTransport::Unavailable,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let git_transport = GitTransport::Available(PathBuf::from("git"));
+
     sync_openai_plugins_repo_with_transport_overrides(
         codex_home,
         &git_transport,
@@ -670,21 +677,6 @@ fn git_command(git_binary: &Path) -> Command {
         command.env_remove(name);
     }
     command
-}
-
-fn resolve_git_transport(git_binary: &str) -> GitTransport {
-    let Ok(git_path) = which::which(git_binary) else {
-        return GitTransport::Unavailable;
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        macos_git_transport_from_path(git_path, apple_developer_tools_available())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        GitTransport::Available(git_path)
-    }
 }
 
 #[cfg(any(target_os = "macos", test))]
