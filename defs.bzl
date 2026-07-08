@@ -110,8 +110,9 @@ def _windows_runfile_env_exports(ctx):
     lines = []
     for runfile_dep, env_var in ctx.attr.runfile_env.items():
         runfile = _runfile_env_file(runfile_dep)
-        lines.append('call :resolve_runfile {} "{}"'.format(env_var, _runfile_logical_path(runfile)))
+        lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
+        lines.append('set "{}=!resolve_runfile_result!"'.format(env_var))
     return "\n".join(lines)
 
 def _runfile_env_file(target):
