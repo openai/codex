@@ -120,14 +120,19 @@ const binaryPath = findCodexExecutable();
  * in order to give the user a hint about how to update it.
  */
 function detectPackageManager() {
-  const pnpmHome = process.env.PNPM_HOME;
-  if (pnpmHome) {
-    const resolvedPnpmHome = existsSync(pnpmHome)
-      ? realpathSync(pnpmHome)
-      : path.resolve(pnpmHome);
-    if (isPathInside(resolvedPnpmHome, codexPackageRoot)) {
+  // pnpm records installation metadata in node_modules/.modules.yaml. Search
+  // from the entry point because its global package and bin dirs can differ.
+  let currentDir = path.dirname(path.resolve(process.argv[1]));
+  while (true) {
+    if (existsSync(path.join(currentDir, "node_modules", ".modules.yaml"))) {
       return "pnpm";
     }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
   }
 
   const userAgent = process.env.npm_config_user_agent || "";
@@ -148,15 +153,6 @@ function detectPackageManager() {
   }
 
   return userAgent ? "npm" : null;
-}
-
-function isPathInside(parent, child) {
-  const relative = path.relative(parent, child);
-  const isOutside =
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative);
-  return !isOutside;
 }
 
 const packageManagerEnvVar =
