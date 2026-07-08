@@ -13,6 +13,8 @@ use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use url::Host as UrlHost;
 
+use crate::proxy::ManagedNetworkDomainPolicy;
+
 /// A normalized host string for policy evaluation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Host(String);
@@ -188,6 +190,23 @@ pub(crate) fn compile_allowlist_globset(patterns: &[String]) -> Result<GlobSet> 
 
 pub(crate) fn compile_denylist_globset(patterns: &[String]) -> Result<GlobSet> {
     compile_globset_with_policy(patterns, GlobalWildcard::Reject)
+}
+
+/// Compiled managed domain policy for sandbox-side name resolution.
+pub struct NetworkDomainMatcher(GlobSet, GlobSet);
+
+impl NetworkDomainMatcher {
+    pub fn new(policy: &ManagedNetworkDomainPolicy) -> Result<Self> {
+        Ok(Self(
+            compile_allowlist_globset(&policy.allowed_domains)?,
+            compile_denylist_globset(&policy.denied_domains)?,
+        ))
+    }
+
+    pub fn is_allowed(&self, host: &str) -> bool {
+        let host = normalize_host(host);
+        !host.is_empty() && !self.1.is_match(&host) && self.0.is_match(&host)
+    }
 }
 
 fn compile_globset_with_policy(

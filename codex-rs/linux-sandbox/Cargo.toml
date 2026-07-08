@@ -24,7 +24,9 @@ codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+dns-lookup = { workspace = true }
 globset = { workspace = true }
+hickory-proto = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 seccompiler = { workspace = true }
