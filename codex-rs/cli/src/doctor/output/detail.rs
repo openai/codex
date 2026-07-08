@@ -211,13 +211,15 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
 
     let managed_by_npm = value(parsed, "managed by npm").unwrap_or("false");
     let managed_by_bun = value(parsed, "managed by bun").unwrap_or("false");
+    let managed_by_pnpm = value(parsed, "managed by pnpm").unwrap_or("false");
     let package_root = value(parsed, "managed package root").unwrap_or("not set");
     out.push(HumanDetail::Row {
         label: "managed by".to_string(),
         value: format!(
-            "npm: {} · bun: {} · package root {}",
+            "npm: {} · bun: {} · pnpm: {} · package root {}",
             yes_no(managed_by_npm),
             yes_no(managed_by_bun),
+            yes_no(managed_by_pnpm),
             if is_falsy(package_root) {
                 "—".to_string()
             } else {
@@ -263,6 +265,7 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
             "install context",
             "managed by npm",
             "managed by bun",
+            "managed by pnpm",
             "managed package root",
             "PATH codex entries",
         ],
