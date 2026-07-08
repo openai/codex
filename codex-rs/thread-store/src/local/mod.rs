@@ -128,9 +128,14 @@ impl LocalThreadStore {
     }
 
     async fn publish_catalog_upsert_if_visible(&self, thread_id: ThreadId, thread: &StoredThread) {
-        if let Some(rollout_path) = thread.rollout_path.as_ref()
-            && self.rollout_is_catalog_visible(rollout_path).await
-        {
+        let visible = if !thread.preview.is_empty() {
+            true
+        } else if let Some(rollout_path) = thread.rollout_path.as_ref() {
+            self.rollout_is_catalog_visible(rollout_path).await
+        } else {
+            false
+        };
+        if visible {
             self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
         }
     }
@@ -366,6 +371,12 @@ impl ThreadStore for LocalThreadStore {
                 Err(err) => {
                     if changed
                         && may_partially_apply
+                        && !matches!(
+                            &err,
+                            ThreadStoreError::Unsupported {
+                                operation: "paginated_threads"
+                            }
+                        )
                         && let Ok(thread) = read_thread::read_thread(
                             self,
                             ReadThreadParams {
