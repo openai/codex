@@ -31,15 +31,12 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::path::Path;
-use std::path::PathBuf;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
@@ -66,30 +63,6 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
             ..Default::default()
         },
     }
-}
-
-fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
-    fn sanitize(value: &str) -> String {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    }
-
-    codex_home
-        .join("generated_images")
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
 }
 
 fn test_model_info(
@@ -644,12 +617,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -699,15 +666,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         Some("Zm9v"),
         "expected the original generated image payload to be preserved"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -758,12 +716,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -823,22 +775,11 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             .all(|text| text != "image content omitted because you do not support image input"),
         "second request should not inject the image-omitted placeholder text"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
-    // TODO(anp): Remove after generated-image artifacts use target-native paths.
-    skip_if_wine_exec!(Ok(()), "uses host-native generated-image artifact paths");
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -876,12 +817,6 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_rollback",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -931,20 +866,11 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
         "rollback should remove the rolled-back image-generation user turn"
     );
     assert!(
-        !second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "rollback should remove the generated-image save note with the rolled-back turn"
-    );
-    assert!(
         second_request
             .inputs_of_type("image_generation_call")
             .is_empty(),
         "rollback should remove the generated image call with the rolled-back turn"
     );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 

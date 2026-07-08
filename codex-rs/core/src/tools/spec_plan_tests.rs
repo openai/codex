@@ -82,7 +82,6 @@ impl ToolPlanProbe {
                 )),
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::ImageGeneration { .. }
                 | ToolSpec::WebSearch { .. }
                 | ToolSpec::Freeform(_) => None,
             })
