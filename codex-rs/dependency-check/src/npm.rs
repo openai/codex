@@ -1,6 +1,7 @@
 use crate::DependencyCheckRequest;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use thiserror::Error;
 use url::Url;
@@ -31,18 +32,28 @@ pub struct NpmInstalledGraph {
 }
 
 impl NpmGraph {
-    pub fn from_query_json(json: &str) -> Result<Self, NpmGraphError> {
-        let nodes: Vec<NpmQueryNode> = serde_json::from_str(json)?;
+    pub fn from_package_lock_json(json: &str) -> Result<Self, NpmGraphError> {
+        let lockfile: NpmPackageLock = serde_json::from_str(json)?;
+        if !matches!(lockfile.lockfile_version, 2 | 3) {
+            return Err(NpmGraphError::UnsupportedLockfileVersion(
+                lockfile.lockfile_version,
+            ));
+        }
         let mut packages = BTreeSet::new();
 
-        for node in nodes {
-            if node.location.as_deref() == Some("") {
+        for (location, package) in lockfile.packages {
+            if location.is_empty() {
                 continue;
             }
 
-            let name = node.name.ok_or(NpmGraphError::MissingField("name"))?;
-            let version = node.version.ok_or(NpmGraphError::MissingField("version"))?;
-            let resolved = node
+            let name = package
+                .name
+                .or_else(|| package_name_from_lockfile_location(&location))
+                .ok_or(NpmGraphError::MissingField("name"))?;
+            let version = package
+                .version
+                .ok_or(NpmGraphError::MissingField("version"))?;
+            let resolved = package
                 .resolved
                 .ok_or_else(|| NpmGraphError::UnsupportedSource {
                     name: name.clone(),
@@ -61,7 +72,7 @@ impl NpmGraph {
                     resolved: Some(resolved),
                 });
             }
-            let integrity = node
+            let integrity = package
                 .integrity
                 .filter(|integrity| !integrity.is_empty())
                 .ok_or_else(|| NpmGraphError::MissingIntegrity {
@@ -202,10 +213,12 @@ impl std::error::Error for NpmInstalledGraphMismatch {}
 
 #[derive(Debug, Error)]
 pub enum NpmGraphError {
-    #[error("npm query returned invalid JSON: {0}")]
+    #[error("npm graph input is invalid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
-    #[error("npm query result is missing required field `{0}`")]
+    #[error("npm graph entry is missing required field `{0}`")]
     MissingField(&'static str),
+    #[error("npm package-lock version {0} is unsupported; expected version 2 or 3")]
+    UnsupportedLockfileVersion(u64),
     #[error("npm package `{name}@{version}` has an unsupported resolved source: {resolved:?}")]
     UnsupportedSource {
         name: String,
@@ -278,16 +291,6 @@ pub fn npm_install_command(
     command
 }
 
-pub fn npm_query_lock_command() -> Vec<String> {
-    vec![
-        "npm".to_string(),
-        "query".to_string(),
-        "*".to_string(),
-        "--json".to_string(),
-        "--package-lock-only".to_string(),
-    ]
-}
-
 pub fn npm_ci_command() -> Vec<String> {
     vec![
         "npm".to_string(),
@@ -316,8 +319,43 @@ struct NpmQueryNode {
     name: Option<String>,
     version: Option<String>,
     resolved: Option<String>,
-    integrity: Option<String>,
     location: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NpmPackageLock {
+    lockfile_version: u64,
+    #[serde(default)]
+    packages: BTreeMap<String, NpmLockPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NpmLockPackage {
+    name: Option<String>,
+    version: Option<String>,
+    resolved: Option<String>,
+    integrity: Option<String>,
+}
+
+fn package_name_from_lockfile_location(location: &str) -> Option<String> {
+    let (_, package_path) = location.rsplit_once("node_modules/")?;
+    let mut components = package_path.split('/');
+    let first = components.next()?;
+    if first.is_empty() {
+        return None;
+    }
+    if first.starts_with('@') {
+        let second = components.next()?;
+        if second.is_empty() || components.next().is_some() {
+            return None;
+        }
+        Some(format!("{first}/{second}"))
+    } else if components.next().is_none() {
+        Some(first.to_string())
+    } else {
+        None
+    }
 }
 
 struct ParsedNpmQueryNode {
@@ -405,11 +443,14 @@ mod tests {
 
     #[test]
     fn parses_and_compares_lock_graphs() {
-        let graph = NpmGraph::from_query_json(
-            r#"[
-                {"name":"example","version":"1.0.0","location":"","resolved":null},
-                {"name":"zod","version":"3.23.8","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz","integrity":"sha512-example"}
-            ]"#,
+        let graph = NpmGraph::from_package_lock_json(
+            r#"{
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name":"example","version":"1.0.0"},
+                    "node_modules/zod": {"version":"3.23.8","resolved":"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz","integrity":"sha512-example"}
+                }
+            }"#,
         )
         .expect("parse graph");
         assert_eq!(
@@ -430,12 +471,12 @@ mod tests {
 
     #[test]
     fn reports_lock_and_installed_graph_mismatches() {
-        let checked = NpmGraph::from_query_json(
-            r#"[{"name":"zod","version":"3.23.8","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz","integrity":"sha512-checked"}]"#,
+        let checked = NpmGraph::from_package_lock_json(
+            r#"{"lockfileVersion":3,"packages":{"node_modules/zod":{"version":"3.23.8","resolved":"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz","integrity":"sha512-checked"}}}"#,
         )
         .expect("checked graph");
-        let changed = NpmGraph::from_query_json(
-            r#"[{"name":"zod","version":"3.24.0","location":"node_modules/zod","resolved":"https://registry.npmjs.org/zod/-/zod-3.24.0.tgz","integrity":"sha512-changed"}]"#,
+        let changed = NpmGraph::from_package_lock_json(
+            r#"{"lockfileVersion":3,"packages":{"node_modules/zod":{"version":"3.24.0","resolved":"https://registry.npmjs.org/zod/-/zod-3.24.0.tgz","integrity":"sha512-changed"}}}"#,
         )
         .expect("changed graph");
         let installed = NpmInstalledGraph::from_query_json(
@@ -449,11 +490,43 @@ mod tests {
 
     #[test]
     fn rejects_unverifiable_sources() {
-        let err = NpmGraph::from_query_json(
-            r#"[{"name":"local","version":"1.0.0","location":"node_modules/local","resolved":"file:../local"}]"#,
+        let err = NpmGraph::from_package_lock_json(
+            r#"{"lockfileVersion":3,"packages":{"node_modules/local":{"version":"1.0.0","resolved":"file:../local"}}}"#,
         )
         .expect_err("local source should fail");
         assert!(matches!(err, NpmGraphError::UnsupportedSource { .. }));
+    }
+
+    #[test]
+    fn derives_scoped_and_nested_package_names_from_lockfile_locations() {
+        let graph = NpmGraph::from_package_lock_json(
+            r#"{
+                "lockfileVersion": 2,
+                "packages": {
+                    "node_modules/@scope/top": {"version":"1.0.0","resolved":"https://registry.npmjs.org/@scope/top/-/top-1.0.0.tgz","integrity":"sha512-top"},
+                    "node_modules/parent/node_modules/@scope/nested": {"version":"2.0.0","resolved":"https://registry.npmjs.org/@scope/nested/-/nested-2.0.0.tgz","integrity":"sha512-nested"}
+                }
+            }"#,
+        )
+        .expect("parse graph");
+
+        assert_eq!(
+            graph.coordinates(),
+            BTreeSet::from([
+                ("@scope/nested".to_string(), "2.0.0".to_string()),
+                ("@scope/top".to_string(), "1.0.0".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_lockfile_without_packages_graph() {
+        let err = NpmGraph::from_package_lock_json(
+            r#"{"lockfileVersion":1,"dependencies":{"zod":{"version":"3.23.8"}}}"#,
+        )
+        .expect_err("legacy lockfile should fail");
+
+        assert!(matches!(err, NpmGraphError::UnsupportedLockfileVersion(1)));
     }
 
     #[test]

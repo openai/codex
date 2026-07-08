@@ -198,8 +198,8 @@ mod tests {
     use wiremock::matchers::path;
 
     fn graph() -> NpmGraph {
-        NpmGraph::from_query_json(
-            r#"[{"name":"example","version":"1.0.0","location":"node_modules/example","resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz","integrity":"sha512-example"}]"#,
+        NpmGraph::from_package_lock_json(
+            r#"{"lockfileVersion":3,"packages":{"node_modules/example":{"version":"1.0.0","resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz","integrity":"sha512-example"}}}"#,
         )
         .expect("parse graph")
     }

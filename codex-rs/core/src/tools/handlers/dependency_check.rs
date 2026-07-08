@@ -35,7 +35,6 @@ use codex_dependency_check::detect_dependency_install_command;
 use codex_dependency_check::npm_ci_command;
 use codex_dependency_check::npm_install_command;
 use codex_dependency_check::npm_query_installed_command;
-use codex_dependency_check::npm_query_lock_command;
 use codex_dependency_check::npm_rebuild_command;
 use codex_dependency_check::validate_npm_manifest;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -172,13 +171,7 @@ impl DependencyCheckHandler {
                 &resolve,
             ));
         }
-        let checked_graph = match query_graph(
-            &runner,
-            resolution_dir.path(),
-            WorkingDirectoryAccess::PreapprovedScratch,
-        )
-        .await?
-        {
+        let checked_graph = match read_lock_graph(resolution_dir.path()).await {
             Ok(graph) => graph,
             Err(message) => return Ok(blocked_output(message)),
         };
@@ -214,11 +207,10 @@ impl DependencyCheckHandler {
         if lock_update.exit_code != 0 {
             return Ok(command_failure_output("project lock update", &lock_update));
         }
-        let locked_graph =
-            match query_graph(&runner, &workdir, WorkingDirectoryAccess::Default).await? {
-                Ok(graph) => graph,
-                Err(message) => return Ok(blocked_output(message)),
-            };
+        let locked_graph = match read_lock_graph(&workdir).await {
+            Ok(graph) => graph,
+            Err(message) => return Ok(blocked_output(message)),
+        };
         if let Err(mismatch) = checked_graph.compare(&locked_graph) {
             return Ok(graph_mismatch_output("project lock update", &mismatch));
         }
@@ -278,25 +270,19 @@ pub(crate) fn dependency_manifest_edit_message() -> String {
         .to_string()
 }
 
-async fn query_graph(
-    runner: &DependencyCommandRunner,
-    cwd: &Path,
-    working_directory_access: WorkingDirectoryAccess,
-) -> Result<Result<NpmGraph, String>, FunctionCallError> {
-    let query = runner
-        .run(
-            npm_query_lock_command(),
-            cwd,
-            ScriptPolicy::Disabled,
-            working_directory_access,
-            "Read the exact npm lock graph for dependency verification.",
+async fn read_lock_graph(cwd: &Path) -> Result<NpmGraph, String> {
+    let lockfile_path = cwd.join("package-lock.json");
+    let lockfile = read_regular_file(&lockfile_path).await.map_err(|err| {
+        format!(
+            "Dependency Check stopped before lifecycle scripts because it could not read {}: {err}",
+            lockfile_path.display()
         )
-        .await?;
-    if query.exit_code != 0 {
-        return Ok(Err(command_failure_message("npm graph query", &query)));
-    }
-    Ok(NpmGraph::from_query_json(&query.stdout.text)
-        .map_err(|err| format!("Dependency Check stopped before lifecycle scripts because npm returned an unverifiable graph: {err}")))
+    })?;
+    NpmGraph::from_package_lock_json(&lockfile).map_err(|err| {
+        format!(
+            "Dependency Check stopped before lifecycle scripts because npm produced an unverifiable package-lock.json graph: {err}"
+        )
+    })
 }
 
 async fn query_installed_graph(

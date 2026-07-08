@@ -17,7 +17,6 @@ pub use npm::NpmManifestError;
 pub use npm::npm_ci_command;
 pub use npm::npm_install_command;
 pub use npm::npm_query_installed_command;
-pub use npm::npm_query_lock_command;
 pub use npm::npm_rebuild_command;
 pub use npm::validate_npm_manifest;
 pub use osv::DependencyPolicyAction;

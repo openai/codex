@@ -29,7 +29,7 @@ direct dependencies.
    into a temporary directory.
 2. Run `npm install --package-lock-only --ignore-scripts` there to resolve the
    complete graph without running package lifecycle code.
-3. Run `npm query '*' --json --package-lock-only` and require every package to
+3. Parse the npm v2/v3 `package-lock.json` graph and require every package to
    have an HTTPS artifact URL and integrity value.
 4. Query the OSV batch API for every unique exact npm package coordinate.
 5. Update the real project lock graph through Codex's normal sandbox and
@@ -73,7 +73,7 @@ description = "Workspace write access with npm manifests read-only."
 ":tmpdir" = "write"
 "/path/to/node/runtime" = "read"
 
-[permissions.dependency-check.filesystem.":project_roots"]
+[permissions.dependency-check.filesystem.":workspace_roots"]
 "." = "write"
 "package.json" = "read"
 "package-lock.json" = "read"
