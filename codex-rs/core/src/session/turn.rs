@@ -382,9 +382,9 @@ pub(crate) async fn run_turn(
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            sess.record_conversation_items(
+                            sess.record_response_item_and_emit_turn_item(
                                 &turn_context,
-                                std::slice::from_ref(&hook_prompt_message),
+                                hook_prompt_message,
                             )
                             .await;
                             stop_hook_active = true;
