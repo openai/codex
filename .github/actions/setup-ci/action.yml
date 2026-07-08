@@ -1,5 +1,9 @@
 name: setup-ci
 description: Prepare common tools and environment shared by CI jobs.
+outputs:
+  bazel-output-base:
+    description: Filesystem path used for Bazel's output base.
+    value: ${{ steps.configure_ci_build_paths.outputs.bazel-output-base }}
 
 runs:
   using: composite
@@ -18,12 +22,15 @@ runs:
       run: echo "CI_BUILD_ROOT=$HOME/.cache/codex-ci" >> "$GITHUB_ENV"
 
     - name: Configure CI build paths
+      id: configure_ci_build_paths
       shell: bash
       run: |
         set -euo pipefail
-        # Keep this directory name tiny on every platform so the shared path
-        # contract preserves Windows' short Bazel output root. Long Windows
-        # Bazel paths can overflow argv and confuse test MANIFEST handling.
+        # setup-bazel passes output_base explicitly, so keep both it and the
+        # user root under the shared build root. Keep these directory names tiny
+        # on every platform so Windows Bazel paths do not overflow argv or
+        # confuse test MANIFEST handling.
+        bazel_output_base="$CI_BUILD_ROOT/o"
         bazel_output_user_root="$CI_BUILD_ROOT/b"
         bazel_repository_cache="$CI_BUILD_ROOT/bazel-repository-cache"
         bazel_repo_contents_cache="$CI_BUILD_ROOT/bazel-repo-contents-cache-$GITHUB_RUN_ID-$GITHUB_JOB"
@@ -31,6 +38,7 @@ runs:
         tmp="$CI_BUILD_ROOT/tmp"
 
         build_dirs=(
+          "$bazel_output_base"
           "$bazel_output_user_root"
           "$bazel_repository_cache"
           "$bazel_repo_contents_cache"
@@ -38,8 +46,10 @@ runs:
           "$tmp"
         )
         mkdir -p "${build_dirs[@]}"
+        echo "bazel-output-base=$bazel_output_base" >> "$GITHUB_OUTPUT"
 
         {
+          echo "BAZEL_OUTPUT_BASE=$bazel_output_base"
           echo "BAZEL_OUTPUT_USER_ROOT=$bazel_output_user_root"
           echo "BAZEL_REPOSITORY_CACHE=$bazel_repository_cache"
           echo "BAZEL_REPO_CONTENTS_CACHE=$bazel_repo_contents_cache"
