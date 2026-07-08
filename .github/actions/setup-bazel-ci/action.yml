@@ -12,7 +12,8 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/setup-ci
+    - id: setup_ci
+      uses: ./.github/actions/setup-ci
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
@@ -20,6 +21,9 @@ runs:
       # and Windows can use the runner's standalone Bazel, ignoring .bazelversion.
       with:
         bazelisk-version: 1.28.1
+        # setup-bazel writes an explicit output_base, which otherwise overrides
+        # BAZEL_OUTPUT_USER_ROOT and leaves Bazel's I/O-heavy trees on C:.
+        output-base: ${{ steps.setup_ci.outputs.bazel-output-base }}
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
