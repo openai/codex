@@ -318,7 +318,7 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&config),
             config_manager.clone(),
-            installation_id.clone(),
+            installation_id,
         );
         let apps_processor = AppsRequestProcessor::new(
             auth_manager.clone(),
@@ -1317,7 +1317,12 @@ impl MessageProcessor {
             }
             ClientRequest::LoginAccount { params, .. } => {
                 self.account_processor
-                    .login_account(request_id.clone(), params)
+                    .login_account(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name,
+                        client_version,
+                    )
                     .await
             }
             ClientRequest::LogoutAccount { .. } => {

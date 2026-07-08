@@ -189,6 +189,7 @@ async fn device_login_revokes_existing_auth_before_requesting_new_tokens() -> Re
         );
         assert!(request.headers.get("x-codex-installation-id").is_none());
     }
+    assert!(!codex_home.path().join("installation_id").exists());
 
     let auth = read_auth_json(codex_home.path())?;
     assert_eq!(auth["tokens"]["refresh_token"], "new-refresh");

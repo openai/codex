@@ -50,6 +50,33 @@ pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
+
+#[derive(Debug, Clone)]
+pub struct CodexClientIdentity {
+    originator: String,
+    user_agent_suffix: String,
+}
+
+impl CodexClientIdentity {
+    pub fn new(client_name: String, client_version: String) -> Self {
+        Self {
+            originator: client_name.clone(),
+            user_agent_suffix: format!("{client_name}; {client_version}"),
+        }
+    }
+
+    pub fn originator(&self) -> &str {
+        &self.originator
+    }
+
+    pub fn user_agent_suffix(&self) -> &str {
+        &self.user_agent_suffix
+    }
+
+    pub(crate) fn headers(&self) -> HeaderMap {
+        default_headers_for_identity(Some(self))
+    }
+}
 static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
 static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
     LazyLock::new(|| RwLock::new(None));
@@ -137,9 +164,15 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
+    get_codex_user_agent_for_identity(/*identity*/ None)
+}
+
+fn get_codex_user_agent_for_identity(identity: Option<&CodexClientIdentity>) -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
-    let originator = originator();
+    let originator = identity.map_or_else(originator, |identity| {
+        get_originator_value(Some(identity.originator.clone()))
+    });
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
         originator.value.as_str(),
@@ -148,10 +181,15 @@ pub fn get_codex_user_agent() -> String {
         os_info.architecture().unwrap_or("unknown"),
         user_agent()
     );
-    let suffix = USER_AGENT_SUFFIX
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
+    let global_suffix = || {
+        USER_AGENT_SUFFIX
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    };
+    let suffix = identity
+        .map(|identity| identity.user_agent_suffix.clone())
+        .or_else(global_suffix);
     let suffix = suffix
         .as_deref()
         .map(str::trim)
@@ -313,9 +351,16 @@ fn auth_http_client_factory(auth_route_config: Option<&AuthRouteConfig>) -> Http
 }
 
 pub fn default_headers() -> HeaderMap {
+    default_headers_for_identity(/*identity*/ None)
+}
+
+fn default_headers_for_identity(identity: Option<&CodexClientIdentity>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
-    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent()) {
+    let originator = identity.map_or_else(originator, |identity| {
+        get_originator_value(Some(identity.originator.clone()))
+    });
+    headers.insert("originator", originator.header_value);
+    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent_for_identity(identity)) {
         headers.insert(USER_AGENT, user_agent);
     }
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()

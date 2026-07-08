@@ -27,6 +27,7 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::default_client::CodexClientIdentity;
 use crate::default_client::build_raw_auth_reqwest_client;
 use crate::default_client::originator;
 use crate::outbound_proxy::AuthRouteConfig;
@@ -80,6 +81,8 @@ pub struct ServerOptions {
     pub auth_route_config: Option<AuthRouteConfig>,
     /// Installation ID attached only to device authorization requests sent to a trusted issuer.
     pub device_auth_installation_id: Option<String>,
+    /// Per-caller identity for device authorization requests, when available.
+    pub device_auth_client_identity: Option<CodexClientIdentity>,
 }
 
 impl ServerOptions {
@@ -106,6 +109,7 @@ impl ServerOptions {
             auth_keyring_backend_kind,
             auth_route_config,
             device_auth_installation_id: None,
+            device_auth_client_identity: None,
         }
     }
 }

@@ -98,8 +98,12 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        app_server_client_name: Option<String>,
+        client_version: Option<String>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.login_v2(request_id, params).await.map(|()| None)
+        self.login_v2(request_id, params, app_server_client_name, client_version)
+            .await
+            .map(|()| None)
     }
 
     pub(crate) async fn logout_account(
@@ -252,6 +256,8 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        app_server_client_name: Option<String>,
+        client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
@@ -281,7 +287,12 @@ impl AccountRequestProcessor {
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(request_id).await;
+                self.login_chatgpt_device_code_v2(
+                    request_id,
+                    app_server_client_name,
+                    client_version,
+                )
+                .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -505,20 +516,35 @@ impl AccountRequestProcessor {
         })
     }
 
-    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_chatgpt_device_code_response().await;
+    async fn login_chatgpt_device_code_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        app_server_client_name: Option<String>,
+        client_version: Option<String>,
+    ) {
+        let result = self
+            .login_chatgpt_device_code_response(app_server_client_name, client_version)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
+        app_server_client_name: Option<String>,
+        client_version: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self
+        let mut opts = self
             .login_chatgpt_common(
                 /*codex_streamlined_login*/ false,
                 LoginSuccessPage::default(),
             )
             .await?;
+        if let (Some(client_name), Some(client_version)) = (app_server_client_name, client_version)
+        {
+            opts.device_auth_client_identity = Some(
+                codex_login::default_client::CodexClientIdentity::new(client_name, client_version),
+            );
+        }
         let device_code = request_device_code(&opts)
             .await
             .map_err(Self::login_chatgpt_device_code_start_error)?;

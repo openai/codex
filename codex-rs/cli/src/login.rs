@@ -316,14 +316,17 @@ pub async fn run_login_with_device_code(
         std::process::exit(1);
     }
     let auth_route_config = config.auth_route_config();
-    let installation_id = match codex_core::resolve_installation_id(&config.codex_home).await {
-        Ok(installation_id) => installation_id,
-        Err(err) => {
-            eprintln!("Error resolving installation ID: {err}");
-            std::process::exit(1);
+    let installation_id = if issuer_base_url.is_none() {
+        match codex_core::resolve_installation_id(&config.codex_home).await {
+            Ok(installation_id) => Some(installation_id),
+            Err(err) => {
+                eprintln!("Error resolving installation ID: {err}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        None
     };
-    let uses_default_issuer = issuer_base_url.is_none();
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -343,9 +346,7 @@ pub async fn run_login_with_device_code(
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
-    if uses_default_issuer {
-        opts.device_auth_installation_id = Some(installation_id);
-    }
+    opts.device_auth_installation_id = installation_id;
     match run_device_code_login(opts).await {
         Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
@@ -375,14 +376,17 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         std::process::exit(1);
     }
     let auth_route_config = config.auth_route_config();
-    let installation_id = match codex_core::resolve_installation_id(&config.codex_home).await {
-        Ok(installation_id) => installation_id,
-        Err(err) => {
-            eprintln!("Error resolving installation ID: {err}");
-            std::process::exit(1);
+    let installation_id = if issuer_base_url.is_none() {
+        match codex_core::resolve_installation_id(&config.codex_home).await {
+            Ok(installation_id) => Some(installation_id),
+            Err(err) => {
+                eprintln!("Error resolving installation ID: {err}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        None
     };
-    let uses_default_issuer = issuer_base_url.is_none();
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -403,9 +407,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
-    if uses_default_issuer {
-        opts.device_auth_installation_id = Some(installation_id);
-    }
+    opts.device_auth_installation_id = installation_id;
     opts.open_browser = false;
 
     match run_device_code_login(opts.clone()).await {
