@@ -168,11 +168,13 @@ function detectPackageManager() {
   return userAgent ? "npm" : null;
 }
 
+const packageManager = detectPackageManager();
 const packageManagerEnvVar =
-  {
-    "bun": "CODEX_MANAGED_BY_BUN",
-    "pnpm": "CODEX_MANAGED_BY_PNPM",
-  }[detectPackageManager()] ?? "CODEX_MANAGED_BY_NPM";
+  packageManager === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : packageManager === "pnpm"
+      ? "CODEX_MANAGED_BY_PNPM"
+      : "CODEX_MANAGED_BY_NPM";
 const env = {
   ...process.env,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
