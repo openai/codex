@@ -152,12 +152,11 @@ function detectPackageManager() {
 
 function isPathInside(parent, child) {
   const relative = path.relative(parent, child);
-  return (
-    relative === "" ||
-    (relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relative))
-  );
+  const isOutside =
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative);
+  return !isOutside;
 }
 
 const packageManagerEnvVar =
