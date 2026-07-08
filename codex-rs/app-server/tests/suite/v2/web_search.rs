@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WebSearchAction;
+use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -183,20 +184,20 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     );
     assert_eq!(
         started.item,
-        ThreadItem::WebSearch {
+        ThreadItem::WebSearch(WebSearchItem {
             id: call_id.to_string(),
             query: String::new(),
-            action: Some(WebSearchAction::Other),
-        }
+            action: None,
+        })
     );
-    let expected_completed_item = ThreadItem::WebSearch {
+    let expected_completed_item = ThreadItem::WebSearch(WebSearchItem {
         id: call_id.to_string(),
         query: "standalone web search".to_string(),
         action: Some(WebSearchAction::Search {
             query: Some("standalone web search".to_string()),
             queries: None,
         }),
-    };
+    });
     assert_eq!(completed.item, expected_completed_item);
 
     drop(mcp);
@@ -223,7 +224,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         .turns
         .iter()
         .flat_map(|turn| &turn.items)
-        .filter(|item| matches!(item, ThreadItem::WebSearch { .. }))
+        .filter(|item| matches!(item, ThreadItem::WebSearch(_)))
         .collect();
     assert_eq!(persisted_web_searches, vec![&expected_completed_item]);
 
@@ -240,7 +241,7 @@ async fn wait_for_web_search_started(mcp: &mut TestAppServer) -> Result<ItemStar
                 .params
                 .context("item/started notification should include params")?,
         )?;
-        if matches!(&started.item, ThreadItem::WebSearch { .. }) {
+        if matches!(&started.item, ThreadItem::WebSearch(_)) {
             return Ok(started);
         }
     }
@@ -258,7 +259,7 @@ async fn wait_for_web_search_completed(
                 .params
                 .context("item/completed notification should include params")?,
         )?;
-        if matches!(&completed.item, ThreadItem::WebSearch { .. }) {
+        if matches!(&completed.item, ThreadItem::WebSearch(_)) {
             return Ok(completed);
         }
     }

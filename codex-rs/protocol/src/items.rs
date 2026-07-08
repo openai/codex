@@ -47,13 +47,17 @@ pub enum TurnItem {
     DynamicToolCall(DynamicToolCallItem),
     CollabAgentToolCall(CollabAgentToolCallItem),
     SubAgentActivity(SubAgentActivityItem),
+    /// Hosted Responses API web-search item handled directly by core.
+    ///
+    /// Standalone web search uses Self::Extension instead because its display
+    /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
-    /// Standalone image generation uses this path. App-server wraps the same
-    /// typed item in its public image-generation variant.
+    /// Standalone image generation and web search use this path. App-server
+    /// wraps the same typed items in their public variants.
     Extension(ExtensionItem),
     /// Hosted Responses API image-generation item handled directly by core.
     ///

@@ -101,7 +101,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
 }
 
 fn extension_turn_item(item: ImageGenerationItem, legacy_event: EventMsg) -> ExtensionTurnItem {
-    ExtensionTurnItem::Extension {
+    ExtensionTurnItem {
         item: ExtensionItem::ImageGeneration(item),
         legacy_events: vec![legacy_event],
     }

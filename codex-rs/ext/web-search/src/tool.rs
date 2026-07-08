@@ -14,10 +14,15 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema_without_compaction;
+use codex_extension_items::ExtensionItem;
+use codex_extension_items::web_search::WebSearchAction;
+use codex_extension_items::web_search::WebSearchItem;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
-use codex_protocol::items::WebSearchItem;
-use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
@@ -109,14 +114,47 @@ impl WebSearchTool {
             ),
         };
         call.turn_item_emitter
-            .emit_started(web_search_item(&call.call_id, WebSearchAction::Other))
+            .emit_started(extension_turn_item(
+                WebSearchItem {
+                    id: call.call_id.clone(),
+                    query: String::new(),
+                    action: None,
+                },
+                EventMsg::WebSearchBegin(WebSearchBeginEvent {
+                    call_id: call.call_id.clone(),
+                }),
+            ))
             .await;
         let response = client
             .search(&request, HeaderMap::new())
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+        let legacy_action = match &command_action {
+            WebSearchAction::Search { query, queries } => CoreWebSearchAction::Search {
+                query: query.clone(),
+                queries: queries.clone(),
+            },
+            WebSearchAction::OpenPage { url } => CoreWebSearchAction::OpenPage { url: url.clone() },
+            WebSearchAction::FindInPage { url, pattern } => CoreWebSearchAction::FindInPage {
+                url: url.clone(),
+                pattern: pattern.clone(),
+            },
+            WebSearchAction::Other => CoreWebSearchAction::Other,
+        };
+        let query = web_search_action_detail(&legacy_action);
         call.turn_item_emitter
-            .emit_completed(web_search_item(&call.call_id, command_action))
+            .emit_completed(extension_turn_item(
+                WebSearchItem {
+                    id: call.call_id.clone(),
+                    query: query.clone(),
+                    action: Some(command_action),
+                },
+                EventMsg::WebSearchEnd(WebSearchEndEvent {
+                    call_id: call.call_id.clone(),
+                    query,
+                    action: legacy_action,
+                }),
+            ))
             .await;
 
         Ok(Box::new(SearchOutput::new(response.output)))
@@ -180,18 +218,17 @@ fn literal_url(ref_id: &str) -> Option<String> {
     Url::parse(ref_id).is_ok().then(|| ref_id.to_string())
 }
 
-fn web_search_item(call_id: &str, action: WebSearchAction) -> ExtensionTurnItem {
-    ExtensionTurnItem::WebSearch(WebSearchItem {
-        id: call_id.to_string(),
-        query: web_search_action_detail(&action),
-        action,
-    })
+fn extension_turn_item(item: WebSearchItem, legacy_event: EventMsg) -> ExtensionTurnItem {
+    ExtensionTurnItem {
+        item: ExtensionItem::WebSearch(item),
+        legacy_events: vec![legacy_event],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use codex_api::SearchCommands;
-    use codex_protocol::models::WebSearchAction;
+    use codex_extension_items::web_search::WebSearchAction;
     use pretty_assertions::assert_eq;
 
     use super::command_action;
