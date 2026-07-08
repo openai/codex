@@ -29,6 +29,7 @@ use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -53,7 +54,7 @@ fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSum
         timestamp: Some(CREATED_AT_RFC3339.to_string()),
         updated_at: Some(UPDATED_AT_RFC3339.to_string()),
         model_provider: MODEL_PROVIDER.to_string(),
-        cwd: PathBuf::from("/"),
+        cwd: test_path_buf("/"),
         cli_version: "0.0.0".to_string(),
         source: SessionSource::Cli,
         git_info: None,
