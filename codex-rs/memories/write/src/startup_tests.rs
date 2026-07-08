@@ -10,6 +10,7 @@ use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider::HttpClientFactory;
 use codex_model_provider::ModelProvider;
 use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::ProviderAccountResult;
@@ -627,10 +628,11 @@ impl ModelProvider for MockMemoryModelProvider {
     fn models_manager(
         &self,
         codex_home: PathBuf,
+        http_client_factory: HttpClientFactory,
         config_model_catalog: Option<ModelsResponse>,
     ) -> codex_models_manager::manager::SharedModelsManager {
         self.delegate
-            .models_manager(codex_home, config_model_catalog)
+            .models_manager(codex_home, http_client_factory, config_model_catalog)
     }
 }
 
