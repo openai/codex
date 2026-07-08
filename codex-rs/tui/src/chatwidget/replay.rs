@@ -139,25 +139,25 @@ impl ChatWidget {
                 ..
             } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
-            ThreadItem::WebSearch { id, query, action } => {
-                self.on_web_search_begin(id.clone());
+            ThreadItem::WebSearch(item) => {
+                self.on_web_search_begin(item.id.clone());
                 self.on_web_search_end(
-                    id,
-                    query,
-                    action.unwrap_or(codex_app_server_protocol::WebSearchAction::Other),
+                    item.id,
+                    item.query,
+                    item.action
+                        .unwrap_or(codex_app_server_protocol::WebSearchAction::Other),
                 );
             }
             ThreadItem::ImageView { id: _, path } => {
                 self.on_view_image_tool_call(path);
             }
-            ThreadItem::ImageGeneration {
-                id,
-                status,
-                revised_prompt,
-                saved_path,
-                ..
-            } => {
-                self.on_image_generation_end(id, status, revised_prompt, saved_path);
+            ThreadItem::ImageGeneration(item) => {
+                self.on_image_generation_end(
+                    item.id,
+                    item.status,
+                    item.revised_prompt,
+                    item.saved_path,
+                );
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if from_replay {
