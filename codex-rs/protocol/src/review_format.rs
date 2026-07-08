@@ -1,8 +1,7 @@
-use codex_protocol::protocol::ReviewFinding;
-use codex_protocol::protocol::ReviewOutputEvent;
+use crate::protocol::ReviewFinding;
+use crate::protocol::ReviewOutputEvent;
 
-// Note: We keep this module UI-agnostic. It returns plain strings that
-// higher layers (e.g., TUI) may style as needed.
+// These helpers return plain strings that higher layers may style as needed.
 
 fn format_location(item: &ReviewFinding) -> String {
     let path = item.code_location.absolute_file_path.display();
@@ -11,7 +10,8 @@ fn format_location(item: &ReviewFinding) -> String {
     format!("{path}:{start}-{end}")
 }
 
-const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
+/// Fallback text used when a review contains no displayable output.
+pub const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 
 /// Format a full review findings block as plain text lines.
 ///

@@ -5,6 +5,7 @@ codex_rust_crate(
     crate_name = "codex_app_server",
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
+        "//codex-rs/code-mode-host:codex-code-mode-host",
     ],
     extra_binaries_non_windows = [
         "//codex-rs/cli:codex",

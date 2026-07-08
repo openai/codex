@@ -449,6 +449,9 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
             }
+            AuthMode::Headers => {
+                unreachable!("header auth cannot be loaded from auth storage")
+            }
             AuthMode::AgentIdentity => {
                 eprintln!("Logged in using access token");
                 std::process::exit(0);

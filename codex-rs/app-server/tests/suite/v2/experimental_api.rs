@@ -30,7 +30,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn mock_experimental_method_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
 
     let init = mcp
         .initialize_with_capabilities(
@@ -62,7 +66,11 @@ async fn mock_experimental_method_requires_experimental_api_capability() -> Resu
 #[tokio::test]
 async fn realtime_conversation_start_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
 
     let init = mcp
         .initialize_with_capabilities(
@@ -109,7 +117,11 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
 #[tokio::test]
 async fn thread_memory_mode_set_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
 
     let init = mcp
         .initialize_with_capabilities(
@@ -144,7 +156,11 @@ async fn thread_memory_mode_set_requires_experimental_api_capability() -> Result
 #[tokio::test]
 async fn thread_settings_update_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
 
     let init = mcp
         .initialize_with_capabilities(
@@ -179,7 +195,11 @@ async fn thread_settings_update_requires_experimental_api_capability() -> Result
 #[tokio::test]
 async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
 
     let init = mcp
         .initialize_with_capabilities(
@@ -231,7 +251,10 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     let init = mcp
         .initialize_with_capabilities(
             default_client_info(),
@@ -270,7 +293,10 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     let init = mcp
         .initialize_with_capabilities(
             default_client_info(),
@@ -308,7 +334,10 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     let init = mcp
         .initialize_with_capabilities(
             default_client_info(),
