@@ -228,19 +228,26 @@ impl ReasoningSummaryCell {
     /// cwd active when the summary was recorded.
     pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
         // Empty reasoning-summary parts can arrive as an HTML comment. Remove that placeholder;
-        // when no prose remains, suppress orphaned status headers instead of rendering them as
-        // transcript content.
+        // when the content consists only of empty parts, suppress their orphaned status headers
+        // instead of rendering them as transcript content.
         let content = if content.contains("<!-- -->") {
-            let content = content.replace("<!-- -->", "");
-            let contains_only_headers = content
+            let mut lines = content
                 .lines()
                 .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .all(|line| line.len() > 4 && line.starts_with("**") && line.ends_with("**"));
-            if contains_only_headers {
+                .filter(|line| !line.is_empty());
+            let mut contains_only_empty_parts = lines.next() == Some("<!-- -->");
+            while contains_only_empty_parts && let Some(line) = lines.next() {
+                let is_header = line
+                    .strip_prefix("**")
+                    .and_then(|line| line.strip_suffix("**"))
+                    .is_some_and(|header| !header.is_empty() && !header.contains("**"));
+                contains_only_empty_parts = is_header && lines.next() == Some("<!-- -->");
+            }
+
+            if contains_only_empty_parts {
                 String::new()
             } else {
-                content
+                content.replace("<!-- -->", "")
             }
         } else {
             content

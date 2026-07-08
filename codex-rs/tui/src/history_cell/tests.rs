@@ -2388,6 +2388,28 @@ fn reasoning_summary_block_hides_empty_html_comment_parts() {
 }
 
 #[test]
+fn reasoning_summary_block_preserves_bold_content_after_empty_html_comment_part() {
+    let cell = new_reasoning_summary_block(
+        "**Status**\n\n<!-- -->\n\n**Important conclusion**".to_string(),
+        &test_cwd(),
+    );
+
+    let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+    insta::assert_snapshot!(rendered_display.join("\n"), @"• Important conclusion");
+
+    let rendered_transcript = render_transcript(cell.as_ref());
+    assert_eq!(rendered_transcript, vec!["• Important conclusion"]);
+
+    let cell = new_reasoning_summary_block(
+        "**Status**\n\n<!-- -->\n\n**Result:** keep **this**".to_string(),
+        &test_cwd(),
+    );
+
+    let rendered_transcript = render_transcript(cell.as_ref());
+    assert_eq!(rendered_transcript, vec!["• Result: keep this"]);
+}
+
+#[test]
 fn deprecation_notice_renders_summary_with_details() {
     let cell = new_deprecation_notice(
         "Feature flag `foo`".to_string(),
