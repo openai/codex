@@ -17,8 +17,6 @@ use codex_tools::TurnItemEmitter;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::stream_events_utils::TurnItemContributorPolicy;
-use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
@@ -87,13 +85,11 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
-            let (item, legacy_events) = match item {
-                ExtensionTurnItem::WebSearch(item) => (TurnItem::WebSearch(item), Vec::new()),
-                ExtensionTurnItem::Extension {
-                    item,
-                    legacy_events,
-                } => (TurnItem::Extension(item), legacy_events),
-            };
+            let ExtensionTurnItem {
+                item,
+                legacy_events,
+            } = item;
+            let item = TurnItem::Extension(item);
             session.emit_turn_item_started(turn.as_ref(), &item).await;
             emit_legacy_events(session.as_ref(), turn.as_ref(), legacy_events).await;
         })
@@ -104,25 +100,11 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
-            let (item, legacy_events) = match item {
-                ExtensionTurnItem::Extension {
-                    item,
-                    legacy_events,
-                } => (TurnItem::Extension(item), legacy_events),
-                ExtensionTurnItem::WebSearch(item) => {
-                    let mut item = TurnItem::WebSearch(item);
-                    finalize_turn_item(
-                        session.as_ref(),
-                        turn.as_ref(),
-                        TurnItemContributorPolicy::Run(turn.extension_data.as_ref()),
-                        &mut item,
-                        turn.collaboration_mode.mode
-                            == codex_protocol::config_types::ModeKind::Plan,
-                    )
-                    .await;
-                    (item, Vec::new())
-                }
-            };
+            let ExtensionTurnItem {
+                item,
+                legacy_events,
+            } = item;
+            let item = TurnItem::Extension(item);
             session.emit_turn_item_completed(turn.as_ref(), item).await;
             emit_legacy_events(session.as_ref(), turn.as_ref(), legacy_events).await;
         })
@@ -181,11 +163,10 @@ mod tests {
 
     use codex_extension_items::ExtensionItem;
     use codex_extension_items::image_generation::ImageGenerationItem;
+    use codex_extension_items::web_search::WebSearchItem;
     use codex_protocol::items::TurnItem;
-    use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
-    use codex_protocol::models::WebSearchAction;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ImageGenerationBeginEvent;
     use codex_protocol::protocol::ImageGenerationEndEvent;
@@ -274,16 +255,16 @@ mod tests {
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-            let item = ExtensionTurnItem::WebSearch(WebSearchItem {
-                id: call.call_id.clone(),
-                query: "rust trait object".to_string(),
-                action: WebSearchAction::Search {
-                    query: Some("rust trait object".to_string()),
-                    queries: None,
-                },
-            });
-            call.turn_item_emitter.emit_started(item.clone()).await;
-            call.turn_item_emitter.emit_completed(item).await;
+            call.turn_item_emitter
+                .emit_started(ExtensionTurnItem {
+                    item: ExtensionItem::WebSearch(WebSearchItem {
+                        id: call.call_id.clone(),
+                        query: String::new(),
+                        action: None,
+                    }),
+                    legacy_events: Vec::new(),
+                })
+                .await;
             *self.captured_call.lock().await = Some(call);
             Ok(
                 Box::new(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
@@ -420,39 +401,17 @@ mod tests {
         let EventMsg::ItemStarted(started) = started.msg else {
             panic!("expected item started event");
         };
-        let TurnItem::WebSearch(started_item) = started.item else {
-            panic!("expected web search item");
+        let TurnItem::Extension(ExtensionItem::WebSearch(started_item)) = started.item else {
+            panic!("expected extension web search item");
         };
-        let begin = rx.recv().await.expect("legacy web search begin event");
-        let EventMsg::WebSearchBegin(begin) = begin.msg else {
-            panic!("expected legacy web search begin event");
-        };
-        let completed = rx.recv().await.expect("item completed event");
-        let EventMsg::ItemCompleted(completed) = completed.msg else {
-            panic!("expected item completed event");
-        };
-        let TurnItem::WebSearch(completed_item) = completed.item else {
-            panic!("expected web search item");
-        };
-        let end = rx.recv().await.expect("legacy web search end event");
-        let EventMsg::WebSearchEnd(end) = end.msg else {
-            panic!("expected legacy web search end event");
-        };
-
-        let expected = WebSearchItem {
-            id: "call-extension".to_string(),
-            query: "rust trait object".to_string(),
-            action: WebSearchAction::Search {
-                query: Some("rust trait object".to_string()),
-                queries: None,
-            },
-        };
-        assert_eq!(started_item, expected);
-        assert_eq!(completed_item, expected);
-        assert_eq!(begin.call_id, expected.id);
-        assert_eq!(end.call_id, expected.id);
-        assert_eq!(end.query, expected.query);
-        assert_eq!(end.action, expected.action);
+        assert_eq!(
+            started_item,
+            WebSearchItem {
+                id: "call-extension".to_string(),
+                query: String::new(),
+                action: None,
+            }
+        );
     }
 
     #[tokio::test]
@@ -484,7 +443,7 @@ mod tests {
         });
         codex_tools::TurnItemEmitter::emit_started(
             &emitter,
-            ExtensionTurnItem::Extension {
+            ExtensionTurnItem {
                 item: expected_started_item.clone(),
                 legacy_events: vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
                     call_id: "call-image".to_string(),
@@ -494,7 +453,7 @@ mod tests {
         .await;
         codex_tools::TurnItemEmitter::emit_completed(
             &emitter,
-            ExtensionTurnItem::Extension {
+            ExtensionTurnItem {
                 item: expected_completed_item.clone(),
                 legacy_events: vec![EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
                     call_id: "call-image".to_string(),

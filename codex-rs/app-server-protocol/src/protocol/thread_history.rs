@@ -21,7 +21,10 @@ use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnItemsView;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
+#[cfg(test)]
 use crate::protocol::v2::WebSearchAction;
+use crate::protocol::v2::WebSearchItem;
+use crate::protocol::v2::web_search_action_from_core;
 use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::MessagePhase;
@@ -613,20 +616,20 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_web_search_begin(&mut self, payload: &WebSearchBeginEvent) {
-        let item = ThreadItem::WebSearch {
+        let item = ThreadItem::WebSearch(WebSearchItem {
             id: payload.call_id.clone(),
             query: String::new(),
             action: None,
-        };
+        });
         self.upsert_item_in_current_turn(item);
     }
 
     fn handle_web_search_end(&mut self, payload: &WebSearchEndEvent) {
-        let item = ThreadItem::WebSearch {
+        let item = ThreadItem::WebSearch(WebSearchItem {
             id: payload.call_id.clone(),
             query: payload.query.clone(),
-            action: Some(WebSearchAction::from(payload.action.clone())),
-        };
+            action: Some(web_search_action_from_core(payload.action.clone())),
+        });
         self.upsert_item_in_current_turn(item);
     }
 
@@ -2549,14 +2552,14 @@ mod tests {
         assert_eq!(turns[0].items.len(), 4);
         assert_eq!(
             turns[0].items[1],
-            ThreadItem::WebSearch {
+            ThreadItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
                 query: "codex".into(),
                 action: Some(WebSearchAction::Search {
                     query: Some("codex".into()),
                     queries: None,
                 }),
-            }
+            })
         );
         assert_eq!(
             turns[0].items[2],
@@ -3982,14 +3985,14 @@ mod tests {
             ThreadHistoryChangeSet {
                 changed_items: vec![ThreadHistoryItemChange {
                     turn_id: "rollout-0".into(),
-                    item: ThreadItem::WebSearch {
+                    item: ThreadItem::WebSearch(WebSearchItem {
                         id: "search-1".into(),
                         query: "codex".into(),
                         action: Some(WebSearchAction::Search {
                             query: Some("codex".into()),
                             queries: None,
                         }),
-                    },
+                    }),
                 }],
                 changed_turns: Vec::new(),
                 removed_turn_ids: Vec::new(),
@@ -4117,14 +4120,14 @@ mod tests {
             ThreadHistoryChangeSet {
                 changed_items: vec![ThreadHistoryItemChange {
                     turn_id: "rollout-0".into(),
-                    item: ThreadItem::WebSearch {
+                    item: ThreadItem::WebSearch(WebSearchItem {
                         id: "search-1".into(),
                         query: "codex".into(),
                         action: Some(WebSearchAction::Search {
                             query: Some("codex".into()),
                             queries: None,
                         }),
-                    },
+                    }),
                 }],
                 changed_turns: vec![ThreadHistoryTurnChange {
                     turn_id: "rollout-0".into(),
