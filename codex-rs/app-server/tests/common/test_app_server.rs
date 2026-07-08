@@ -147,6 +147,7 @@ pub struct TestAppServer {
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+const CODE_MODE_HOST_PATH_ENV_VAR: &str = "CODEX_CODE_MODE_HOST_PATH";
 
 impl TestAppServer {
     /// Starts building a server with a temporary CODEX_HOME and the standard
@@ -1939,6 +1940,20 @@ impl TestAppServerBuilder {
             }
             TestAppServerEnvironment::None => None,
         };
+        if !env_overrides
+            .iter()
+            .any(|(key, _)| key == CODE_MODE_HOST_PATH_ENV_VAR)
+            && let Ok(code_mode_host_program) =
+                codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
+        {
+            env_overrides.insert(
+                0,
+                (
+                    CODE_MODE_HOST_PATH_ENV_VAR.to_string(),
+                    Some(code_mode_host_program.to_string_lossy().into_owned()),
+                ),
+            );
+        }
         let program = match program {
             Some(program) => program,
             None => codex_utils_cargo_bin::cargo_bin("codex-app-server")
