@@ -495,10 +495,8 @@ impl Features {
                 }
                 _ => {}
             }
-            if let Some(feature) = legacy::feature_for_key(k)
-                && m.contains_key(feature.key())
-            {
-                self.record_legacy_usage(k, feature);
+            if k == "imagegenext" && m.contains_key(Feature::ImageGeneration.key()) {
+                self.record_legacy_usage(k, Feature::ImageGeneration);
                 continue;
             }
             match feature_for_key(k) {

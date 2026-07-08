@@ -466,7 +466,7 @@ model_provider = "openai-custom"
 enable_request_compression = false
 
 [model_providers.openai-custom]
-name = "OpenAI"
+name = "OpenAI Custom"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
