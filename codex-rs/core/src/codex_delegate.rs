@@ -656,11 +656,10 @@ async fn handle_patch_approval(
     let decision = if let Some(decision) = guardian_decision {
         decision
     } else {
-        let decision_rx = parent_session
-            .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
-            .await;
+        let decision =
+            parent_session.request_patch_approval(parent_ctx, call_id, changes, reason, grant_root);
         await_approval_with_cancel(
-            async move { decision_rx.await.unwrap_or_default() },
+            decision,
             parent_session,
             &approval_id,
             cancel_token,
