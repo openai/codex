@@ -45,6 +45,7 @@ pub(super) struct ThreadEventStore {
     pub(super) pending_interactive_replay: PendingInteractiveReplayState,
     pub(super) active_turn_id: Option<String>,
     pub(super) input_state: Option<ThreadInputState>,
+    latest_token_usage: Option<codex_app_server_protocol::ThreadTokenUsageUpdatedNotification>,
     pub(super) capacity: usize,
     pub(super) active: bool,
 }
@@ -69,6 +70,7 @@ impl ThreadEventStore {
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             active_turn_id: None,
             input_state: None,
+            latest_token_usage: None,
             capacity,
             active: false,
         }
@@ -107,6 +109,9 @@ impl ThreadEventStore {
     pub(super) fn push_notification(&mut self, notification: ServerNotification) {
         self.pending_interactive_replay
             .note_server_notification(&notification);
+        if let ServerNotification::ThreadTokenUsageUpdated(notification) = &notification {
+            self.latest_token_usage = Some(notification.clone());
+        }
         match &notification {
             ServerNotification::TurnStarted(turn) => {
                 self.active_turn_id = Some(turn.turn.id.clone());
@@ -206,6 +211,7 @@ impl ThreadEventStore {
     }
 
     pub(super) fn snapshot(&self) -> ThreadEventSnapshot {
+        let latest_token_usage = self.latest_token_usage.as_ref();
         ThreadEventSnapshot {
             session: self.session.clone(),
             turns: self.turns.clone(),
@@ -218,11 +224,19 @@ impl ThreadEventStore {
                     ThreadBufferedEvent::Request(request) => self
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
+                    ThreadBufferedEvent::Notification(
+                        ServerNotification::ThreadTokenUsageUpdated(_),
+                    ) => latest_token_usage.is_none(),
                     ThreadBufferedEvent::Notification(_)
                     | ThreadBufferedEvent::HistoryEntryResponse(_)
                     | ThreadBufferedEvent::FeedbackSubmission(_) => true,
                 })
                 .cloned()
+                .chain(latest_token_usage.cloned().map(|notification| {
+                    ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(
+                        notification,
+                    ))
+                }))
                 .collect(),
             input_state: self.input_state.clone(),
         }
@@ -349,6 +363,9 @@ mod tests {
     use codex_app_server_protocol::HookScope as AppServerHookScope;
     use codex_app_server_protocol::HookStartedNotification;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
+    use codex_app_server_protocol::ThreadTokenUsage;
+    use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+    use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_config::types::ApprovalsReviewer;
@@ -415,6 +432,31 @@ mod tests {
                 completed_at: Some(0),
                 duration_ms: Some(1),
                 ..test_turn(turn_id, status, Vec::new())
+            },
+        })
+    }
+
+    fn token_usage_notification(thread_id: ThreadId, window_number: u64) -> ServerNotification {
+        ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            window_number,
+            token_usage: ThreadTokenUsage {
+                total: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 4,
+                    cached_input_tokens: 1,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                },
+                last: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 4,
+                    cached_input_tokens: 1,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: Some(100),
             },
         })
     }
@@ -553,6 +595,35 @@ mod tests {
         store.clear_active_turn_id();
 
         assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
+    fn thread_event_store_snapshot_preserves_latest_token_usage() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 1);
+        store.push_notification(token_usage_notification(
+            thread_id, /*window_number*/ 3,
+        ));
+        store.push_notification(ServerNotification::ConfigWarning(
+            codex_app_server_protocol::ConfigWarningNotification {
+                summary: "unrelated warning".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            },
+        ));
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        let [
+            ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(
+                notification,
+            )),
+        ] = snapshot.events.as_slice()
+        else {
+            panic!("expected the latest token usage notification");
+        };
+        assert_eq!(notification.window_number, 3);
     }
 
     #[test]

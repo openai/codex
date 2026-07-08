@@ -901,8 +901,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
-                .await;
+            let window_number = conversation.context_window_number().await;
+            handle_token_count_event(
+                conversation_id,
+                event_turn_id,
+                token_count_event,
+                window_number,
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
@@ -1610,6 +1617,7 @@ async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
+    window_number: u64,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
@@ -1618,6 +1626,7 @@ async fn handle_token_count_event(
             thread_id: conversation_id.to_string(),
             turn_id,
             token_usage,
+            window_number,
         };
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
@@ -3829,6 +3838,7 @@ mod tests {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
             },
+            /*window_number*/ 7,
             &outgoing,
         )
         .await;
@@ -3840,6 +3850,7 @@ mod tests {
             ) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, turn_id);
+                assert_eq!(payload.window_number, 7);
                 let usage = payload.token_usage;
                 assert_eq!(usage.total.total_tokens, 200);
                 assert_eq!(usage.total.cached_input_tokens, 25);
@@ -3886,6 +3897,7 @@ mod tests {
                 info: None,
                 rate_limits: None,
             },
+            /*window_number*/ 0,
             &outgoing,
         )
         .await;

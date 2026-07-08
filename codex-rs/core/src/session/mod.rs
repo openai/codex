@@ -1273,6 +1273,12 @@ impl Session {
         state.token_info()
     }
 
+    /// Returns the current context-window generation for this session.
+    pub(crate) async fn context_window_number(&self) -> u64 {
+        let state = self.state.lock().await;
+        state.auto_compact_window_number()
+    }
+
     pub(crate) async fn get_estimated_token_count(
         &self,
         turn_context: &TurnContext,
@@ -3487,9 +3493,8 @@ impl Session {
     }
 
     pub(crate) async fn current_window_id(&self) -> String {
-        let state = self.state.lock().await;
         let thread_id = self.thread_id;
-        let window_number = state.auto_compact_window_number();
+        let window_number = self.context_window_number().await;
         format!("{thread_id}:{window_number}")
     }
 

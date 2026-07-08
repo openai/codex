@@ -44,10 +44,12 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
+    let window_number = conversation.context_window_number().await;
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
         turn_id: token_usage_turn_id.unwrap_or_else(|| latest_token_usage_turn_id(thread)),
         token_usage: ThreadTokenUsage::from(info),
+        window_number,
     };
     outgoing
         .send_server_notification_to_connections(

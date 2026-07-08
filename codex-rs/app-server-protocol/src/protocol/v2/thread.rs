@@ -1373,6 +1373,10 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub token_usage: ThreadTokenUsage,
+    /// Current context-window generation. This starts at zero and advances after compaction.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub window_number: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

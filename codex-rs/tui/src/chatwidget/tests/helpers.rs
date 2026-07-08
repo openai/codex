@@ -382,6 +382,14 @@ fn token_usage_breakdown(usage: TokenUsage) -> codex_app_server_protocol::TokenU
 }
 
 pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageInfo>) {
+    handle_token_count_with_window_number(chat, info, /*window_number*/ 0);
+}
+
+pub(super) fn handle_token_count_with_window_number(
+    chat: &mut ChatWidget,
+    info: Option<TokenUsageInfo>,
+    window_number: u64,
+) {
     match info {
         Some(info) => {
             chat.handle_server_notification(
@@ -393,6 +401,7 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                             .last_turn_id
                             .clone()
                             .unwrap_or_else(|| "turn-1".to_string()),
+                        window_number,
                         token_usage: codex_app_server_protocol::ThreadTokenUsage {
                             total: token_usage_breakdown(info.total_token_usage),
                             last: token_usage_breakdown(info.last_token_usage),

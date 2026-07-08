@@ -1135,6 +1135,7 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         ThreadId::new(),
         "turn-1",
         Some(950_000),
+        /*window_number*/ 0,
     )));
 
     assert_eq!(
@@ -4651,10 +4652,12 @@ fn token_usage_notification(
     thread_id: ThreadId,
     turn_id: &str,
     model_context_window: Option<i64>,
+    window_number: u64,
 ) -> ServerNotification {
     ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
+        window_number,
         token_usage: ThreadTokenUsage {
             total: TokenUsageBreakdown {
                 total_tokens: 10,

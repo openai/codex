@@ -19821,6 +19821,13 @@
           },
           "turnId": {
             "type": "string"
+          },
+          "windowNumber": {
+            "default": 0,
+            "description": "Current context-window generation. This starts at zero and advances after compaction.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
           }
         },
         "required": [

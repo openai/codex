@@ -42,6 +42,21 @@ async fn token_count_none_resets_context_indicator() {
 }
 
 #[tokio::test]
+async fn token_count_updates_context_window_generation() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_token_count_with_window_number(
+        &mut chat,
+        Some(make_token_info(
+            /*total_tokens*/ 1, /*context_window*/ 100,
+        )),
+        /*window_number*/ 3,
+    );
+
+    assert_eq!(chat.window_number, 3);
+}
+
+#[tokio::test]
 async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 

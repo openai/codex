@@ -30,6 +30,7 @@ impl ChatWidget {
         }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
+                self.window_number = notification.window_number;
                 self.set_token_info(Some(token_usage_info_from_app_server(
                     notification.token_usage,
                 )));

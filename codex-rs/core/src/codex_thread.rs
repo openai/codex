@@ -450,6 +450,11 @@ impl CodexThread {
         self.codex.session.token_usage_info().await
     }
 
+    /// Returns the current context-window generation for this thread.
+    pub async fn context_window_number(&self) -> u64 {
+        self.codex.session.context_window_number().await
+    }
+
     /// Records a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let item = ResponseItem::Message {
