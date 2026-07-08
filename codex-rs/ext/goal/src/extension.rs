@@ -32,6 +32,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
+use rand::Rng;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
@@ -46,9 +47,10 @@ use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
 
-// Capacity failures do not consume user tokens, but retrying immediately can
-// create a tight loop. Keep the retry cadence deliberately low.
-const DEFERRED_GOAL_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+// Capacity failures do not consume user tokens. Add jitter around a five-minute
+// average so clients that hit capacity together do not retry in lockstep.
+const DEFERRED_GOAL_RETRY_MIN_SECS: u64 = 4 * 60;
+const DEFERRED_GOAL_RETRY_MAX_SECS: u64 = 6 * 60;
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -313,7 +315,9 @@ where
                     .accounting_state()
                     .turn_is_current_active_goal(input.turn_id)
             {
-                return Some(DEFERRED_GOAL_RETRY_DELAY);
+                return Some(Duration::from_secs(rand::rng().random_range(
+                    DEFERRED_GOAL_RETRY_MIN_SECS..=DEFERRED_GOAL_RETRY_MAX_SECS,
+                )));
             }
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,

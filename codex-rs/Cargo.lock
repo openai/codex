@@ -3160,6 +3160,7 @@ dependencies = [
  "codex-tools",
  "codex-utils-template",
  "pretty_assertions",
+ "rand 0.9.3",
  "serde",
  "serde_json",
  "tempfile",
