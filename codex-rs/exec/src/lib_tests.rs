@@ -509,7 +509,7 @@ async fn thread_resume_params_only_include_explicit_review_policy_override() {
     let params_without_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        /* approvals_reviewer_override */ None,
+        /*approvals_reviewer_override*/ None,
     );
     let params_with_override = thread_resume_params_from_config(
         &config,
@@ -652,7 +652,7 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        /* approvals_reviewer_override */ None,
+        /*approvals_reviewer_override*/ None,
     );
 
     assert_eq!(start_params.config, expected_config);
@@ -688,7 +688,7 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        /* approvals_reviewer_override */ None,
+        /*approvals_reviewer_override*/ None,
     );
 
     assert_eq!(config.permissions.active_permission_profile(), None);

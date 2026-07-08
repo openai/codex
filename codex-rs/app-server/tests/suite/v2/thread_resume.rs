@@ -446,7 +446,11 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let thread_id = {
-        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build()
+            .await?;
         timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
         let start_id = mcp
@@ -498,7 +502,11 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
         ),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -527,7 +535,11 @@ async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Res
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let thread_id = {
-        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build()
+            .await?;
         timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
         let start_id = mcp
@@ -587,7 +599,11 @@ async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Res
         thread.id
     };
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
