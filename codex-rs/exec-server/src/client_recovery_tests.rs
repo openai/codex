@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use pretty_assertions::assert_eq;
+
 use super::*;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ProcessOutputChunk;
@@ -81,6 +83,88 @@ fn process_event_reorder_rejects_oversized_output() {
         .expect_err("oversized pending process output should be rejected");
 
     assert!(error.contains("bytes"));
+}
+
+#[test]
+fn process_event_reorder_accepts_gap_closing_event_at_limits() {
+    let state = SessionState::new(/*recoverable*/ true);
+    let chunk_size =
+        super::super::MAX_PENDING_PROCESS_EVENT_BYTES / super::super::MAX_PENDING_PROCESS_EVENTS;
+    let last_seq = super::super::MAX_PENDING_PROCESS_EVENTS as u64 + 1;
+
+    for seq in 2..=last_seq {
+        assert!(
+            !state
+                .publish_ordered_event(ExecProcessEvent::Output(ProcessOutputChunk {
+                    seq,
+                    stream: ExecOutputStream::Stdout,
+                    chunk: vec![0; chunk_size].into(),
+                }))
+                .expect("future output should fit within reorder limits")
+        );
+    }
+    assert!(
+        !state
+            .publish_ordered_event(ExecProcessEvent::Output(ProcessOutputChunk {
+                seq: 1,
+                stream: ExecOutputStream::Stdout,
+                chunk: b"x".to_vec().into(),
+            }))
+            .expect("gap-closing output should drain the reorder buffer")
+    );
+
+    let ordered_events = state
+        .ordered_events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(
+        (
+            ordered_events.last_published_seq,
+            ordered_events.pending.len(),
+            ordered_events.pending_bytes,
+        ),
+        (last_seq, 0, 0)
+    );
+}
+
+#[test]
+fn recovery_publishes_dense_output_beyond_reorder_entry_limit() {
+    let state = SessionState::new(/*recoverable*/ true);
+    let last_seq = super::super::MAX_PENDING_PROCESS_EVENTS as u64 + 1;
+    let chunks = (1..=last_seq)
+        .map(|seq| ProcessOutputChunk {
+            seq,
+            stream: ExecOutputStream::Stdout,
+            chunk: b"x".to_vec().into(),
+        })
+        .collect();
+
+    assert!(
+        !state
+            .recover_events(ReadResponse {
+                chunks,
+                next_seq: last_seq + 1,
+                exited: false,
+                exit_code: None,
+                closed: false,
+                failure: None,
+                sandbox_denied: false,
+            })
+            .expect("dense retained output should recover")
+    );
+
+    let ordered_events = state
+        .ordered_events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(
+        (
+            ordered_events.last_published_seq,
+            ordered_events.pending.len(),
+            ordered_events.pending_bytes,
+        ),
+        (last_seq, 0, 0)
+    );
 }
 
 #[tokio::test]

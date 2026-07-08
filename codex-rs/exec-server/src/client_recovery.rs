@@ -78,11 +78,33 @@ impl SessionState {
             {
                 return Ok(false);
             }
+            let pending_exit = ordered_events.pending.range_mut(..=target_seq).find_map(
+                |(_, event)| match event {
+                    ExecProcessEvent::Exited {
+                        sandbox_denied: pending_sandbox_denied,
+                        ..
+                    } => Some(pending_sandbox_denied),
+                    _ => None,
+                },
+            );
+            let exit_pending = pending_exit.is_some();
+            if let Some(pending_sandbox_denied) = pending_exit {
+                *pending_sandbox_denied =
+                    Some(pending_sandbox_denied.unwrap_or(false) || sandbox_denied);
+            }
+            let mut published_closed = false;
             for chunk in chunks {
+                if chunk.seq > target_seq {
+                    return Err(ExecServerError::Protocol(format!(
+                        "recovered process output sequence {} exceeds target sequence {target_seq}",
+                        chunk.seq
+                    )));
+                }
                 if chunk.seq > ordered_events.last_published_seq {
                     ordered_events
                         .insert_pending(ExecProcessEvent::Output(chunk))
                         .map_err(ExecServerError::Protocol)?;
+                    published_closed |= self.publish_ready(&mut ordered_events);
                 }
             }
             if closed {
@@ -101,26 +123,17 @@ impl SessionState {
                 }
             }
 
-            let pending_exit = ordered_events.pending.range_mut(..=target_seq).find_map(
-                |(_, event)| match event {
-                    ExecProcessEvent::Exited {
-                        sandbox_denied: pending_sandbox_denied,
-                        ..
-                    } => Some(pending_sandbox_denied),
-                    _ => None,
-                },
-            );
-            let exit_pending = pending_exit.is_some();
-            if let Some(pending_sandbox_denied) = pending_exit {
-                *pending_sandbox_denied =
-                    Some(pending_sandbox_denied.unwrap_or(false) || sandbox_denied);
-            }
             let exit_known = ordered_events.exit_published || exit_pending;
             let event_count = target_seq - ordered_events.last_published_seq;
-            let retained_count = ordered_events
-                .pending
-                .range(ordered_events.last_published_seq.saturating_add(1)..=target_seq)
-                .count() as u64;
+            let first_unpublished_seq = ordered_events.last_published_seq.saturating_add(1);
+            let retained_count = if first_unpublished_seq <= target_seq {
+                ordered_events
+                    .pending
+                    .range(first_unpublished_seq..=target_seq)
+                    .count() as u64
+            } else {
+                0
+            };
             let missing_count = event_count.saturating_sub(retained_count);
             if exited && !exit_known {
                 if missing_count != 1 {
@@ -142,7 +155,8 @@ impl SessionState {
             } else if missing_count != 0 {
                 return Err(recovery_gap_error(target_seq));
             }
-            self.publish_ready(&mut ordered_events)
+            published_closed |= self.publish_ready(&mut ordered_events);
+            published_closed
         };
 
         self.note_change(target_seq);

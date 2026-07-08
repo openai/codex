@@ -972,20 +972,28 @@ impl OrderedSessionEvents {
         }
 
         let next_seq = self.last_published_seq.saturating_add(1);
+        // The next expected event is synchronously published by every caller,
+        // so it can drain a full buffer without becoming retained state.
+        let closes_gap = seq == next_seq;
         if seq.saturating_sub(next_seq) > MAX_PROCESS_EVENT_SEQUENCE_GAP {
             return Err(format!(
                 "process event sequence {seq} is more than {MAX_PROCESS_EVENT_SEQUENCE_GAP} entries ahead of {next_seq}"
             ));
         }
-        if self.pending.len() >= MAX_PENDING_PROCESS_EVENTS {
+        if !closes_gap && self.pending.len() >= MAX_PENDING_PROCESS_EVENTS {
             return Err(format!(
                 "process event reorder buffer exceeds {MAX_PENDING_PROCESS_EVENTS} entries"
             ));
         }
 
         let event_bytes = pending_process_event_bytes(&event);
+        if event_bytes > MAX_PENDING_PROCESS_EVENT_BYTES {
+            return Err(format!(
+                "process event exceeds {MAX_PENDING_PROCESS_EVENT_BYTES} bytes"
+            ));
+        }
         let pending_bytes = self.pending_bytes.saturating_add(event_bytes);
-        if pending_bytes > MAX_PENDING_PROCESS_EVENT_BYTES {
+        if !closes_gap && pending_bytes > MAX_PENDING_PROCESS_EVENT_BYTES {
             return Err(format!(
                 "process event reorder buffer exceeds {MAX_PENDING_PROCESS_EVENT_BYTES} bytes"
             ));
