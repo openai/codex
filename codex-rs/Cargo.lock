@@ -4471,6 +4471,7 @@ dependencies = [
  "codex-api",
  "codex-core",
  "codex-extension-api",
+ "codex-extension-items",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",

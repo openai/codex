@@ -9,6 +9,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 pub mod image_generation;
+pub mod web_search;
 
 /// Canonical extension-owned turn item carried through core lifecycle events.
 ///
@@ -34,6 +35,9 @@ pub enum ExtensionItem {
     #[serde(rename = "image_gen.generation")]
     #[ts(rename = "image_gen.generation")]
     ImageGeneration(image_generation::ImageGenerationItem),
+    #[serde(rename = "web.search")]
+    #[ts(rename = "web.search")]
+    WebSearch(web_search::WebSearchItem),
 }
 
 impl ExtensionItem {
@@ -42,6 +46,7 @@ impl ExtensionItem {
     pub fn id(&self) -> &str {
         match self {
             Self::ImageGeneration(item) => &item.id,
+            Self::WebSearch(item) => &item.id,
         }
     }
 }

@@ -82,6 +82,7 @@ export type { Tool } from "./Tool";
 export type { Verbosity } from "./Verbosity";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WebSearchContextSize } from "./WebSearchContextSize";
+export type { WebSearchItem } from "./WebSearchItem";
 export type { WebSearchLocation } from "./WebSearchLocation";
 export type { WebSearchMode } from "./WebSearchMode";
 export type { WebSearchToolConfig } from "./WebSearchToolConfig";
