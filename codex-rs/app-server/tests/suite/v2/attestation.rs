@@ -67,8 +67,12 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_capabilities(

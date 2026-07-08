@@ -52,6 +52,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
@@ -69,6 +70,8 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
@@ -1480,6 +1483,16 @@ impl Config {
             .then(AuthRouteConfig::respect_system_proxy)
     }
 
+    /// Creates the HTTP client factory resolved from the effective feature configuration.
+    pub fn http_client_factory(&self) -> HttpClientFactory {
+        let outbound_proxy_policy = if self.respect_system_proxy {
+            OutboundProxyPolicy::RespectSystemProxy
+        } else {
+            OutboundProxyPolicy::ReqwestDefault
+        };
+        HttpClientFactory::new(outbound_proxy_policy)
+    }
+
     /// Build the plugin-manager input from the effective config.
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
@@ -1528,6 +1541,14 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+        self.to_mcp_config_with_loaded_plugins(&loaded_plugins, additional_plugin_registrations)
+    }
+
+    pub(crate) fn to_mcp_config_with_loaded_plugins(
+        &self,
+        loaded_plugins: &PluginLoadOutcome,
+        additional_plugin_registrations: impl IntoIterator<Item = McpServerRegistration>,
+    ) -> McpConfig {
         let mut catalog = ResolvedMcpCatalog::builder();
         for (plugin_order, plugin) in loaded_plugins
             .plugins()

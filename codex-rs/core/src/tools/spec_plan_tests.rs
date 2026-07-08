@@ -1609,7 +1609,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         live_web_search.visible_spec("web_search"),
         &ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: None,
+            indexed_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,

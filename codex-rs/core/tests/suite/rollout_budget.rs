@@ -195,9 +195,21 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
     .await;
     test.submit_turn(FOLLOW_UP_PROMPT).await?;
 
-    let request = follow_up.single_request();
+    let requests = follow_up
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text == FOLLOW_UP_PROMPT)
+        })
+        .collect::<Vec<_>>();
+    let [request] = requests.as_slice() else {
+        anyhow::bail!("expected 1 follow-up request, got {}", requests.len());
+    };
     assert_eq!(
-        rollout_budget_texts(&request).last(),
+        rollout_budget_texts(request).last(),
         Some(&rollout_budget_message(/*remaining_tokens*/ 50))
     );
 

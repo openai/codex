@@ -299,6 +299,7 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -321,6 +322,7 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: true,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -341,6 +343,68 @@ async fn file_system_walk_handles_directory_symlinks(
                 WalkEntry {
                     path: PathUri::from_host_native_path(target_link.join("root-link"))?,
                     kind: WalkEntryKind::Directory,
+                },
+            ],
+            errors: Vec::new(),
+            truncated: false,
+        }
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_prunes_hidden_directories_without_claiming_visible_aliases(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let root = tmp.path().join("root");
+    let hidden = root.join(".hidden");
+    let hidden_nested = hidden.join("nested");
+    let visible = root.join("visible");
+    std::fs::create_dir_all(&hidden_nested)?;
+    std::fs::write(hidden_nested.join("note.txt"), "visible through alias")?;
+    symlink(&hidden, &visible)?;
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(&root)?,
+            WalkOptions {
+                max_depth: 3,
+                max_directories: 3,
+                max_entries: 6,
+                follow_directory_symlinks: true,
+                prune_hidden_directories: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: vec![
+                WalkEntry {
+                    path: PathUri::from_host_native_path(hidden)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(&visible)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(visible.join("nested"))?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(visible.join("nested/note.txt"))?,
+                    kind: WalkEntryKind::File,
                 },
             ],
             errors: Vec::new(),

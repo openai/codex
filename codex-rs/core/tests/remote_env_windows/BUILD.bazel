@@ -6,15 +6,10 @@ wine_rust_test(
     srcs = ["remote_env_windows_test.rs"],
     crate_name = "remote_env_windows_test",
     crate_root = "remote_env_windows_test.rs",
-    host_binaries = {
-        "codex-app-server": "//codex-rs/app-server:codex-app-server",
-    },
     windows_binaries = {
-        "wine-windows-exec-server": "//codex-rs/exec-server/testing:windows-exec-server",
+        "wine-windows-exec-server": "//codex-rs/exec-server/testing:exec-server",
     },
     deps = [
-        "//codex-rs/app-server-protocol",
-        "//codex-rs/app-server/tests/common",
         "//codex-rs/core/tests/common",
         "//codex-rs/exec-server",
         "//codex-rs/exec-server/testing:wine-exec-server-test-support",
@@ -24,7 +19,6 @@ wine_rust_test(
         "@crates//:anyhow",
         "@crates//:pretty_assertions",
         "@crates//:serde_json",
-        "@crates//:tempfile",
         "@crates//:tokio",
     ],
 )

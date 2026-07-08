@@ -42,7 +42,11 @@ enabled = true
 "#,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let params = PluginUninstallParams {
@@ -100,7 +104,11 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -162,7 +170,11 @@ async fn plugin_uninstall_rejects_remote_plugin_when_plugins_are_disabled() -> R
 plugins = false
 "#,
     )?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -241,7 +253,11 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     ));
     std::fs::create_dir_all(legacy_remote_plugin_cache_root.join("local/.codex-plugin"))?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     // Simulate a background remote-cache refresh removing the local bundle
@@ -336,7 +352,11 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
         .join("plugins/cache/openai-curated-remote/linear");
     std::fs::create_dir_all(global_cache_root.join("1.0.0/.codex-plugin"))?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -410,7 +430,11 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
         r#"{"name":"skill-improver","version":"1.0.0"}"#,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -459,7 +483,11 @@ async fn plugin_uninstall_rejects_before_post_when_remote_detail_fetch_fails() -
     ));
     std::fs::create_dir_all(legacy_remote_plugin_cache_root.join("local/.codex-plugin"))?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -501,7 +529,11 @@ async fn plugin_uninstall_rejects_remote_plugin_id_with_spaces_before_network_ca
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -536,7 +568,11 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_id_before_network_call()
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -571,7 +607,11 @@ async fn plugin_uninstall_rejects_empty_remote_plugin_id() -> Result<()> {
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

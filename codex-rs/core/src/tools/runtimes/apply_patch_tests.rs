@@ -80,7 +80,7 @@ async fn guardian_review_request_includes_patch_context() {
 
     assert_eq!(
         guardian_request,
-        GuardianApprovalRequest::ApplyPatch {
+        ApprovalAction::ApplyPatch {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: vec![path],
@@ -232,6 +232,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
         windows_sandbox_private_desktop: true,
         network_denial_cancellation_token: None,
+        network_proxy: None,
     };
 
     let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
@@ -300,6 +301,7 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
+        network_proxy: None,
     };
 
     assert_eq!(

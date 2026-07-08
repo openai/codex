@@ -276,7 +276,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn indexed_web_search_mode_sets_index_gate() {
+async fn indexed_web_search_mode_sets_indexed_access() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -308,7 +308,7 @@ async fn indexed_web_search_mode_sets_index_gate() {
     assert_eq!(
         (
             tool.get("external_web_access").and_then(Value::as_bool),
-            tool.get("index_gated_web_access").and_then(Value::as_bool),
+            tool.get("indexed_web_access").and_then(Value::as_bool),
         ),
         (Some(true), Some(true))
     );

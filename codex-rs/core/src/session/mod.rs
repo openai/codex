@@ -21,10 +21,8 @@ use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
-use crate::connectors;
+use crate::context::ApprovalPromptContext;
 use crate::context::ApprovedCommandPrefixSaved;
-use crate::context::AppsInstructions;
-use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
@@ -632,11 +630,14 @@ impl Codex {
                 developer_instructions: None,
             },
         };
-        let service_tier = get_service_tier(
-            config.service_tier.clone(),
-            config.features.enabled(Feature::FastMode),
+        let fast_mode_enabled = config.features.enabled(Feature::FastMode);
+        let initial_service_tier_warning = unsupported_service_tier_warning(
+            config.service_tier.as_deref(),
+            fast_mode_enabled,
             &model_info,
         );
+        let service_tier =
+            get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -709,6 +710,14 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
+        if let Some(message) = initial_service_tier_warning {
+            session
+                .send_event_raw(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Warning(WarningEvent { message }),
+                })
+                .await;
+        }
         let thread_id = session.thread_id;
 
         // This task will run until Op::Shutdown is received.
@@ -909,6 +918,22 @@ fn get_service_tier(
         service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
             || model_info.supports_service_tier(service_tier)
     })
+}
+
+fn unsupported_service_tier_warning(
+    configured_service_tier: Option<&str>,
+    fast_mode_enabled: bool,
+    model_info: &ModelInfo,
+) -> Option<String> {
+    let service_tier = configured_service_tier.filter(|service_tier| {
+        fast_mode_enabled
+            && *service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE
+            && !model_info.supports_service_tier(service_tier)
+    })?;
+    Some(format!(
+        "Configured service tier `{service_tier}` is not advertised as supported for model `{}` and will be omitted from requests.",
+        model_info.slug
+    ))
 }
 
 fn session_permission_profile_state_from_config(
@@ -1142,12 +1167,8 @@ impl Session {
         state.session_configuration.codex_home().clone()
     }
 
-    pub(crate) fn subscribe_out_of_band_elicitation_pause_state(&self) -> watch::Receiver<bool> {
-        self.out_of_band_elicitation_paused.subscribe()
-    }
-
-    pub(crate) fn set_out_of_band_elicitation_pause_state(&self, paused: bool) {
-        self.out_of_band_elicitation_paused.send_replace(paused);
+    pub(crate) fn subscribe_elicitation_pause_state(&self) -> watch::Receiver<bool> {
+        self.services.elicitations.subscribe()
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1774,6 +1795,9 @@ impl Session {
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
+            self.services
+                .rollout_thread_trace
+                .record_tool_call_event(turn_context.sub_id.clone(), &legacy);
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
@@ -2834,6 +2858,7 @@ impl Session {
     /// This may refresh filesystem-derived state. Normal turns should call it only from
     /// `run_turn` and pass the result down; standalone request or history boundaries may capture
     /// their own step.
+    #[tracing::instrument(name = "step_context.capture", level = "info", skip_all)]
     pub(crate) async fn capture_step_context(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -3182,7 +3207,14 @@ impl Session {
                 PermissionsInstructions::from_permission_profile(
                     &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
-                    turn_context.config.approvals_reviewer,
+                    ApprovalPromptContext::new(
+                        turn_context.config.approvals_reviewer,
+                        turn_context
+                            .model_info
+                            .model_messages
+                            .as_ref()
+                            .and_then(|messages| messages.approvals.as_ref()),
+                    ),
                     self.services.exec_policy.current().as_ref(),
                     #[allow(deprecated)]
                     &turn_context.cwd,
@@ -3239,19 +3271,6 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let accessible_and_enabled_connectors =
-                connectors::list_accessible_and_enabled_connectors_from_manager(
-                    mcp.manager(),
-                    &turn_context.config,
-                )
-                .await;
-            if let Some(apps_instructions) =
-                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
-            {
-                developer_sections.push(apps_instructions.render());
-            }
-        }
         if turn_context.config.include_skill_instructions {
             let available_skills = build_available_skills(
                 turn_context.turn_skills.snapshot.outcome(),
@@ -3305,11 +3324,6 @@ impl Session {
             .and_then(RecommendedPluginsInstructions::from_plugins)
         {
             contextual_user_sections.push(recommended_plugins.render());
-        }
-        if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_instructions.render());
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in &context_contributors {

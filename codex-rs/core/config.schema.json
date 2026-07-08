@@ -150,6 +150,7 @@
       "enum": [
         "auto",
         "prompt",
+        "writes",
         "approve"
       ],
       "type": "string"
@@ -467,6 +468,9 @@
               "type": "boolean"
             },
             "computer_use": {
+              "type": "boolean"
+            },
+            "concurrent_reasoning_summaries": {
               "type": "boolean"
             },
             "connectors": {
@@ -4836,6 +4840,9 @@
           "type": "boolean"
         },
         "computer_use": {
+          "type": "boolean"
+        },
+        "concurrent_reasoning_summaries": {
           "type": "boolean"
         },
         "connectors": {

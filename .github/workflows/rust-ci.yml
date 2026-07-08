@@ -3,11 +3,6 @@ on:
   workflow_call:
   workflow_dispatch:
 
-# Cargo's libgit2 transport has been flaky when fetching git dependencies with
-# nested submodules. Prefer the system git CLI across every Cargo invocation.
-env:
-  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-
 jobs:
   # --- Detect what changed so the fast PR workflow only runs relevant jobs ----
   changed:
@@ -76,12 +71,10 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: just
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Rust benchmark smoke test
@@ -104,6 +97,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
@@ -128,6 +122,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Install nightly argument-comment-lint toolchain
         shell: bash

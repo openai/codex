@@ -185,7 +185,7 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
             let path = path.render_for_ui();
             return bounded_summary(&format!("Viewed {path}"));
         }
-        ThreadItem::ImageGeneration { .. } => return Some("Generated an image".to_string()),
+        ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
         ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
         ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
         ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),

@@ -30,7 +30,6 @@ pub(crate) struct Session {
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
-    pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
     pub(super) state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
@@ -679,7 +678,7 @@ impl Session {
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_config = mcp_manager_for_mcp
+            let mcp_projection = mcp_manager_for_mcp
                 .runtime_config_for_step(
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
@@ -687,8 +686,9 @@ impl Session {
                     /*available_environment_ids*/ &[],
                 )
                 .await;
-            let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
+            let mcp_config = &mcp_projection.config;
+            let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
+            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -699,7 +699,7 @@ impl Session {
             .await;
             (
                 auth,
-                mcp_config,
+                mcp_projection,
                 mcp_servers,
                 auth_statuses,
                 tool_plugin_provenance,
@@ -714,7 +714,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_config, mcp_servers, auth_statuses, tool_plugin_provenance),
+            (auth, mcp_projection, mcp_servers, auth_statuses, tool_plugin_provenance),
         ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
@@ -1056,6 +1056,7 @@ impl Session {
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
                 ),
+                elicitations: crate::elicitation::ElicitationService::new(),
                 shell_zsh_path: config.zsh_path.clone(),
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
@@ -1110,7 +1111,11 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+                    /*concurrent_reasoning_summaries_enabled*/ config
+                        .features
+                        .enabled(Feature::ConcurrentReasoningSummaries),
                     attestation_provider,
+                    config.http_client_factory(),
                 )
                 .with_prompt_cache_key_override(
                     crate::guardian::prompt_cache_key_override_for_review_session(
@@ -1124,15 +1129,11 @@ impl Session {
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };
-            let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
-                watch::channel(false);
-
             let sess = Arc::new(Session {
                 thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,
-                out_of_band_elicitation_paused,
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
@@ -1208,13 +1209,17 @@ impl Session {
                 sess.services.mcp_manager.codex_apps_tools_cache(),
                 codex_apps_tools_cache_key(auth),
                 config.prefix_mcp_tool_names(),
-                mcp_config.client_elicitation_capability.clone(),
+                mcp_projection
+                    .config
+                    .client_elicitation_capability
+                    .clone(),
                 sess.services
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),
+                Some(sess.mcp_elicitation_lifecycle()),
                 codex_mcp::ElicitationRequestRouter::default(),
             )
             .instrument(info_span!(
@@ -1224,7 +1229,8 @@ impl Session {
             .await;
             sess.services
                 .install_mcp_connection_manager(
-                    Arc::new(mcp_config),
+                    Arc::new(mcp_projection.config),
+                    mcp_projection.plugins_available,
                     mcp_runtime_context,
                     /*available_environment_ids*/ Vec::new(),
                     mcp_connection_manager,

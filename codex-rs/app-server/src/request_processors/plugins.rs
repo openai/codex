@@ -163,6 +163,7 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
         share_context,
         source: marketplace_plugin_source_to_info(plugin.source),
         install_policy: plugin.policy.installation.into(),
+        install_policy_source: None,
         auth_policy: plugin.policy.authentication.into(),
         availability: PluginAvailability::Available,
         interface: plugin.interface.map(local_plugin_interface_to_info),
@@ -1104,6 +1105,7 @@ impl PluginRequestProcessor {
                         installed: outcome.plugin.installed,
                         enabled: outcome.plugin.enabled,
                         install_policy: outcome.plugin.policy.installation.into(),
+                        install_policy_source: None,
                         auth_policy: outcome.plugin.policy.authentication.into(),
                         availability: PluginAvailability::Available,
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
@@ -1546,6 +1548,7 @@ impl PluginRequestProcessor {
                     &remote_marketplace_name,
                     /*plugin_id*/ None,
                     error_type,
+                    /*sub_error_type*/ None,
                     err.to_string(),
                 );
                 remote_plugin_catalog_error_to_jsonrpc(
@@ -1589,11 +1592,13 @@ impl PluginRequestProcessor {
         )
         .map_err(|err| {
             let error_type = remote_plugin_bundle_install_error_type(&err);
+            let sub_error_type = err.sub_error_type();
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
                 Some(&resolved_plugin_id),
                 error_type,
+                sub_error_type,
                 err.to_string(),
             );
             remote_plugin_bundle_install_error_to_jsonrpc(err)
@@ -1606,11 +1611,13 @@ impl PluginRequestProcessor {
         .await
         .map_err(|err| {
             let error_type = remote_plugin_bundle_install_error_type(&err);
+            let sub_error_type = err.sub_error_type();
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
                 Some(&resolved_plugin_id),
                 error_type,
+                sub_error_type,
                 err.to_string(),
             );
             remote_plugin_bundle_install_error_to_jsonrpc(err)
@@ -1633,6 +1640,7 @@ impl PluginRequestProcessor {
                 &actual_remote_marketplace_name,
                 Some(&result.plugin_id),
                 error_type,
+                /*sub_error_type*/ None,
                 err.to_string(),
             );
             remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin")
@@ -1730,12 +1738,14 @@ impl PluginRequestProcessor {
         marketplace_name: &str,
         plugin_id: Option<&PluginId>,
         error_type: &'static str,
+        sub_error_type: Option<String>,
         error_message: String,
     ) {
         tracing::warn!(
             remote_plugin_id = %remote_plugin_id,
             marketplace_name = %marketplace_name,
             error_type = %error_type,
+            sub_error_type = sub_error_type.as_deref(),
             error = %error_message,
             "remote plugin install failed"
         );
@@ -2180,6 +2190,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
         installed: summary.installed,
         enabled: summary.enabled,
         install_policy: summary.install_policy,
+        install_policy_source: summary.install_policy_source,
         auth_policy: summary.auth_policy,
         availability: summary.availability,
         interface: summary.interface,

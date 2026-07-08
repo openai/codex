@@ -412,6 +412,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "tempfile",
  "tokio",
  "uuid",
  "wiremock",
@@ -1936,6 +1937,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codex-client",
+ "codex-http-client",
  "codex-protocol",
  "codex-utils-rustls-provider",
  "eventsource-stream",
@@ -2106,6 +2108,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
+ "codex-extension-items",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -2262,7 +2265,7 @@ dependencies = [
  "anyhow",
  "codex-api",
  "codex-backend-openapi-models",
- "codex-client",
+ "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-protocol",
@@ -2392,33 +2395,12 @@ dependencies = [
 name = "codex-client"
 version = "0.0.0"
 dependencies = [
- "bytes",
- "codex-utils-cargo-bin",
- "codex-utils-rustls-provider",
+ "codex-http-client",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
- "opentelemetry",
- "opentelemetry_sdk",
- "pretty_assertions",
  "rand 0.9.3",
- "rcgen",
- "reqwest 0.12.28",
- "rustls",
- "rustls-native-certs",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "system-configuration",
- "tempfile",
- "thiserror 2.0.18",
  "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "windows-sys 0.52.0",
- "zstd 0.13.3",
 ]
 
 [[package]]
@@ -2452,11 +2434,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "codex-client",
  "codex-cloud-tasks-client",
  "codex-cloud-tasks-mock-client",
  "codex-core",
  "codex-git-utils",
+ "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-tui",
@@ -2526,6 +2508,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "pretty_assertions",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
@@ -2660,12 +2643,14 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",
+ "codex-extension-items",
  "codex-features",
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
  "codex-home",
  "codex-hooks",
+ "codex-http-client",
  "codex-image-generation-extension",
  "codex-install-context",
  "codex-login",
@@ -2915,9 +2900,9 @@ dependencies = [
  "bytes",
  "clatter",
  "codex-api",
- "codex-client",
  "codex-exec-server-protocol",
  "codex-file-system",
+ "codex-http-client",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -3029,6 +3014,18 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "codex-extension-items"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
@@ -3214,6 +3211,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-http-client"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "codex-utils-cargo-bin",
+ "codex-utils-rustls-provider",
+ "futures",
+ "http 1.4.0",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "pretty_assertions",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "system-configuration",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "windows-sys 0.52.0",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
@@ -3222,6 +3250,7 @@ dependencies = [
  "codex-core",
  "codex-exec-server",
  "codex-extension-api",
+ "codex-extension-items",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
@@ -3264,6 +3293,7 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-install-context",
+ "codex-network-proxy",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
@@ -3303,8 +3333,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-agent-identity",
- "codex-client",
  "codex-config",
+ "codex-http-client",
  "codex-keyring-store",
  "codex-model-provider-info",
  "codex-otel",
@@ -3518,8 +3548,8 @@ dependencies = [
  "codex-agent-identity",
  "codex-api",
  "codex-aws-auth",
- "codex-client",
  "codex-feedback",
+ "codex-http-client",
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -3700,6 +3730,7 @@ dependencies = [
  "chrono",
  "codex-async-utils",
  "codex-execpolicy",
+ "codex-extension-items",
  "codex-network-proxy",
  "codex-utils-absolute-path",
  "codex-utils-image",
@@ -4057,6 +4088,7 @@ version = "0.0.0"
 dependencies = [
  "codex-code-mode",
  "codex-connectors",
+ "codex-extension-items",
  "codex-features",
  "codex-file-system",
  "codex-protocol",
@@ -4821,9 +4853,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]

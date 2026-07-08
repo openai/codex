@@ -11,7 +11,7 @@ use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
-use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -851,6 +851,7 @@ mod tests {
             reasoning: None,
             store: false,
             stream: true,
+            stream_options: None,
             include: vec!["reasoning.encrypted_content".to_string()],
             service_tier: Some("priority".to_string()),
             prompt_cache_key: Some("cache-key".to_string()),
@@ -1061,7 +1062,7 @@ mod tests {
             "safety_buffering": {
                 "use_cases": ["cyber"],
                 "reasons": ["user_risk"],
-                "faster_model": "gpt-fast-wire"
+                "retry_model": "gpt-fast-wire"
             }
         }))
         .expect("deserialize safety buffering event");

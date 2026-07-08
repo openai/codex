@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::atomic::AtomicI64;
@@ -111,6 +112,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_exec_server::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
@@ -121,6 +123,7 @@ use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use core_test_support::test_codex::TestEnv;
 use core_test_support::test_codex::test_env;
+use tempfile::TempDir;
 use tokio::process::Command;
 
 use crate::json_logging::JsonLogCapture;
@@ -137,6 +140,8 @@ pub struct TestAppServer {
     pending_messages: VecDeque<JSONRPCMessage>,
     auto_env: Option<TestEnv>,
     json_logs: JsonLogCapture,
+    codex_home: PathBuf,
+    _owned_codex_home: Option<TempDir>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
@@ -144,12 +149,28 @@ pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tas
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 impl TestAppServer {
+    /// Starts building a server with a temporary CODEX_HOME and the standard
+    /// automatic test environment.
+    pub fn builder() -> TestAppServerBuilder {
+        TestAppServerBuilder {
+            codex_home: None,
+            environment: TestAppServerEnvironment::Auto,
+            program: None,
+            env_overrides: Vec::new(),
+            args: vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG.to_string()],
+        }
+    }
+
     pub async fn wait_for_exit(&mut self) -> std::io::Result<ExitStatus> {
         self.process.wait().await
     }
 
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, &[], &[DISABLE_PLUGIN_STARTUP_TASKS_ARG]).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .build()
+            .await
     }
 
     /// Starts an app server with the standard test environment and retains it
@@ -163,7 +184,7 @@ impl TestAppServer {
     /// URL-based configuration, this helper rejects a `codex_home` containing
     /// that file.
     pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_auto_env_and_env(codex_home, &[]).await
+        Self::builder().with_codex_home(codex_home).build().await
     }
 
     /// Starts an auto-environment app server that emits JSON logs.
@@ -173,62 +194,37 @@ impl TestAppServer {
         codex_home: &Path,
         rust_log: impl Into<String>,
     ) -> anyhow::Result<Self> {
-        let rust_log = rust_log.into();
-        Self::new_with_auto_env_and_env(
-            codex_home,
-            &[
-                ("LOG_FORMAT", Some("json")),
-                ("RUST_LOG", Some(rust_log.as_str())),
-            ],
-        )
-        .await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .with_json_logging(rust_log)
+            .build()
+            .await
     }
 
-    async fn new_with_auto_env_and_env(
-        codex_home: &Path,
-        extra_env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
-        let environments_toml = codex_home.join("environments.toml");
-        ensure!(
-            !environments_toml
-                .try_exists()
-                .with_context(|| format!("check whether {} exists", environments_toml.display()))?,
-            "new_with_auto_env cannot be used when {} exists",
-            environments_toml.display()
-        );
-
-        let auto_env = test_env().await?;
-        // Noise registry configuration takes precedence over the URL-based
-        // provider, so clear inherited values to keep the selection hermetic.
-        let mut env_overrides = vec![
-            (
-                CODEX_EXEC_SERVER_URL_ENV_VAR,
-                auto_env.environment().exec_server_url(),
-            ),
-            (CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR, None),
-            (CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR, None),
-            (CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR, None),
-            (CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR, None),
-        ];
-        env_overrides.extend_from_slice(extra_env_overrides);
-        let mut app_server = Self::new_with_env(codex_home, &env_overrides).await?;
-        app_server.auto_env = Some(auto_env);
-        Ok(app_server)
+    /// Returns the automatically selected test environment retained by this server.
+    ///
+    /// Tests can use the environment to arrange target-native filesystem fixtures before starting
+    /// a thread. Returns an error unless this server was created with [`Self::new_with_auto_env`].
+    pub fn auto_env(&self) -> anyhow::Result<&TestEnv> {
+        self.auto_env
+            .as_ref()
+            .context("auto environment is unavailable; use TestAppServer::new_with_auto_env")
     }
 
     /// Returns app-server protocol parameters for the automatically selected
     /// test environment. Returns an error unless this server was created with
     /// [`Self::new_with_auto_env`].
     pub fn auto_env_params(&self) -> anyhow::Result<TurnEnvironmentParams> {
-        let selection = self
-            .auto_env
-            .as_ref()
-            .context("auto environment is unavailable; use TestAppServer::new_with_auto_env")?
-            .selection();
+        let selection = self.auto_env()?.selection();
         Ok(TurnEnvironmentParams {
             environment_id: selection.environment_id.clone(),
             cwd: selection.cwd.clone().into(),
         })
+    }
+
+    /// Returns the effective CODEX_HOME used by the child app-server.
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
     }
 
     /// Waits for a JSON stderr event whose structured `event.name` field matches.
@@ -254,33 +250,56 @@ impl TestAppServer {
     }
 
     pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(codex_home, &[(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))]).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .without_managed_config()
+            .build()
+            .await
     }
 
     pub async fn new_without_managed_config_with_env(
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        let mut all_env_overrides = vec![(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))];
-        all_env_overrides.extend_from_slice(env_overrides);
-        Self::new_with_env(codex_home, &all_env_overrides).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .without_managed_config()
+            .with_env_overrides(env_overrides)
+            .build()
+            .await
     }
 
     pub async fn new_with_plugin_startup_tasks(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, &[], &[]).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .with_plugin_startup_tasks()
+            .build()
+            .await
     }
 
     pub async fn new_with_env_and_plugin_startup_tasks(
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .with_plugin_startup_tasks()
+            .with_env_overrides(env_overrides)
+            .build()
+            .await
     }
 
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
-        let mut all_args = vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG];
-        all_args.extend_from_slice(args);
-        Self::new_with_env_and_args(codex_home, &[], &all_args).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .with_args(args)
+            .build()
+            .await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -292,12 +311,12 @@ impl TestAppServer {
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(
-            codex_home,
-            env_overrides,
-            &[DISABLE_PLUGIN_STARTUP_TASKS_ARG],
-        )
-        .await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .with_env_overrides(env_overrides)
+            .build()
+            .await
     }
 
     pub async fn new_with_program_and_env(
@@ -305,23 +324,13 @@ impl TestAppServer {
         program: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        Self::new_with_program_env_and_args(
-            codex_home,
-            program,
-            env_overrides,
-            &[DISABLE_PLUGIN_STARTUP_TASKS_ARG],
-        )
-        .await
-    }
-
-    async fn new_with_env_and_args(
-        codex_home: &Path,
-        env_overrides: &[(&str, Option<&str>)],
-        args: &[&str],
-    ) -> anyhow::Result<Self> {
-        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
-            .context("should find binary for codex-app-server")?;
-        Self::new_with_program_env_and_args(codex_home, &program, env_overrides, args).await
+        Self::builder()
+            .with_codex_home(codex_home)
+            .without_auto_env()
+            .with_program(program)
+            .with_env_overrides(env_overrides)
+            .build()
+            .await
     }
 
     async fn new_with_program_env_and_args(
@@ -392,6 +401,8 @@ impl TestAppServer {
             pending_messages: VecDeque::new(),
             auto_env: None,
             json_logs,
+            codex_home: codex_home.to_path_buf(),
+            _owned_codex_home: None,
         })
     }
 
@@ -546,8 +557,8 @@ impl TestAppServer {
             chatgpt_account_id,
             chatgpt_plan_type,
         };
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/start", params).await
+        self.send_login_account_request(serde_json::to_value(params)?)
+            .await
     }
 
     /// Send a `feedback/upload` JSON-RPC request.
@@ -1052,6 +1063,39 @@ impl TestAppServer {
         self.send_request("turn/start", params).await
     }
 
+    /// Start a turn and return its matching typed completion notification.
+    pub async fn start_turn_and_wait_for_completion(
+        &mut self,
+        params: TurnStartParams,
+    ) -> anyhow::Result<TurnCompletedNotification> {
+        let thread_id = params.thread_id.clone();
+        let request_id = self.send_turn_start_request(params).await?;
+        let response = self
+            .read_stream_until_response_message(RequestId::Integer(request_id))
+            .await?;
+        let TurnStartResponse { turn } = crate::to_response(response)?;
+        let notification = self
+            .read_stream_until_matching_notification(
+                "turn/completed for started turn",
+                |notification| {
+                    notification.method == "turn/completed"
+                        && notification.params.as_ref().is_some_and(|params| {
+                            serde_json::from_value::<TurnCompletedNotification>(params.clone())
+                                .is_ok_and(|completed| {
+                                    completed.thread_id == thread_id && completed.turn.id == turn.id
+                                })
+                        })
+                },
+            )
+            .await?;
+        let params = notification
+            .params
+            .context("turn/completed notification must include params")?;
+        let completed = serde_json::from_value(params)
+            .context("failed to deserialize turn/completed notification")?;
+        Ok(completed)
+    }
+
     /// Send a `thread/inject_items` JSON-RPC request (v2).
     pub async fn send_thread_inject_items_request(
         &mut self,
@@ -1380,6 +1424,14 @@ impl TestAppServer {
         self.send_request("account/logout", /*params*/ None).await
     }
 
+    /// Send an `account/login/start` JSON-RPC request.
+    pub async fn send_login_account_request(
+        &mut self,
+        params: serde_json::Value,
+    ) -> anyhow::Result<i64> {
+        self.send_request("account/login/start", Some(params)).await
+    }
+
     /// Send an `account/login/start` JSON-RPC request for API key login.
     pub async fn send_login_account_api_key_request(
         &mut self,
@@ -1389,7 +1441,7 @@ impl TestAppServer {
             "type": "apiKey",
             "apiKey": api_key,
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
@@ -1397,7 +1449,7 @@ impl TestAppServer {
         let params = serde_json::json!({
             "type": "chatgpt"
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/start` JSON-RPC request for ChatGPT device code login.
@@ -1405,7 +1457,7 @@ impl TestAppServer {
         let params = serde_json::json!({
             "type": "chatgptDeviceCode"
         });
-        self.send_request("account/login/start", Some(params)).await
+        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/cancel` JSON-RPC request.
@@ -1749,6 +1801,164 @@ impl TestAppServer {
             JSONRPCMessage::Error(err) => Some(&err.id),
             JSONRPCMessage::Notification(_) => None,
         }
+    }
+}
+
+/// Builder for TestAppServer.
+pub struct TestAppServerBuilder {
+    codex_home: Option<PathBuf>,
+    environment: TestAppServerEnvironment,
+    program: Option<PathBuf>,
+    env_overrides: Vec<(String, Option<String>)>,
+    args: Vec<String>,
+}
+
+enum TestAppServerEnvironment {
+    Auto,
+    None,
+}
+
+impl TestAppServerBuilder {
+    /// Uses this existing CODEX_HOME instead of a temporary one.
+    pub fn with_codex_home(mut self, codex_home: &Path) -> Self {
+        self.codex_home = Some(codex_home.to_path_buf());
+        self
+    }
+
+    /// Starts app-server without the standard automatic test environment.
+    pub fn without_auto_env(mut self) -> Self {
+        self.environment = TestAppServerEnvironment::None;
+        self
+    }
+
+    /// Uses this app-server binary instead of the standard test binary.
+    pub fn with_program(mut self, program: &Path) -> Self {
+        self.program = Some(program.to_path_buf());
+        self
+    }
+
+    /// Adds command-line arguments after the default test arguments.
+    pub fn with_args(mut self, args: &[&str]) -> Self {
+        self.args
+            .extend(args.iter().map(|argument| (*argument).to_string()));
+        self
+    }
+
+    /// Enables startup tasks that the default test arguments disable.
+    pub fn with_plugin_startup_tasks(mut self) -> Self {
+        self.args
+            .retain(|argument| argument != DISABLE_PLUGIN_STARTUP_TASKS_ARG);
+        self
+    }
+
+    /// Adds child-process environment overrides.
+    ///
+    /// Some values set variables and None values remove inherited variables.
+    pub fn with_env_overrides(mut self, env_overrides: &[(&str, Option<&str>)]) -> Self {
+        self.env_overrides
+            .extend(env_overrides.iter().map(|(key, value)| {
+                (
+                    (*key).to_string(),
+                    value.map(std::string::ToString::to_string),
+                )
+            }));
+        self
+    }
+
+    /// Prevents the child from loading managed configuration.
+    pub fn without_managed_config(self) -> Self {
+        self.with_env_overrides(&[(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))])
+    }
+
+    /// Configures the child to emit JSON logs at the requested Rust log level.
+    pub fn with_json_logging(self, rust_log: impl Into<String>) -> Self {
+        let rust_log = rust_log.into();
+        let mut builder = self.with_env_overrides(&[("LOG_FORMAT", Some("json"))]);
+        builder
+            .env_overrides
+            .push(("RUST_LOG".to_string(), Some(rust_log)));
+        builder
+    }
+
+    /// Builds a server with a temporary CODEX_HOME and automatic environment
+    /// by default.
+    pub async fn build(self) -> anyhow::Result<TestAppServer> {
+        let Self {
+            codex_home,
+            environment,
+            program,
+            mut env_overrides,
+            args,
+        } = self;
+        let (codex_home, owned_codex_home) = match codex_home {
+            Some(codex_home) => (codex_home, None),
+            None => {
+                let owned_codex_home = TempDir::new()?;
+                (
+                    owned_codex_home.path().to_path_buf(),
+                    Some(owned_codex_home),
+                )
+            }
+        };
+        let auto_env = match environment {
+            TestAppServerEnvironment::Auto => {
+                let environments_toml = codex_home.join("environments.toml");
+                ensure!(
+                    !environments_toml.try_exists().with_context(|| format!(
+                        "check whether {} exists",
+                        environments_toml.display()
+                    ))?,
+                    "automatic environment cannot be used when {} exists",
+                    environments_toml.display()
+                );
+                let auto_env = test_env().await?;
+                // Noise registry configuration takes precedence over the URL-based
+                // provider, so clear inherited values to keep the selection hermetic.
+                let mut auto_env_overrides = vec![
+                    (
+                        CODEX_EXEC_SERVER_URL_ENV_VAR.to_string(),
+                        auto_env.environment().exec_server_url().map(str::to_string),
+                    ),
+                    (
+                        CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR.to_string(),
+                        None,
+                    ),
+                    (
+                        CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR.to_string(),
+                        None,
+                    ),
+                    (CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR.to_string(), None),
+                    (
+                        CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR.to_string(),
+                        None,
+                    ),
+                ];
+                auto_env_overrides.append(&mut env_overrides);
+                env_overrides = auto_env_overrides;
+                Some(auto_env)
+            }
+            TestAppServerEnvironment::None => None,
+        };
+        let program = match program {
+            Some(program) => program,
+            None => codex_utils_cargo_bin::cargo_bin("codex-app-server")
+                .context("should find binary for codex-app-server")?,
+        };
+        let env_overrides = env_overrides
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_deref()))
+            .collect::<Vec<_>>();
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut app_server = TestAppServer::new_with_program_env_and_args(
+            &codex_home,
+            &program,
+            &env_overrides,
+            &args,
+        )
+        .await?;
+        app_server.auto_env = auto_env;
+        app_server._owned_codex_home = owned_codex_home;
+        Ok(app_server)
     }
 }
 
