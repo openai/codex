@@ -761,7 +761,8 @@ impl NetworkProxy {
         env: &mut HashMap<String, String>,
         addrs: EnvironmentProxyAddrs,
     ) {
-        let prepared = self.prepare_for_addrs(std::mem::take(env), addrs, None);
+        let prepared =
+            self.prepare_for_addrs(std::mem::take(env), addrs, /*domain_policy*/ None);
         *env = prepared.env;
     }
 
@@ -813,7 +814,7 @@ impl NetworkProxy {
                 socks_addr: self.socks_addr,
             },
         };
-        Ok(self.prepare_for_addrs(env, addrs, None))
+        Ok(self.prepare_for_addrs(env, addrs, /*domain_policy*/ None))
     }
 
     /// Prepares a command using the latest reloaded domain policy.
