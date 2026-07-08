@@ -20,11 +20,23 @@ use std::time::Duration;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::dns_setup::ResolvConfMount;
+use crate::dns_setup::append_bwrap_args as append_dns_setup_bwrap_args;
+use crate::dns_setup::capture_loader_environment;
+use crate::dns_setup::create_resolv_conf_file;
+use crate::dns_setup::drop_and_verify_capabilities;
+use crate::dns_setup::resolv_conf_mount_path;
+use crate::dns_setup::restore_loader_environment as apply_loader_environment;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
+use crate::proxy_routing::DnsRouteConfig;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
+use crate::proxy_routing::activate_proxy_routes_with_dns_in_netns;
+use crate::proxy_routing::bind_dns_route_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use crate::proxy_routing::prepare_host_proxy_routes;
+use codex_network_proxy::ManagedNetworkDomainPolicy;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -122,6 +134,14 @@ pub struct LandlockCommand {
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
+    /// Internal domain policy for DNS routed through the managed proxy bridge.
+    #[arg(
+        long = "dns-domain-policy",
+        hide = true,
+        value_parser = parse_dns_domain_policy
+    )]
+    pub dns_domain_policy: Option<ManagedNetworkDomainPolicy>,
+
     /// Internal route spec used for managed proxy routing in bwrap mode.
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
@@ -152,6 +172,7 @@ pub fn run_main() -> ! {
         use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
+        dns_domain_policy,
         proxy_route_spec,
         no_proc,
         command,
@@ -159,6 +180,9 @@ pub fn run_main() -> ! {
 
     if command.is_empty() {
         panic!("No command specified to execute.");
+    }
+    if dns_domain_policy.is_some() && (!allow_network_for_proxy || use_legacy_landlock) {
+        panic!("--dns-domain-policy requires managed proxy mode with bubblewrap");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
@@ -180,7 +204,20 @@ pub fn run_main() -> ! {
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
-            if let Err(err) = activate_proxy_routes_in_netns(spec) {
+            let bound_dns = bind_dns_route_in_netns(spec)
+                .unwrap_or_else(|err| panic!("error binding Linux DNS bridge: {err}"));
+            let bound_dns_stub = bound_dns.map(|route| {
+                drop_and_verify_capabilities().unwrap_or_else(|err| {
+                    panic!("error dropping Linux DNS setup capabilities: {err}")
+                });
+                apply_loader_environment(route.loader_environment);
+                route.stub
+            });
+            let activation = match bound_dns_stub {
+                Some(stub) => activate_proxy_routes_with_dns_in_netns(spec, Some(stub)),
+                None => activate_proxy_routes_in_netns(spec),
+            };
+            if let Err(err) = activation {
                 panic!("error activating Linux proxy routing bridge: {err}");
             }
         }
@@ -214,14 +251,36 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let proxy_route_spec =
-            if allow_network_for_proxy {
-                Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
-                    panic!("failed to prepare host proxy routing bridge: {err}")
+        let dns_resolv_conf = dns_domain_policy.as_ref().map(|_| ResolvConfMount {
+            file: create_resolv_conf_file()
+                .unwrap_or_else(|err| panic!("failed to create resolver configuration: {err}")),
+            path: resolv_conf_mount_path(&file_system_sandbox_policy, &sandbox_policy_cwd)
+                .unwrap_or_else(|err| panic!("failed to prepare resolver configuration: {err}")),
+        });
+        let prepared_proxy_routes = allow_network_for_proxy.then(|| {
+            if let Some(policy) = dns_domain_policy.as_ref() {
+                prepare_host_proxy_routes(Some(DnsRouteConfig {
+                    policy,
+                    loader_environment: capture_loader_environment(),
                 }))
             } else {
-                None
-            };
+                prepare_host_proxy_route_spec().map(|serialized_spec| {
+                    crate::proxy_routing::PreparedProxyRoutes {
+                        serialized_spec,
+                        dns_relay_files: Vec::new(),
+                    }
+                })
+            }
+            .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"))
+        });
+        let (proxy_route_spec, dns_resolv_conf, dns_relay_files) = match prepared_proxy_routes {
+            Some(prepared) => (
+                Some(prepared.serialized_spec),
+                dns_resolv_conf,
+                prepared.dns_relay_files,
+            ),
+            None => (None, dns_resolv_conf, Vec::new()),
+        };
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -238,6 +297,8 @@ pub fn run_main() -> ! {
             inner,
             !no_proc,
             allow_network_for_proxy,
+            dns_resolv_conf,
+            dns_relay_files,
         );
     }
 
@@ -276,6 +337,10 @@ impl fmt::Display for ResolvePermissionProfileError {
 
 fn parse_permission_profile(value: &str) -> std::result::Result<PermissionProfile, String> {
     serde_json::from_str(value).map_err(|err| format!("invalid permission profile JSON: {err}"))
+}
+
+fn parse_dns_domain_policy(value: &str) -> std::result::Result<ManagedNetworkDomainPolicy, String> {
+    serde_json::from_str(value).map_err(|err| format!("invalid DNS domain policy JSON: {err}"))
 }
 
 fn resolve_permission_profile(
@@ -322,6 +387,8 @@ fn run_bwrap_with_proc_fallback(
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
+    dns_resolv_conf: Option<ResolvConfMount>,
+    dns_relay_files: Vec<File>,
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
@@ -354,6 +421,10 @@ fn run_bwrap_with_proc_fallback(
         options,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+    if let Some(resolv_conf) = dns_resolv_conf {
+        append_dns_setup_bwrap_args(&mut bwrap_args, resolv_conf);
+    }
+    bwrap_args.preserved_files.extend(dns_relay_files);
     apply_inner_command_argv0(&mut bwrap_args.args);
     run_or_exec_bwrap(bwrap_args);
 }

@@ -29,6 +29,7 @@ globset = { workspace = true }
 hickory-proto = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
+rustix = { workspace = true }
 seccompiler = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

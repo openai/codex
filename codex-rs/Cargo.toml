@@ -381,6 +381,7 @@ regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
 rmcp = { version = "1.8.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+rustix = { version = "1.1.4", features = ["thread"] }
 rustls = { version = "0.23", default-features = false, features = [
     "aws_lc_rs",
     "std",

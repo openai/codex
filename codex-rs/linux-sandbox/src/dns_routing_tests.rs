@@ -30,7 +30,7 @@ fn exchange(stream: &mut UnixStream, query: &[u8]) -> Message {
 #[test]
 fn host_resolver_enforces_policy_over_udp_and_tcp_channels() {
     let policy = ManagedNetworkDomainPolicy {
-        allowed_domains: vec!["localhost".to_string(), "**.test".to_string()],
+        allowed_domains: vec!["127.0.0.1".to_string(), "**.test".to_string()],
         denied_domains: vec!["blocked.test".to_string()],
     };
     let (_spec, files, pid) = spawn_host_dns_relay(&policy).expect("start resolver");
@@ -39,7 +39,7 @@ fn host_resolver_enforces_policy_over_udp_and_tcp_channels() {
     let mut udp = unsafe { UnixStream::from_raw_fd(udp.into_raw_fd()) };
     let mut tcp = unsafe { UnixStream::from_raw_fd(tcp.into_raw_fd()) };
 
-    let allowed = exchange(&mut udp, &query("localhost", RecordType::A, 1));
+    let allowed = exchange(&mut udp, &query("127.0.0.1", RecordType::A, 1));
     assert!(
         allowed
             .answers()
@@ -48,7 +48,7 @@ fn host_resolver_enforces_policy_over_udp_and_tcp_channels() {
     );
     let denied = exchange(&mut udp, &query("blocked.test", RecordType::A, 2));
     assert_eq!(denied.response_code(), ResponseCode::Refused);
-    let allowed = exchange(&mut tcp, &query("localhost", RecordType::A, 3));
+    let allowed = exchange(&mut tcp, &query("127.0.0.1", RecordType::A, 3));
     assert_eq!(allowed.response_code(), ResponseCode::NoError);
 }
 
