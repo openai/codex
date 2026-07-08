@@ -630,6 +630,14 @@ impl CodexThread {
         self.codex.thread_environment_selections().await
     }
 
+    /// Returns one typed value owned by a thread extension.
+    pub fn extension_thread_data<T>(&self) -> Option<Arc<T>>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.codex.session.services.thread_extension_data.get::<T>()
+    }
+
     /// Passively inspects the selected capability roots whose environments are ready now.
     pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
         self.codex

@@ -16,8 +16,11 @@ use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSkillMetadata;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnEnvironmentParams;
@@ -47,6 +50,7 @@ use tokio::time::timeout;
 
 use super::app_list::connector_tool;
 use super::app_list::start_apps_server_with_delays;
+use super::selected_capability_proxy::DisconnectableWebSocketProxy;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const EXECUTOR_ID: &str = "executor-1";
@@ -166,7 +170,9 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     let mut exec_server =
         spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
-    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    let mut exec_server_proxy =
+        DisconnectableWebSocketProxy::start(&fixture.exec_server_url).await?;
+    add_environment(&mut app_server, exec_server_proxy.websocket_url()).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
@@ -186,6 +192,24 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     )
     .await?;
     assert_eq!(first_mcp_pid, wait_for_pid_file(&fixture.pid_file).await?);
+
+    let inspection_thread_id = start_thread(
+        &mut app_server,
+        fixture.selected_root.clone(),
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+    exec_server_proxy.pause_and_disconnect().await?;
+    assert_eq!(
+        timeout(
+            Duration::from_secs(2),
+            list_thread_skills(&mut app_server, &inspection_thread_id),
+        )
+        .await
+        .context("skills/list waited for executor recovery")??,
+        (Vec::new(), Vec::new())
+    );
+    exec_server_proxy.resume()?;
 
     exec_server.kill().await?;
     drop(app_server);
@@ -226,10 +250,18 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         latest_selected_skill_update(&requests[4])
             .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
+    let (thread_skills, warnings) = list_thread_skills(&mut app_server, &thread_id).await?;
+    assert_eq!(thread_skills, Vec::new());
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains(&format!("environment `{EXECUTOR_ID}` is unavailable")));
 
     exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
+    assert_eq!(
+        list_thread_skills(&mut app_server, &thread_id).await?,
+        (vec![fixture.thread_skill.clone()], Vec::new())
+    );
 
     run_turn(
         &mut app_server,
@@ -439,6 +471,7 @@ struct SelectedCapabilityFixture {
     pid_file: std::path::PathBuf,
     exec_server_url: String,
     selected_root: SelectedCapabilityRoot,
+    thread_skill: ThreadSkillMetadata,
     environment_cwd: AbsolutePathBuf,
 }
 
@@ -505,8 +538,9 @@ fn selected_capability_fixture(
         manifest_dir.join("plugin.json"),
         r#"{"name":"executor-demo","apps":"./.app.json","interface":{"displayName":"Executor Demo"}}"#,
     )?;
+    let skill_path = skill_dir.join("SKILL.md");
     std::fs::write(
-        skill_dir.join("SKILL.md"),
+        &skill_path,
         format!(
             "---\nname: deploy\ndescription: {SKILL_DESCRIPTION}\n---\n\n{SKILL_BODY_MARKER}\n"
         ),
@@ -538,6 +572,17 @@ fn selected_capability_fixture(
             path: PathUri::from_host_native_path(plugin.path())?,
         },
     };
+    let normalized_skill_path = skill_path.to_string_lossy().replace('\\', "/");
+    let thread_skill = ThreadSkillMetadata {
+        name: SKILL_NAME.to_string(),
+        description: SKILL_DESCRIPTION.to_string(),
+        short_description: None,
+        resource: format!(
+            "skill://{PLUGIN_ID}/{}",
+            normalized_skill_path.trim_start_matches('/')
+        ),
+        enabled: true,
+    };
     let environment_cwd = AbsolutePathBuf::try_from(plugin.path().to_path_buf())?;
     Ok(SelectedCapabilityFixture {
         codex_home,
@@ -545,6 +590,7 @@ fn selected_capability_fixture(
         pid_file,
         exec_server_url,
         selected_root,
+        thread_skill,
         environment_cwd,
     })
 }
@@ -709,6 +755,30 @@ async fn add_environment(app_server: &mut TestAppServer, exec_server_url: &str) 
     .await??;
     let _: EnvironmentAddResponse = to_response(response)?;
     Ok(())
+}
+
+async fn list_thread_skills(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<(Vec<ThreadSkillMetadata>, Vec<String>)> {
+    let request_id = app_server
+        .send_skills_list_request(SkillsListParams {
+            cwds: Vec::new(),
+            force_reload: true,
+            thread_id: Some(thread_id.to_string()),
+        })
+        .await?;
+    let response = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse {
+        thread_skills,
+        thread_skill_warnings,
+        ..
+    } = to_response(response)?;
+    Ok((thread_skills, thread_skill_warnings))
 }
 
 async fn wait_for_selected_mcp_server(

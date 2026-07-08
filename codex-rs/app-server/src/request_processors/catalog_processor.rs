@@ -11,6 +11,7 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    executor_skill_providers: codex_skills_extension::SkillProviders,
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
@@ -97,6 +98,7 @@ fn errors_to_info(
 }
 
 impl CatalogRequestProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         skills_watcher: Arc<SkillsWatcher>,
@@ -105,6 +107,7 @@ impl CatalogRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
     ) -> Self {
         Self {
             outgoing,
@@ -114,6 +117,8 @@ impl CatalogRequestProcessor {
             config,
             config_manager,
             workspace_settings_cache,
+            executor_skill_providers: codex_skills_extension::SkillProviders::new()
+                .with_executor_provider(executor_skill_provider),
         }
     }
 
@@ -489,11 +494,19 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            force_reload,
+            thread_id,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
             cwds
+        };
+        let (thread_skills, thread_skill_warnings) = match thread_id.as_deref() {
+            Some(thread_id) => self.thread_skills(thread_id).await?,
+            None => (Vec::new(), Vec::new()),
         };
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
@@ -507,7 +520,13 @@ impl CatalogRequestProcessor {
             .thread_manager
             .environment_manager()
             .default_environment()
-            .map(|environment| environment.get_filesystem());
+            .map(|environment| {
+                if thread_id.is_some() {
+                    environment.get_filesystem_without_reconnect()
+                } else {
+                    environment.get_filesystem()
+                }
+            });
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
@@ -570,7 +589,67 @@ impl CatalogRequestProcessor {
             .await;
         data.sort_unstable_by_key(|(index, _)| *index);
         let data = data.into_iter().map(|(_, entry)| entry).collect();
-        Ok(SkillsListResponse { data })
+        Ok(SkillsListResponse {
+            data,
+            thread_skills,
+            thread_skill_warnings,
+        })
+    }
+
+    async fn thread_skills(
+        &self,
+        thread_id: &str,
+    ) -> Result<
+        (
+            Vec<codex_app_server_protocol::ThreadSkillMetadata>,
+            Vec<String>,
+        ),
+        JSONRPCErrorError,
+    > {
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let thread = self
+            .thread_manager
+            .get_thread(thread_id)
+            .await
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+        let Some(state) =
+            thread.extension_thread_data::<codex_skills_extension::SkillsThreadState>()
+        else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let roots_status = thread.inspect_selected_capability_roots();
+        let catalog = state
+            .inspect_executor_catalog(
+                &self.executor_skill_providers,
+                codex_skills_extension::provider::SkillListQuery {
+                    turn_id: thread_id.to_string(),
+                    executor_roots: roots_status.ready_roots,
+                    host_snapshot: None,
+                    include_host_skills: false,
+                    include_bundled_skills: false,
+                    include_orchestrator_skills: false,
+                    mcp_resources: None,
+                },
+            )
+            .await;
+        let mut warnings = roots_status.warnings;
+        warnings.extend(catalog.warnings);
+        let skills = catalog
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let resource = entry.rendered_path().to_string();
+                codex_app_server_protocol::ThreadSkillMetadata {
+                    name: entry.name,
+                    description: entry.description,
+                    short_description: entry.short_description,
+                    resource,
+                    enabled: entry.enabled,
+                }
+            })
+            .collect();
+        Ok((skills, warnings))
     }
 
     async fn skills_extra_roots_set_response(

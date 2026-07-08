@@ -19483,6 +19483,36 @@
         "title": "ThreadShellCommandResponse",
         "type": "object"
       },
+      "ThreadSkillMetadata": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "resource": {
+            "description": "Stable executor-owned locator used for display and deduplication.",
+            "type": "string"
+          },
+          "shortDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "enabled",
+          "name",
+          "resource"
+        ],
+        "type": "object"
+      },
       "ThreadSortKey": {
         "enum": [
           "created_at",

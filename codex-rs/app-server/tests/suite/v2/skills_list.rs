@@ -210,6 +210,7 @@ enabled = true
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
     let initial_skills_list_response: JSONRPCResponse = timeout(
@@ -217,7 +218,7 @@ enabled = true
         mcp.read_stream_until_response_message(RequestId::Integer(initial_skills_list_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(initial_skills_list_response)?;
+    let SkillsListResponse { data, .. } = to_response(initial_skills_list_response)?;
     assert!(data.iter().any(|entry| {
         entry
             .skills
@@ -241,6 +242,7 @@ enabled = true
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
     let skills_list_response: JSONRPCResponse = timeout(
@@ -248,7 +250,7 @@ enabled = true
         mcp.read_stream_until_response_message(RequestId::Integer(skills_list_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(skills_list_response)?;
+    let SkillsListResponse { data, .. } = to_response(skills_list_response)?;
 
     assert!(data.iter().all(|entry| {
         entry
@@ -358,6 +360,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
     let stale_skills_list_response: JSONRPCResponse = timeout(
@@ -365,7 +368,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         mcp.read_stream_until_response_message(RequestId::Integer(stale_skills_list_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(stale_skills_list_response)?;
+    let SkillsListResponse { data, .. } = to_response(stale_skills_list_response)?;
     assert_eq!(data.len(), 1);
     assert!(
         data[0]
@@ -403,12 +406,13 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
     .await??;
     let _: PluginListResponse = to_response(plugin_list_response)?;
 
-    let SkillsListResponse { data } = timeout(DEFAULT_TIMEOUT, async {
+    let SkillsListResponse { data, .. } = timeout(DEFAULT_TIMEOUT, async {
         loop {
             let skills_list_request_id = mcp
                 .send_skills_list_request(SkillsListParams {
                     cwds: vec![cwd.path().to_path_buf()],
                     force_reload: false,
+                    thread_id: None,
                 })
                 .await?;
             let skills_list_response: JSONRPCResponse = timeout(
@@ -488,6 +492,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         .send_skills_list_request(SkillsListParams {
             cwds: vec![repo_root.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
 
@@ -496,7 +501,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse { data, .. } = to_response(response)?;
     assert_eq!(data.len(), 1);
     assert!(
         data[0]
@@ -539,6 +544,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
 
@@ -547,7 +553,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse { data, .. } = to_response(response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].cwd, cwd.path().to_path_buf());
     assert_eq!(data[0].errors, Vec::new());
@@ -583,6 +589,7 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![relative_cwd.clone()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
 
@@ -591,7 +598,7 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse { data, .. } = to_response(response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].cwd, relative_cwd);
     assert_eq!(data[0].errors, Vec::new());
@@ -618,6 +625,7 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
                 second_cwd.path().to_path_buf(),
             ],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
 
@@ -626,7 +634,7 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse { data, .. } = to_response(response)?;
     assert_eq!(
         data.iter()
             .map(|entry| entry.cwd.clone())
@@ -656,6 +664,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let first_response: JSONRPCResponse = timeout(
@@ -663,7 +672,9 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(first_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: first_data } = to_response(first_response)?;
+    let SkillsListResponse {
+        data: first_data, ..
+    } = to_response(first_response)?;
     assert_eq!(first_data.len(), 1);
     assert!(
         first_data[0]
@@ -683,6 +694,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let second_response: JSONRPCResponse = timeout(
@@ -690,7 +702,9 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: second_data } = to_response(second_response)?;
+    let SkillsListResponse {
+        data: second_data, ..
+    } = to_response(second_response)?;
     assert_eq!(second_data.len(), 1);
     assert!(
         second_data[0]
@@ -703,6 +717,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
     let third_response: JSONRPCResponse = timeout(
@@ -710,7 +725,9 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(third_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: third_data } = to_response(third_response)?;
+    let SkillsListResponse {
+        data: third_data, ..
+    } = to_response(third_response)?;
     assert_eq!(third_data.len(), 1);
     assert!(
         third_data[0]
@@ -758,6 +775,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let skills_response: JSONRPCResponse = timeout(
@@ -765,7 +783,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(skills_response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].errors, Vec::new());
     assert!(
@@ -793,6 +811,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let skills_response: JSONRPCResponse = timeout(
@@ -800,7 +819,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(skills_response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].errors, Vec::new());
     assert!(
@@ -826,6 +845,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let skills_response: JSONRPCResponse = timeout(
@@ -833,7 +853,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(skills_response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].errors, Vec::new());
     assert!(
@@ -854,6 +874,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let skills_response: JSONRPCResponse = timeout(
@@ -861,7 +882,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(skills_response)?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].errors, Vec::new());
     assert!(
@@ -899,6 +920,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
             force_reload: true,
+            thread_id: None,
         })
         .await?;
     let initial_skills_response: JSONRPCResponse = timeout(
@@ -906,7 +928,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(initial_skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(initial_skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(initial_skills_response)?;
     assert_eq!(data.len(), 1);
     assert!(
         data[0]
@@ -975,6 +997,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
             force_reload: false,
+            thread_id: None,
         })
         .await?;
     let updated_skills_response: JSONRPCResponse = timeout(
@@ -982,7 +1005,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(updated_skills_request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(updated_skills_response)?;
+    let SkillsListResponse { data, .. } = to_response(updated_skills_response)?;
     assert_eq!(data.len(), 1);
     assert!(
         data[0]

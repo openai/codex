@@ -257,6 +257,13 @@ impl MessageProcessor {
                 restriction_product,
             ),
         );
+        let executor_skill_inspection_provider: Arc<dyn codex_skills_extension::SkillProvider> =
+            Arc::new(
+                codex_skills_extension::ExecutorSkillProvider::new_for_inspection(
+                    Arc::clone(&environment_manager_for_extensions),
+                    restriction_product,
+                ),
+            );
         let goal_service = Arc::new(GoalService::new());
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
@@ -336,6 +343,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager.clone(),
             Arc::clone(&workspace_settings_cache),
+            executor_skill_inspection_provider,
         );
         let command_exec_processor = CommandExecRequestProcessor::new(
             arg0_paths.clone(),

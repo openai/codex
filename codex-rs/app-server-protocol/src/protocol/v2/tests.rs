@@ -3033,21 +3033,37 @@ fn skills_list_params_serialization_uses_force_reload() {
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
             force_reload: false,
+            thread_id: None,
         })
         .unwrap(),
-        json!({}),
+        json!({ "threadId": null }),
     );
 
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
             force_reload: true,
+            thread_id: None,
         })
         .unwrap(),
         json!({
             "cwds": ["/repo"],
             "forceReload": true,
+            "threadId": null,
         }),
+    );
+}
+
+#[test]
+fn skills_list_response_defaults_experimental_fields() {
+    assert_eq!(
+        serde_json::from_value::<SkillsListResponse>(json!({ "data": [] }))
+            .expect("stable response should deserialize"),
+        SkillsListResponse {
+            data: Vec::new(),
+            thread_skills: Vec::new(),
+            thread_skill_warnings: Vec::new(),
+        }
     );
 }
 

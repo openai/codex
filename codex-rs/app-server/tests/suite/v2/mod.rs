@@ -59,6 +59,8 @@ mod request_validation;
 mod review;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]
+mod selected_capability_proxy;
+#[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
 mod selected_environment;
 mod skills_list;

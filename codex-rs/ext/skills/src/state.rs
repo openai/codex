@@ -25,7 +25,7 @@ use crate::sources::SkillProviders;
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
 const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
-pub(crate) struct SkillsThreadState {
+pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     orchestrator_skills_available: bool,
     executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
@@ -83,6 +83,33 @@ impl SkillsThreadState {
             query.executor_roots = vec![root.clone()];
             catalog.extend(
                 self.executor_root_catalog(providers, root, query.clone())
+                    .await,
+            );
+        }
+        catalog
+    }
+
+    /// Reads executor catalogs without populating the thread's model-facing cache.
+    ///
+    /// Roots already cached by a model step reuse that snapshot. Uncached roots are discovered
+    /// for this read only, so a transient discovery failure cannot affect a later model step.
+    #[tracing::instrument(
+        name = "skills.executor.catalog_inspection",
+        level = "info",
+        skip_all,
+        fields(root_count = query.executor_roots.len())
+    )]
+    pub async fn inspect_executor_catalog(
+        &self,
+        providers: &SkillProviders,
+        mut query: SkillListQuery,
+    ) -> SkillCatalog {
+        let roots = std::mem::take(&mut query.executor_roots);
+        let mut catalog = SkillCatalog::default();
+        for root in roots {
+            query.executor_roots = vec![root.clone()];
+            catalog.extend(
+                self.inspect_executor_root_catalog(providers, root, query.clone())
                     .await,
             );
         }
@@ -170,14 +197,8 @@ impl SkillsThreadState {
         root: SelectedCapabilityRoot,
         query: SkillListQuery,
     ) -> SkillCatalog {
-        if let Some(cached) = self
-            .executor_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .find(|cached| cached.root == root)
-        {
-            return cached.catalog.clone();
+        if let Some(cached) = self.cached_executor_root_catalog(&root) {
+            return cached;
         }
 
         let discovered = providers.list_executor_for_turn(query).await;
@@ -193,6 +214,30 @@ impl SkillsThreadState {
             catalog: discovered.clone(),
         });
         discovered
+    }
+
+    async fn inspect_executor_root_catalog(
+        &self,
+        providers: &SkillProviders,
+        root: SelectedCapabilityRoot,
+        query: SkillListQuery,
+    ) -> SkillCatalog {
+        if let Some(cached) = self.cached_executor_root_catalog(&root) {
+            return cached;
+        }
+
+        let discovered = providers.list_executor_for_turn(query).await;
+        self.cached_executor_root_catalog(&root)
+            .unwrap_or(discovered)
+    }
+
+    fn cached_executor_root_catalog(&self, root: &SelectedCapabilityRoot) -> Option<SkillCatalog> {
+        self.executor_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|cached| &cached.root == root)
+            .map(|cached| cached.catalog.clone())
     }
 }
 

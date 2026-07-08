@@ -3,6 +3,7 @@ use super::HookEventName;
 use super::HookHandlerType;
 use super::HookSource;
 use super::HookTrustStatus;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
@@ -15,7 +16,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
@@ -26,13 +29,38 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
+
+    /// Optional thread whose selected executor skills should be included.
+    #[experimental("skills/list.threadId")]
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListResponse {
+    pub data: Vec<SkillsListEntry>,
+    /// Skills contributed by selected capability roots for the requested thread.
+    #[experimental("skills/list.threadSkills")]
+    #[serde(default)]
+    pub thread_skills: Vec<ThreadSkillMetadata>,
+    /// Warnings encountered while discovering the requested thread's executor skills.
+    #[experimental("skills/list.threadSkillWarnings")]
+    #[serde(default)]
+    pub thread_skill_warnings: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct SkillsListResponse {
-    pub data: Vec<SkillsListEntry>,
+pub struct ThreadSkillMetadata {
+    pub name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    /// Stable executor-owned locator used for display and deduplication.
+    pub resource: String,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -1637,7 +1637,8 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`). Pass the experimental `threadId` field to also receive the selected executor skills currently available to that thread in `threadSkills`; executor discovery problems are returned in `threadSkillWarnings`.
+`threadId` does not change `data`; that field continues to use `cwds`, or the app-server default working directory when `cwds` is empty.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
@@ -1645,7 +1646,8 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
 ```json
 { "method": "skills/list", "id": 25, "params": {
     "cwds": ["/Users/me/project", "/Users/me/other-project"],
-    "forceReload": true
+    "forceReload": true,
+    "threadId": "67e8c0d2-5f31-4f0d-9f70-4b529c6fdd01"
 } }
 { "id": 25, "result": {
     "data": [{
@@ -1666,7 +1668,15 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
             }
         ],
         "errors": []
-    }]
+    }],
+    "threadSkills": [{
+        "name": "deploy",
+        "description": "Deploy through the selected executor",
+        "shortDescription": null,
+        "resource": "skill://executor-plugin@1/workspace/plugin/skills/deploy/SKILL.md",
+        "enabled": true
+    }],
+    "threadSkillWarnings": []
 } }
 ```
 

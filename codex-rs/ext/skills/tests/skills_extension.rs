@@ -33,6 +33,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
+use codex_skills_extension::SkillsThreadState;
 use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillCatalog;
 use codex_skills_extension::catalog::SkillCatalogEntry;
@@ -146,7 +147,8 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
 }
 
 #[tokio::test]
-async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cache() -> TestResult {
+async fn selected_executor_catalog_inspection_is_cache_neutral_and_tracks_availability()
+-> TestResult {
     let read_requests = Arc::new(Mutex::new(Vec::new()));
     let list_calls = Arc::new(AtomicUsize::new(0));
     let executor_provider = Arc::new(StaticSkillProvider {
@@ -161,11 +163,11 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: Some(Arc::clone(&list_calls)),
-        fail_first_list: false,
+        fail_first_list: true,
     });
     let providers = SkillProviders::new().with_executor_provider(executor_provider);
     let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers(&mut builder, providers, skills_extension_config);
+    install_with_providers(&mut builder, providers.clone(), skills_extension_config);
     let registry = builder.build();
 
     let session_store = ExtensionData::new("session");
@@ -189,6 +191,33 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             thread_store: &thread_store,
         })
         .await;
+
+    let state = thread_store
+        .get::<SkillsThreadState>()
+        .ok_or("skills thread state should be initialized")?;
+    let inspected = state
+        .inspect_executor_catalog(
+            &providers,
+            SkillListQuery {
+                turn_id: "inspection".to_string(),
+                executor_roots: selected_roots.clone(),
+                host_snapshot: None,
+                include_host_skills: false,
+                include_bundled_skills: false,
+                include_orchestrator_skills: false,
+                mcp_resources: None,
+            },
+        )
+        .await;
+    assert_eq!(
+        SkillCatalog {
+            entries: Vec::new(),
+            warnings: vec![
+                "executor skills unavailable: temporary orchestrator failure".to_string()
+            ],
+        },
+        inspected
+    );
 
     let prompt_fragments = registry.context_contributors()[0]
         .contribute_thread_context(&session_store, &thread_store)
@@ -290,7 +319,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot))
         .ok_or("restored skills should render")?;
     assert!(restored_fragment.body().contains("lint-fix"));
-    assert_eq!(1, list_calls.load(Ordering::Relaxed));
+    assert_eq!(2, list_calls.load(Ordering::Relaxed));
 
     let mut listing_disabled_config = config.clone();
     listing_disabled_config.include_instructions = false;
