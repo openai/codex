@@ -22,6 +22,30 @@ cargo run -p codex-app-server-test-client -- model-list
 When Codex asks a question, choose a numbered option (or `o` for a free-form answer when offered)
 and the client will send the response and continue streaming the same turn.
 
+## Testing Codex-managed Amazon Bedrock login
+
+`test-amazon-bedrock-login` initializes the experimental app-server API, logs in with an Amazon
+Bedrock API key, waits for the login completion notification, and verifies that `account/read`
+reports a Codex-managed Amazon Bedrock account. Login replaces the current primary credential and
+sets `model_provider = "amazon-bedrock"`, so use an isolated `CODEX_HOME` when testing.
+
+```bash
+export CODEX_HOME="$(mktemp -d)"
+printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+export AWS_BEARER_TOKEN_BEDROCK="<BEDROCK_API_KEY>"
+
+cargo build -p codex-cli --bin codex
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  test-amazon-bedrock-login \
+  --region us-west-2
+```
+
+The key can instead be passed with `--api-key`, but the environment variable avoids exposing it in
+shell history. The test client redacts `apiKey` from its outbound request log. After login, unset
+`AWS_BEARER_TOKEN_BEDROCK` and start a fresh Codex process with the same `CODEX_HOME` to verify that
+it uses the persisted managed credential.
+
 ## Testing Plugin Analytics
 
 The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
