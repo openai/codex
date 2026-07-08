@@ -445,6 +445,93 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_extension_is_enabled_by_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server =
+        create_mock_responses_server(vec![create_final_assistant_message_sse_response("Done")?])
+            .await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "openai-custom"
+
+[features]
+enable_request_compression = false
+
+[model_providers.openai-custom]
+name = "OpenAI"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+requires_openai_auth = true
+"#,
+            server_uri = server.uri(),
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        serde_json::to_vec_pretty(&json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91c2VyX2lkIjoidXNlci0xMjM0NSIsImNoYXRncHRfcGxhbl90eXBlIjoicHJvIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjb3VudC0xMjMifX0.c2ln",
+                "access_token": "test-access-token",
+                "refresh_token": "test-refresh-token",
+                "account_id": "account-123"
+            },
+            "last_refresh": "2099-01-01T00:00:00Z"
+        }))?,
+    )?;
+
+    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    let request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "Generate an image".to_string(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Number(request_id)),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("mock server should record requests"))?;
+    let request = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .ok_or_else(|| anyhow::anyhow!("mock server should receive a Responses request"))?
+        .body_json::<serde_json::Value>()?;
+    let tools = request["tools"]
+        .as_array()
+        .expect("responses request should include tools");
+    assert!(tools.iter().any(|tool| {
+        tool.get("type").and_then(serde_json::Value::as_str) == Some("namespace")
+            && tool.get("name").and_then(serde_json::Value::as_str) == Some("image_gen")
+            && tool["tools"].as_array().is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("name").and_then(serde_json::Value::as_str) == Some("imagegen")
+                })
+            })
+    }));
+    assert!(!tools.iter().any(|tool| {
+        tool.get("type").and_then(serde_json::Value::as_str) == Some("image_generation")
+    }));
+
+    Ok(())
+}
+
 fn create_expected_patch_approval_elicitation_request_params(
     changes: HashMap<PathBuf, FileChange>,
     grant_root: Option<PathBuf>,

@@ -196,10 +196,8 @@ pub enum Feature {
     PluginSharing,
     /// Removed compatibility flag retained as a no-op.
     ExternalMigration,
-    /// Allow the model to invoke the built-in image generation tool.
+    /// Enable extension-backed image generation.
     ImageGeneration,
-    /// Replace hosted image generation with the standalone image-generation extension.
-    ImageGenExt,
     /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
@@ -496,6 +494,12 @@ impl Features {
                     );
                 }
                 _ => {}
+            }
+            if let Some(feature) = legacy::feature_for_key(k)
+                && m.contains_key(feature.key())
+            {
+                self.record_legacy_usage(k, feature);
+                continue;
             }
             match feature_for_key(k) {
                 Some(feat) => {
@@ -1167,12 +1171,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "image_generation",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ImageGenExt,
-        key: "imagegenext",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResizeAllImages,

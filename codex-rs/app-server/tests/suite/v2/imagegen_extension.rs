@@ -588,7 +588,6 @@ model_provider = "openai-custom"
 chatgpt_base_url = "{server_uri}"
 
 [features]
-imagegenext = true
 {code_mode_only}
 
 [model_providers.openai-custom]
