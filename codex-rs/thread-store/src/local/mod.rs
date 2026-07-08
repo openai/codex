@@ -350,7 +350,12 @@ impl ThreadStore for LocalThreadStore {
         let changed = !params.patch.is_empty();
         Box::pin(async move {
             let thread = update_thread_metadata::update_thread_metadata(self, params).await?;
-            if changed {
+            if changed
+                && let Some(rollout_path) = thread.rollout_path.as_ref()
+                && codex_rollout::existing_rollout_path(rollout_path)
+                    .await
+                    .is_some()
+            {
                 self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
             }
             Ok(thread)
@@ -408,6 +413,7 @@ mod tests {
 
     use super::*;
     use crate::LiveThread;
+    use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
@@ -683,10 +689,23 @@ mod tests {
         .await
         .expect("state db should initialize");
         let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let mut catalog_changes = store.subscribe_catalog_changes();
         let thread_id = ThreadId::default();
         let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
             .await
             .expect("create live thread");
+
+        live_thread
+            .update_metadata(
+                ThreadMetadataPatch::default(),
+                /*include_archived*/ false,
+            )
+            .await
+            .expect("flush pending metadata");
+        assert!(matches!(
+            catalog_changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
 
         live_thread
             .update_memory_mode(ThreadMemoryMode::Disabled, /*include_archived*/ false)
