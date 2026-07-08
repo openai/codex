@@ -28,6 +28,7 @@ use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_mcp::SandboxState;
 use codex_models_manager::manager::RefreshStrategy;
@@ -45,6 +46,7 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -738,6 +740,23 @@ async fn apps_enabled_turn_skips_pending_optional_mcp_without_cached_tools() -> 
         tokio::time::timeout(Duration::from_secs(5), pending_mcp_listener.accept())
             .await
             .context("optional MCP startup should reach the pending server")??;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = fixture
+                .codex
+                .next_event()
+                .await
+                .context("event stream ended before Codex Apps became ready")?;
+            if let EventMsg::McpStartupUpdate(update) = event.msg
+                && update.server == CODEX_APPS_MCP_SERVER_NAME
+                && matches!(update.status, McpStartupStatus::Ready)
+            {
+                break Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await
+    .context("Codex Apps should become ready before exercising pending optional MCP startup")??;
     tokio::time::timeout(Duration::from_secs(5), fixture.submit_turn("hello"))
         .await
         .context("turn should not wait for pending optional MCP startup")??;

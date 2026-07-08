@@ -84,11 +84,16 @@ use tracing::warn;
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
+// Optional MCP startup happens concurrently with turn setup. Give healthy
+// servers a short chance to finish so their tools are not dropped only because
+// the background startup task has not been scheduled yet, while still keeping
+// a slow optional server from holding the turn until its configured timeout.
+const OPTIONAL_MCP_TURN_STARTUP_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PendingOptionalToolListing {
     WaitForStartup,
-    SkipWithoutCache,
+    SkipAfterStartupGrace,
 }
 
 /// Returns whether a tool may be included in model-facing tool declarations.
@@ -494,9 +499,10 @@ impl McpConnectionManager {
             .await
     }
 
-    /// Returns tools available to a turn without waiting for uncached optional servers to start.
+    /// Returns tools available to a turn after giving uncached optional servers a short
+    /// startup grace period.
     pub async fn list_all_tools_for_turn(&self) -> Vec<ToolInfo> {
-        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::SkipWithoutCache)
+        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::SkipAfterStartupGrace)
             .await
     }
 
@@ -519,16 +525,27 @@ impl McpConnectionManager {
                         startup_complete,
                         "listing MCP server tools while building tool list"
                     );
-                    if pending_optional == PendingOptionalToolListing::SkipWithoutCache
+                    if pending_optional == PendingOptionalToolListing::SkipAfterStartupGrace
                         && !required
                         && !startup_complete
                         && !has_cached_tools
                     {
-                        trace!(
-                            server_name = %server_name,
-                            "skipping pending optional MCP server without cached tools"
-                        );
-                        return None;
+                        return match tokio::time::timeout(
+                            OPTIONAL_MCP_TURN_STARTUP_GRACE,
+                            managed_client.listed_tools(),
+                        )
+                        .await
+                        {
+                            Ok(server_tools) => server_tools,
+                            Err(_) => {
+                                trace!(
+                                    server_name = %server_name,
+                                    grace_ms = OPTIONAL_MCP_TURN_STARTUP_GRACE.as_millis(),
+                                    "skipping pending optional MCP server without cached tools"
+                                );
+                                None
+                            }
+                        };
                     }
                     if required && !startup_complete && has_cached_tools {
                         let _ = managed_client.client().await;

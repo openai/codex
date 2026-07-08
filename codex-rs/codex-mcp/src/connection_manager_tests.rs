@@ -988,8 +988,8 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
     );
 }
 
-#[tokio::test]
-async fn list_all_tools_for_turn_skips_optional_client_pending_without_cached_tools() {
+#[tokio::test(start_paused = true)]
+async fn list_all_tools_for_turn_skips_optional_client_after_startup_grace_without_cached_tools() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -1001,10 +1001,10 @@ async fn list_all_tools_for_turn_skips_optional_client_pending_without_cached_to
         /*prefix_mcp_tool_names*/ true,
     );
     manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        "pending_optional".to_string(),
         AsyncManagedClient {
             client: pending_client,
-            is_codex_apps_mcp_server: true,
+            is_codex_apps_mcp_server: false,
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_filter: ToolFilter::default(),
@@ -1015,10 +1015,49 @@ async fn list_all_tools_for_turn_skips_optional_client_pending_without_cached_to
         },
     );
 
-    let tools = tokio::time::timeout(Duration::from_secs(1), manager.list_all_tools_for_turn())
+    let tools = tokio::time::timeout(Duration::from_secs(2), manager.list_all_tools_for_turn())
         .await
-        .expect("optional client tool listing should not block a turn on startup");
+        .expect("optional client tool listing should only wait for the startup grace period");
     assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn list_all_tools_for_turn_uses_optional_client_that_finishes_during_startup_grace() {
+    let client = async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(create_test_managed_client(vec![create_test_tool("fast_optional", "echo")]).await)
+    }
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        "fast_optional".to_string(),
+        AsyncManagedClient {
+            client,
+            is_codex_apps_mcp_server: false,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: None,
+            tool_filter: ToolFilter::default(),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_reconnect: None,
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = manager.list_all_tools_for_turn().await;
+    assert!(
+        tools.iter().any(|tool| {
+            tool.canonical_tool_name() == ToolName::namespaced("mcp__fast_optional", "echo")
+        }),
+        "fast optional client tools should be available to the turn"
+    );
 }
 
 #[tokio::test]
