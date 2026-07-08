@@ -568,14 +568,27 @@ fn create_filesystem_args(
         bwrap_args.args.push(path_to_string(mount_root));
         bwrap_args.args.push(path_to_string(mount_root));
 
-        let mut read_only_subpaths: Vec<PathBuf> = writable_root
-            .read_only_subpaths
-            .iter()
-            .map(|path| path.as_path().to_path_buf())
-            .filter(|path| !unreadable_paths.contains(path))
-            .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
-            .collect();
-        let protected_metadata_names = writable_root.protected_metadata_names.clone();
+        // Exact-file grants are valid writable roots, but they cannot contain
+        // read-only carveouts or protected metadata children.
+        let root_is_directory = root.is_dir();
+        let mut read_only_subpaths: Vec<PathBuf> = if root_is_directory {
+            writable_root
+                .read_only_subpaths
+                .iter()
+                .map(|path| path.as_path().to_path_buf())
+                .filter(|path| !unreadable_paths.contains(path))
+                .filter(|path| {
+                    !missing_auto_metadata_read_only_project_root_subpaths.contains(path)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let protected_metadata_names = if root_is_directory {
+            writable_root.protected_metadata_names.clone()
+        } else {
+            Vec::new()
+        };
         append_metadata_path_masks_for_writable_root(
             &mut read_only_subpaths,
             root,
@@ -2422,6 +2435,64 @@ mod tests {
             blocked_none_index < allowed_bind_index,
             "expected unreadable parent mask before rebinding writable file child: {:#?}",
             args.args
+        );
+    }
+
+    #[test]
+    fn exact_writable_file_does_not_create_metadata_mount_targets() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_file = temp_dir.path().join("package-lock.json");
+        std::fs::write(&writable_file, "{}\n").expect("create package-lock.json");
+        let writable_file =
+            AbsolutePathBuf::from_absolute_path(&writable_file).expect("absolute writable file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_file.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(temp_dir.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, writable_file);
+        assert!(
+            !writable_roots[0].protected_metadata_names.is_empty(),
+            "the runtime must tolerate metadata protections attached to an exact-file root"
+        );
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let writable_file_path = writable_file.as_path();
+        let writable_file_string = path_to_string(writable_file_path);
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    writable_file_string.as_str(),
+                    writable_file_string.as_str(),
+                ]
+        }));
+        assert!(
+            synthetic_mount_target_paths(&args)
+                .iter()
+                .all(|target| !target.starts_with(writable_file_path)),
+            "exact-file roots must not synthesize metadata children: {:#?}",
+            args.synthetic_mount_targets
         );
     }
 
