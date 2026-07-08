@@ -4,6 +4,9 @@ outputs:
   bazel-output-base:
     description: Filesystem path used for Bazel's output base.
     value: ${{ steps.configure_ci_build_paths.outputs.bazel-output-base }}
+  cargo-target-dir:
+    description: Filesystem path used for Cargo's target directory.
+    value: ${{ steps.configure_ci_build_paths.outputs.cargo-target-dir }}
 
 runs:
   using: composite
@@ -47,6 +50,7 @@ runs:
         )
         mkdir -p "${build_dirs[@]}"
         echo "bazel-output-base=$bazel_output_base" >> "$GITHUB_OUTPUT"
+        echo "cargo-target-dir=$cargo_target_dir" >> "$GITHUB_OUTPUT"
 
         {
           echo "BAZEL_OUTPUT_BASE=$bazel_output_base"
