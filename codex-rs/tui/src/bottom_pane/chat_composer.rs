@@ -2323,6 +2323,8 @@ impl ChatComposer {
     /// - At an adjacent sigil, a bound left mention gives way to the editable token on the right.
     ///   Editable `$` fragments keep left affinity, while editable `@` fragments retain the
     ///   surrounding whitespace-delimited token so nested package prefixes keep working.
+    /// - On same-line separator whitespace, an `@` token on the right wins. `$` tokens keep left
+    ///   affinity unless that mention is already bound.
     /// - If the token under the cursor starts with `prefix`, its byte range and
     ///   text without the leading prefix are returned. When `allow_empty` is
     ///   true, a lone prefix character yields `Some(String::new())` to surface hints.
@@ -2471,6 +2473,9 @@ impl ChatComposer {
             right_match.map(|t| (start_right..end_right, t[prefix_len..].to_string()));
 
         if at_whitespace {
+            if prefix == '@' && right_prefixed.is_some() {
+                return right_prefixed;
+            }
             if left_prefixed.as_ref().is_some_and(|(range, token)| {
                 !Self::prefixed_token_range_is_editable(textarea, prefix, range, token)
             }) {
@@ -6491,6 +6496,21 @@ mod tests {
         composer.sync_popups();
     }
 
+    fn configure_whitespace_separated_plugin_mentions(composer: &mut ChatComposer) {
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "new@test".to_string(),
+            display_name: "new".to_string(),
+            description: Some("Plugin to the right of the cursor.".to_string()),
+            has_skills: false,
+            mcp_server_names: vec!["new".to_string()],
+            app_connector_ids: Vec::new(),
+        }]));
+        composer.set_text_content("@old @new".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@old".len());
+        composer.sync_popups();
+    }
+
     #[test]
     fn skill_popup_targets_unbound_mention_left_of_bound_mention() {
         let (mut composer, _rx) = new_test_composer();
@@ -6602,6 +6622,32 @@ mod tests {
             "unified_mention_popup_targets_unbound_plugin_right_of_adjacent_bound_plugin",
             /*enhanced_keys_supported*/ false,
             configure_bound_plugin_left_of_unbound_plugin,
+        );
+    }
+
+    #[test]
+    fn unified_mention_popup_targets_plugin_right_of_whitespace() {
+        let (mut composer, _rx) = new_test_composer();
+        configure_whitespace_separated_plugin_mentions(&mut composer);
+
+        let ActivePopup::MentionV2(popup) = &composer.popups.active else {
+            panic!("expected unified mention popup for the right mention");
+        };
+        let Some(MentionV2Selection::Tool { insert_text, path }) = popup.selected() else {
+            panic!("expected the right plugin mention to be selected");
+        };
+        assert_eq!(
+            (insert_text, path),
+            ("@new".to_string(), Some("plugin://new@test".to_string()))
+        );
+    }
+
+    #[test]
+    fn unified_mention_popup_targets_plugin_right_of_whitespace_snapshot() {
+        snapshot_composer_state(
+            "unified_mention_popup_targets_plugin_right_of_whitespace",
+            /*enhanced_keys_supported*/ false,
+            configure_whitespace_separated_plugin_mentions,
         );
     }
 
