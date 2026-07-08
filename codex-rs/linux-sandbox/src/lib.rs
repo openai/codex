@@ -12,6 +12,8 @@ mod bwrap;
 #[cfg(target_os = "linux")]
 mod dns_routing;
 #[cfg(target_os = "linux")]
+mod dns_setup;
+#[cfg(target_os = "linux")]
 mod exec_util;
 #[cfg(target_os = "linux")]
 mod landlock;

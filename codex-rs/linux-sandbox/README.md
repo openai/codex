@@ -88,6 +88,10 @@ commands that would enter the bubblewrap path.
 - In managed proxy mode, the helper uses `--unshare-net` plus an internal
   TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
   endpoints.
+- When a managed domain policy is active, a loopback resolver answers only
+  permitted names through the host resolver while direct DNS egress remains
+  isolated. The policy is snapshotted when the command starts, and canonical
+  names are returned only when they are also permitted.
 - In managed proxy mode, after the bridge is live, seccomp blocks new
   AF_UNIX/socketpair creation for the user command.
 - When bubblewrap is active, it mounts a fresh `/proc` via `--proc /proc` by default, but
