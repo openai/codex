@@ -166,20 +166,6 @@ fn load_file_auth(codex_home: &Path) -> Result<Option<AuthDotJson>> {
     )?)
 }
 
-fn aws_managed_bedrock_config() -> CreateConfigTomlParams {
-    CreateConfigTomlParams {
-        model_provider_id: Some("amazon-bedrock".to_string()),
-        extra_provider_config: Some(
-            r#"[model_providers.amazon-bedrock.aws]
-profile = "codex-bedrock"
-region = "us-west-2"
-"#
-            .to_string(),
-        ),
-        ..Default::default()
-    }
-}
-
 async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -1196,7 +1182,7 @@ async fn managed_bedrock_login_requires_experimental_api() -> Result<()> {
 #[tokio::test]
 async fn login_managed_bedrock_updates_active_bedrock_account() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), aws_managed_bedrock_config())?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;

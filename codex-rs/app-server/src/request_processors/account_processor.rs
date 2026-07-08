@@ -193,6 +193,13 @@ impl AccountRequestProcessor {
         }
     }
 
+    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+        self.config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
+    }
+
     async fn maybe_refresh_plugin_caches_for_current_config(
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
@@ -899,7 +906,8 @@ impl AccountRequestProcessor {
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
         // then no auth step is required; otherwise, default to requiring auth.
-        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+        let config = self.load_latest_config().await?;
+        let requires_openai_auth = config.model_provider.requires_openai_auth;
 
         let response = if !requires_openai_auth {
             GetAuthStatusResponse {
@@ -967,10 +975,9 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        let provider = create_model_provider(
-            self.config.model_provider.clone(),
-            Some(self.auth_manager.clone()),
-        );
+        let config = self.load_latest_config().await?;
+        let provider =
+            create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),
