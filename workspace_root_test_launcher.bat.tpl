@@ -1,16 +1,23 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-call :resolve_runfile workspace_root_marker "__WORKSPACE_ROOT_MARKER__"
+call :resolve_runfile "__WORKSPACE_ROOT_MARKER__"
 if errorlevel 1 exit /b 1
+set "workspace_root_marker=!resolve_runfile_result!"
 
 for %%I in ("%workspace_root_marker%") do set "workspace_root_marker_dir=%%~dpI"
 for %%I in ("%workspace_root_marker_dir%..\..") do set "workspace_root=%%~fI"
 
-call :resolve_runfile test_bin "__TEST_BIN__"
+call :resolve_runfile "__TEST_BIN__"
 if errorlevel 1 exit /b 1
+set "test_bin=!resolve_runfile_result!"
 
 __RUNFILE_ENV_EXPORTS__
+
+if not defined test_bin (
+  >&2 echo resolved test binary was lost while exporting runfile environment variables
+  exit /b 1
+)
 
 __WORKSPACE_ROOT_SETUP__
 
@@ -97,44 +104,74 @@ rmdir /s /q "!TEMP_DIR!" 2>nul
 exit /b !TEST_EXIT!
 
 :resolve_runfile
-setlocal EnableExtensions EnableDelayedExpansion
-set "logical_path=%~2"
-set "workspace_logical_path=%logical_path%"
-if defined TEST_WORKSPACE set "workspace_logical_path=%TEST_WORKSPACE%/%logical_path%"
-set "native_logical_path=%logical_path:/=\%"
-set "native_workspace_logical_path=%workspace_logical_path:/=\%"
+set "resolve_runfile_result="
+set "resolve_runfile_logical_path=%~1"
+set "resolve_runfile_workspace_logical_path=!resolve_runfile_logical_path!"
+if defined TEST_WORKSPACE set "resolve_runfile_workspace_logical_path=%TEST_WORKSPACE%/!resolve_runfile_logical_path!"
+set "resolve_runfile_native_logical_path=!resolve_runfile_logical_path:/=\!"
+set "resolve_runfile_native_workspace_logical_path=!resolve_runfile_workspace_logical_path:/=\!"
 
 for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
-  set "runfiles_root=%%~R"
-  if defined runfiles_root (
-    if exist "!runfiles_root!\!native_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_logical_path!" & exit /b 0
+  set "resolve_runfile_root=%%~R"
+  if defined resolve_runfile_root (
+    if exist "!resolve_runfile_root!\!resolve_runfile_native_logical_path!" (
+      set "resolve_runfile_result=!resolve_runfile_root!\!resolve_runfile_native_logical_path!"
+      goto :resolve_runfile_success
     )
-    if exist "!runfiles_root!\!native_workspace_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_workspace_logical_path!" & exit /b 0
+    if exist "!resolve_runfile_root!\!resolve_runfile_native_workspace_logical_path!" (
+      set "resolve_runfile_result=!resolve_runfile_root!\!resolve_runfile_native_workspace_logical_path!"
+      goto :resolve_runfile_success
     )
   )
 )
 
-set "manifest=%RUNFILES_MANIFEST_FILE%"
-if not defined manifest if exist "%~f0.runfiles_manifest" set "manifest=%~f0.runfiles_manifest"
-if not defined manifest if exist "%~dpn0.runfiles_manifest" set "manifest=%~dpn0.runfiles_manifest"
-if not defined manifest if exist "%~f0.exe.runfiles_manifest" set "manifest=%~f0.exe.runfiles_manifest"
+set "resolve_runfile_manifest=%RUNFILES_MANIFEST_FILE%"
+if not defined resolve_runfile_manifest if exist "%~f0.runfiles_manifest" set "resolve_runfile_manifest=%~f0.runfiles_manifest"
+if not defined resolve_runfile_manifest if exist "%~dpn0.runfiles_manifest" set "resolve_runfile_manifest=%~dpn0.runfiles_manifest"
+if not defined resolve_runfile_manifest if exist "%~f0.exe.runfiles_manifest" set "resolve_runfile_manifest=%~f0.exe.runfiles_manifest"
 
-if defined manifest if exist "%manifest%" (
+if defined resolve_runfile_manifest if exist "!resolve_runfile_manifest!" (
   rem Read the manifest directly instead of shelling out to findstr. In the
   rem GitHub Windows runner, the nested `findstr` path produced
   rem `FINDSTR: Cannot open D:MANIFEST`, which then broke runfile resolution for
   rem Bazel tests even though the manifest file was present.
-  for /f "usebackq tokens=1,* delims= " %%A in ("%manifest%") do (
-    if "%%A"=="%logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+  rem A one-field manifest entry maps to itself, so fall back to %%A when the
+  rem optional mapped path in %%B is empty.
+  for /f "usebackq tokens=1,* delims= " %%A in ("!resolve_runfile_manifest!") do (
+    if "%%A"=="!resolve_runfile_logical_path!" (
+      set "resolve_runfile_manifest_path=%%B"
+      if not defined resolve_runfile_manifest_path set "resolve_runfile_manifest_path=%%A"
+      set "resolve_runfile_result=!resolve_runfile_manifest_path!"
+      goto :resolve_runfile_success
     )
-    if "%%A"=="%workspace_logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+    if "%%A"=="!resolve_runfile_workspace_logical_path!" (
+      set "resolve_runfile_manifest_path=%%B"
+      if not defined resolve_runfile_manifest_path set "resolve_runfile_manifest_path=%%A"
+      set "resolve_runfile_result=!resolve_runfile_manifest_path!"
+      goto :resolve_runfile_success
     )
   )
 )
 
->&2 echo failed to resolve runfile: %logical_path%
-endlocal & exit /b 1
+>&2 echo failed to resolve runfile: !resolve_runfile_logical_path!
+call :clear_resolve_runfile_state
+exit /b 1
+
+:resolve_runfile_success
+if not defined resolve_runfile_result (
+  >&2 echo resolved runfile has an empty path: !resolve_runfile_logical_path!
+  call :clear_resolve_runfile_state
+  exit /b 1
+)
+call :clear_resolve_runfile_state
+exit /b 0
+
+:clear_resolve_runfile_state
+set "resolve_runfile_logical_path="
+set "resolve_runfile_workspace_logical_path="
+set "resolve_runfile_native_logical_path="
+set "resolve_runfile_native_workspace_logical_path="
+set "resolve_runfile_root="
+set "resolve_runfile_manifest="
+set "resolve_runfile_manifest_path="
+exit /b 0
