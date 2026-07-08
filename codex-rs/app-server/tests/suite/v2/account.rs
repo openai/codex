@@ -1360,7 +1360,7 @@ async fn logout_aws_managed_bedrock_preserves_openai_auth_and_config() -> Result
 async fn logout_managed_bedrock_preserves_changed_provider_without_experimental_api() -> Result<()>
 {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    create_config_toml(codex_home.path(), aws_managed_bedrock_config())?;
     login_with_bedrock_api_key(
         codex_home.path(),
         "managed-bedrock-api-key",
@@ -1368,7 +1368,6 @@ async fn logout_managed_bedrock_preserves_changed_provider_without_experimental_
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     )?;
-    let expected_config = read_config_toml(codex_home.path())?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     let initialized = mcp
@@ -1385,6 +1384,9 @@ async fn logout_managed_bedrock_preserves_changed_provider_without_experimental_
         )
         .await?;
     assert!(matches!(initialized, JSONRPCMessage::Response(_)));
+
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let expected_config = read_config_toml(codex_home.path())?;
 
     let request_id = mcp.send_logout_account_request().await?;
     let response = timeout(

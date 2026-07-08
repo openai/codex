@@ -181,6 +181,43 @@ impl ConfigManager {
             .await
     }
 
+    /// Clears a value from the active user config only when its current raw value matches.
+    pub(crate) async fn clear_user_value_if_matches(
+        &self,
+        key_path: &str,
+        expected_value: JsonValue,
+    ) -> Result<(), ConfigManagerError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigManagerError::io("failed to load configuration", err))?;
+        let Some(user_layer) = layers.get_active_user_layer() else {
+            return Ok(());
+        };
+        let segments = parse_key_path(key_path).map_err(|message| {
+            ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+        })?;
+        let expected_value = parse_value(expected_value).map_err(|message| {
+            ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+        })?;
+        if value_at_path(&user_layer.config, &segments) != expected_value.as_ref() {
+            return Ok(());
+        }
+        let expected_version = Some(user_layer.version.clone());
+
+        self.apply_edits(
+            /*file_path*/ None,
+            expected_version,
+            vec![(
+                key_path.to_string(),
+                JsonValue::Null,
+                MergeStrategy::Replace,
+            )],
+        )
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,

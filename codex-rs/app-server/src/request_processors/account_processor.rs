@@ -1,6 +1,5 @@
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
 use super::bedrock_auth::set_user_model_provider_to_bedrock;
-use super::bedrock_auth::user_model_provider_state;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
@@ -846,11 +845,6 @@ impl AccountRequestProcessor {
             self.auth_manager.auth_cached(),
             Some(CodexAuth::BedrockApiKey(_))
         );
-        let user_model_provider = if managed_bedrock_auth {
-            Some(user_model_provider_state(&self.config_manager).await?)
-        } else {
-            None
-        };
         if self.config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
             return Ok(());
         }
@@ -869,8 +863,8 @@ impl AccountRequestProcessor {
         )
         .await;
 
-        if let Some(user_model_provider) = user_model_provider {
-            clear_user_model_provider_if_bedrock(&self.config_manager, user_model_provider).await?;
+        if managed_bedrock_auth {
+            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
         }
 
         Ok(())
