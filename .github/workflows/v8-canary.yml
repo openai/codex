@@ -15,7 +15,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
+  group: ${{ github.workflow }}::${{ inputs.io_trace_run_id != '' && format('analysis-{0}', inputs.io_trace_run_id) || format('build-{0}', github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name) }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
