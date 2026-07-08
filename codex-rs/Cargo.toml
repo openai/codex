@@ -90,6 +90,7 @@ members = [
     "tui",
     "tools",
     "v8-poc",
+    "websocket-client",
     "utils/absolute-path",
     "utils/path-uri",
     "utils/cargo-bin",
@@ -427,6 +428,7 @@ thiserror = "2.0.17"
 time = "0.3.47"
 tiny_http = "0.12"
 tokio = "1"
+tokio-rustls = "0.26.4"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
 tokio-tungstenite = { version = "0.28.0", features = [

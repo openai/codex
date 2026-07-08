@@ -4486,6 +4486,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-websocket-client"
+version = "0.0.0"
+dependencies = [
+ "codex-http-client",
+ "codex-utils-rustls-provider",
+ "futures",
+ "pretty_assertions",
+ "rcgen",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "url",
+]
+
+[[package]]
 name = "codex-windows-sandbox"
 version = "0.0.0"
 dependencies = [
