@@ -504,6 +504,7 @@ pub fn codex_apps_mcp_server_config(
 pub fn hosted_plugin_runtime_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
+    originator: Option<&str>,
 ) -> McpServerConfig {
     let base_url = normalize_codex_apps_base_url(chatgpt_base_url);
     let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
@@ -514,7 +515,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
-        /*originator*/ None,
+        originator,
         McpServerAuth::ChatGpt,
     )
 }

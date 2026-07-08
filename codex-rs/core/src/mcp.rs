@@ -100,6 +100,7 @@ impl McpManager {
                 config,
                 thread_init,
                 thread_store,
+                originator,
                 available_environment_ids,
             ),
             Some(originator),
