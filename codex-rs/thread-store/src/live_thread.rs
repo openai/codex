@@ -60,16 +60,12 @@ impl LiveThreadInitGuard {
     }
 
     pub async fn discard(&mut self) {
-        let Some(live_thread) = self.live_thread.as_ref().cloned() else {
+        let Some(live_thread) = self.live_thread.take() else {
             return;
         };
         if let Err(err) = live_thread.discard().await {
             warn!("failed to discard thread persistence for failed session init: {err}");
-            return;
         }
-        // Keep the guard armed until discard completes so cancellation still leaves Drop able to
-        // retry terminal cleanup.
-        self.live_thread = None;
     }
 }
 

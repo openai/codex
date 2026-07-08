@@ -53,12 +53,71 @@ mod tests {
     use super::*;
     use crate::ListItemsParams;
     use crate::ListTurnsParams;
+    use crate::LiveThread;
+    use crate::LiveThreadInitGuard;
     use crate::SortDirection;
     use crate::StoredTurnItemsView;
     use crate::ThreadPersistenceMetadata;
     use crate::ThreadSortKey;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
+    use std::future::Future;
+    use std::task::Poll;
+
+    #[tokio::test]
+    async fn canceled_init_discard_starts_only_one_cleanup() {
+        let store = Arc::new(InMemoryThreadStore::default());
+        let thread_id = ThreadId::default();
+        let thread_store: Arc<dyn ThreadStore> = store.clone();
+        let live_thread = LiveThread::create(
+            thread_store,
+            create_thread_params(thread_id, ThreadHistoryMode::Legacy),
+        )
+        .await
+        .expect("create live thread");
+        let mut guard = LiveThreadInitGuard::new(Some(live_thread));
+        let state = Arc::clone(&store.state).lock_owned().await;
+        let (release_lock, lock_released) = std::sync::mpsc::channel();
+        let lock_holder = tokio::task::spawn_blocking(move || {
+            let _state = state;
+            lock_released.recv().expect("receive state lock release");
+        });
+        let mut discard = Box::pin(guard.discard());
+        std::future::poll_fn(|cx| {
+            assert!(matches!(discard.as_mut().poll(cx), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        drop(discard);
+        drop(guard);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        release_lock.send(()).expect("release state lock");
+        lock_holder.await.expect("join state lock holder");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if store.calls().await.discard_thread == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("discard cleanup should complete");
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            store.calls().await,
+            InMemoryThreadStoreCalls {
+                create_thread: 1,
+                discard_thread: 1,
+                ..Default::default()
+            }
+        );
+    }
 
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
