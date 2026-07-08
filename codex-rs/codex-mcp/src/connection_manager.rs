@@ -23,8 +23,8 @@ use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
+use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
-use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
@@ -142,6 +142,7 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
         elicitation_router: ElicitationRequestRouter,
     ) -> Self {
         let mut required_servers = mcp_servers
@@ -157,6 +158,7 @@ impl McpConnectionManager {
             approval_policy.value(),
             initial_permission_profile,
             elicitation_reviewer,
+            elicitation_lifecycle,
             elicitation_router,
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
@@ -360,6 +362,7 @@ impl McpConnectionManager {
                 approval_policy.value(),
                 permission_profile.clone(),
                 /*reviewer*/ None,
+                /*lifecycle*/ None,
                 ElicitationRequestRouter::default(),
             ),
             startup_cancellation_token: CancellationToken::new(),
@@ -527,6 +530,7 @@ impl McpConnectionManager {
     /// cache is enabled and the latest filtered tools are returned directly to
     /// the caller. On failure, existing shared cache contents remain unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
+        let refresh_start = Instant::now();
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -536,7 +540,6 @@ impl McpConnectionManager {
             .context("failed to get client")?;
 
         let list_start = Instant::now();
-        let fetch_start = Instant::now();
         let fetch_ticket = managed_client
             .codex_apps_tools_cache_context
             .as_ref()
@@ -544,6 +547,7 @@ impl McpConnectionManager {
         let tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
+            /*codex_apps_refresh_trigger*/ "explicit",
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
@@ -552,11 +556,6 @@ impl McpConnectionManager {
         .with_context(|| {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
-        emit_duration(
-            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-            fetch_start.elapsed(),
-            &[],
-        );
 
         let tools =
             match (
@@ -579,10 +578,13 @@ impl McpConnectionManager {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 self.with_server_metadata(tool)
             });
-        Ok(normalize_tools_for_model_with_prefix(
-            tools,
-            self.prefix_mcp_tool_names,
-        ))
+        let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
+        emit_duration(
+            CODEX_APPS_REFRESH_DURATION_METRIC,
+            refresh_start.elapsed(),
+            &[("path", "legacy"), ("trigger", "explicit")],
+        );
+        Ok(tools)
     }
 
     /// Returns resources from servers selected by `include_server`. Each key

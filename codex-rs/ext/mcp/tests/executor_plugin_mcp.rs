@@ -25,6 +25,13 @@ struct ContributionSummary {
     enabled: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PackageSummary {
+    plugin_id: String,
+    plugin_display_name: String,
+    connector_ids: Vec<String>,
+}
+
 #[tokio::test]
 async fn selected_plugin_servers_use_managed_requirements_for_the_selected_root_id() -> TestResult {
     let codex_home = tempfile::tempdir()?;
@@ -92,10 +99,87 @@ command = "expected-command"
     Ok(())
 }
 
+#[tokio::test]
+async fn selected_plugin_package_is_contributed_without_servers_or_connectors() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let plugin_root = tempfile::tempdir()?;
+    std::fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.path().join("skills/deploy"))?;
+    std::fs::write(
+        plugin_root.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"skill-only","interface":{"displayName":"Skill Only"}}"#,
+    )?;
+    std::fs::write(
+        plugin_root.path().join("skills/deploy/SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy the project.\n---\n",
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    let contributions = raw_selected_plugin_contributions(&config, plugin_root.path()).await?;
+    let package = contributions.into_iter().find_map(|contribution| {
+        let McpServerContribution::SelectedPluginPackage {
+            plugin_id,
+            plugin_display_name,
+            connector_ids,
+        } = contribution
+        else {
+            return None;
+        };
+        Some(PackageSummary {
+            plugin_id,
+            plugin_display_name,
+            connector_ids,
+        })
+    });
+
+    assert_eq!(
+        package,
+        Some(PackageSummary {
+            plugin_id: "selected-root".to_string(),
+            plugin_display_name: "Skill Only".to_string(),
+            connector_ids: Vec::new(),
+        })
+    );
+    Ok(())
+}
+
 async fn selected_plugin_contributions(
     config: &Config,
     plugin_root: &std::path::Path,
 ) -> Result<Vec<ContributionSummary>, Box<dyn std::error::Error>> {
+    Ok(raw_selected_plugin_contributions(config, plugin_root)
+        .await?
+        .into_iter()
+        .filter_map(|contribution| match contribution {
+            McpServerContribution::SelectedPlugin {
+                name,
+                plugin_id,
+                plugin_display_name,
+                selection_order,
+                config,
+            } => Some(ContributionSummary {
+                name,
+                plugin_id,
+                plugin_display_name,
+                selection_order,
+                enabled: config.enabled,
+            }),
+            McpServerContribution::SelectedPluginPackage { .. } => None,
+            McpServerContribution::Set { .. } | McpServerContribution::Remove { .. } => {
+                panic!("expected selected plugin contribution")
+            }
+        })
+        .collect())
+}
+
+async fn raw_selected_plugin_contributions(
+    config: &Config,
+    plugin_root: &std::path::Path,
+) -> Result<Vec<McpServerContribution>, Box<dyn std::error::Error>> {
     let mut builder = ExtensionRegistryBuilder::new();
     codex_mcp_extension::install_executor_plugins(
         &mut builder,
@@ -120,27 +204,5 @@ async fn selected_plugin_contributions(
             &thread_store,
             &available_environment_ids,
         ))
-        .await
-        .into_iter()
-        .map(|contribution| match contribution {
-            McpServerContribution::SelectedPlugin {
-                name,
-                plugin_id,
-                plugin_display_name,
-                selection_order,
-                config,
-            } => ContributionSummary {
-                name,
-                plugin_id,
-                plugin_display_name,
-                selection_order,
-                enabled: config.enabled,
-            },
-            McpServerContribution::Set { .. }
-            | McpServerContribution::SelectedPluginConnectors { .. }
-            | McpServerContribution::Remove { .. } => {
-                panic!("expected selected plugin contribution")
-            }
-        })
-        .collect())
+        .await)
 }

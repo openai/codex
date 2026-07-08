@@ -138,7 +138,7 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
+            model: Some("gpt-5.5".to_string()),
             environments: Some(Vec::new()),
             ..Default::default()
         })
@@ -552,7 +552,11 @@ apps = true
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_request_id = mcp
@@ -692,7 +696,11 @@ stream_max_retries = 0
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok((codex_home, mcp))
 }

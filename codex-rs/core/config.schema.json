@@ -150,6 +150,7 @@
       "enum": [
         "auto",
         "prompt",
+        "writes",
         "approve"
       ],
       "type": "string"
@@ -467,6 +468,9 @@
               "type": "boolean"
             },
             "computer_use": {
+              "type": "boolean"
+            },
+            "concurrent_reasoning_summaries": {
               "type": "boolean"
             },
             "connectors": {
@@ -1749,6 +1753,9 @@
           "maximum": 3600000.0,
           "minimum": 0.0,
           "type": "integer"
+        },
+        "multi_agent_mode_hint_text": {
+          "type": "string"
         },
         "non_code_mode_only": {
           "type": "boolean"
@@ -4833,6 +4840,9 @@
           "type": "boolean"
         },
         "computer_use": {
+          "type": "boolean"
+        },
+        "concurrent_reasoning_summaries": {
           "type": "boolean"
         },
         "connectors": {

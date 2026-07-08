@@ -1,0 +1,162 @@
+use crate::default_client::HttpClient;
+use crate::default_client::RequestBuilder;
+use crate::error::TransportError;
+use crate::request::Request;
+use crate::request::RequestBody;
+use crate::request::Response;
+use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
+use http::HeaderMap;
+use http::Method;
+use http::StatusCode;
+use tracing::Level;
+use tracing::enabled;
+use tracing::trace;
+
+pub type ByteStream = BoxStream<'static, Result<Bytes, TransportError>>;
+
+pub struct StreamResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub bytes: ByteStream,
+}
+
+pub trait HttpTransport: Send + Sync {
+    fn execute(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<Response, TransportError>> + Send;
+    fn stream(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = Result<StreamResponse, TransportError>> + Send;
+}
+
+#[derive(Clone, Debug)]
+pub struct ReqwestTransport {
+    client: HttpClient,
+}
+
+impl ReqwestTransport {
+    pub fn new(client: reqwest::Client) -> Self {
+        Self {
+            client: HttpClient::new(client),
+        }
+    }
+
+    fn build(&self, req: Request) -> Result<RequestBuilder, TransportError> {
+        let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
+
+        let Request {
+            method,
+            url,
+            headers: _,
+            body: _,
+            compression: _,
+            timeout,
+        } = req;
+
+        let mut builder = self.client.request(
+            Method::from_bytes(method.as_str().as_bytes()).unwrap_or(Method::GET),
+            &url,
+        );
+
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
+        }
+
+        builder = builder.headers(prepared.headers);
+        if let Some(body) = prepared.body {
+            builder = builder.body(body);
+        }
+        Ok(builder)
+    }
+
+    fn map_error(err: reqwest::Error) -> TransportError {
+        if err.is_timeout() {
+            TransportError::Timeout
+        } else {
+            TransportError::Network(err.to_string())
+        }
+    }
+}
+
+fn request_body_for_trace(req: &Request) -> String {
+    match req.body.as_ref() {
+        Some(RequestBody::Json(body)) => body.to_string(),
+        Some(RequestBody::EncodedJson(body)) => {
+            String::from_utf8_lossy(body.trace_bytes()).into_owned()
+        }
+        Some(RequestBody::Raw(body)) => format!("<raw body: {} bytes>", body.len()),
+        None => String::new(),
+    }
+}
+
+impl HttpTransport for ReqwestTransport {
+    async fn execute(&self, req: Request) -> Result<Response, TransportError> {
+        if enabled!(Level::TRACE) {
+            trace!(
+                "{} to {}: {}",
+                req.method,
+                req.url,
+                request_body_for_trace(&req)
+            );
+        }
+
+        let url = req.url.clone();
+        let builder = self.build(req)?;
+        let resp = builder.send().await.map_err(Self::map_error)?;
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let bytes = resp.bytes().await.map_err(Self::map_error)?;
+        if !status.is_success() {
+            let body = String::from_utf8(bytes.to_vec()).ok();
+            return Err(TransportError::Http {
+                status,
+                url: Some(url),
+                headers: Some(headers),
+                body,
+            });
+        }
+        Ok(Response {
+            status,
+            headers,
+            body: bytes,
+        })
+    }
+
+    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
+        if enabled!(Level::TRACE) {
+            trace!(
+                "{} to {}: {}",
+                req.method,
+                req.url,
+                request_body_for_trace(&req)
+            );
+        }
+
+        let url = req.url.clone();
+        let builder = self.build(req)?;
+        let resp = builder.send().await.map_err(Self::map_error)?;
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        if !status.is_success() {
+            let body = resp.text().await.ok();
+            return Err(TransportError::Http {
+                status,
+                url: Some(url),
+                headers: Some(headers),
+                body,
+            });
+        }
+        let stream = resp
+            .bytes_stream()
+            .map(|result| result.map_err(Self::map_error));
+        Ok(StreamResponse {
+            status,
+            headers,
+            bytes: Box::pin(stream),
+        })
+    }
+}

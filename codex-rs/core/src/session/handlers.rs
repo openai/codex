@@ -285,6 +285,7 @@ pub async fn inter_agent_communication(
     sess.input_queue
         .enqueue_mailbox_communication(communication)
         .await;
+    crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -588,8 +589,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
         startup_prewarm.abort().await;
     }
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     sess.services
         .unified_exec_manager
         .terminate_all_processes()

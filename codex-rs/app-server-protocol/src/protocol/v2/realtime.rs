@@ -70,6 +70,10 @@ pub struct ThreadRealtimeStartParams {
     /// them automatically. Defaults to false.
     #[ts(optional = nullable)]
     pub client_managed_handoffs: Option<bool>,
+    /// Routes any transcript tail remaining at session end through Codex. Defaults to false.
+    /// TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
+    #[ts(optional = nullable)]
+    pub flush_transcript_tail_on_session_end: Option<bool>,
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
     #[ts(optional = nullable)]
     pub codex_responses_as_items: Option<bool>,

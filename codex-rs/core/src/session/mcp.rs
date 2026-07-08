@@ -1,4 +1,5 @@
 use super::*;
+use crate::mcp::McpRuntimeProjection;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
@@ -92,6 +93,7 @@ impl Session {
                 &available_environment_ids,
             )
             .await
+            .config
     }
 
     pub(crate) async fn runtime_mcp_servers(
@@ -123,7 +125,7 @@ impl Session {
         if current.available_environment_ids() == available_environment_ids {
             return current;
         }
-        let mcp_config = self
+        let mcp_projection = self
             .services
             .mcp_manager
             .runtime_config_for_step(
@@ -133,6 +135,7 @@ impl Session {
                 &available_environment_ids,
             )
             .await;
+        let mcp_config = &mcp_projection.config;
         let changed_environment_is_used_by_mcp = mcp_config
             .mcp_server_catalog
             .configured_servers()
@@ -156,6 +159,7 @@ impl Session {
             // replacing the live manager and restarting its processes.
             let runtime = Arc::new(McpRuntimeSnapshot::new(
                 Arc::new(current.config().clone()),
+                mcp_projection.plugins_available,
                 current.manager_arc(),
                 current.runtime_context().clone(),
                 available_environment_ids,
@@ -165,7 +169,7 @@ impl Session {
         }
         self.refresh_mcp_servers_inner(
             turn_context,
-            mcp_config,
+            mcp_projection,
             environments,
             &available_environment_ids,
             Some(self.mcp_elicitation_reviewer()),
@@ -189,6 +193,11 @@ impl Session {
 
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
+    }
+
+    pub(crate) fn mcp_elicitation_lifecycle(&self) -> codex_mcp::ElicitationLifecycle {
+        let elicitations = self.services.elicitations.clone();
+        codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
     }
 
     #[expect(
@@ -218,6 +227,7 @@ impl Session {
             };
         }
 
+        let _elicitation = self.services.elicitations.register();
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
@@ -309,12 +319,16 @@ impl Session {
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        mcp_config: McpConfig,
+        mcp_projection: McpRuntimeProjection,
         environments: &TurnEnvironmentSnapshot,
         available_environment_ids: &[String],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Arc<McpRuntimeSnapshot> {
         let auth = self.services.auth_manager.auth().await;
+        let McpRuntimeProjection {
+            config: mcp_config,
+            plugins_available,
+        } = mcp_projection;
         let mcp_config = Arc::new(mcp_config);
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
@@ -369,6 +383,7 @@ impl Session {
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
+            Some(self.mcp_elicitation_lifecycle()),
             current_runtime.manager().elicitation_router(),
         )
         .await;
@@ -376,6 +391,7 @@ impl Session {
             .set_elicitations_auto_deny(current_runtime.manager().elicitations_auto_deny());
         self.services.publish_mcp_runtime(
             mcp_config,
+            plugins_available,
             mcp_runtime_context,
             available_environment_ids.to_vec(),
             refreshed_manager,
@@ -448,7 +464,7 @@ impl Session {
             .latest_mcp_runtime()
             .available_environment_ids()
             .to_vec();
-        let mut mcp_config = self
+        let mut mcp_projection = self
             .services
             .mcp_manager
             .runtime_config_for_step(
@@ -458,12 +474,13 @@ impl Session {
                 &available_environment_ids,
             )
             .await;
-        mcp_config.mcp_server_catalog = mcp_config
+        mcp_projection.config.mcp_server_catalog = mcp_projection
+            .config
             .mcp_server_catalog
             .with_materialized_servers(mcp_servers);
         self.refresh_mcp_servers_inner(
             turn_context,
-            mcp_config,
+            mcp_projection,
             &turn_context.environments,
             &available_environment_ids,
             elicitation_reviewer,
@@ -515,7 +532,7 @@ impl Session {
             .latest_mcp_runtime()
             .available_environment_ids()
             .to_vec();
-        let mcp_config = self
+        let mcp_projection = self
             .services
             .mcp_manager
             .runtime_config_for_step(
@@ -527,7 +544,7 @@ impl Session {
             .await;
         self.refresh_mcp_servers_inner(
             turn_context,
-            mcp_config,
+            mcp_projection,
             &turn_context.environments,
             &available_environment_ids,
             elicitation_reviewer,

@@ -63,6 +63,13 @@
       ],
       "type": "string"
     },
+    "PluginInstallPolicySource": {
+      "enum": [
+        "WORKSPACE_SETTING",
+        "IMPLICIT_CANONICAL_APP"
+      ],
+      "type": "string"
+    },
     "PluginInterface": {
       "properties": {
         "brandColor": {
@@ -489,6 +496,16 @@
         "installPolicy": {
           "$ref": "#/definitions/PluginInstallPolicy"
         },
+        "installPolicySource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginInstallPolicySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "installed": {
           "type": "boolean"
         },
@@ -540,6 +557,14 @@
         },
         "source": {
           "$ref": "#/definitions/PluginSource"
+        },
+        "version": {
+          "default": null,
+          "description": "Version advertised by the remote marketplace backend when available.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

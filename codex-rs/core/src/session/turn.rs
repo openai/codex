@@ -349,6 +349,7 @@ pub(crate) async fn run_turn(
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
+                        /*fallback_step_context*/ None,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
                         CompactionReason::ContextLimit,
@@ -810,6 +811,7 @@ async fn run_pre_sampling_compact(
         run_auto_compact(
             sess,
             step_context,
+            /*fallback_step_context*/ None,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
@@ -828,6 +830,28 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
         .is_some_and(|(previous, current)| previous != current)
 }
 
+/// Captures the current model's request-scoped state for retrying previous-model compaction.
+///
+/// Returns `None` when the active authentication does not use the Codex backend, the provider is
+/// not OpenAI, or the previous and current model are the same.
+async fn capture_current_model_fallback_step_context(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    previous_model: &str,
+) -> Option<Arc<StepContext>> {
+    let uses_codex_backend = turn_context
+        .auth_manager
+        .as_deref()
+        .is_some_and(codex_login::AuthManager::current_auth_uses_codex_backend);
+    if !uses_codex_backend
+        || !turn_context.provider.info().is_openai()
+        || previous_model == turn_context.model_info.slug
+    {
+        return None;
+    }
+    Some(sess.capture_step_context(Arc::clone(turn_context)).await)
+}
+
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility
 /// hash changed or when switching to a smaller context-window model.
 ///
@@ -844,20 +868,27 @@ async fn maybe_run_previous_model_inline_compact(
         previous_turn_settings.comp_hash.as_deref(),
         turn_context.model_info.comp_hash.as_deref(),
     );
+    let previous_model = previous_turn_settings.model;
     let previous_model_turn_context = Arc::new(
         turn_context
-            .with_model(previous_turn_settings.model, &sess.services.models_manager)
+            .with_model(previous_model.clone(), &sess.services.models_manager)
             .await,
     );
 
     if should_compact_for_comp_hash_change {
-        // This pre-turn request needs a step built from the previous model's turn context.
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context))
             .await;
+        let fallback_step_context = capture_current_model_fallback_step_context(
+            sess,
+            turn_context,
+            previous_model.as_str(),
+        )
+        .await;
         run_auto_compact(
             sess,
             step_context,
+            fallback_step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::CompHashChanged,
@@ -892,13 +923,19 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
-        // This pre-turn request needs a step built from the previous model's turn context.
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context))
             .await;
+        let fallback_step_context = capture_current_model_fallback_step_context(
+            sess,
+            turn_context,
+            previous_model.as_str(),
+        )
+        .await;
         run_auto_compact(
             sess,
             step_context,
+            fallback_step_context,
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
@@ -917,6 +954,7 @@ async fn maybe_run_previous_model_inline_compact(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,
+    fallback_step_context: Option<Arc<StepContext>>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -949,6 +987,7 @@ async fn run_auto_compact(
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
                 step_context,
+                fallback_step_context,
                 client_session,
                 initial_context_injection,
                 reason,
@@ -965,6 +1004,7 @@ async fn run_auto_compact(
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             step_context,
+            fallback_step_context,
             client_session.turn_state(),
             initial_context_injection,
             reason,
@@ -1909,6 +1949,11 @@ async fn try_run_sampling_request(
         turn_context.provider.info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
+    let uses_sequential_cutoff_reasoning_summaries = turn_context
+        .config
+        .features
+        .enabled(Feature::ConcurrentReasoningSummaries)
+        && turn_context.provider.info().is_openai();
     let mut stream = client_session
         .stream(
             prompt,
@@ -2291,6 +2336,9 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
+                if uses_sequential_cutoff_reasoning_summaries {
+                    continue;
+                }
                 if let Some(active) = active_item.as_ref() {
                     if !active_item_is_streaming_to_client {
                         continue;
@@ -2309,6 +2357,9 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if uses_sequential_cutoff_reasoning_summaries {
+                    continue;
+                }
                 if let Some(active) = active_item.as_ref() {
                     if !active_item_is_streaming_to_client {
                         continue;
@@ -2322,6 +2373,40 @@ async fn try_run_sampling_request(
                 } else {
                     error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
+            }
+            ResponseEvent::ReasoningSummaryDone {
+                item_id,
+                text,
+                summary_index,
+            } => {
+                if !uses_sequential_cutoff_reasoning_summaries {
+                    continue;
+                }
+                let Some(active) = active_item.as_ref() else {
+                    continue;
+                };
+                if !active_item_is_streaming_to_client || active.id() != item_id {
+                    continue;
+                }
+                if summary_index > 0 {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: item_id.clone(),
+                            summary_index,
+                        }),
+                    )
+                    .await;
+                }
+                let event = ReasoningContentDeltaEvent {
+                    thread_id: sess.thread_id.to_string(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item_id,
+                    delta: text,
+                    summary_index,
+                };
+                sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                    .await;
             }
             ResponseEvent::ReasoningContentDelta {
                 delta,

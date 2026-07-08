@@ -12,14 +12,15 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::AgentPath;
+use codex_protocol::items::CollabAgentTool;
+use codex_protocol::items::CollabAgentToolCallItem;
+use codex_protocol::items::CollabAgentToolCallStatus;
+use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::CollabWaitingBeginEvent;
-use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::SubAgentActivityEvent;
 use codex_protocol::protocol::SubAgentActivityKind;
-use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
@@ -39,6 +40,16 @@ mod message_tool;
 mod send_message;
 mod spawn;
 pub(crate) mod wait;
+
+pub(crate) async fn emit_sub_agent_activity(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    item: SubAgentActivityItem,
+) {
+    session
+        .emit_turn_item_completed(turn, TurnItem::SubAgentActivity(item))
+        .await;
+}
 
 pub(super) fn communication_from_tool_message(
     author: AgentPath,

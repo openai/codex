@@ -41,7 +41,10 @@ async fn thread_start_with_auto_env_exposes_fixture_cwd_to_model() -> Result<()>
         "compact",
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let expected_environment = mcp.auto_env_params()?;
 
@@ -110,14 +113,17 @@ async fn auto_env_rejects_explicit_environment_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(codex_home.path().join("environments.toml"), "")?;
 
-    let result = TestAppServer::new_with_auto_env(codex_home.path()).await;
+    let result = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await;
     let Err(err) = result else {
         anyhow::bail!("auto-env construction unexpectedly succeeded");
     };
     assert_eq!(
         err.to_string(),
         format!(
-            "new_with_auto_env cannot be used when {} exists",
+            "automatic environment cannot be used when {} exists",
             codex_home.path().join("environments.toml").display()
         )
     );

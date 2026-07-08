@@ -316,9 +316,9 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn auth_elicitation_is_under_development() {
-    assert_eq!(Feature::AuthElicitation.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::AuthElicitation.default_enabled(), false);
+fn auth_elicitation_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::AuthElicitation.stage(), Stage::Stable);
+    assert_eq!(Feature::AuthElicitation.default_enabled(), true);
     assert_eq!(
         feature_for_key("auth_elicitation"),
         Some(Feature::AuthElicitation)
@@ -610,6 +610,7 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
@@ -633,6 +634,7 @@ non_code_mode_only = true
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
+            multi_agent_mode_hint_text: Some("Custom mode guidance.".to_string()),
             tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
             non_code_mode_only: Some(true),

@@ -11,6 +11,8 @@ use super::shared::v2_enum_from_core;
 use crate::protocol::item_builders::command_actions_for_path_uri;
 use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_extension_items::ExtensionItem;
+pub use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
@@ -246,7 +248,10 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
-    Plan { id: String, text: String },
+    Plan {
+        id: String,
+        text: String,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -373,26 +378,24 @@ pub enum ThreadItem {
         #[ts(type = "number")]
         duration_ms: u64,
     },
+    ImageGeneration(ImageGenerationItem),
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageGeneration {
+    EnteredReviewMode {
         id: String,
-        status: String,
-        revised_prompt: Option<String>,
-        result: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        saved_path: Option<AbsolutePathBuf>,
+        review: String,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode { id: String, review: String },
+    ExitedReviewMode {
+        id: String,
+        review: String,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode { id: String, review: String },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    ContextCompaction { id: String },
+    ContextCompaction {
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -432,10 +435,10 @@ impl ThreadItem {
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
             | ThreadItem::Sleep { id, .. }
-            | ThreadItem::ImageGeneration { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
+            ThreadItem::ImageGeneration(item) => &item.id,
         }
     }
 }
@@ -931,13 +934,18 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: sleep.id,
                 duration_ms: sleep.duration_ms,
             },
-            CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
-                id: image.id,
-                status: image.status,
-                revised_prompt: image.revised_prompt,
-                result: image.result,
-                saved_path: image.saved_path,
+            CoreTurnItem::Extension(extension) => match extension {
+                ExtensionItem::ImageGeneration(item) => ThreadItem::ImageGeneration(item),
             },
+            CoreTurnItem::ImageGeneration(image) => {
+                ThreadItem::ImageGeneration(ImageGenerationItem {
+                    id: image.id,
+                    status: image.status,
+                    revised_prompt: image.revised_prompt,
+                    result: image.result,
+                    saved_path: image.saved_path,
+                })
+            }
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,
                 changes: convert_patch_changes(&file_change.changes),
