@@ -1,6 +1,6 @@
 use super::*;
-use crate::codex_apps_cache::CodexAppsToolsCache;
-use crate::codex_apps_cache::CodexAppsToolsCacheContext;
+use crate::connector_runtime::CodexAppsToolsCache;
+use crate::connector_runtime::CodexAppsToolsCacheContext;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;

@@ -44,9 +44,9 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::ResolvedMcpCatalog;
-use crate::codex_apps_cache::CodexAppsToolsCache;
-use crate::codex_apps_cache::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
+use crate::connector_runtime::CodexAppsToolsCache;
+use crate::connector_runtime::codex_apps_tools_cache_key;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
