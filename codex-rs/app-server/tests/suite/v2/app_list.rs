@@ -206,7 +206,11 @@ async fn list_apps_uses_external_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let login_id = mcp
         .send_chatgpt_auth_tokens_login_request(
