@@ -11,6 +11,7 @@ pub use auth::auth_provider_from_auth;
 pub use auth::unauthenticated_auth_provider;
 pub use bearer_auth_provider::BearerAuthProvider;
 pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
+pub use codex_http_client::HttpClientFactory;
 pub use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 pub use codex_protocol::account::ProviderAccount;
 pub use provider::ModelProvider;

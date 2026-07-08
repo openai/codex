@@ -10,11 +10,13 @@ use codex_api::auth_header_telemetry;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::build_default_reqwest_client_for_route;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
@@ -38,16 +40,19 @@ const MODELS_ENDPOINT: &str = "/models";
 pub(crate) struct OpenAiModelsEndpoint {
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    http_client_factory: HttpClientFactory,
 }
 
 impl OpenAiModelsEndpoint {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
+        http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
             provider_info,
             auth_manager,
+            http_client_factory,
         }
     }
 
@@ -75,7 +80,14 @@ impl OpenAiModelsEndpoint {
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
         let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_url = api_provider.url_for_path(MODELS_ENDPOINT);
+        let client = build_default_reqwest_client_for_route(
+            &self.http_client_factory,
+            &request_url,
+            ClientRouteClass::Api,
+        )
+        .map_err(std::io::Error::from)?;
+        let transport = ReqwestTransport::new(client);
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let agent_identity_telemetry = if let Some(CodexAuth::AgentIdentity(auth)) = auth.as_ref() {
             Some(agent_identity_telemetry(auth))
@@ -229,7 +241,12 @@ mod tests {
     use std::num::NonZeroU64;
 
     use super::*;
+    use codex_http_client::OutboundProxyPolicy;
     use codex_protocol::config_types::ModelProviderAuthInfo;
+
+    fn default_http_client_factory() -> HttpClientFactory {
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+    }
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -253,6 +270,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint::new(
             provider_info_with_command_auth(),
             /*auth_manager*/ None,
+            default_http_client_factory(),
         );
 
         assert!(endpoint.has_command_auth());
@@ -263,6 +281,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint::new(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+            default_http_client_factory(),
         );
 
         assert!(!endpoint.has_command_auth());
