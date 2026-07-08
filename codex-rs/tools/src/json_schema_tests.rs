@@ -912,7 +912,7 @@ fn many_string_properties(count: usize) -> serde_json::Map<String, serde_json::V
 fn parse_large_tool_input_schema_compacts_descriptions_only_on_default_path() {
     let input_schema = serde_json::json!({
         "type": "object",
-        "description": "x".repeat(4_500),
+        "description": "x".repeat(5_500),
         "properties": {
             "metadata": {
                 "$ref": "#/$defs/metadata"
@@ -949,7 +949,7 @@ fn parse_large_tool_input_schema_compacts_descriptions_only_on_default_path() {
         serde_json::to_value(schema).expect("serialize schema"),
         serde_json::json!({
             "type": "object",
-            "description": "x".repeat(4_500),
+            "description": "x".repeat(5_500),
             "properties": {
                 "metadata": {
                     "$ref": "#/$defs/metadata"
@@ -978,7 +978,7 @@ fn parse_large_tool_input_schema_ignores_dropped_metadata_for_budget() {
                         "type": "object",
                         "examples": [
                             {
-                                "payload": "x".repeat(4_500)
+                                "payload": "x".repeat(5_500)
                             }
                         ],
                         "properties": {
@@ -1021,7 +1021,7 @@ fn parse_large_tool_input_schema_ignores_dropped_metadata_for_budget() {
 fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_under_budget() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
-        "description": "x".repeat(4_500),
+        "description": "x".repeat(5_500),
         "properties": {
             "event": {
                 "type": "object",
@@ -1081,7 +1081,7 @@ fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_unde
 fn parse_large_tool_input_schema_strips_descriptions_without_removing_description_property() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
-        "description": "x".repeat(4_500),
+        "description": "x".repeat(5_500),
         "properties": {
             "description": {
                 "type": "string",
@@ -1225,7 +1225,7 @@ fn parse_large_tool_input_schema_prunes_single_composition_variant_if_still_over
                 "anyOf": [
                     {
                         "type": "string",
-                        "enum": ["x".repeat(4_500)]
+                        "enum": ["x".repeat(5_500)]
                     }
                 ]
             }
@@ -1248,7 +1248,7 @@ fn parse_large_tool_input_schema_prunes_single_composition_variant_if_still_over
 fn parse_large_tool_input_schema_preserves_object_enum_literal_descriptions() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
-        "description": "x".repeat(4_500),
+        "description": "x".repeat(5_500),
         "properties": {
             "choice": {
                 "enum": [
