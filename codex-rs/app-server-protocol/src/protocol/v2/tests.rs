@@ -300,6 +300,63 @@ fn thread_items_list_round_trips() {
 }
 
 #[test]
+fn thread_search_occurrences_round_trips_anchors() {
+    let params = ThreadSearchOccurrencesParams {
+        thread_id: "thr_123".to_string(),
+        search_term: "needle".to_string(),
+        cursor: Some("search-cursor".to_string()),
+        limit: Some(50),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&params).expect("serialize params"),
+        json!({
+            "threadId": "thr_123",
+            "searchTerm": "needle",
+            "cursor": "search-cursor",
+            "limit": 50,
+        })
+    );
+
+    let response = ThreadSearchOccurrencesResponse {
+        data: vec![ThreadSearchOccurrence {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_456".to_string(),
+            item_id: "item-2".to_string(),
+            occurrence_id: "turn_456:item-2:7".to_string(),
+            occurrence_index: 0,
+            snippet: "before needle after".to_string(),
+            match_range: ThreadSearchTextRange { start: 7, end: 13 },
+            snippet_match_range: ThreadSearchTextRange { start: 7, end: 13 },
+            turn_started_at: 1_700_000_000,
+            turn_cursor: r#"{"turnId":"turn_456","includeAnchor":true}"#.to_string(),
+        }],
+        next_cursor: Some("next-search-cursor".to_string()),
+        is_capped: false,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&response).expect("serialize response"),
+        json!({
+            "data": [{
+                "threadId": "thr_123",
+                "turnId": "turn_456",
+                "itemId": "item-2",
+                "occurrenceId": "turn_456:item-2:7",
+                "occurrenceIndex": 0,
+                "snippet": "before needle after",
+                "matchRange": {"start": 7, "end": 13},
+                "snippetMatchRange": {"start": 7, "end": 13},
+                "turnStartedAt": 1_700_000_000,
+                "turnCursor": r#"{"turnId":"turn_456","includeAnchor":true}"#,
+            }],
+            "nextCursor": "next-search-cursor",
+            "isCapped": false,
+        })
+    );
+}
+
+#[test]
 fn thread_list_params_accepts_single_cwd() {
     let params = serde_json::from_value::<ThreadListParams>(json!({
         "cwd": "/workspace",

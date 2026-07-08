@@ -16,9 +16,11 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadOccurrenceSearchPage;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStoreError;
@@ -98,6 +100,18 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "thread/search",
+            })
+        })
+    }
+
+    /// Searches visible user and assistant message occurrences within one thread.
+    fn search_thread_occurrences(
+        &self,
+        _params: SearchThreadOccurrencesParams,
+    ) -> ThreadStoreFuture<'_, ThreadOccurrenceSearchPage> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "search_thread_occurrences",
             })
         })
     }

@@ -284,6 +284,50 @@ pub struct ThreadSearchPage {
     pub next_cursor: Option<String>,
 }
 
+/// Parameters for searching occurrences within one persisted thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchThreadOccurrencesParams {
+    /// Thread id to search.
+    pub thread_id: ThreadId,
+    /// Case-insensitive literal substring to find in visible message text.
+    pub search_term: String,
+    /// Opaque cursor returned by a previous search call for this query.
+    pub cursor: Option<String>,
+    /// Maximum number of occurrences to return in this page.
+    pub page_size: usize,
+    /// Maximum number of occurrences retained for this query generation.
+    pub max_results: usize,
+}
+
+/// UTF-16 code-unit range suitable for direct use by JavaScript clients.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchTextRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Lightweight stable anchor for one persisted message occurrence.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredThreadOccurrence {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub item_id: String,
+    pub occurrence_id: String,
+    pub occurrence_index: u32,
+    pub snippet: String,
+    pub match_range: SearchTextRange,
+    pub snippet_match_range: SearchTextRange,
+    pub turn_started_at: i64,
+}
+
+/// Point-in-time page of occurrence search results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreadOccurrenceSearchPage {
+    pub items: Vec<StoredThreadOccurrence>,
+    pub next_cursor: Option<String>,
+    pub is_capped: bool,
+}
+
 /// Requested amount of item detail for stored turns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoredTurnItemsView {

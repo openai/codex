@@ -707,6 +707,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_search_occurrences(
+        &self,
+        params: ThreadSearchOccurrencesParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_search_occurrences_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_items_list(
         &self,
         params: ThreadItemsListParams,
@@ -2440,6 +2449,73 @@ impl ThreadRequestProcessor {
         )
     }
 
+    async fn thread_search_occurrences_response_inner(
+        &self,
+        params: ThreadSearchOccurrencesParams,
+    ) -> Result<ThreadSearchOccurrencesResponse, JSONRPCErrorError> {
+        let ThreadSearchOccurrencesParams {
+            thread_id,
+            search_term,
+            cursor,
+            limit,
+        } = params;
+        let thread_id = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        if search_term.is_empty() {
+            return Err(invalid_request(
+                "thread/searchOccurrences requires a non-empty searchTerm",
+            ));
+        }
+        let page_size = limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_SEARCH_OCCURRENCES_DEFAULT_LIMIT)
+            .clamp(1, THREAD_SEARCH_OCCURRENCES_MAX_RESULTS);
+        let page = self
+            .thread_store
+            .search_thread_occurrences(StoreSearchThreadOccurrencesParams {
+                thread_id,
+                search_term,
+                cursor,
+                page_size,
+                max_results: THREAD_SEARCH_OCCURRENCES_MAX_RESULTS,
+            })
+            .await
+            .map_err(thread_search_occurrences_error)?;
+        let data = page
+            .items
+            .into_iter()
+            .map(|item| {
+                Ok(ThreadSearchOccurrence {
+                    thread_id: item.thread_id.to_string(),
+                    turn_cursor: serialize_thread_turns_cursor(
+                        item.turn_id.as_str(),
+                        /*include_anchor*/ true,
+                    )?,
+                    turn_id: item.turn_id,
+                    item_id: item.item_id,
+                    occurrence_id: item.occurrence_id,
+                    occurrence_index: item.occurrence_index,
+                    snippet: item.snippet,
+                    match_range: ThreadSearchTextRange {
+                        start: item.match_range.start,
+                        end: item.match_range.end,
+                    },
+                    snippet_match_range: ThreadSearchTextRange {
+                        start: item.snippet_match_range.start,
+                        end: item.snippet_match_range.end,
+                    },
+                    turn_started_at: item.turn_started_at,
+                })
+            })
+            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
+
+        Ok(ThreadSearchOccurrencesResponse {
+            data,
+            next_cursor: page.next_cursor,
+            is_capped: page.is_capped,
+        })
+    }
+
     async fn thread_items_list_response_inner(
         &self,
         params: ThreadItemsListParams,
@@ -3846,6 +3922,8 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
 
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
+const THREAD_SEARCH_OCCURRENCES_DEFAULT_LIMIT: usize = 50;
+const THREAD_SEARCH_OCCURRENCES_MAX_RESULTS: usize = 250;
 const THREAD_ITEMS_DEFAULT_LIMIT: usize = 25;
 const THREAD_ITEMS_MAX_LIMIT: usize = 100;
 
@@ -4160,6 +4238,19 @@ fn thread_turns_list_history_load_error(
         err => ThreadReadViewError::Internal(format!(
             "failed to load thread history for thread {thread_id}: {err}"
         )),
+    }
+}
+
+fn thread_search_occurrences_error(err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("no rollout found for thread id {thread_id}"))
+        }
+        err => internal_error(format!("failed to search thread occurrences: {err}")),
     }
 }
 

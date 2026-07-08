@@ -1140,6 +1140,11 @@ impl MessageProcessor {
             ClientRequest::ThreadTurnsList { params, .. } => {
                 self.thread_processor.thread_turns_list(params).await
             }
+            ClientRequest::ThreadSearchOccurrences { params, .. } => {
+                self.thread_processor
+                    .thread_search_occurrences(params)
+                    .await
+            }
             ClientRequest::ThreadItemsList { params, .. } => {
                 self.thread_processor.thread_items_list(params).await
             }

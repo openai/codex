@@ -1223,6 +1223,65 @@ pub struct ThreadSearchResponse {
     pub backwards_cursor: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrencesParams {
+    pub thread_id: String,
+    /// Case-insensitive literal substring to find in user-visible user and assistant messages.
+    pub search_term: String,
+    /// Opaque pagination cursor returned by a previous call for the same thread and search term.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; the server caps a query generation at 250 occurrences.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchTextRange {
+    /// Inclusive UTF-16 code-unit offset.
+    pub start: u32,
+    /// Exclusive UTF-16 code-unit offset.
+    pub end: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrence {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Stable identity for this occurrence within the persisted query snapshot.
+    pub occurrence_id: String,
+    /// Zero-based occurrence index within the user or assistant message item.
+    pub occurrence_index: u32,
+    pub snippet: String,
+    /// Match range within the complete item text, in UTF-16 code units.
+    pub match_range: ThreadSearchTextRange,
+    /// Match range within `snippet`, in UTF-16 code units.
+    pub snippet_match_range: ThreadSearchTextRange,
+    /// Unix timestamp in seconds used to place the matching turn chronologically.
+    #[ts(type = "number")]
+    pub turn_started_at: i64,
+    /// Opaque inclusive cursor accepted by `thread/turns/list` for this turn.
+    pub turn_cursor: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrencesResponse {
+    pub data: Vec<ThreadSearchOccurrence>,
+    /// Opaque cursor for the next page of this point-in-time query snapshot.
+    pub next_cursor: Option<String>,
+    /// Whether this query generation reached the server's 250-occurrence cap.
+    pub is_capped: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

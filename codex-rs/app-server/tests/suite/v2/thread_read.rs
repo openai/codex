@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
@@ -29,6 +30,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSearchOccurrencesParams;
+use codex_app_server_protocol::ThreadSearchOccurrencesResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -135,6 +138,106 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.git_info, None);
     assert_eq!(thread.turns.len(), 0);
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_occurrences_returns_hydratable_turn_cursor() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Needle then NEEDLE",
+        Some("mock_provider"),
+        None,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let search_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.clone(),
+            search_term: "needle".to_string(),
+            cursor: None,
+            limit: Some(1),
+        })
+        .await?;
+    let search_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(search_id)),
+    )
+    .await??;
+    let ThreadSearchOccurrencesResponse {
+        data,
+        next_cursor,
+        is_capped,
+    } = to_response::<ThreadSearchOccurrencesResponse>(search_resp)?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].thread_id, thread_id);
+    assert_eq!(data[0].occurrence_index, 0);
+    assert_eq!(data[0].match_range.start, 0);
+    assert_eq!(data[0].match_range.end, 6);
+    let next_cursor = next_cursor.expect("second search page cursor");
+    assert!(!is_capped);
+
+    let next_search_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.clone(),
+            search_term: "needle".to_string(),
+            cursor: Some(next_cursor),
+            limit: Some(1),
+        })
+        .await?;
+    let next_search_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(next_search_id)),
+    )
+    .await??;
+    let next_page = to_response::<ThreadSearchOccurrencesResponse>(next_search_resp)?;
+    assert_eq!(next_page.data.len(), 1);
+    assert_eq!(next_page.data[0].occurrence_index, 1);
+    assert_eq!(next_page.next_cursor, None);
+
+    let turns_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread_id.clone(),
+            cursor: Some(data[0].turn_cursor.clone()),
+            limit: Some(1),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::NotLoaded),
+        })
+        .await?;
+    let turns_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turns_id)),
+    )
+    .await??;
+    let turns = to_response::<ThreadTurnsListResponse>(turns_resp)?;
+    assert_eq!(turns.data.len(), 1);
+    assert_eq!(turns.data[0].id, data[0].turn_id);
+
+    let literal_whitespace_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id,
+            search_term: " needle ".to_string(),
+            cursor: None,
+            limit: Some(10),
+        })
+        .await?;
+    let literal_whitespace_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(literal_whitespace_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<ThreadSearchOccurrencesResponse>(literal_whitespace_resp)?.data,
+        Vec::new()
+    );
 
     Ok(())
 }

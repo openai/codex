@@ -17104,6 +17104,70 @@
       "title": "ThreadRollbackResponse",
       "type": "object"
     },
+    "ThreadSearchOccurrence": {
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "matchRange": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadSearchTextRange"
+            }
+          ],
+          "description": "Match range within the complete item text, in UTF-16 code units."
+        },
+        "occurrenceId": {
+          "description": "Stable identity for this occurrence within the persisted query snapshot.",
+          "type": "string"
+        },
+        "occurrenceIndex": {
+          "description": "Zero-based occurrence index within the user or assistant message item.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "snippetMatchRange": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadSearchTextRange"
+            }
+          ],
+          "description": "Match range within `snippet`, in UTF-16 code units."
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnCursor": {
+          "description": "Opaque inclusive cursor accepted by `thread/turns/list` for this turn.",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "turnStartedAt": {
+          "description": "Unix timestamp in seconds used to place the matching turn chronologically.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "itemId",
+        "matchRange",
+        "occurrenceId",
+        "occurrenceIndex",
+        "snippet",
+        "snippetMatchRange",
+        "threadId",
+        "turnCursor",
+        "turnId",
+        "turnStartedAt"
+      ],
+      "type": "object"
+    },
     "ThreadSearchResult": {
       "properties": {
         "snippet": {
@@ -17116,6 +17180,27 @@
       "required": [
         "snippet",
         "thread"
+      ],
+      "type": "object"
+    },
+    "ThreadSearchTextRange": {
+      "properties": {
+        "end": {
+          "description": "Exclusive UTF-16 code-unit offset.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "start": {
+          "description": "Inclusive UTF-16 code-unit offset.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "end",
+        "start"
       ],
       "type": "object"
     },

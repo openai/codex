@@ -145,6 +145,7 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
+- `thread/searchOccurrences` — experimental; find case-insensitive literal occurrences in one stored thread’s visible user and assistant messages. Results are chronological, point-in-time paginated, capped at 250 occurrences, and include an inclusive cursor accepted by `thread/turns/list` for bounded hydration around a selected match.
 - `thread/items/list` — experimental; page through persisted thread items without resuming the thread. Pass `turnId` to restrict results to one turn, or omit it to page items across the thread. The active thread store must support item pagination.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/settings/update` — experimental; queue a partial update to a loaded thread’s next-turn settings without starting a turn or adding transcript items. Omitted fields leave settings unchanged; `serviceTier: null` clears the tier; deprecated `multiAgentMode` is ignored, while Ultra reasoning effort enables proactive multi-agent behavior; `sandboxPolicy` and `permissions` cannot be combined. Returns `{}` when the update is accepted and emits `thread/settings/updated` with the full effective settings only if they actually change. `turn/start` settings overrides emit the same notification when they change the stored settings.
@@ -512,6 +513,38 @@ Every returned `Turn` includes `itemsView`, which tells clients whether the `ite
     "data": [ ... ],
     "nextCursor": "older-turns-cursor-or-null",
     "backwardsCursor": "newer-turns-cursor-or-null"
+} }
+```
+
+Search one thread without hydrating its turns by calling `thread/searchOccurrences`. Matching uses
+the current Cmd-F semantics over visible user text and the final assistant message in each turn:
+lowercase literal substrings over the client's Markdown-to-search-text projection. Each result
+contains UTF-16 ranges for the full item and snippet plus a `turnCursor` that
+can be passed directly to `thread/turns/list` with either sort direction; the anchor turn is included
+in that page. Unconsumed search pagination cursors remain valid for ten minutes within the running
+app-server process; a completed page remains retryable for 30 seconds.
+
+```json
+{ "method": "thread/searchOccurrences", "id": 25, "params": {
+    "threadId": "thr_123",
+    "searchTerm": "needle",
+    "limit": 50
+} }
+{ "id": 25, "result": {
+    "data": [{
+        "threadId": "thr_123",
+        "turnId": "turn_456",
+        "itemId": "item-3",
+        "occurrenceId": "turn_456:item-3:120",
+        "occurrenceIndex": 0,
+        "snippet": "... surrounding needle text ...",
+        "matchRange": { "start": 120, "end": 126 },
+        "snippetMatchRange": { "start": 16, "end": 22 },
+        "turnStartedAt": 1736078400,
+        "turnCursor": "opaque-inclusive-turn-cursor"
+    }],
+    "nextCursor": "next-search-page-or-null",
+    "isCapped": false
 } }
 ```
 

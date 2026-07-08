@@ -4065,6 +4065,7 @@ name = "codex-thread-store"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-app-server-protocol",
  "codex-git-utils",
  "codex-install-context",
  "codex-otel",
@@ -4073,6 +4074,7 @@ dependencies = [
  "codex-state",
  "codex-utils-path",
  "pretty_assertions",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "tempfile",

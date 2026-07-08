@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -193,6 +194,9 @@ impl RolloutFile {
 /// Line-oriented rollout reader returned by [`open_rollout_line_reader`].
 pub struct RolloutLineReader {
     inner: RolloutLineReaderInner,
+    source_path: PathBuf,
+    source_len: u64,
+    source_modified_at: Option<SystemTime>,
 }
 
 enum RolloutLineReaderInner {
@@ -201,6 +205,21 @@ enum RolloutLineReaderInner {
 }
 
 impl RolloutLineReader {
+    /// Returns the physical rollout representation opened by this reader.
+    pub fn source_path(&self) -> &Path {
+        self.source_path.as_path()
+    }
+
+    /// Returns the source length captured when this reader opened the rollout.
+    pub fn source_len(&self) -> u64 {
+        self.source_len
+    }
+
+    /// Returns the source modification time captured when this reader opened the rollout.
+    pub fn source_modified_at(&self) -> Option<SystemTime> {
+        self.source_modified_at
+    }
+
     /// Reads the next JSONL record from the rollout.
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
         match &mut self.inner {
@@ -987,22 +1006,31 @@ mod reader {
             .await
             .unwrap_or_else(|| path.to_path_buf());
         if path::is_compressed_rollout_path(path.as_path()) {
+            let source_path = path.clone();
             let reader = tokio::task::spawn_blocking(move || {
                 let input = File::open(path.as_path())?;
+                let metadata = input.metadata()?;
                 let decoder = zstd::stream::read::Decoder::new(input)?;
-                Ok::<_, io::Error>(
-                    io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines(),
-                )
+                let lines = io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines();
+                Ok::<_, io::Error>((lines, metadata.len(), metadata.modified().ok()))
             })
             .await
             .map_err(io::Error::other)??;
+            let (reader, source_len, source_modified_at) = reader;
             return Ok(RolloutLineReader {
                 inner: RolloutLineReaderInner::Blocking(Some(reader)),
+                source_path,
+                source_len,
+                source_modified_at,
             });
         }
-        let file = tokio::fs::File::open(path).await?;
+        let file = tokio::fs::File::open(path.as_path()).await?;
+        let metadata = file.metadata().await?;
         Ok(RolloutLineReader {
             inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
+            source_path: path,
+            source_len: metadata.len(),
+            source_modified_at: metadata.modified().ok(),
         })
     }
 }

@@ -5,6 +5,7 @@ mod helpers;
 mod list_threads;
 mod live_writer;
 mod read_thread;
+mod search_thread_occurrences;
 mod search_threads;
 mod unarchive_thread;
 mod update_thread_metadata;
@@ -31,9 +32,11 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadOccurrenceSearchPage;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStore;
@@ -59,6 +62,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderEntry>>>,
+    occurrence_search_cache: Arc<Mutex<search_thread_occurrences::ThreadOccurrenceSearchCache>>,
     state_db: Option<StateDbHandle>,
 }
 
@@ -106,6 +110,7 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            occurrence_search_cache: Arc::new(Mutex::new(Default::default())),
             state_db,
         }
     }
@@ -299,6 +304,15 @@ impl ThreadStore for LocalThreadStore {
         params: SearchThreadsParams,
     ) -> ThreadStoreFuture<'_, ThreadSearchPage> {
         Box::pin(async move { search_threads::search_threads(self, params).await })
+    }
+
+    fn search_thread_occurrences(
+        &self,
+        params: SearchThreadOccurrencesParams,
+    ) -> ThreadStoreFuture<'_, ThreadOccurrenceSearchPage> {
+        Box::pin(
+            async move { search_thread_occurrences::search_thread_occurrences(self, params).await },
+        )
     }
 
     fn update_thread_metadata(

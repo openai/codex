@@ -206,7 +206,7 @@ async fn attach_history_if_requested(
     Ok(())
 }
 
-async fn resolve_rollout_path(
+pub(super) async fn resolve_rollout_path(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
     include_archived: bool,
