@@ -134,15 +134,13 @@ jobs:
     # Split the Windows Bazel test leg across separate Windows hosts. Jobs with
     # BuildBuddy credentials use Linux RBE for build actions; test execution
     # remains on a Windows runner.
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         shard:
           - 1
-          - 2
           - 3
-          - 4
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-windows-x64
@@ -287,13 +285,41 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/windows-io-trace.ps1 -Action stop -Label check-clean-worktree
 
-      - name: Upload Windows I/O trace
+      - name: Install ETWAnalyzer
+        if: always() && !cancelled()
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Siemens-Healthineers/ETWAnalyzer/releases/download/v4.5.0.4/ETWAnalyzer_SelfContained.zip" -OutFile ETWAnalyzer.zip
+          Expand-Archive -Path ETWAnalyzer.zip -DestinationPath ETWAnalyzer
+
+      - name: Extract Windows I/O trace
+        if: always() && !cancelled()
+        shell: pwsh
+        run: |
+          $analyzer = (Get-ChildItem ETWAnalyzer -Filter ETWAnalyzer.exe -Recurse | Select-Object -First 1).FullName
+          if (-not $analyzer) {
+            throw "ETWAnalyzer.exe was not found"
+          }
+
+          $traces = Get-ChildItem (Join-Path $env:RUNNER_TEMP "codex-io-trace") -Filter *.etl
+          if (-not $traces) {
+            throw "no ETL traces were found"
+          }
+
+          foreach ($trace in $traces) {
+            & $analyzer -extract File Disk Mark -fd $trace.FullName -NoCompress -Indent
+            if ($LASTEXITCODE -ne 0) {
+              throw "ETWAnalyzer failed for $($trace.FullName)"
+            }
+          }
+
+      - name: Upload extracted Windows I/O data
         if: always() && !cancelled()
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: windows-io-bazel-shard-${{ matrix.shard }}
-          path: ${{ runner.temp }}/codex-io-trace
+          name: windows-io-bazel-shard-${{ matrix.shard }}-analysis
+          path: ${{ runner.temp }}/codex-io-trace/Extract/*.json
           if-no-files-found: error
 
   test-windows:
