@@ -32,6 +32,8 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CodexAppsStartupMode;
+use codex_mcp::ConnectorRuntimeSnapshot;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
@@ -39,6 +41,7 @@ use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
+use codex_mcp::connector_runtime_context_key;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance;
 
@@ -272,6 +275,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),
+        codex_mcp::CodexAppsStartupMode::ListTools,
     )
     .await;
 
@@ -341,6 +345,81 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         connectors: accessible_connectors,
         codex_apps_ready,
     })
+}
+
+/// Returns the committed runtime snapshot for the active account/workspace without refreshing it.
+pub fn connector_runtime_snapshot(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    mcp_manager: &McpManager,
+) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+    mcp_manager.connector_runtime_manager().current_snapshot(
+        config.codex_home.to_path_buf(),
+        connector_runtime_context_key(auth),
+    )
+}
+
+/// Performs one strict, uncached hosted-connector refresh and returns the exact committed snapshot.
+///
+/// The temporary connection manager contains only the host-owned Codex Apps server and skips its
+/// normal startup `tools/list`, leaving `hard_refresh_codex_apps_runtime` as the single network
+/// listing. Snapshot serialization and publication remain owned by `ConnectorRuntimeManager`.
+pub async fn refresh_connector_runtime_snapshot(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    environment_manager: Arc<EnvironmentManager>,
+    mcp_manager: &McpManager,
+) -> anyhow::Result<Arc<ConnectorRuntimeSnapshot>> {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
+    let mut mcp_servers = effective_mcp_servers(&mcp_config, auth);
+    mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
+    anyhow::ensure!(
+        !mcp_servers.is_empty(),
+        "host-owned MCP server '{CODEX_APPS_MCP_SERVER_NAME}' is not enabled"
+    );
+
+    let runtime_context = McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf());
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        mcp_config.mcp_oauth_credentials_store_mode,
+        mcp_config.auth_keyring_backend_kind,
+        auth,
+        &runtime_context,
+    )
+    .await;
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+    let cancellation_token = CancellationToken::new();
+    let connection_manager = McpConnectionManager::new(
+        &mcp_servers,
+        mcp_config.mcp_oauth_credentials_store_mode,
+        mcp_config.auth_keyring_backend_kind,
+        auth_status_entries,
+        &config.permissions.approval_policy,
+        INITIAL_SUBMIT_ID.to_owned(),
+        tx_event,
+        cancellation_token.clone(),
+        config.permissions.permission_profile().clone(),
+        runtime_context,
+        mcp_config.codex_home.clone(),
+        mcp_manager.codex_apps_tools_cache(),
+        connector_runtime_context_key(auth),
+        mcp_config.prefix_mcp_tool_names,
+        mcp_config.client_elicitation_capability,
+        /*supports_openai_form_elicitation*/ false,
+        tool_plugin_provenance,
+        auth,
+        /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
+        codex_mcp::ElicitationRequestRouter::default(),
+        CodexAppsStartupMode::InitializeOnly,
+    )
+    .await;
+    let snapshot = connection_manager.hard_refresh_codex_apps_runtime().await;
+    cancellation_token.cancel();
+    connection_manager.shutdown().await;
+    snapshot
 }
 
 fn accessible_connectors_cache_key(

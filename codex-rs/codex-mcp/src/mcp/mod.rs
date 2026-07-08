@@ -47,6 +47,7 @@ use crate::ResolvedMcpCatalog;
 use crate::connection_manager::McpConnectionManager;
 use crate::connector_runtime::CodexAppsToolsCache;
 use crate::connector_runtime::codex_apps_tools_cache_key;
+use crate::rmcp_client::CodexAppsStartupMode;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
@@ -341,6 +342,7 @@ pub async fn read_mcp_resource(
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
+        CodexAppsStartupMode::ListTools,
     )
     .await;
 
@@ -419,6 +421,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
+        CodexAppsStartupMode::ListTools,
     )
     .await;
 

@@ -264,6 +264,16 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
         .min(CODEX_APPS_RECONNECT_MAX_BACKOFF)
 }
 
+/// Controls whether the host-owned Apps client lists tools during startup.
+///
+/// Explicit connector-runtime refreshes initialize the client first, then run
+/// their one serialized `tools/list` through the runtime manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexAppsStartupMode {
+    ListTools,
+    InitializeOnly,
+}
+
 #[derive(Clone)]
 struct ManagedClientStartup {
     server_name: String,
@@ -277,6 +287,7 @@ struct ManagedClientStartup {
     runtime_auth_provider: Option<SharedAuthProvider>,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
+    codex_apps_startup_mode: CodexAppsStartupMode,
     cancel_token: CancellationToken,
     startup_complete: Arc<AtomicBool>,
 }
@@ -295,6 +306,7 @@ impl ManagedClientStartup {
             runtime_auth_provider,
             client_elicitation_capability,
             supports_openai_form_elicitation,
+            codex_apps_startup_mode,
             cancel_token,
             startup_complete,
         } = self.clone();
@@ -305,7 +317,9 @@ impl ManagedClientStartup {
             .unwrap_or_default();
         let cancel_token_for_fut = cancel_token;
         async move {
-            let refresh_start = is_codex_apps_mcp_server.then(Instant::now);
+            let refresh_start = (is_codex_apps_mcp_server
+                && codex_apps_startup_mode == CodexAppsStartupMode::ListTools)
+                .then(Instant::now);
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
@@ -341,6 +355,7 @@ impl ManagedClientStartup {
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
                         supports_openai_form_elicitation,
+                        codex_apps_startup_mode,
                     },
                 )
                 .await
@@ -403,6 +418,7 @@ impl AsyncManagedClient {
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
+        codex_apps_startup_mode: CodexAppsStartupMode,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let reconnect_server_name = server_name.clone();
@@ -431,6 +447,7 @@ impl AsyncManagedClient {
             runtime_auth_provider,
             client_elicitation_capability,
             supports_openai_form_elicitation,
+            codex_apps_startup_mode,
             cancel_token: cancel_token.clone(),
             startup_complete: Arc::clone(&startup_complete),
         });
@@ -600,26 +617,33 @@ pub(crate) async fn list_tools_for_client_uncached(
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let fetch_start = Instant::now();
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
-            tool_info_from_listed_tool(
-                server_name,
-                is_codex_apps_mcp_server,
-                server_instructions,
-                tool,
-            )
-        })
-        .collect();
+    let result = async {
+        let resp = client
+            .list_tools_with_connector_ids(/*params*/ None, timeout)
+            .await?;
+        Ok(resp
+            .tools
+            .into_iter()
+            .map(|tool| {
+                tool_info_from_listed_tool(
+                    server_name,
+                    is_codex_apps_mcp_server,
+                    server_instructions,
+                    tool,
+                )
+            })
+            .collect())
+    }
+    .await;
     if is_codex_apps_mcp_server {
+        let outcome = if result.is_ok() { "success" } else { "error" };
         emit_duration(
             MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
             fetch_start.elapsed(),
-            &[("trigger", codex_apps_refresh_trigger)],
+            &[
+                ("trigger", codex_apps_refresh_trigger),
+                ("outcome", outcome),
+            ],
         );
     } else {
         emit_duration(
@@ -628,7 +652,7 @@ pub(crate) async fn list_tools_for_client_uncached(
             &[],
         );
     }
-    Ok(tools)
+    result
 }
 
 /// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
@@ -845,6 +869,7 @@ async fn start_server_task(
         codex_apps_tools_cache_context,
         client_elicitation_capability,
         supports_openai_form_elicitation,
+        codex_apps_startup_mode,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
@@ -864,35 +889,44 @@ async fn start_server_task(
         .as_ref()
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
-    let list_start = Instant::now();
-    let fetch_ticket = codex_apps_tools_cache_context
-        .as_ref()
-        .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
-    let tools = list_tools_for_client_uncached(
-        &server_name,
-        is_codex_apps_mcp_server,
-        /*codex_apps_refresh_trigger*/ "initial",
-        &client,
-        startup_timeout,
-        initialize_result.instructions.as_deref(),
-    )
-    .await
-    .map_err(StartupOutcomeError::from)?;
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
-    let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
-        (Some(cache_context), Some(fetch_ticket)) => cache_context
-            .publish_if_newest_accepted(fetch_ticket, &server_info, tools)
-            .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?,
-        (None, None) => tools,
-        _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+    let tools = if is_codex_apps_mcp_server
+        && codex_apps_startup_mode == CodexAppsStartupMode::InitializeOnly
+    {
+        Vec::new()
+    } else {
+        let list_start = Instant::now();
+        let fetch_ticket = codex_apps_tools_cache_context
+            .as_ref()
+            .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
+        let tools = list_tools_for_client_uncached(
+            &server_name,
+            is_codex_apps_mcp_server,
+            /*codex_apps_refresh_trigger*/ "initial",
+            &client,
+            startup_timeout,
+            initialize_result.instructions.as_deref(),
+        )
+        .await
+        .map_err(StartupOutcomeError::from)?;
+        let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
+            (Some(cache_context), Some(fetch_ticket)) => cache_context
+                .publish_runtime_if_newest_accepted(fetch_ticket, &server_info, tools)
+                .map(|snapshot| snapshot.tools().to_vec())
+                .map_err(anyhow::Error::from)
+                .map_err(StartupOutcomeError::from)?,
+            (None, None) => tools,
+            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+        };
+        if is_codex_apps_mcp_server {
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                list_start.elapsed(),
+                &[("cache", "miss")],
+            );
+        }
+        tools
     };
-    if is_codex_apps_mcp_server {
-        emit_duration(
-            MCP_TOOLS_LIST_DURATION_METRIC,
-            list_start.elapsed(),
-            &[("cache", "miss")],
-        );
-    }
     let tools = filter_tools(tools, &tool_filter);
 
     let managed = ManagedClient {
@@ -954,6 +988,7 @@ struct StartServerTaskParams {
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
+    codex_apps_startup_mode: CodexAppsStartupMode,
 }
 
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]

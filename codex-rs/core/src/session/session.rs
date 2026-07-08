@@ -1221,6 +1221,7 @@ impl Session {
                 Some(sess.mcp_elicitation_reviewer()),
                 Some(sess.mcp_elicitation_lifecycle()),
                 codex_mcp::ElicitationRequestRouter::default(),
+                codex_mcp::CodexAppsStartupMode::ListTools,
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

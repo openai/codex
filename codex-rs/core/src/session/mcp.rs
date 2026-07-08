@@ -385,6 +385,7 @@ impl Session {
             elicitation_reviewer,
             Some(self.mcp_elicitation_lifecycle()),
             current_runtime.manager().elicitation_router(),
+            codex_mcp::CodexAppsStartupMode::ListTools,
         )
         .await;
         refreshed_manager

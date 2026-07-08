@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -750,4 +751,66 @@ fn live_publish_sets_timestamp_and_stale_publish_preserves_it() {
         .expect("stale publish returns current snapshot");
     assert!(Arc::ptr_eq(&current, &stale));
     assert_eq!(stale.refreshed_at(), current.refreshed_at());
+}
+
+#[tokio::test]
+async fn explicit_refresh_lock_serializes_concurrent_refreshes() {
+    let codex_home = tempdir().expect("tempdir");
+    let context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let first_guard = context
+        .lock_explicit_refresh()
+        .await
+        .expect("acquire first refresh lock");
+    let second_context = context.clone();
+    let (attempting_tx, attempting_rx) = tokio::sync::oneshot::channel();
+    let (acquired_tx, mut acquired_rx) = tokio::sync::oneshot::channel();
+    let second_refresh = tokio::spawn(async move {
+        attempting_tx.send(()).expect("signal lock attempt");
+        let _guard = second_context
+            .lock_explicit_refresh()
+            .await
+            .expect("acquire second refresh lock");
+        acquired_tx.send(()).expect("signal lock acquisition");
+    });
+    attempting_rx.await.expect("second refresh attempted lock");
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut acquired_rx)
+            .await
+            .is_err()
+    );
+    drop(first_guard);
+    tokio::time::timeout(Duration::from_secs(1), acquired_rx)
+        .await
+        .expect("second refresh should acquire after first releases")
+        .expect("second refresh acquisition signal");
+    second_refresh.await.expect("second refresh task");
+}
+
+#[tokio::test]
+async fn discarded_context_cannot_acquire_explicit_refresh_lock() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = ConnectorRuntimeManager::default();
+    let context_a = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-a".to_string()),
+            chatgpt_user_id: Some("user-a".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let _context_b = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-b".to_string()),
+            chatgpt_user_id: Some("user-b".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert!(context_a.lock_explicit_refresh().await.is_err());
 }

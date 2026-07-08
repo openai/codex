@@ -8,6 +8,7 @@ use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::CODEX_APPS_RECONNECT_INITIAL_BACKOFF;
+use crate::rmcp_client::CodexAppsStartupMode;
 use crate::rmcp_client::CodexAppsStartupReconnect;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::ManagedClientFuture;
@@ -1911,6 +1912,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         ElicitationRequestRouter::default(),
+        CodexAppsStartupMode::ListTools,
     )
     .await;
 

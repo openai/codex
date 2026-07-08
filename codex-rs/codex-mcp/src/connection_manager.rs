@@ -17,6 +17,7 @@ use crate::McpAuthStatusEntry;
 use crate::connector_runtime::CodexAppsToolsCache;
 use crate::connector_runtime::CodexAppsToolsCacheKey;
 use crate::connector_runtime::CodexAppsToolsFetchSource;
+use crate::connector_runtime::ConnectorRuntimeSnapshot;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -24,6 +25,7 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
+use crate::rmcp_client::CodexAppsStartupMode;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
@@ -144,6 +146,7 @@ impl McpConnectionManager {
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
         elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
         elicitation_router: ElicitationRequestRouter,
+        codex_apps_startup_mode: CodexAppsStartupMode,
     ) -> Self {
         let mut required_servers = mcp_servers
             .iter()
@@ -223,6 +226,7 @@ impl McpConnectionManager {
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
                 supports_openai_form_elicitation,
+                codex_apps_startup_mode,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -528,6 +532,78 @@ impl McpConnectionManager {
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
+    /// Force-refreshes the connector runtime exactly once under the active
+    /// context's shared lock and returns the exact committed snapshot.
+    pub async fn hard_refresh_codex_apps_runtime(&self) -> Result<Arc<ConnectorRuntimeSnapshot>> {
+        let refresh_start = Instant::now();
+        let async_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let result = async {
+            let cache_context = async_client
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .ok_or_else(|| anyhow!("connector runtime manager is unavailable"))?;
+            let _refresh_guard = cache_context
+                .lock_explicit_refresh()
+                .await
+                .context("connector runtime context changed before refresh")?;
+            let managed_client = self.client_by_name(CODEX_APPS_MCP_SERVER_NAME).await?;
+            let list_start = Instant::now();
+            let fetch_ticket = cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh);
+            let tools = list_tools_for_client_uncached(
+                CODEX_APPS_MCP_SERVER_NAME,
+                /*is_codex_apps_mcp_server*/ true,
+                /*codex_apps_refresh_trigger*/ "explicit",
+                &managed_client.client,
+                managed_client.tool_timeout,
+                managed_client.server_instructions.as_deref(),
+            )
+            .await
+            .with_context(|| {
+                format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
+            })?;
+            let snapshot = cache_context
+                .publish_runtime_if_newest_accepted(
+                    fetch_ticket,
+                    &managed_client.server_info,
+                    tools,
+                )
+                .context("connector runtime context changed while publishing refresh")?;
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                list_start.elapsed(),
+                &[("cache", "miss")],
+            );
+            Ok(snapshot)
+        }
+        .await;
+        let outcome = if result.is_ok() { "success" } else { "error" };
+        let retained_previous = if result.is_err()
+            && async_client
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .and_then(super::connector_runtime::ConnectorRuntimeContext::current_snapshot)
+                .is_some()
+        {
+            "true"
+        } else {
+            "false"
+        };
+        emit_duration(
+            CODEX_APPS_REFRESH_DURATION_METRIC,
+            refresh_start.elapsed(),
+            &[
+                ("path", "new"),
+                ("trigger", "explicit"),
+                ("outcome", outcome),
+                ("retained_previous_snapshot", retained_previous),
+            ],
+        );
+        result
+    }
+
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace shared cache contents when the
@@ -535,6 +611,19 @@ impl McpConnectionManager {
     /// the caller. On failure, existing shared cache contents remain unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let refresh_start = Instant::now();
+        let async_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let _refresh_guard = match async_client.codex_apps_tools_cache_context.as_ref() {
+            Some(cache_context) => Some(
+                cache_context
+                    .lock_explicit_refresh()
+                    .await
+                    .context("connector runtime context changed before refresh")?,
+            ),
+            None => None,
+        };
         let managed_client = self.client_by_name(CODEX_APPS_MCP_SERVER_NAME).await?;
 
         let list_start = Instant::now();
@@ -555,16 +644,21 @@ impl McpConnectionManager {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
 
-        let tools =
-            match (
-                managed_client.codex_apps_tools_cache_context.as_ref(),
-                fetch_ticket,
-            ) {
-                (Some(cache_context), Some(fetch_ticket)) => cache_context
-                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools)?,
-                (None, None) => tools,
-                _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-            };
+        let tools = match (
+            managed_client.codex_apps_tools_cache_context.as_ref(),
+            fetch_ticket,
+        ) {
+            (Some(cache_context), Some(fetch_ticket)) => cache_context
+                .publish_runtime_if_newest_accepted(
+                    fetch_ticket,
+                    &managed_client.server_info,
+                    tools,
+                )
+                .map(|snapshot| snapshot.tools().to_vec())
+                .context("connector runtime context changed while publishing refresh")?,
+            (None, None) => tools,
+            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+        };
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),

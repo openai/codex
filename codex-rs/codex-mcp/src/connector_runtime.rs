@@ -19,6 +19,7 @@ use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::OwnedMutexGuard;
 
 use crate::connector_runtime_persistence::load_cached_codex_apps_server_info;
 use crate::connector_runtime_persistence::load_cached_connector_runtime_for_identity;
@@ -200,6 +201,21 @@ impl ConnectorRuntimeContext {
         }
     }
 
+    pub(crate) async fn lock_explicit_refresh(
+        &self,
+    ) -> Result<OwnedMutexGuard<()>, ConnectorRuntimeContextDiscarded> {
+        if !self.is_active() {
+            return Err(ConnectorRuntimeContextDiscarded);
+        }
+        let guard = Arc::clone(&self.entry.explicit_refresh_lock)
+            .lock_owned()
+            .await;
+        if !self.is_active() {
+            return Err(ConnectorRuntimeContextDiscarded);
+        }
+        Ok(guard)
+    }
+
     pub(crate) fn publish_runtime_if_newest_accepted(
         &self,
         ticket: CodexAppsToolsFetchTicket,
@@ -269,6 +285,7 @@ impl ConnectorRuntimeContext {
         Ok(snapshot)
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_if_newest_accepted(
         &self,
         ticket: CodexAppsToolsFetchTicket,
@@ -331,6 +348,7 @@ pub(crate) struct ConnectorRuntimeEntry {
     pub(crate) current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot>,
     next_fetch_generation: AtomicU64,
     last_accepted_generation: Mutex<u64>,
+    explicit_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ConnectorRuntimeEntry {
@@ -341,6 +359,7 @@ impl ConnectorRuntimeEntry {
             current_snapshot: ArcSwapOption::from(current_snapshot),
             next_fetch_generation: AtomicU64::new(0),
             last_accepted_generation: Mutex::new(0),
+            explicit_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
