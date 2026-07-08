@@ -1,5 +1,4 @@
 use super::*;
-use pretty_assertions::assert_eq;
 
 #[test]
 fn preserves_valid_custom_title_unchanged() {

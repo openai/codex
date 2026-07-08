@@ -22,5 +22,4 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 codex-app-server-protocol = { workspace = true }
-pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
