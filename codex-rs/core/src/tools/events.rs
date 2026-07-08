@@ -624,10 +624,6 @@ async fn emit_patch_end(
 }
 
 #[cfg(test)]
-#[path = "events_exec_command_tests.rs"]
-mod exec_command_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx;
