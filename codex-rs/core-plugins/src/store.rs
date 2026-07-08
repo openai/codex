@@ -365,6 +365,17 @@ impl PluginStoreError {
     fn io(context: &'static str, source: io::Error) -> Self {
         Self::Io { context, source }
     }
+
+    pub(crate) fn sub_error_type(&self) -> Option<String> {
+        match self {
+            Self::Io { context, .. } => Some(error_context_sub_error_type(context)),
+            Self::Invalid(_) => None,
+        }
+    }
+}
+
+pub(crate) fn error_context_sub_error_type(context: &str) -> String {
+    context.to_ascii_lowercase().replace(' ', "_")
 }
 
 pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginStoreError> {

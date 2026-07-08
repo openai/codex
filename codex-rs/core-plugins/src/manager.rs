@@ -1283,6 +1283,7 @@ impl PluginsManager {
                 self.track_plugin_install_failed(
                     &plugin_id,
                     plugin_install_error_type(&err),
+                    plugin_install_sub_error_type(&err),
                     err.to_string(),
                 );
                 Err(err)
@@ -1345,6 +1346,7 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &resolved.plugin_id,
                 plugin_install_error_type(&err),
+                plugin_install_sub_error_type(&err),
                 err.to_string(),
             );
             return Err(err);
@@ -1356,6 +1358,7 @@ impl PluginsManager {
                 self.track_plugin_install_failed(
                     &plugin_id,
                     plugin_install_error_type(&err),
+                    plugin_install_sub_error_type(&err),
                     err.to_string(),
                 );
                 Err(err)
@@ -1383,6 +1386,7 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &plugin_id,
                 marketplace_error_type(err),
+                /*sub_error_type*/ None,
                 err.to_string(),
             );
         } else {
@@ -1398,11 +1402,13 @@ impl PluginsManager {
         &self,
         plugin_id: &PluginId,
         error_type: &'static str,
+        sub_error_type: Option<String>,
         error_message: String,
     ) {
         tracing::warn!(
             plugin_id = %plugin_id.as_key(),
             error_type = %error_type,
+            sub_error_type = sub_error_type.as_deref(),
             error = %error_message,
             "plugin install failed"
         );
@@ -2671,6 +2677,16 @@ fn plugin_install_error_type(err: &PluginInstallError) -> &'static str {
         PluginInstallError::Store(err) => plugin_store_error_type(err),
         PluginInstallError::Config(_) => "config",
         PluginInstallError::Join(_) => "join",
+    }
+}
+
+fn plugin_install_sub_error_type(err: &PluginInstallError) -> Option<String> {
+    match err {
+        PluginInstallError::Store(err) => err.sub_error_type(),
+        PluginInstallError::Marketplace(_)
+        | PluginInstallError::Remote(_)
+        | PluginInstallError::Config(_)
+        | PluginInstallError::Join(_) => None,
     }
 }
 

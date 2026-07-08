@@ -4,6 +4,7 @@ use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::store::PluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
+use crate::store::error_context_sub_error_type;
 use crate::store::validate_plugin_version_segment;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::PluginId;
@@ -131,6 +132,26 @@ pub enum RemotePluginBundleInstallError {
 impl RemotePluginBundleInstallError {
     fn io(context: &'static str, source: io::Error) -> Self {
         Self::Io { context, source }
+    }
+
+    pub fn sub_error_type(&self) -> Option<String> {
+        match self {
+            Self::Io { context, .. } => Some(error_context_sub_error_type(context)),
+            Self::Store(err) => err.sub_error_type(),
+            Self::MissingReleaseVersion { .. }
+            | Self::InvalidReleaseVersion { .. }
+            | Self::MissingBundleDownloadUrl { .. }
+            | Self::InvalidBundleDownloadUrl { .. }
+            | Self::UnsupportedBundleDownloadUrlScheme { .. }
+            | Self::InvalidPluginId { .. }
+            | Self::DownloadRequest { .. }
+            | Self::DownloadStatus { .. }
+            | Self::DownloadBody { .. }
+            | Self::DownloadTooLarge { .. }
+            | Self::UnsupportedBundleDownloadFinalUrl { .. }
+            | Self::ExtractedBundleTooLarge { .. }
+            | Self::InvalidBundle(_) => None,
+        }
     }
 }
 
