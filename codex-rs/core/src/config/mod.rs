@@ -56,6 +56,7 @@ use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_features::AutoCompactFallbackConfigToml;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
@@ -711,8 +712,8 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Developer message contributed for the optional pre-rollover fallback turn.
-    pub auto_compact_fallback_prompt: Option<String>,
+    /// Settings for the optional pre-rollover fallback turn.
+    pub auto_compact_fallback: AutoCompactFallbackConfig,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -1101,6 +1102,11 @@ pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
     pub guidance_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AutoCompactFallbackConfig {
+    pub prompt: Option<String>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -2615,6 +2621,17 @@ fn resolve_token_budget_config(
     }))
 }
 
+fn resolve_auto_compact_fallback_config(config_toml: &ConfigToml) -> AutoCompactFallbackConfig {
+    let configured = auto_compact_fallback_toml_config(config_toml.features.as_ref());
+    let prompt = configured
+        .and_then(|config| config.prompt.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    AutoCompactFallbackConfig { prompt }
+}
+
 fn resolve_rollout_budget_config(
     config_toml: &ConfigToml,
     features: &ManagedFeatures,
@@ -2753,6 +2770,15 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
 
 fn token_budget_toml_config(features: Option<&FeaturesToml>) -> Option<&TokenBudgetConfigToml> {
     match features?.token_budget.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn auto_compact_fallback_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&AutoCompactFallbackConfigToml> {
+    match features?.auto_compact_fallback.as_ref()? {
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
@@ -3414,6 +3440,7 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
+        let auto_compact_fallback = resolve_auto_compact_fallback_config(&cfg);
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
@@ -3595,14 +3622,6 @@ impl Config {
         });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-        let auto_compact_fallback_prompt = cfg.auto_compact_fallback_prompt.and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 None
@@ -3825,7 +3844,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
-            auto_compact_fallback_prompt,
+            auto_compact_fallback,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,

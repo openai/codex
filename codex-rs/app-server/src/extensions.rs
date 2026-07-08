@@ -115,7 +115,7 @@ struct AutoCompactFallbackPrompt(Option<String>);
 impl AutoCompactFallbackPromptExtension {
     fn store(thread_store: &ExtensionData, config: &Config) {
         thread_store.insert(AutoCompactFallbackPrompt(
-            config.auto_compact_fallback_prompt.clone(),
+            config.auto_compact_fallback.prompt.clone(),
         ));
     }
 }

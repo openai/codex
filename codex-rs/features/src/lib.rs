@@ -16,6 +16,7 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
+pub use feature_configs::AutoCompactFallbackConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::CurrentTimeReminderConfigToml;
 pub use feature_configs::CurrentTimeReminderDeliveryMode;
@@ -644,6 +645,8 @@ pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_fallback: Option<FeatureToml<AutoCompactFallbackConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollout_budget: Option<FeatureToml<RolloutBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
@@ -682,6 +685,13 @@ impl FeaturesToml {
         if let Some(enabled) = self.token_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::TokenBudget.key().to_string(), enabled);
         }
+        if let Some(enabled) = self
+            .auto_compact_fallback
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::AutoCompactFallback.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.rollout_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::RolloutBudget.key().to_string(), enabled);
         }
@@ -704,6 +714,7 @@ impl FeaturesToml {
             code_mode,
             multi_agent_v2,
             token_budget,
+            auto_compact_fallback,
             rollout_budget,
             current_time_reminder,
             removed_apps_mcp_path_override: _,
@@ -721,6 +732,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::TokenBudget {
                 materialize_resolved_feature_enabled(token_budget, enabled);
+            } else if spec.id == Feature::AutoCompactFallback {
+                materialize_resolved_feature_enabled(auto_compact_fallback, enabled);
             } else if spec.id == Feature::RolloutBudget {
                 materialize_resolved_feature_enabled(rollout_budget, enabled);
             } else if spec.id == Feature::CurrentTimeReminder {

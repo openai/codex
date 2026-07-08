@@ -106,6 +106,27 @@ impl FeatureConfig for TokenBudgetConfigToml {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutoCompactFallbackConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Developer message contributed for the single fallback turn before an
+    /// automatic compaction rollover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl FeatureConfig for AutoCompactFallbackConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RolloutBudgetConfigToml {

@@ -643,10 +643,50 @@ non_code_mode_only = true
 }
 
 #[test]
+fn auto_compact_fallback_feature_config_deserializes_boolean_toggle() {
+    let features: FeaturesToml =
+        toml::from_str("auto_compact_fallback = true").expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("auto_compact_fallback".to_string(), true)])
+    );
+    assert_eq!(
+        features.auto_compact_fallback,
+        Some(FeatureToml::Enabled(true))
+    );
+}
+
+#[test]
+fn auto_compact_fallback_feature_config_deserializes_table() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[auto_compact_fallback]
+enabled = true
+prompt = "Persist the important state."
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("auto_compact_fallback".to_string(), true)])
+    );
+    assert_eq!(
+        features.auto_compact_fallback,
+        Some(FeatureToml::Config(crate::AutoCompactFallbackConfigToml {
+            enabled: Some(true),
+            prompt: Some("Persist the important state.".to_string()),
+        }))
+    );
+}
+
+#[test]
 fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
+    features.enable(Feature::AutoCompactFallback);
     features.enable(Feature::NetworkProxy);
     features.enable(Feature::RespectSystemProxy);
 
@@ -655,6 +695,10 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             enabled: Some(false),
             min_wait_timeout_ms: Some(2500),
             ..Default::default()
+        })),
+        auto_compact_fallback: Some(FeatureToml::Config(crate::AutoCompactFallbackConfigToml {
+            enabled: Some(false),
+            prompt: Some("Persist the important state.".to_string()),
         })),
         network_proxy: Some(FeatureToml::Config(crate::NetworkProxyConfigToml {
             enabled: Some(false),
@@ -682,6 +726,13 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             enabled: Some(true),
             min_wait_timeout_ms: Some(2500),
             ..Default::default()
+        }))
+    );
+    assert_eq!(
+        features_toml.auto_compact_fallback,
+        Some(FeatureToml::Config(crate::AutoCompactFallbackConfigToml {
+            enabled: Some(true),
+            prompt: Some("Persist the important state.".to_string()),
         }))
     );
     assert_eq!(

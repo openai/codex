@@ -7095,10 +7095,18 @@ async fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn loads_auto_compact_fallback_prompt() -> std::io::Result<()> {
+async fn loads_auto_compact_fallback_settings() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let features = toml::from_str(
+        r#"
+[auto_compact_fallback]
+enabled = true
+prompt = "  write notes immediately  "
+"#,
+    )
+    .expect("auto compact fallback feature config should deserialize");
     let cfg = ConfigToml {
-        auto_compact_fallback_prompt: Some("  write notes immediately  ".to_string()),
+        features: Some(features),
         ..Default::default()
     };
 
@@ -7110,9 +7118,42 @@ async fn loads_auto_compact_fallback_prompt() -> std::io::Result<()> {
     .await?;
 
     assert_eq!(
-        config.auto_compact_fallback_prompt.as_deref(),
+        config.auto_compact_fallback.prompt.as_deref(),
         Some("write notes immediately")
     );
+    assert!(config.features.enabled(Feature::AutoCompactFallback));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn prompt_only_auto_compact_fallback_settings_do_not_enable_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let features = toml::from_str(
+        r#"
+[auto_compact_fallback]
+prompt = "  write notes immediately  "
+"#,
+    )
+    .expect("auto compact fallback feature config should deserialize");
+    let cfg = ConfigToml {
+        features: Some(features),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.auto_compact_fallback.prompt.as_deref(),
+        Some("write notes immediately")
+    );
+    assert!(!config.features.enabled(Feature::AutoCompactFallback));
+
     Ok(())
 }
 

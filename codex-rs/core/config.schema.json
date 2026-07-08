@@ -315,6 +315,19 @@
         }
       ]
     },
+    "AutoCompactFallbackConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "prompt": {
+          "description": "Developer message contributed for the single fallback turn before an automatic compaction rollover.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AutoCompactTokenLimitScope": {
       "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
       "oneOf": [
@@ -435,7 +448,7 @@
               "type": "boolean"
             },
             "auto_compact_fallback": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_AutoCompactFallbackConfigToml"
             },
             "browser_use": {
               "type": "boolean"
@@ -945,6 +958,16 @@
         }
       },
       "type": "object"
+    },
+    "FeatureToml_for_AutoCompactFallbackConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/AutoCompactFallbackConfigToml"
+        }
+      ]
     },
     "FeatureToml_for_CodeModeConfigToml": {
       "anyOf": [
@@ -4668,10 +4691,6 @@
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
-    "auto_compact_fallback_prompt": {
-      "description": "Developer message contributed by the app-server extension for the single fallback turn before an automatic compaction rollover.",
-      "type": "string"
-    },
     "auto_review": {
       "allOf": [
         {
@@ -4814,7 +4833,7 @@
           "type": "boolean"
         },
         "auto_compact_fallback": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_AutoCompactFallbackConfigToml"
         },
         "browser_use": {
           "type": "boolean"

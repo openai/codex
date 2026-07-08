@@ -243,10 +243,6 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Developer message contributed by the app-server extension for the single
-    /// fallback turn before an automatic compaction rollover.
-    pub auto_compact_fallback_prompt: Option<String>,
-
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
     pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
