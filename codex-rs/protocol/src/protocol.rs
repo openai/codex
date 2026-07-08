@@ -5046,6 +5046,7 @@ mod tests {
                 action: WebSearchAction::Search {
                     query: Some("find docs".into()),
                     queries: None,
+                    sources: None,
                 },
                 results: None,
             }),

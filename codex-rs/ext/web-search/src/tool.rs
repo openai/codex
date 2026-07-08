@@ -168,10 +168,12 @@ fn query_action(queries: &[SearchQuery]) -> Option<WebSearchAction> {
         [query] => Some(WebSearchAction::Search {
             query: Some(query.q.clone()),
             queries: None,
+            sources: None,
         }),
         queries => Some(WebSearchAction::Search {
             query: None,
             queries: Some(queries.iter().map(|query| query.q.clone()).collect()),
+            sources: None,
         }),
     }
 }
@@ -205,6 +207,7 @@ mod tests {
                 WebSearchAction::Search {
                     query: None,
                     queries: Some(vec!["waterfalls".to_string(), "mountains".to_string()]),
+                    sources: None,
                 },
             ),
             (

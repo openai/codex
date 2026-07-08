@@ -2449,6 +2449,7 @@ mod tests {
                 action: CoreWebSearchAction::Search {
                     query: Some("codex".into()),
                     queries: None,
+                    sources: None,
                 },
                 results: Some(vec![CoreWebSearchResult {
                     url: "https://example.com/codex".into(),
@@ -3933,6 +3934,7 @@ mod tests {
                 action: CoreWebSearchAction::Search {
                     query: Some("codex".into()),
                     queries: None,
+                    sources: None,
                 },
                 results: None,
             }),
@@ -4070,6 +4072,7 @@ mod tests {
                 action: CoreWebSearchAction::Search {
                     query: Some("codex".into()),
                     queries: None,
+                    sources: None,
                 },
                 results: None,
             })),

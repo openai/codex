@@ -395,6 +395,7 @@ fn web_search_completion_preserves_query_and_action() {
                         action: WebSearchAction::Search {
                             query: Some("rust async await".to_string()),
                             queries: None,
+                            sources: None,
                         },
                         results: Some(vec![WebSearchResult {
                             url: "https://example.com/rust-async".to_string(),
@@ -472,6 +473,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                         action: WebSearchAction::Search {
                             query: Some("rust async await".to_string()),
                             queries: None,
+                            sources: None,
                         },
                         results: None,
                     }),

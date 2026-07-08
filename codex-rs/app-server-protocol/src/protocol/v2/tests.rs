@@ -2777,6 +2777,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         action: CoreWebSearchAction::Search {
             query: Some("docs".to_string()),
             queries: None,
+            sources: None,
         },
         results: Some(vec![CoreWebSearchResult {
             url: "https://openai.com/docs".to_string(),

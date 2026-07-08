@@ -7,6 +7,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::WebSearchResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::AskForApproval;
@@ -30,7 +32,7 @@ use core_test_support::responses::ev_reasoning_summary_text_delta;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
-use core_test_support::responses::ev_web_search_call_done;
+use core_test_support::responses::ev_web_search_call_done_with_sources;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -285,7 +287,12 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
     let web_search_added = ev_web_search_call_added_partial("web-search-1", "in_progress");
-    let web_search_done = ev_web_search_call_done("web-search-1", "completed", "weather seattle");
+    let web_search_done = ev_web_search_call_done_with_sources(
+        "web-search-1",
+        "completed",
+        "weather seattle",
+        &["https://weather.example/seattle"],
+    );
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
@@ -335,15 +342,53 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(begin.call_id, "web-search-1");
     assert_eq!(started.0.id, begin.call_id);
     assert!(started.1 > 0);
-    assert_eq!(completed.0.id, begin.call_id);
     assert!(completed.1 > 0);
     assert_eq!(
-        completed.0.action,
-        WebSearchAction::Search {
-            query: Some("weather seattle".to_string()),
-            queries: None,
+        completed.0,
+        WebSearchItem {
+            id: begin.call_id,
+            query: "weather seattle".to_string(),
+            action: WebSearchAction::Search {
+                query: Some("weather seattle".to_string()),
+                queries: None,
+                sources: None,
+            },
+            results: Some(vec![WebSearchResult {
+                url: "https://weather.example/seattle".to_string(),
+                title: None,
+                snippet: None,
+            }]),
         }
     );
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "summarize the search".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = second_mock.single_request();
+    let web_search_items = request.inputs_of_type("web_search_call");
+    assert_eq!(web_search_items.len(), 1);
+    assert!(web_search_items[0].pointer("/action/sources").is_none());
 
     Ok(())
 }

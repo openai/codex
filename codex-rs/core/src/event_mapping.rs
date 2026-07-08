@@ -4,12 +4,14 @@ use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::WebSearchResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::WebSearchSource;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
@@ -196,15 +198,37 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             }))
         }
         ResponseItem::WebSearchCall { id, action, .. } => {
-            let (action, query) = match action {
-                Some(action) => (action.clone(), web_search_action_detail(action)),
-                None => (WebSearchAction::Other, String::new()),
+            let (action, query, results) = match action {
+                Some(action) => {
+                    let query = web_search_action_detail(action);
+                    let mut action = action.clone();
+                    let results = match &mut action {
+                        WebSearchAction::Search { sources, .. } => sources
+                            .take()
+                            .map(|sources| {
+                                sources
+                                    .into_iter()
+                                    .map(|source| match source {
+                                        WebSearchSource::Url { url } => WebSearchResult {
+                                            url,
+                                            title: None,
+                                            snippet: None,
+                                        },
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .filter(|results| !results.is_empty()),
+                        _ => None,
+                    };
+                    (action, query, results)
+                }
+                None => (WebSearchAction::Other, String::new(), None),
             };
             Some(TurnItem::WebSearch(WebSearchItem {
                 id: id.clone().unwrap_or_default(),
                 query,
                 action,
-                results: None,
+                results,
             }))
         }
         ResponseItem::ImageGenerationCall {
