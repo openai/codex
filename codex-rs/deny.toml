@@ -233,6 +233,39 @@ deny = [
         "tonic",
         "zbus",
     ], reason = "first-party traits must use native async trait methods with explicit Send bounds" },
+    # Migration ratchet: `codex-http-client` is the intended reqwest owner. Remove each temporary
+    # wrapper when that crate's direct reqwest dependency is migrated to the shared abstraction.
+    { crate = "reqwest", wrappers = [
+        # Intended owner.
+        "codex-http-client",
+        # Temporary migration exceptions.
+        "codex-agent-identity",
+        "codex-api",
+        "codex-app-server",
+        "codex-app-server-daemon",
+        "codex-backend-client",
+        "codex-cloud-tasks",
+        "codex-core",
+        "codex-core-plugins",
+        "codex-exec-server",
+        "codex-lmstudio",
+        "codex-login",
+        "codex-ollama",
+        "codex-otel",
+        "codex-protocol",
+        "codex-responses-api-proxy",
+        "codex-rmcp-client",
+        "codex-tui",
+        "core_test_support",
+        # Third-party crates that own their reqwest integration. These are not part of the
+        # first-party migration count above.
+        "oauth2",
+        "opentelemetry-http",
+        "opentelemetry-otlp",
+        "rmcp",
+        "sentry",
+        "webrtc-sys-build",
+    ], reason = "new direct reqwest dependencies must use codex-http-client; temporary wrappers track migration debt" },
 ]
 
 # List of features to allow/deny
