@@ -272,6 +272,7 @@ mod tests {
                 action: WebSearchAction::Search {
                     query: Some("rust trait object".to_string()),
                     queries: None,
+                    sources: None,
                 },
                 results: None,
             });
@@ -438,6 +439,7 @@ mod tests {
             action: WebSearchAction::Search {
                 query: Some("rust trait object".to_string()),
                 queries: None,
+                sources: None,
             },
             results: None,
         };

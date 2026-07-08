@@ -826,7 +826,7 @@ pub enum WebSearchAction {
 impl From<codex_protocol::models::WebSearchAction> for WebSearchAction {
     fn from(value: codex_protocol::models::WebSearchAction) -> Self {
         match value {
-            codex_protocol::models::WebSearchAction::Search { query, queries } => {
+            codex_protocol::models::WebSearchAction::Search { query, queries, .. } => {
                 WebSearchAction::Search { query, queries }
             }
             codex_protocol::models::WebSearchAction::OpenPage { url } => {

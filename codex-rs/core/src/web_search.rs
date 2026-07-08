@@ -17,7 +17,7 @@ fn search_action_detail(query: &Option<String>, queries: &Option<Vec<String>>) -
 
 pub fn web_search_action_detail(action: &WebSearchAction) -> String {
     match action {
-        WebSearchAction::Search { query, queries } => search_action_detail(query, queries),
+        WebSearchAction::Search { query, queries, .. } => search_action_detail(query, queries),
         WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
         WebSearchAction::FindInPage { url, pattern } => match (pattern, url) {
             (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),

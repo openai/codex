@@ -2534,7 +2534,7 @@ fn web_search_action_kind(action: &WebSearchAction) -> WebSearchActionKind {
 
 fn web_search_query_count(query: &str, action: Option<&WebSearchAction>) -> Option<u64> {
     match action {
-        Some(WebSearchAction::Search { query, queries }) => queries
+        Some(WebSearchAction::Search { query, queries, .. }) => queries
             .as_ref()
             .map(|queries| usize_to_u64(queries.len()))
             .or_else(|| query.as_ref().map(|_| 1)),

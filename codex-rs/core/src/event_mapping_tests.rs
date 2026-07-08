@@ -8,6 +8,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::WebSearchResult;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -15,6 +16,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::WebSearchSource;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
@@ -492,6 +494,9 @@ fn parses_web_search_call() {
         action: Some(WebSearchAction::Search {
             query: Some("weather".to_string()),
             queries: None,
+            sources: Some(vec![WebSearchSource::Url {
+                url: "https://example.com/weather".to_string(),
+            }]),
         }),
         internal_chat_message_metadata_passthrough: None,
     };
@@ -507,8 +512,13 @@ fn parses_web_search_call() {
                 action: WebSearchAction::Search {
                     query: Some("weather".to_string()),
                     queries: None,
+                    sources: None,
                 },
-                results: None,
+                results: Some(vec![WebSearchResult {
+                    url: "https://example.com/weather".to_string(),
+                    title: None,
+                    snippet: None,
+                }]),
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),

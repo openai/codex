@@ -823,6 +823,27 @@ pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
     })
 }
 
+pub fn ev_web_search_call_done_with_sources(
+    id: &str,
+    status: &str,
+    query: &str,
+    sources: &[&str],
+) -> Value {
+    let sources = sources
+        .iter()
+        .map(|url| serde_json::json!({"type": "url", "url": url}))
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "web_search_call",
+            "id": id,
+            "status": status,
+            "action": {"type": "search", "query": query, "sources": sources}
+        }
+    })
+}
+
 pub fn ev_image_generation_call(
     id: &str,
     status: &str,
