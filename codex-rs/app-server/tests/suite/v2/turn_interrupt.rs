@@ -22,6 +22,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::skip_if_remote;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -30,6 +31,12 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
+    // TODO(anp): Remove after the long-running command fixture can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "uses a host-local command and cwd fixture unavailable to remote executors"
+    );
+
     // Use a portable sleep command to keep the turn running.
     #[cfg(target_os = "windows")]
     let shell_command = vec![
@@ -59,14 +66,13 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread and capture its id.
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -215,6 +221,12 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()> {
+    // TODO(anp): Remove after the approval command fixture can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "uses a host-local command and cwd fixture unavailable to remote executors"
+    );
+
     #[cfg(target_os = "windows")]
     let shell_command = vec![
         "powershell".to_string(),
@@ -245,13 +257,12 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

@@ -178,6 +178,7 @@ HTTP_PROXY = {http_proxy}
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This suite owns environments.toml to exercise explicit executor selection.
         .without_auto_env()
         .build()
         .await?;

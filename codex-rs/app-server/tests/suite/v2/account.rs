@@ -511,7 +511,6 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
@@ -538,7 +537,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -623,7 +622,6 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
@@ -650,7 +648,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -751,7 +749,6 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
@@ -778,7 +775,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -872,7 +869,6 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
@@ -899,7 +895,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     .await??;
 
     let thread_req = mcp
-        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+        .send_thread_start_request_with_auto_env(codex_app_server_protocol::ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

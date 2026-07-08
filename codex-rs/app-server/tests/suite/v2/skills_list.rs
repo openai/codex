@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -874,6 +875,12 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
 
 #[tokio::test]
 async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<()> {
+    // TODO(anp): Remove after skill watching can bridge host-local storage into remote exec.
+    skip_if_remote!(
+        Ok(()),
+        "host-local skill changes are not visible to remote executors"
+    );
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml_with_chatgpt_base_url(
@@ -885,8 +892,6 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .with_env_overrides(&[(CODEX_EXEC_SERVER_URL_ENV_VAR, None)])
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -911,7 +916,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     );
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: None,
             model_provider: None,
             allow_provider_model_fallback: false,

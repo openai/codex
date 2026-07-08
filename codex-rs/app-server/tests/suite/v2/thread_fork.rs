@@ -120,7 +120,6 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -263,13 +262,12 @@ async fn thread_fork_at_last_turn_id_keeps_only_terminal_prefix() -> Result<()> 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
