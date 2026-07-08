@@ -2370,7 +2370,7 @@ impl ChatComposer {
                 && left_token
                     .as_bytes()
                     .iter()
-                    .all(|byte| is_mention_name_char(*byte))
+                    .all(|byte| is_mention_name_char(*byte) || *byte == b':')
             {
                 let left_range = left_fragment_start..safe_cursor;
                 if Self::prefixed_token_range_is_editable(textarea, prefix, &left_range, left_token)
@@ -6440,6 +6440,27 @@ mod tests {
         composer.sync_popups();
     }
 
+    fn configure_colon_qualified_skill_left_of_adjacent_skill(composer: &mut ChatComposer) {
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "google-calendar:availability".to_string(),
+            description: "Find availability and plan event changes.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/google-calendar/availability/SKILL.md").abs(),
+            scope: crate::test_support::skill_scope_user(),
+            plugin_id: None,
+        }]));
+        let text = "$google-calendar:availability$unbound-skill";
+        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
+        composer
+            .draft
+            .textarea
+            .set_cursor("$google-calendar:availability".len());
+        composer.sync_popups();
+    }
+
     #[test]
     fn skill_popup_targets_unbound_mention_left_of_bound_mention() {
         let (mut composer, _rx) = new_test_composer();
@@ -6496,6 +6517,32 @@ mod tests {
             "skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention",
             /*enhanced_keys_supported*/ false,
             configure_bound_skill_left_of_unbound_skill,
+        );
+    }
+
+    #[test]
+    fn skill_popup_targets_colon_qualified_mention_left_of_adjacent_skill() {
+        let (mut composer, _rx) = new_test_composer();
+        configure_colon_qualified_skill_left_of_adjacent_skill(&mut composer);
+
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
+            panic!("expected skill popup for colon-qualified left mention");
+        };
+        assert_eq!(
+            popup
+                .selected_mention()
+                .expect("expected colon-qualified skill mention to be selected")
+                .insert_text,
+            "$google-calendar:availability"
+        );
+    }
+
+    #[test]
+    fn skill_popup_targets_colon_qualified_mention_left_of_adjacent_skill_snapshot() {
+        snapshot_composer_state(
+            "skill_popup_targets_colon_qualified_mention_left_of_adjacent_skill",
+            /*enhanced_keys_supported*/ false,
+            configure_colon_qualified_skill_left_of_adjacent_skill,
         );
     }
 
