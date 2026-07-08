@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::CodexAppsToolsCache;
@@ -187,14 +188,17 @@ impl McpManager {
             .to_mcp_config_with_loaded_plugins(&loaded_plugins, selected_plugin_registrations);
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
+            let mut codex_apps_config = codex_apps_mcp_server_config(
+                &mcp_config.chatgpt_base_url,
+                mcp_config.apps_mcp_product_sku.as_deref(),
+                originator,
+            );
+            codex_apps_config.supports_parallel_tool_calls =
+                config.features.enabled(Feature::CodexAppsParallelToolCalls);
             catalog.register(McpServerRegistration::from_compatibility(
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 LEGACY_CODEX_APPS_REGISTRATION_ID,
-                codex_apps_mcp_server_config(
-                    &mcp_config.chatgpt_base_url,
-                    mcp_config.apps_mcp_product_sku.as_deref(),
-                    originator,
-                ),
+                codex_apps_config,
             ));
         } else {
             catalog.remove_compatibility(
@@ -267,3 +271,7 @@ impl McpManager {
         effective_mcp_servers(&mcp_config, auth)
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;

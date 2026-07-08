@@ -154,6 +154,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Allow host-owned Codex Apps tools to run in parallel regardless of tool annotations.
+    CodexAppsParallelToolCalls,
     /// Enable MCP apps.
     EnableMcpApps,
     /// Removed compatibility flag for the legacy Apps MCP path override.
@@ -1057,6 +1059,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::CodexAppsParallelToolCalls,
+        key: "codex_apps_parallel_tool_calls",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableMcpApps,
