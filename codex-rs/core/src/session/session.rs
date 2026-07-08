@@ -667,6 +667,7 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let thread_extension_data_for_mcp = &thread_extension_data;
+        let mcp_originator = session_configuration.originator.clone();
         let mcp_runtime_cwd = session_configuration
             .environment_selections()
             .first()
@@ -683,6 +684,7 @@ impl Session {
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
                     thread_extension_data_for_mcp,
+                    &mcp_originator,
                     /*available_environment_ids*/ &[],
                 )
                 .await;

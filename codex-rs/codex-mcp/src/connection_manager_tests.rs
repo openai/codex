@@ -1418,6 +1418,7 @@ fn server_metadata_preserves_tool_approval_policy() {
     let mut config = crate::codex_apps_mcp_server_config(
         "https://docs.example",
         /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
     );
     config.environment_id = "remote".to_string();
     config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
@@ -1462,6 +1463,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
     let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
     ));
     manager.server_metadata.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
