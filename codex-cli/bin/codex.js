@@ -115,36 +115,44 @@ const binaryPath = findCodexExecutable();
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
 
+function isPnpmOwnedCodexInstall(nodeModulesDir) {
+  if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {
+    return false;
+  }
+
+  try {
+    return (
+      realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
+      codexPackageRoot
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Use heuristics to detect the package manager that was used to install Codex
  * in order to give the user a hint about how to update it.
  */
 function detectPackageManager() {
-  // pnpm records installation metadata in node_modules/.modules.yaml. Search
-  // the canonical package root and lexical entrypoint because either can be
-  // linked by pnpm.
+  // pnpm's owning node_modules directory can be several parents above the
+  // package in isolated global layouts. Search ancestors of both the canonical
+  // package root and lexical entrypoint because pnpm may link either path.
   const entrypointDir = path.dirname(path.resolve(process.argv[1]));
-  for (let currentDir of new Set([codexPackageRoot, entrypointDir])) {
-    while (true) {
-      const nodeModulesDir = path.join(currentDir, "node_modules");
-      if (existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {
-        try {
-          if (
-            realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
-            codexPackageRoot
-          ) {
-            return "pnpm";
-          }
-        } catch {
-          // Keep looking if this installation does not contain Codex.
-        }
+  for (const startDir of new Set([codexPackageRoot, entrypointDir])) {
+    const filesystemRoot = path.parse(startDir).root;
+    for (
+      let currentDir = startDir;
+      currentDir !== filesystemRoot;
+      currentDir = path.dirname(currentDir)
+    ) {
+      if (isPnpmOwnedCodexInstall(path.join(currentDir, "node_modules"))) {
+        return "pnpm";
       }
+    }
 
-      const parentDir = path.dirname(currentDir);
-      if (parentDir === currentDir) {
-        break;
-      }
-      currentDir = parentDir;
+    if (isPnpmOwnedCodexInstall(path.join(filesystemRoot, "node_modules"))) {
+      return "pnpm";
     }
   }
 
