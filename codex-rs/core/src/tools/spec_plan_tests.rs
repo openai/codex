@@ -273,20 +273,23 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
-struct WebRunExtensionTool;
+struct TestNamespaceExtensionTool {
+    namespace: &'static str,
+    tool_name: &'static str,
+}
 
-impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
+impl ToolExecutor<ExtensionToolCall> for TestNamespaceExtensionTool {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced("web", "run")
+        ToolName::namespaced(self.namespace, self.tool_name)
     }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
-            name: "web".to_string(),
-            description: "Test web namespace.".to_string(),
+            name: self.namespace.to_string(),
+            description: "Test namespace.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: "run".to_string(),
-                description: "Test standalone web search tool.".to_string(),
+                name: self.tool_name.to_string(),
+                description: "Test namespace tool.".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: codex_tools::JsonSchema::default(),
@@ -299,33 +302,6 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
         Box::pin(async {
             Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))) as Box<dyn ToolOutput>)
         })
-    }
-}
-
-struct ImageGenExtensionTool;
-
-impl ToolExecutor<ExtensionToolCall> for ImageGenExtensionTool {
-    fn tool_name(&self) -> ToolName {
-        ToolName::namespaced("image_gen", "imagegen")
-    }
-
-    fn spec(&self) -> ToolSpec {
-        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
-            name: "image_gen".to_string(),
-            description: "Test image generation namespace.".to_string(),
-            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: "imagegen".to_string(),
-                description: "Test standalone image generation tool.".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
-            })],
-        })
-    }
-
-    fn handle(&self, _call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
-        Box::pin(async { panic!("spec planning should not execute extension tools") })
     }
 }
 
@@ -1532,13 +1508,17 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
 
 #[tokio::test]
 async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates() {
+    let image_generation_tool = Arc::new(TestNamespaceExtensionTool {
+        namespace: "image_gen",
+        tool_name: "imagegen",
+    });
     let image_generation = probe_with(
         |turn| {
             use_chatgpt_auth(turn);
             turn.model_info.input_modalities = vec![InputModality::Image];
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(ImageGenExtensionTool)],
+            extension_tool_executors: vec![image_generation_tool.clone()],
             ..Default::default()
         },
     )
@@ -1552,7 +1532,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             turn.model_info.input_modalities = vec![InputModality::Image];
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(ImageGenExtensionTool)],
+            extension_tool_executors: vec![image_generation_tool.clone()],
             ..Default::default()
         },
     )
@@ -1565,7 +1545,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             turn.model_info.input_modalities = vec![];
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(ImageGenExtensionTool)],
+            extension_tool_executors: vec![image_generation_tool.clone()],
             ..Default::default()
         },
     )
@@ -1578,7 +1558,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             turn.model_info.input_modalities = vec![InputModality::Image];
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(ImageGenExtensionTool)],
+            extension_tool_executors: vec![image_generation_tool],
             ..Default::default()
         },
     )
@@ -1636,7 +1616,10 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             set_web_search_mode(turn, WebSearchMode::Live);
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(WebRunExtensionTool)],
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "web",
+                tool_name: "run",
+            })],
             ..Default::default()
         },
     )
