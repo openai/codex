@@ -166,6 +166,20 @@ fn load_file_auth(codex_home: &Path) -> Result<Option<AuthDotJson>> {
     )?)
 }
 
+fn aws_managed_bedrock_config() -> CreateConfigTomlParams {
+    CreateConfigTomlParams {
+        model_provider_id: Some("amazon-bedrock".to_string()),
+        extra_provider_config: Some(
+            r#"[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-west-2"
+"#
+            .to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
 async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -1268,9 +1282,9 @@ async fn login_amazon_bedrock_allows_bedrock_provider_override() -> Result<()> {
 }
 
 #[tokio::test]
-async fn logout_managed_bedrock_restores_aws_managed_account() -> Result<()> {
+async fn logout_managed_bedrock_restores_default_account() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), aws_managed_bedrock_config())?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
     let mut expected_config = read_config_toml(codex_home.path())?;
     expected_config
         .as_table_mut()
@@ -1298,6 +1312,15 @@ async fn logout_managed_bedrock_restores_aws_managed_account() -> Result<()> {
     )
     .await??;
     assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+            }),
+            requires_openai_auth: false,
+        }
+    );
 
     let request_id = mcp.send_logout_account_request().await?;
     let response = timeout(
@@ -1315,10 +1338,8 @@ async fn logout_managed_bedrock_restores_aws_managed_account() -> Result<()> {
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
-            account: Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::AwsManaged,
-            }),
-            requires_openai_auth: false,
+            account: None,
+            requires_openai_auth: true,
         }
     );
     Ok(())
@@ -1401,6 +1422,13 @@ async fn logout_managed_bedrock_preserves_changed_provider_without_experimental_
     assert_eq!(load_file_auth(codex_home.path())?, None);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
     assert_account_updated(&mut mcp, /*auth_mode*/ None).await?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: None,
+            requires_openai_auth: false,
+        }
+    );
     Ok(())
 }
 

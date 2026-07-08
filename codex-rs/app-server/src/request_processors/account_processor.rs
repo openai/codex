@@ -845,7 +845,8 @@ impl AccountRequestProcessor {
             self.auth_manager.auth_cached(),
             Some(CodexAuth::BedrockApiKey(_))
         );
-        if self.config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
+        let config = self.load_latest_config().await?;
+        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
             return Ok(self
                 .auth_manager
                 .auth_cached()
@@ -861,16 +862,16 @@ impl AccountRequestProcessor {
             }
         }
 
+        if managed_bedrock_auth {
+            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
+        }
+
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
         )
         .await;
-
-        if managed_bedrock_auth {
-            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
-        }
 
         // Reflect the current auth method after logout (likely None).
         Ok(self
