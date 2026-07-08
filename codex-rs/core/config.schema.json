@@ -455,6 +455,9 @@
             "code_mode_only": {
               "type": "boolean"
             },
+            "codex_apps_parallel_tool_calls": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
               "type": "boolean"
             },
@@ -4825,6 +4828,9 @@
           "type": "boolean"
         },
         "code_mode_only": {
+          "type": "boolean"
+        },
+        "codex_apps_parallel_tool_calls": {
           "type": "boolean"
         },
         "codex_git_commit": {
