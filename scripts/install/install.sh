@@ -125,6 +125,113 @@ download_text() {
   exit 1
 }
 
+parse_release_metadata() {
+  # Bound awk's record size so compact, single-line JSON stays fast on every
+  # supported awk implementation. JSON strings cannot contain literal newlines,
+  # so the record boundaries inserted by fold do not change the document.
+  LC_ALL=C fold -b -w 4096 | LC_ALL=C awk '
+    function finish_string(value) {
+      if (object_depth == 1 && key == "tag_name") {
+        print "tag_name\t" value
+      } else if (object_depth == asset_object_depth) {
+        if (key == "name") {
+          asset_name = value
+        } else if (key == "digest") {
+          asset_digest = value
+        }
+      }
+
+      expecting_value = 0
+      key = ""
+    }
+
+    {
+      for (i = 1; i <= length($0); i++) {
+        char = substr($0, i, 1)
+
+        if (in_string) {
+          if (escaped) {
+            token = token "\\" char
+            escaped = 0
+          } else if (char == "\\") {
+            escaped = 1
+          } else if (char == "\"") {
+            in_string = 0
+            if (string_is_value) {
+              finish_string(token)
+            } else {
+              pending_key = token
+            }
+          } else {
+            token = token char
+          }
+          continue
+        }
+
+        if (char == "\"") {
+          in_string = 1
+          token = ""
+          escaped = 0
+          string_is_value = expecting_value
+        } else if (char == ":" && pending_key != "") {
+          key = pending_key
+          pending_key = ""
+          expecting_value = 1
+        } else if (char == "{") {
+          object_depth++
+          if (assets_array_depth != 0 &&
+              array_depth == assets_array_depth &&
+              asset_object_depth == 0) {
+            asset_object_depth = object_depth
+            asset_name = ""
+            asset_digest = ""
+          }
+          expecting_value = 0
+          key = ""
+        } else if (char == "}") {
+          if (object_depth == asset_object_depth) {
+            if (asset_name != "" && asset_digest != "") {
+              print "asset\t" asset_name "\t" asset_digest
+            }
+            asset_object_depth = 0
+            asset_name = ""
+            asset_digest = ""
+          }
+          object_depth--
+          expecting_value = 0
+          key = ""
+          pending_key = ""
+        } else if (char == "[") {
+          array_depth++
+          if (expecting_value && key == "assets" && object_depth == 1) {
+            assets_array_depth = array_depth
+          }
+          expecting_value = 0
+          key = ""
+        } else if (char == "]") {
+          if (array_depth == assets_array_depth) {
+            assets_array_depth = 0
+          }
+          array_depth--
+          expecting_value = 0
+          key = ""
+          pending_key = ""
+        } else if (char == ",") {
+          expecting_value = 0
+          key = ""
+          pending_key = ""
+        }
+      }
+    }
+
+    END {
+      if (in_string || object_depth != 0 || array_depth != 0) {
+        exit 1
+      }
+    }
+  '
+}
+
 release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
@@ -156,8 +263,17 @@ resolve_release() {
     exit 1
   fi
 
+  if ! release_metadata="$(printf '%s\n' "$release_json" | parse_release_metadata)"; then
+    echo "Could not parse GitHub release metadata for Codex $requested_release." >&2
+    exit 1
+  fi
+
   if [ "$normalized_version" = "latest" ]; then
-    resolved_version="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"rust-v\([^"]*\)".*/\1/p' | head -n 1)"
+    release_tag="$(printf '%s\n' "$release_metadata" | awk -F '\t' '$1 == "tag_name" { print $2; exit }')"
+    case "$release_tag" in
+      rust-v*) resolved_version="${release_tag#rust-v}" ;;
+      *) resolved_version="" ;;
+    esac
     if [ -z "$resolved_version" ]; then
       echo "Failed to resolve the latest Codex release version." >&2
       exit 1
@@ -169,38 +285,10 @@ resolve_release() {
 release_asset_digest_or_empty() {
   asset="$1"
 
-  digest="$(printf '%s\n' "$release_json" | awk -v asset="$asset" '
-    /"name":[[:space:]]*"[^"]+"/ {
-      name = $0
-      sub(/^.*"name":[[:space:]]*"/, "", name)
-      sub(/".*$/, "", name)
-      if (name == asset) {
-        in_asset = 1
-        asset_depth = depth
-      }
-    }
-
-    in_asset && /"digest":[[:space:]]*"[^"]+"/ {
-      digest = $0
-      sub(/^.*"digest":[[:space:]]*"/, "", digest)
-      sub(/".*$/, "", digest)
-    }
-
-    {
-      line = $0
-      opens = gsub(/\{/, "{", line)
-      closes = gsub(/\}/, "}", line)
-      depth += opens - closes
-
-      if (in_asset && depth < asset_depth) {
-        in_asset = 0
-      }
-    }
-
-    END {
-      if (digest != "") {
-        print digest
-      }
+  digest="$(printf '%s\n' "$release_metadata" | awk -F '\t' -v asset="$asset" '
+    $1 == "asset" && $2 == asset {
+      print $3
+      exit
     }
   ')"
 
