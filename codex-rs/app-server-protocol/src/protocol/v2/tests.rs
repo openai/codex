@@ -20,6 +20,7 @@ use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::WebSearchResult as CoreWebSearchResult;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
@@ -2777,6 +2778,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             query: Some("docs".to_string()),
             queries: None,
         },
+        results: Some(vec![CoreWebSearchResult {
+            url: "https://openai.com/docs".to_string(),
+            title: Some("OpenAI docs".to_string()),
+            snippet: Some("Documentation".to_string()),
+        }]),
     });
 
     assert_eq!(
@@ -2788,6 +2794,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 query: Some("docs".to_string()),
                 queries: None,
             }),
+            results: Some(vec![WebSearchResult {
+                url: "https://openai.com/docs".to_string(),
+                title: Some("OpenAI docs".to_string()),
+                snippet: Some("Documentation".to_string()),
+            }]),
         }
     );
 

@@ -27,6 +27,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
+use codex_app_server_protocol::WebSearchResult as ApiWebSearchResult;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -74,6 +75,7 @@ use codex_exec::TurnFailedEvent;
 use codex_exec::TurnStartedEvent;
 use codex_exec::Usage;
 use codex_exec::WebSearchItem;
+use codex_exec::WebSearchResult;
 
 #[test]
 fn map_todo_items_preserves_text_and_completion_state() {
@@ -369,6 +371,11 @@ fn web_search_completion_preserves_query_and_action() {
                     query: Some("rust async await".to_string()),
                     queries: None,
                 }),
+                results: Some(vec![ApiWebSearchResult {
+                    url: "https://example.com/rust-async".to_string(),
+                    title: Some("Async Rust".to_string()),
+                    snippet: Some("An introduction to async Rust.".to_string()),
+                }]),
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -389,6 +396,11 @@ fn web_search_completion_preserves_query_and_action() {
                             query: Some("rust async await".to_string()),
                             queries: None,
                         },
+                        results: Some(vec![WebSearchResult {
+                            url: "https://example.com/rust-async".to_string(),
+                            title: Some("Async Rust".to_string()),
+                            snippet: Some("An introduction to async Rust.".to_string()),
+                        }]),
                     }),
                 },
             })],
@@ -407,6 +419,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                 id: "search-1".to_string(),
                 query: String::new(),
                 action: None,
+                results: None,
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -422,6 +435,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                     query: Some("rust async await".to_string()),
                     queries: None,
                 }),
+                results: None,
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -439,6 +453,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                         id: "search-1".to_string(),
                         query: String::new(),
                         action: WebSearchAction::Other,
+                        results: None,
                     }),
                 },
             })],
@@ -458,6 +473,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                             query: Some("rust async await".to_string()),
                             queries: None,
                         },
+                        results: None,
                     }),
                 },
             })],

@@ -22,6 +22,7 @@ use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_utils_string::take_bytes_at_char_boundary;
 use quick_xml::de::from_str as from_xml_str;
 use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
@@ -262,11 +263,97 @@ pub struct SubAgentActivityItem {
     pub agent_path: AgentPath,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct WebSearchResult {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snippet: Option<String>,
+}
+
+const MAX_WEB_SEARCH_RESULTS: usize = 20;
+const MAX_WEB_SEARCH_RESULT_URL_BYTES: usize = 512;
+const MAX_WEB_SEARCH_RESULT_TOTAL_URL_BYTES: usize = 2_048;
+const MAX_WEB_SEARCH_RESULT_TITLE_BYTES: usize = 256;
+const MAX_WEB_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
+const MAX_WEB_SEARCH_RESULT_TOTAL_TEXT_BYTES: usize = 4_096;
+
+pub fn bounded_web_search_results(
+    results: impl IntoIterator<Item = WebSearchResult>,
+) -> Vec<WebSearchResult> {
+    let mut bounded_results = Vec::new();
+    let mut total_url_bytes = 0usize;
+    let mut total_text_bytes = 0usize;
+
+    for result in results {
+        if bounded_results.len() == MAX_WEB_SEARCH_RESULTS {
+            break;
+        }
+        if result.url.len() > MAX_WEB_SEARCH_RESULT_URL_BYTES
+            || total_url_bytes.saturating_add(result.url.len())
+                > MAX_WEB_SEARCH_RESULT_TOTAL_URL_BYTES
+        {
+            continue;
+        }
+
+        let title = bounded_web_search_result_text(
+            result.title,
+            MAX_WEB_SEARCH_RESULT_TITLE_BYTES,
+            MAX_WEB_SEARCH_RESULT_TOTAL_TEXT_BYTES.saturating_sub(total_text_bytes),
+        );
+        total_text_bytes += title.as_ref().map_or(0, String::len);
+        let snippet = bounded_web_search_result_text(
+            result.snippet,
+            MAX_WEB_SEARCH_RESULT_SNIPPET_BYTES,
+            MAX_WEB_SEARCH_RESULT_TOTAL_TEXT_BYTES.saturating_sub(total_text_bytes),
+        );
+        total_text_bytes += snippet.as_ref().map_or(0, String::len);
+        total_url_bytes += result.url.len();
+        bounded_results.push(WebSearchResult {
+            url: result.url,
+            title,
+            snippet,
+        });
+    }
+
+    bounded_results
+}
+
+fn bounded_web_search_result_text(
+    text: Option<String>,
+    max_bytes: usize,
+    remaining_bytes: usize,
+) -> Option<String> {
+    let text = text?;
+    let text = text.trim();
+    let text = take_bytes_at_char_boundary(text, max_bytes.min(remaining_bytes));
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+pub(crate) fn deserialize_web_search_results<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<WebSearchResult>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<WebSearchResult>>::deserialize(deserializer)?.map(bounded_web_search_results))
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_web_search_results",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub results: Option<Vec<WebSearchResult>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -647,6 +734,39 @@ mod tests {
                 text: "Retry with tests.".to_string(),
                 hook_run_id: "hook-run-1".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn bounds_web_search_result_text_and_total_payload() {
+        let results = bounded_web_search_results((0..20).map(|index| WebSearchResult {
+            url: format!("https://example.com/{index}"),
+            title: Some("t".repeat(300)),
+            snippet: Some("é".repeat(600)),
+        }));
+
+        assert_eq!(results.len(), 20);
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.title.as_ref())
+                .all(|title| title.len() <= MAX_WEB_SEARCH_RESULT_TITLE_BYTES)
+        );
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.snippet.as_ref())
+                .all(|snippet| snippet.len() <= MAX_WEB_SEARCH_RESULT_SNIPPET_BYTES)
+        );
+        assert!(
+            results
+                .iter()
+                .map(|result| {
+                    result.title.as_ref().map_or(0, String::len)
+                        + result.snippet.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>()
+                <= MAX_WEB_SEARCH_RESULT_TOTAL_TEXT_BYTES
         );
     }
 }

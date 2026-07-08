@@ -187,6 +187,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
             id: call_id.to_string(),
             query: String::new(),
             action: Some(WebSearchAction::Other),
+            results: None,
         }
     );
     let expected_completed_item = ThreadItem::WebSearch {
@@ -196,6 +197,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
             query: Some("standalone web search".to_string()),
             queries: None,
         }),
+        results: None,
     };
     assert_eq!(completed.item, expected_completed_item);
 

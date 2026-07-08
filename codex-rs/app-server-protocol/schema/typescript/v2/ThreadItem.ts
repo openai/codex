@@ -25,6 +25,7 @@ import type { PatchApplyStatus } from "./PatchApplyStatus";
 import type { SubAgentActivityKind } from "./SubAgentActivityKind";
 import type { UserInput } from "./UserInput";
 import type { WebSearchAction } from "./WebSearchAction";
+import type { WebSearchResult } from "./WebSearchResult";
 
 export type ThreadItem = { "type": "userMessage", id: string, clientId: string | null, content: Array<UserInput>, } | { "type": "hookPrompt", id: string, fragments: Array<HookPromptFragment>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, memoryCitation: MemoryCitation | null, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string,
 /**
@@ -105,4 +106,4 @@ reasoningEffort: ReasoningEffort | null,
 /**
  * Last known status of the target agents, when available.
  */
-agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "subAgentActivity", id: string, kind: SubAgentActivityKind, agentThreadId: string, agentPath: string, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: LegacyAppPathString, } | { "type": "sleep", id: string, durationMs: number, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };
+agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "subAgentActivity", id: string, kind: SubAgentActivityKind, agentThreadId: string, agentPath: string, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, results: Array<WebSearchResult> | null, } | { "type": "imageView", id: string, path: LegacyAppPathString, } | { "type": "sleep", id: string, durationMs: number, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };

@@ -1102,6 +1102,15 @@
             "query": {
               "type": "string"
             },
+            "results": {
+              "items": {
+                "$ref": "#/definitions/WebSearchResult"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -1524,6 +1533,29 @@
           "type": "object"
         }
       ]
+    },
+    "WebSearchResult": {
+      "properties": {
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
     }
   },
   "properties": {

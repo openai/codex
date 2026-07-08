@@ -185,6 +185,7 @@ fn web_search_item(call_id: &str, action: WebSearchAction) -> ExtensionTurnItem 
         id: call_id.to_string(),
         query: web_search_action_detail(&action),
         action,
+        results: None,
     })
 }
 

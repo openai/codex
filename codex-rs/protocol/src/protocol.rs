@@ -32,6 +32,8 @@ use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
+use crate::items::WebSearchResult;
+use crate::items::deserialize_web_search_results;
 use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
 use crate::memory_citation::MemoryCitation;
@@ -2408,6 +2410,13 @@ pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
     pub action: WebSearchAction,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_web_search_results",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub results: Option<Vec<WebSearchResult>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5038,6 +5047,7 @@ mod tests {
                     query: Some("find docs".into()),
                     queries: None,
                 },
+                results: None,
             }),
             started_at_ms: 0,
         };
