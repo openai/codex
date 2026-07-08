@@ -546,22 +546,19 @@ pub(crate) fn split_reasoning_summary_parts(reasoning_parts: &[String]) -> (Stri
     if content.is_empty() {
         return (leading_empty_part_header.unwrap_or_default(), content);
     }
-    if let Some(header) = leading_empty_part_header {
-        return (header, content);
-    }
 
-    if let Some(open) = content.find("**") {
-        let after_open = &content[(open + 2)..];
+    if let Some(after_open) = content.strip_prefix("**") {
         if let Some(close) = after_open.find("**") {
-            let after_close_idx = open + 2 + close + 2;
-            if after_close_idx < content.len() {
+            let after_close_idx = 2 + close + 2;
+            let after_close = &content[after_close_idx..];
+            if after_close.starts_with('\n') || after_close.starts_with('\r') {
                 return (
                     content[..after_close_idx].to_string(),
-                    content[after_close_idx..].to_string(),
+                    after_close.to_string(),
                 );
             }
         }
     }
 
-    (String::new(), content)
+    (leading_empty_part_header.unwrap_or_default(), content)
 }

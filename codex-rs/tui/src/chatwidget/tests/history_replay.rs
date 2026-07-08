@@ -867,7 +867,7 @@ async fn replayed_thread_closed_notification_does_not_exit_tui() {
 }
 
 #[tokio::test]
-async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
+async fn replayed_reasoning_item_preserves_summary_parts_and_hides_raw_reasoning_when_disabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.show_raw_agent_reasoning = false;
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
@@ -897,7 +897,10 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
     chat.replay_thread_item(
         AppServerThreadItem::Reasoning {
             id: "reasoning-1".to_string(),
-            summary: vec!["Summary only".to_string()],
+            summary: vec![
+                "**Plan**\n\ndone".to_string(),
+                "**Checking tests**\n\n<!-- -->".to_string(),
+            ],
             content: vec!["Raw reasoning".to_string()],
         },
         "turn-1".to_string(),
@@ -910,7 +913,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         }
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     };
-    assert!(!rendered.trim().is_empty());
+    assert_eq!(rendered, "• done\n");
     assert!(!rendered.contains("Raw reasoning"));
 }
 

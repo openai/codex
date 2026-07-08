@@ -2421,6 +2421,23 @@ fn reasoning_summary_block_preserves_bold_content_after_empty_html_comment_part(
 }
 
 #[test]
+fn reasoning_summary_block_strips_header_after_leading_empty_part() {
+    let cell = new_reasoning_summary_block(
+        vec![
+            "**Status**\n\n<!-- -->".to_string(),
+            "**Checking tests**\n\nTests passed".to_string(),
+        ],
+        &test_cwd(),
+    );
+
+    let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+    insta::assert_snapshot!(rendered_display.join("\n"), @"• Tests passed");
+
+    let rendered_transcript = render_transcript(cell.as_ref());
+    assert_eq!(rendered_transcript, vec!["• Tests passed"]);
+}
+
+#[test]
 fn reasoning_summary_block_drops_empty_part_after_real_content() {
     let cell = new_reasoning_summary_block(
         vec![
