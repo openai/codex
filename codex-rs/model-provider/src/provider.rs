@@ -7,6 +7,7 @@ use std::sync::Arc;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -197,6 +198,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn models_manager(
         &self,
         codex_home: PathBuf,
+        http_client_factory: HttpClientFactory,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
 }
@@ -314,6 +316,7 @@ impl ModelProvider for ConfiguredModelProvider {
     fn models_manager(
         &self,
         codex_home: PathBuf,
+        http_client_factory: HttpClientFactory,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
@@ -325,6 +328,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
+                    http_client_factory,
                 ));
                 Arc::new(OpenAiModelsManager::new(
                     codex_home,
@@ -340,6 +344,7 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_http_client::OutboundProxyPolicy;
     use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
@@ -362,6 +367,10 @@ mod tests {
 
     use super::*;
     use crate::auth::AgentIdentitySessionFallback;
+
+    fn default_http_client_factory() -> HttpClientFactory {
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+    }
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -653,8 +662,11 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            default_http_client_factory(),
+            /*config_model_catalog*/ None,
+        );
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
         let model_ids = catalog
@@ -701,6 +713,7 @@ mod tests {
         );
         let manager = provider.models_manager(
             test_codex_home(),
+            default_http_client_factory(),
             Some(ModelsResponse {
                 models: vec![configured_model],
             }),
@@ -746,8 +759,11 @@ mod tests {
             )),
         );
 
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            default_http_client_factory(),
+            /*config_model_catalog*/ None,
+        );
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert!(
