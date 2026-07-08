@@ -13,10 +13,14 @@ doctest = false
 workspace = true
 
 [dependencies]
+# copybara:strip-for-public begin
+# Keep internal-only dependencies separate from the public dependency list so
+# public additions do not collide with them during Copybara merges.
+codex-internal-extra-config = { workspace = true }
+# copybara:strip-for-public end
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-experimental-api-macros = { workspace = true }
-codex-internal-extra-config = { workspace = true } # copybara:strip-for-public
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
