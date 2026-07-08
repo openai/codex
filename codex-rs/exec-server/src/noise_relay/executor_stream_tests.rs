@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -17,6 +16,7 @@ use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseTransport;
 use crate::noise_channel::PendingResponderHandshake;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
+use crate::relay::RelayAckState;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay_proto::RelayData;
@@ -85,22 +85,59 @@ async fn full_physical_queue_defers_ack_without_resetting_stream() -> Result<()>
         result: serde_json::Value::Null,
     });
     let framed = frame_jsonrpc_message(&message)?;
-    let ciphertext = harness_transport.encrypt(&framed[..1])?;
+    let first_ciphertext = harness_transport.encrypt(&framed[..1])?;
+    let second_ciphertext = harness_transport.encrypt(&framed[1..2])?;
     stream.receive_data(RelayData {
-        seq: 1,
+        seq: 2,
         segment_index: 0,
         segment_count: 1,
-        payload: ciphertext,
+        payload: second_ciphertext,
     })?;
 
-    assert_eq!(stream.inbound_ack.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        stream
+            .inbound_ack_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest,
+        RelayAckState {
+            ack: 0,
+            ack_bits: 0b10,
+        }
+    );
     assert_eq!(physical_outgoing_rx.try_recv()?, vec![0x5a]);
     let ack = timeout(Duration::from_secs(1), physical_outgoing_rx.recv())
         .await?
         .expect("virtual stream writer should send the deferred ack");
     let ack = decode_relay_message_frame(&ack)?;
     assert_eq!(ack.validate()?, RelayFrameBodyKind::Ack);
-    assert_eq!(ack.ack, 1);
+    assert_eq!(ack.ack, 0);
+    assert_eq!(ack.ack_bits, 0b10);
+
+    stream.receive_data(RelayData {
+        seq: 1,
+        segment_index: 0,
+        segment_count: 1,
+        payload: first_ciphertext,
+    })?;
+    assert_eq!(
+        stream
+            .inbound_ack_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest,
+        RelayAckState {
+            ack: 2,
+            ack_bits: 0,
+        }
+    );
+    let ack = timeout(Duration::from_secs(1), physical_outgoing_rx.recv())
+        .await?
+        .expect("virtual stream writer should send the cumulative ack");
+    let ack = decode_relay_message_frame(&ack)?;
+    assert_eq!(ack.validate()?, RelayFrameBodyKind::Ack);
+    assert_eq!(ack.ack, 2);
+    assert_eq!(ack.ack_bits, 0);
     Ok(())
 }
 

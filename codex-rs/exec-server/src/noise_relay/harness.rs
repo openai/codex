@@ -395,7 +395,7 @@ where
                     };
                     let frame = RelayMessageFrame::reliable_data(
                         stream_id.clone(),
-                        inbound_ciphertexts.cumulative_ack(),
+                        inbound_ciphertexts.ack_state(),
                         outbound.seq,
                         outbound.payload,
                     );
@@ -423,7 +423,7 @@ where
                     if let Some(outbound) = reliable_sender.next_retry_due(tokio::time::Instant::now()) {
                         let frame = RelayMessageFrame::reliable_data(
                             stream_id.clone(),
-                            inbound_ciphertexts.cumulative_ack(),
+                            inbound_ciphertexts.ack_state(),
                             outbound.seq,
                             outbound.payload,
                         );
@@ -440,10 +440,10 @@ where
                     }
                 }
                 _ = std::future::ready(()), if pending_ack.is_some() && !force_incoming && !pong_deadline_expired => {
-                    let Some(ack) = pending_ack.take() else {
+                    let Some(ack_state) = pending_ack.take() else {
                         continue;
                     };
-                    let frame = RelayMessageFrame::ack(stream_id.clone(), ack);
+                    let frame = RelayMessageFrame::ack(stream_id.clone(), ack_state);
                     if let Err(error) = send_websocket_message(
                         &mut websocket,
                         Message::Binary(encode_relay_message_frame(&frame).into()),
@@ -506,7 +506,7 @@ where
                             };
                             if !matches!(kind, RelayFrameBodyKind::Handshake)
                                 && let Err(error) =
-                                    reliable_sender.process_peer_ack(frame.ack, frame.ack_bits)
+                                    reliable_sender.process_peer_ack(frame.ack_state())
                                 {
                                     send_malformed(&incoming_tx, error.to_string());
                                     break;
@@ -536,7 +536,7 @@ where
                                         send_malformed(&incoming_tx, error.to_string());
                                         break;
                                     }
-                                    pending_ack = Some(inbound_ciphertexts.cumulative_ack());
+                                    pending_ack = Some(inbound_ciphertexts.ack_state());
                                 }
                                 RelayFrameBodyKind::Reset => {
                                     let _ = incoming_tx.try_send(

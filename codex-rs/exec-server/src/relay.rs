@@ -87,6 +87,17 @@ pub(crate) enum RelayFrameBodyKind {
     Handshake,
 }
 
+/// One coherent cumulative/selective acknowledgement snapshot.
+///
+/// Bit `i` acknowledges sequence `ack + 1 + i`. Reliable Noise endpoints
+/// pass this value as one unit so concurrent readers and writers cannot pair a
+/// newer cumulative frontier with stale selective bits.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct RelayAckState {
+    pub(crate) ack: u32,
+    pub(crate) ack_bits: u32,
+}
+
 impl RelayMessageFrame {
     pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
@@ -103,25 +114,38 @@ impl RelayMessageFrame {
         }
     }
 
-    /// Build one reliable Noise data frame with the receiver's cumulative ack.
+    /// Build one reliable Noise data frame with the receiver's ack state.
     ///
     /// The legacy plaintext relay still uses [`Self::data`] and keeps its old
     /// sequence behavior. Noise reliability owns its own sequence and ack
     /// invariants, so keep that policy at the Noise call sites.
-    pub(crate) fn reliable_data(stream_id: String, ack: u32, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn reliable_data(
+        stream_id: String,
+        ack_state: RelayAckState,
+        seq: u32,
+        payload: Vec<u8>,
+    ) -> Self {
         let mut frame = Self::data(stream_id, seq, payload);
-        frame.ack = ack;
+        frame.ack = ack_state.ack;
+        frame.ack_bits = ack_state.ack_bits;
         frame
     }
 
-    /// Build an unsequenced cumulative acknowledgement for a reliable stream.
-    pub(crate) fn ack(stream_id: String, ack: u32) -> Self {
+    /// Build an unsequenced acknowledgement for a reliable stream.
+    pub(crate) fn ack(stream_id: String, ack_state: RelayAckState) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack,
-            ack_bits: 0,
+            ack: ack_state.ack,
+            ack_bits: ack_state.ack_bits,
             body: Some(relay_message_frame::Body::AckFrame(RelayAck {})),
+        }
+    }
+
+    pub(crate) fn ack_state(&self) -> RelayAckState {
+        RelayAckState {
+            ack: self.ack,
+            ack_bits: self.ack_bits,
         }
     }
 
@@ -870,8 +894,7 @@ where
                 });
             }
             RelayFrameBodyKind::Data => {
-                let peer_ack = frame.ack;
-                let peer_ack_bits = frame.ack_bits;
+                let peer_ack = frame.ack_state();
                 // Removing pending state also makes any in-flight validation stale.
                 let Some(stream) = streams.get_mut(&stream_id) else {
                     let canceled_pending_handshake =
@@ -885,7 +908,7 @@ where
                     }
                     continue;
                 };
-                if let Err(error) = stream.process_peer_ack(peer_ack, peer_ack_bits) {
+                if let Err(error) = stream.process_peer_ack(peer_ack) {
                     warn!("failed to process Noise relay peer ack: {error}");
                     streams.remove(&stream_id);
                     retire_noise_stream_id(
@@ -937,7 +960,7 @@ where
             | RelayFrameBodyKind::Resume
             | RelayFrameBodyKind::Heartbeat => {
                 if let Some(stream) = streams.get(&stream_id)
-                    && let Err(error) = stream.process_peer_ack(frame.ack, frame.ack_bits)
+                    && let Err(error) = stream.process_peer_ack(frame.ack_state())
                 {
                     warn!("failed to process Noise relay peer ack: {error}");
                     streams.remove(&stream_id);

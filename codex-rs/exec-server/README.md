@@ -61,7 +61,7 @@ version
 stream_id
 body              // handshake | data | ack_frame | resume | reset | heartbeat
 ack               // highest contiguous peer segment seq received; 0 means none
-ack_bits          // reserved in v1; must be 0
+ack_bits          // bit i acknowledges peer seq = ack + 1 + i
 seq               // data only: segment sequence number
 segment_index     // data only: 0-based index within message
 segment_count     // data only: number of segments in message
@@ -99,19 +99,19 @@ segment_count = 1
 unsplit messages, `message_start_seq == seq`, `segment_index == 0`, and
 `segment_count == 1`.
 
-V1 uses cumulative `ack` and reserves `ack_bits` for a later selective-ack
-extension:
+V1 uses cumulative `ack` plus a fixed-width selective acknowledgement mask:
 
 ```text
 ack = 0 when no segment has been received contiguously
 ack = highest contiguous received segment seq otherwise
-ack_bits = 0
+bit i in ack_bits acknowledges seq = ack + 1 + i
 ```
 
-Send `ack` and zero `ack_bits` redundantly on every outbound frame. Acks are
-not themselves acked. Acks, retries, duplicate suppression, segmentation, and
-reassembly are endpoint responsibilities; rendezvous only routes relay frames
-by `stream_id`.
+The 32-segment receive window uses `u32 ack_bits`.
+Bit zero is canonically clear because receiving `ack + 1` advances the cumulative `ack`.
+Send `ack` and `ack_bits` redundantly on every outbound frame.
+Acks are not themselves acked.
+Acks, retries, duplicate suppression, segmentation, and reassembly are endpoint responsibilities; rendezvous only routes relay frames by `stream_id`.
 
 ## Lifecycle
 

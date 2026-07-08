@@ -4,12 +4,11 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::ExecServerError;
+use crate::relay::RelayAckState;
 
-/// Maximum number of encrypted records retained until the peer cumulatively
-/// acknowledges them.
+/// Maximum number of encrypted records retained awaiting peer acknowledgement.
 pub(crate) const MAX_UNACKED_SEGMENTS: usize = 32;
-/// Maximum encrypted bytes retained until the peer cumulatively acknowledges
-/// them.
+/// Maximum encrypted bytes retained awaiting peer acknowledgement.
 pub(crate) const MAX_UNACKED_BYTES: usize = 2 * 1024 * 1024;
 /// How long an encrypted record may remain unacknowledged before it is retried.
 pub(crate) const RESEND_AFTER: Duration = Duration::from_millis(500);
@@ -34,12 +33,13 @@ struct UnackedCiphertext {
 ///
 /// The receive frontier stays in `OrderedCiphertextFrames`, which already owns
 /// the bounded reorder buffer needed before Noise decryption. This type only
-/// allocates send sequences, applies peer cumulative acks, and retains exact
-/// ciphertext for retries.
+/// allocates send sequences, applies peer acknowledgement state, and retains
+/// exact ciphertext for retries.
 #[derive(Debug)]
 pub(crate) struct ReliableSender {
     next_seq: u32,
     highest_sent_seq: u32,
+    peer_cumulative_ack: u32,
     resend_cursor: u32,
     unacked: BTreeMap<u32, UnackedCiphertext>,
     unacked_bytes: usize,
@@ -52,6 +52,7 @@ impl Default for ReliableSender {
             // nothing has been received contiguously yet.
             next_seq: 1,
             highest_sent_seq: 0,
+            peer_cumulative_ack: 0,
             resend_cursor: 1,
             unacked: BTreeMap::new(),
             unacked_bytes: 0,
@@ -60,6 +61,12 @@ impl Default for ReliableSender {
 }
 
 impl ReliableSender {
+    fn send_window_has_space(&self) -> bool {
+        self.next_seq
+            .checked_sub(self.peer_cumulative_ack)
+            .is_some_and(|span| span <= MAX_UNACKED_SEGMENTS as u32)
+    }
+
     /// Whether one newly encrypted payload can be retained in the send window.
     ///
     /// Callers must check this before consuming another Noise send nonce.
@@ -67,6 +74,7 @@ impl ReliableSender {
         ciphertext_len > 0
             && ciphertext_len <= MAX_UNACKED_BYTES
             && self.unacked.len() < MAX_UNACKED_SEGMENTS
+            && self.send_window_has_space()
             && self
                 .unacked_bytes
                 .checked_add(ciphertext_len)
@@ -95,6 +103,11 @@ impl ReliableSender {
                 "Noise reliable segment send window is full".to_string(),
             ));
         }
+        if !self.send_window_has_space() {
+            return Err(ExecServerError::Protocol(
+                "Noise reliable cumulative send window is full".to_string(),
+            ));
+        }
         let unacked_bytes = self
             .unacked_bytes
             .checked_add(payload.len())
@@ -118,36 +131,57 @@ impl ReliableSender {
         Ok(OutboundCiphertext { seq, payload })
     }
 
-    /// Apply cumulative peer acknowledgement metadata.
+    /// Apply cumulative and selective peer acknowledgement metadata.
     ///
-    /// ack = 0 is the reserved empty state. PR1 rejects nonzero selective bits
-    /// so they cannot silently alter delivery semantics before PR2.
+    /// Selective acknowledgement frees cached ciphertext for retry and byte
+    /// accounting, but only the cumulative frontier slides the sequence window.
     pub(crate) fn process_peer_ack(
         &mut self,
-        ack: u32,
-        ack_bits: u32,
+        ack_state: RelayAckState,
     ) -> Result<(), ExecServerError> {
-        if ack_bits != 0 {
-            return Err(ExecServerError::Protocol(format!(
-                "Noise reliable selective ack bits are unsupported in PR1: {ack_bits}"
-            )));
-        }
-        if ack == 0 {
-            return Ok(());
-        }
+        let RelayAckState { ack, ack_bits } = ack_state;
         if ack > self.highest_sent_seq {
             return Err(ExecServerError::Protocol(format!(
                 "Noise reliable peer ack {ack} exceeds highest sent sequence {}",
                 self.highest_sent_seq
             )));
         }
+        if ack_bits & 1 != 0 {
+            return Err(ExecServerError::Protocol(
+                "Noise reliable selective ack bit zero is inconsistent with cumulative ack"
+                    .to_string(),
+            ));
+        }
 
+        let mut selective_acks = Vec::new();
+        let mut remaining_ack_bits = ack_bits;
+        while remaining_ack_bits != 0 {
+            let bit = remaining_ack_bits.trailing_zeros();
+            let seq = ack
+                .checked_add(1)
+                .and_then(|seq| seq.checked_add(bit))
+                .ok_or_else(|| {
+                    ExecServerError::Protocol(
+                        "Noise reliable selective ack sequence overflow".to_string(),
+                    )
+                })?;
+            if seq > self.highest_sent_seq {
+                return Err(ExecServerError::Protocol(format!(
+                    "Noise reliable selective ack seq {seq} exceeds highest sent sequence {}",
+                    self.highest_sent_seq
+                )));
+            }
+            selective_acks.push(seq);
+            remaining_ack_bits &= remaining_ack_bits - 1;
+        }
+
+        self.peer_cumulative_ack = self.peer_cumulative_ack.max(ack);
         let acknowledged = self
             .unacked
             .range(..=ack)
             .map(|(seq, _pending)| *seq)
             .collect::<Vec<_>>();
-        for seq in acknowledged {
+        for seq in acknowledged.into_iter().chain(selective_acks) {
             if let Some(pending) = self.unacked.remove(&seq) {
                 self.unacked_bytes -= pending.payload.len();
             }

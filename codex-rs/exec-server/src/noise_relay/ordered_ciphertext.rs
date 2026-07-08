@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::ExecServerError;
+use crate::relay::RelayAckState;
 
 // A receive window of 32 includes the next expected sequence itself, so only
 // 31 later records can wait behind one gap.
@@ -27,9 +28,20 @@ impl Default for OrderedCiphertextFrames {
 }
 
 impl OrderedCiphertextFrames {
-    /// Highest contiguous sequence released for decryption.
-    pub(crate) fn cumulative_ack(&self) -> u32 {
-        self.next_seq - 1
+    /// Current cumulative/selective acknowledgement state.
+    ///
+    /// Pending ciphertexts are always later than `next_seq` and bounded to
+    /// the 32-record receive window, so they map directly to bits 1..31.
+    pub(crate) fn ack_state(&self) -> RelayAckState {
+        let ack_bits = self.pending.keys().fold(0, |ack_bits, seq| {
+            let bit = seq - self.next_seq;
+            debug_assert!(bit < u32::BITS);
+            ack_bits | (1u32 << bit)
+        });
+        RelayAckState {
+            ack: self.next_seq - 1,
+            ack_bits,
+        }
     }
 
     /// Accept one relay record and return the newly contiguous ciphertext run.

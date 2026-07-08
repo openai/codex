@@ -6,8 +6,6 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::sync::Notify;
@@ -29,6 +27,7 @@ use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
 use crate::noise_relay::reliable_stream::MAX_UNACKED_BYTES;
 use crate::noise_relay::reliable_stream::MAX_UNACKED_SEGMENTS;
 use crate::noise_relay::reliable_stream::ReliableSender;
+use crate::relay::RelayAckState;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
@@ -48,6 +47,12 @@ pub(crate) struct ClosedNoiseVirtualStream {
     pub(crate) instance_id: u64,
 }
 
+#[derive(Default)]
+struct InboundAckState {
+    latest: RelayAckState,
+    pending: Option<RelayAckState>,
+}
+
 /// One authenticated JSON-RPC stream carried by the executor's physical relay.
 ///
 /// Inbound delivery is intentionally nonblocking. An overloaded or abandoned
@@ -58,8 +63,7 @@ pub(crate) struct NoiseVirtualStream {
     disconnected_tx: watch::Sender<bool>,
     transport: Arc<Mutex<NoiseTransport>>,
     reliable_sender: Arc<Mutex<ReliableSender>>,
-    inbound_ack: Arc<AtomicU32>,
-    pending_ack: Arc<Mutex<Option<u32>>>,
+    inbound_ack_state: Arc<Mutex<InboundAckState>>,
     writer_wakeup: Arc<Notify>,
     inbound_ciphertexts: OrderedCiphertextFrames,
     inbound_decoder: JsonRpcMessageDecoder,
@@ -75,13 +79,13 @@ impl NoiseVirtualStream {
     }
 
     /// Apply ack metadata from one post-handshake peer frame and wake the
-    /// writer if the cumulative prefix opened send-window capacity.
-    pub(crate) fn process_peer_ack(&self, ack: u32, ack_bits: u32) -> Result<(), ExecServerError> {
+    /// writer if it opened sequence or byte send capacity.
+    pub(crate) fn process_peer_ack(&self, ack_state: RelayAckState) -> Result<(), ExecServerError> {
         let mut reliable_sender = self
             .reliable_sender
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        reliable_sender.process_peer_ack(ack, ack_bits)?;
+        reliable_sender.process_peer_ack(ack_state)?;
         drop(reliable_sender);
         self.writer_wakeup.notify_one();
         Ok(())
@@ -110,12 +114,14 @@ impl NoiseVirtualStream {
                     })?;
             }
         }
-        let ack = self.inbound_ciphertexts.cumulative_ack();
-        self.inbound_ack.store(ack, Ordering::Relaxed);
-        *self
-            .pending_ack
+        let ack_state = self.inbound_ciphertexts.ack_state();
+        let mut inbound_ack_state = self
+            .inbound_ack_state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ack);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inbound_ack_state.latest = ack_state;
+        inbound_ack_state.pending = Some(ack_state);
+        drop(inbound_ack_state);
         self.writer_wakeup.notify_one();
         Ok(())
     }
@@ -138,13 +144,11 @@ pub(crate) fn spawn_noise_virtual_stream(
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let transport = Arc::new(Mutex::new(transport));
     let reliable_sender = Arc::new(Mutex::new(ReliableSender::default()));
-    let inbound_ack = Arc::new(AtomicU32::new(0));
-    let pending_ack = Arc::new(Mutex::new(None));
+    let inbound_ack_state = Arc::new(Mutex::new(InboundAckState::default()));
     let writer_wakeup = Arc::new(Notify::new());
     let writer_transport = Arc::clone(&transport);
     let writer_reliable_sender = Arc::clone(&reliable_sender);
-    let writer_inbound_ack = Arc::clone(&inbound_ack);
-    let writer_pending_ack = Arc::clone(&pending_ack);
+    let writer_inbound_ack_state = Arc::clone(&inbound_ack_state);
     let writer_wakeup_task = Arc::clone(&writer_wakeup);
     let writer_physical_outgoing_tx = physical_outgoing_tx;
     let processor_stream_id = stream_id.clone();
@@ -163,9 +167,10 @@ pub(crate) fn spawn_noise_virtual_stream(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .can_admit_ciphertext(MAX_RELIABLE_CIPHERTEXT_BYTES);
-            let has_pending_ack = writer_pending_ack
+            let has_pending_ack = writer_inbound_ack_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
                 .is_some();
             tokio::select! {
                 maybe_message = json_outgoing_rx.recv(), if pending_outbound.is_none() => {
@@ -205,11 +210,11 @@ pub(crate) fn spawn_noise_virtual_stream(
                         }
                         (ciphertext, next_offset, next_offset == framed.len())
                     };
-                    let (outbound, ack) = {
+                    let outbound = {
                         let mut reliable_sender = writer_reliable_sender
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let outbound = match reliable_sender
+                        match reliable_sender
                             .admit_ciphertext(ciphertext, tokio::time::Instant::now())
                         {
                             Ok(outbound) => outbound,
@@ -217,12 +222,15 @@ pub(crate) fn spawn_noise_virtual_stream(
                                 warn!("failed to admit Noise reliable ciphertext: {error}");
                                 break 'writer;
                             }
-                        };
-                        (outbound, writer_inbound_ack.load(Ordering::Relaxed))
+                        }
                     };
+                    let ack_state = writer_inbound_ack_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .latest;
                     let frame = RelayMessageFrame::reliable_data(
                         writer_stream_id.clone(),
-                        ack,
+                        ack_state,
                         outbound.seq,
                         outbound.payload,
                     );
@@ -240,17 +248,20 @@ pub(crate) fn spawn_noise_virtual_stream(
                     }
                 }
                 _ = retry_tick.tick() => {
-                    let (retry, ack) = {
+                    let retry = {
                         let mut reliable_sender = writer_reliable_sender
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let retry = reliable_sender.next_retry_due(tokio::time::Instant::now());
-                        (retry, writer_inbound_ack.load(Ordering::Relaxed))
+                        reliable_sender.next_retry_due(tokio::time::Instant::now())
                     };
                     if let Some(outbound) = retry {
+                        let ack_state = writer_inbound_ack_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .latest;
                         let frame = RelayMessageFrame::reliable_data(
                             writer_stream_id.clone(),
-                            ack,
+                            ack_state,
                             outbound.seq,
                             outbound.payload,
                         );
@@ -264,14 +275,15 @@ pub(crate) fn spawn_noise_virtual_stream(
                     }
                 }
                 _ = std::future::ready(()), if has_pending_ack => {
-                    let ack = writer_pending_ack
+                    let ack_state = writer_inbound_ack_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .pending
                         .take();
-                    let Some(ack) = ack else {
+                    let Some(ack_state) = ack_state else {
                         continue;
                     };
-                    let frame = RelayMessageFrame::ack(writer_stream_id.clone(), ack);
+                    let frame = RelayMessageFrame::ack(writer_stream_id.clone(), ack_state);
                     if writer_physical_outgoing_tx
                         .send(encode_relay_message_frame(&frame))
                         .await
@@ -319,8 +331,7 @@ pub(crate) fn spawn_noise_virtual_stream(
         disconnected_tx,
         transport,
         reliable_sender,
-        inbound_ack,
-        pending_ack,
+        inbound_ack_state,
         writer_wakeup,
         inbound_ciphertexts: OrderedCiphertextFrames::default(),
         inbound_decoder: JsonRpcMessageDecoder::default(),

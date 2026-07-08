@@ -31,6 +31,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::noise_channel::NoiseTransport;
 use crate::noise_channel::PendingResponderHandshake;
 use crate::noise_relay::reliable_stream::RESEND_AFTER;
+use crate::relay::RelayAckState;
 
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
@@ -111,7 +112,14 @@ async fn dropped_data_is_retried_with_identical_ciphertext_until_cumulative_ack(
     drain_outbound_control(&mut outbound_rx, &control).await?;
 
     control.send_inbound(Message::Binary(
-        encode_relay_message_frame(&RelayMessageFrame::ack(stream_id, /*ack*/ 1)).into(),
+        encode_relay_message_frame(&RelayMessageFrame::ack(
+            stream_id,
+            RelayAckState {
+                ack: 1,
+                ack_bits: 0,
+            },
+        ))
+        .into(),
     ))?;
     tokio::task::yield_now().await;
     drain_outbound_control(&mut outbound_rx, &control).await?;
@@ -144,8 +152,15 @@ async fn queued_pong_is_drained_before_deferred_ack_write() -> Result<()> {
         result: serde_json::Value::Null,
     }))?;
     let ciphertext = executor_transport.encrypt(&framed[..1])?;
-    let data =
-        RelayMessageFrame::reliable_data(stream_id, /*ack*/ 0, /*seq*/ 1, ciphertext);
+    let data = RelayMessageFrame::reliable_data(
+        stream_id,
+        RelayAckState {
+            ack: 0,
+            ack_bits: 0,
+        },
+        /*seq*/ 2,
+        ciphertext,
+    );
     control.send_inbound(Message::Binary(encode_relay_message_frame(&data).into()))?;
     control.send_inbound(Message::Pong(ping_payload))?;
 
@@ -170,7 +185,8 @@ async fn queued_pong_is_drained_before_deferred_ack_write() -> Result<()> {
     };
     let ack = decode_relay_message_frame(ack_payload.as_ref())?;
     assert_eq!(ack.validate()?, RelayFrameBodyKind::Ack);
-    assert_eq!(ack.ack, 1);
+    assert_eq!(ack.ack, 0);
+    assert_eq!(ack.ack_bits, 0b10);
     for task in &connection.task_handles {
         task.abort();
     }
