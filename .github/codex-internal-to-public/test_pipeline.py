@@ -511,6 +511,52 @@ class PipelineIntegrationTest(unittest.TestCase):
 
 
 class PipelineLockfileTest(unittest.TestCase):
+    def test_restores_cargo_lock_from_source_and_bazel_lock_from_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate_tree = Path(temp_dir)
+            (candidate_tree / pipeline.CARGO_LOCKFILE).parent.mkdir(parents=True)
+
+            with patch.object(
+                pipeline,
+                "output",
+                side_effect=["source cargo lock", "ready bazel lock"],
+            ) as output:
+                pipeline.restore_lockfile_baselines(
+                    "source-revision", "ready-revision", candidate_tree
+                )
+
+            self.assertEqual(
+                (candidate_tree / pipeline.CARGO_LOCKFILE).read_text(
+                    encoding="utf-8"
+                ),
+                "source cargo lock\n",
+            )
+            self.assertEqual(
+                (candidate_tree / pipeline.BAZEL_LOCKFILE).read_text(
+                    encoding="utf-8"
+                ),
+                "ready bazel lock\n",
+            )
+            self.assertEqual(
+                output.call_args_list,
+                [
+                    call(
+                        [
+                            "git",
+                            "show",
+                            "source-revision:codex-rs/Cargo.lock",
+                        ]
+                    ),
+                    call(
+                        [
+                            "git",
+                            "show",
+                            "ready-revision:MODULE.bazel.lock",
+                        ]
+                    ),
+                ],
+            )
+
     def test_reconcile_bazel_lockfile_updates_then_verifies(self) -> None:
         candidate_tree = Path("/candidate")
 
@@ -625,14 +671,16 @@ def create_repository_fixture(
         path.write_text(content, encoding="utf-8")
     candidate = commit_all(
         repo,
-        "Candidate one",
+        f"Candidate one\n\nGitOrigin-RevId: {baseline}",
         author="Candidate Author <candidate@example.com>",
         date=CANDIDATE_AUTHOR_DATE,
     )
     (repo / "public/projected.txt").write_text(
         "candidate two\n", encoding="utf-8"
     )
-    later_candidate = commit_all(repo, "Candidate two")
+    later_candidate = commit_all(
+        repo, f"Candidate two\n\nGitOrigin-RevId: {baseline}"
+    )
     git(repo, "push", "origin", pipeline.CANDIDATE_BRANCH)
     git(repo, "checkout", "main")
     return RepositoryFixture(
@@ -705,7 +753,9 @@ def create_base_repository(root: Path) -> tuple[Path, str]:
     public_workflow = repo / "public/.github/workflows/public-ci.yml"
     public_workflow.parent.mkdir(parents=True)
     public_workflow.write_text("name: Public CI\n", encoding="utf-8")
-    return repo, commit_all(repo, "Public baseline")
+    baseline = commit_all(repo, "Public baseline")
+    git(repo, "push", "-u", "origin", "main")
+    return repo, baseline
 
 
 def cargo_lockfile() -> str:

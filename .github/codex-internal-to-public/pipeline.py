@@ -44,6 +44,7 @@ from message_policy import validate_message  # noqa: E402
 
 CANDIDATE_BRANCH = "copybara-no-internal-code"
 READY_BRANCH = "copybara-no-internal-references"
+SOURCE_BRANCH = "main"
 GITHUB_DIR = Path(".github")
 STATE_FILE = Path(".codex-internal-to-public-state")
 CARGO_MANIFEST = Path("codex-rs/Cargo.toml")
@@ -69,6 +70,9 @@ MESSAGE_WORKSPACE_BUNDLE = "message-workspace.bundle"
 MESSAGE_TARGET_FILE = "target-commit.txt"
 MESSAGE_BASELINE_SUBJECT = "Public staging baseline"
 MESSAGE_PLACEHOLDER_SUBJECT = "PLACEHOLDER: write the public commit message"
+GIT_ORIGIN_REVISION_TRAILER = re.compile(
+    r"^GitOrigin-RevId: ([0-9a-f]{40})$", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ def prepare(
     github_output: Path | None,
     message_override: PublicMessageOverride | None,
 ) -> None:
+    fetch_branch(SOURCE_BRANCH)
     fetch_branch(CANDIDATE_BRANCH)
     fetch_branch(READY_BRANCH)
     candidate_head = rev_parse(remote_ref(CANDIDATE_BRANCH))
@@ -175,6 +180,10 @@ def prepare(
         ready_parent=ready_parent,
         author=load_author(candidate_revision),
     )
+    source_revision = load_source_revision(candidate_revision)
+    ensure_first_parent_ancestor(
+        source_revision, rev_parse(remote_ref(SOURCE_BRANCH))
+    )
     with tempfile.TemporaryDirectory(prefix="codex-public-stage-") as temp_dir:
         temp_root = Path(temp_dir)
         with git_worktree(
@@ -183,9 +192,11 @@ def prepare(
             remove_github_files(candidate_tree)
             (candidate_tree / STATE_FILE).unlink(missing_ok=True)
             reject_internal_paths(candidate_tree)
-            restore_previous_lockfiles(ready_parent, candidate_tree)
-            reject_internal_dependency_references(candidate_tree)
+            restore_lockfile_baselines(
+                source_revision, ready_parent, candidate_tree
+            )
             reconcile_cargo_lockfile(candidate_tree)
+            reject_internal_dependency_references(candidate_tree)
             reconcile_bazel_lockfile(candidate_tree)
             reject_internal_dependency_references(candidate_tree)
             write_projection_archive(candidate_tree, projection_archive)
@@ -321,10 +332,28 @@ def read_public_message_override() -> PublicMessageOverride | None:
     )
 
 
-def restore_previous_lockfiles(ready_revision: str, candidate_tree: Path) -> None:
-    for lockfile_path in GENERATED_LOCKFILES:
+def load_source_revision(candidate_revision: str) -> str:
+    message = output(
+        ["git", "show", "--no-patch", "--format=%B", candidate_revision]
+    )
+    matches = GIT_ORIGIN_REVISION_TRAILER.findall(message)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly one GitOrigin-RevId trailer on {candidate_revision}, "
+            f"found {len(matches)}."
+        )
+    return matches[0]
+
+
+def restore_lockfile_baselines(
+    source_revision: str, ready_revision: str, candidate_tree: Path
+) -> None:
+    for revision, lockfile_path in (
+        (source_revision, CARGO_LOCKFILE),
+        (ready_revision, BAZEL_LOCKFILE),
+    ):
         lockfile = output(
-            ["git", "show", f"{ready_revision}:{lockfile_path.as_posix()}"]
+            ["git", "show", f"{revision}:{lockfile_path.as_posix()}"]
         )
         (candidate_tree / lockfile_path).write_text(
             f"{lockfile}\n", encoding="utf-8"

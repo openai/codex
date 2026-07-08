@@ -80,8 +80,9 @@ For each run, `pipeline.py prepare`:
 3. selects the oldest unprocessed first-parent candidate commit;
 4. creates a transport tree for that commit and a temporary effective tree with the final Copyberry
    allowlist and `public/` flattening applied;
-5. starts with the previous ready branch's `Cargo.lock` and `MODULE.bazel.lock`, minimally
-   reconciles each one, and verifies both in locked/error mode; and
+5. starts with internal `main`'s `Cargo.lock` and the previous ready branch's `MODULE.bazel.lock`,
+   minimally reconciles each one for the filtered candidate tree, and verifies both in
+   locked/error mode; and
 6. emits separate artifacts for model input, publication metadata, and the projected tree.
 
 The publish job verifies that neither branch moved unexpectedly, preserves the candidate commit's
@@ -178,10 +179,11 @@ form consistently outside the repository.
 Do not run `cargo generate-lockfile` in this pipeline. Resolving from scratch needlessly updates
 unrelated third-party dependencies and makes the exported commit larger and harder to review.
 
-Instead, each run carries forward the sanitized lockfile from the previous ready commit and lets
-Cargo minimally reconcile it with the candidate manifests. Before and after reconciliation, the
-script rejects known internal crate and repository identifiers. `cargo metadata --locked` is the
-final consistency check.
+Instead, each run reads `GitOrigin-RevId` from the candidate commit and starts with that exact
+internal `main` revision's lockfile. Cargo minimally reconciles it with the filtered candidate
+manifests, which removes internal-only packages while preserving the source revision's public
+dependency versions. After reconciliation, the script rejects known internal crate and repository
+identifiers. `cargo metadata --locked` is the final consistency check.
 
 `MODULE.bazel.lock` records facts derived from `codex-rs/Cargo.lock`, so the two generated files must
 move together. Each run also carries forward the ready branch's Bazel lockfile, runs `bazel mod deps
@@ -192,7 +194,9 @@ The two Copyberry hops intentionally need different lockfile rules:
 
 - `codex-internal-no-internal-code` should preserve the existing sanitized `Cargo.lock` on the
   candidate branch because the lockfile on internal `main` contains internal packages. This
-  workflow replaces the candidate's `MODULE.bazel.lock` with the matching ready-branch baseline.
+  workflow obtains the candidate's internal source revision from `GitOrigin-RevId`, uses its
+  `Cargo.lock` as the reconciliation input, and replaces the candidate's `MODULE.bazel.lock` with
+  the matching ready-branch baseline.
 - This workflow updates both generated lockfiles and commits the result to
   `copybara-no-internal-references`.
 - `codex-internal-to-codex-oss` must copy both updated lockfiles from the ready branch to
