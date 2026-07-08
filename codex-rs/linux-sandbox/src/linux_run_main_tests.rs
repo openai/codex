@@ -180,22 +180,18 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 }
 
 #[test]
-fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
+fn proxy_only_proc_preflight_unshares_network_without_setup_capabilities() {
     let file_system_sandbox_policy = read_only_file_system_policy();
-    let argv = build_bwrap_argv(
-        vec!["/bin/true".to_string()],
+    let argv = build_preflight_bwrap_argv(
+        Path::new("/"),
+        Path::new("/"),
         &file_system_sandbox_policy,
-        Path::new("/"),
-        Path::new("/"),
-        BwrapOptions {
-            mount_proc: true,
-            network_mode: BwrapNetworkMode::ProxyOnly,
-            ..Default::default()
-        },
+        BwrapNetworkMode::ProxyOnly,
     )
-    .expect("build bwrap argv")
+    .expect("build preflight bwrap argv")
     .args;
     assert!(argv.contains(&"--unshare-net".to_string()));
+    assert!(!argv.contains(&"--cap-add".to_string()));
 }
 
 #[test]

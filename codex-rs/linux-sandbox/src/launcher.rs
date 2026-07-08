@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -34,6 +35,9 @@ struct SystemBwrapCapabilities {
 }
 
 pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
+    if requests_setup_capabilities(&argv) {
+        clear_loader_environment();
+    }
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(launcher) => {
             exec_system_bwrap(&launcher.program, argv, preserved_files)
@@ -45,6 +49,39 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
                  codex-resources/bwrap binary was found next to the Codex executable"
             )
         }
+    }
+}
+
+fn requests_setup_capabilities(argv: &[String]) -> bool {
+    argv.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--cap-add")
+}
+
+fn clear_loader_environment() {
+    let keys = std::env::vars_os()
+        .map(|(key, _)| key)
+        .filter(|key| key.as_os_str().as_bytes().starts_with(b"LD_"))
+        .collect::<Vec<_>>();
+    for key in keys {
+        unsafe { std::env::remove_var(key) };
+    }
+    unsafe { std::env::remove_var("GLIBC_TUNABLES") };
+}
+
+fn is_nonroot_setuid_program(path: &Path) -> bool {
+    (unsafe { libc::geteuid() }) != 0
+        && path
+            .metadata()
+            .is_ok_and(|metadata| metadata.permissions().mode() & 0o4000 != 0)
+}
+
+pub(crate) fn preferred_bwrap_supports_cap_add() -> bool {
+    match preferred_bwrap_launcher() {
+        BubblewrapLauncher::System(launcher) => {
+            !is_nonroot_setuid_program(launcher.program.as_path())
+        }
+        BubblewrapLauncher::Bundled(_) | BubblewrapLauncher::Unavailable => true,
     }
 }
 

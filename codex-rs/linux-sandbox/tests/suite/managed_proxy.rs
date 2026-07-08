@@ -177,7 +177,7 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
 }
 
 #[tokio::test]
-async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
+async fn managed_proxy_mode_routes_proxy_aware_and_direct_ipv4_traffic() {
     if let Some(skip_reason) = managed_proxy_skip_reason().await {
         eprintln!("skipping managed proxy test: {skip_reason}");
         return;
@@ -190,17 +190,31 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         .port();
     let (request_tx, request_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept proxy connection");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .expect("set read timeout");
-        let mut buf = [0_u8; 4096];
-        let read = stream.read(&mut buf).expect("read proxy request");
-        let request = String::from_utf8_lossy(&buf[..read]).to_string();
-        request_tx.send(request).expect("send proxy request");
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
-            .expect("write proxy response");
+        for connection in 0..3 {
+            let (mut stream, _) = listener.accept().expect("accept proxy connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .expect("set read timeout");
+            let mut buf = [0_u8; 4096];
+            let read = stream.read(&mut buf).expect("read proxy request");
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            request_tx.send(request).expect("send proxy request");
+            if connection == 2 {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\n\r\n")
+                    .expect("accept CONNECT");
+                let mut payload = [0_u8; 4];
+                stream
+                    .read_exact(&mut payload)
+                    .expect("read tunnel payload");
+                assert_eq!(&payload, b"ping");
+                stream.write_all(b"pong").expect("write tunnel payload");
+            } else {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                    .expect("write proxy response");
+            }
+        }
     });
 
     let mut env = create_env_from_core_vars();
@@ -245,15 +259,55 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         "expected HTTP proxy absolute-form request, got request: {request}"
     );
 
-    let direct_egress_output = run_linux_sandbox_direct(
-        &["bash", "-c", "echo hi > /dev/tcp/192.0.2.1/80"],
+    let direct_output = run_linux_sandbox_direct(
+        &[
+            "bash",
+            "-c",
+            "getent ahostsv4 example.com >/dev/null; cap_eff=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status); cap_bnd=$(sed -n 's/^CapBnd:[[:space:]]*//p' /proc/self/status); cap_amb=$(sed -n 's/^CapAmb:[[:space:]]*//p' /proc/self/status); exec 3<>/dev/tcp/example.com/80; printf 'GET /direct HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n' >&3; IFS= read -r line <&3; exec 3>&-; printf '%s\nCapEff=%s\nCapBnd=%s\nCapAmb=%s\n' \"$line\" \"$cap_eff\" \"$cap_bnd\" \"$cap_amb\"; exec 4<>/dev/tcp/example.com/443; printf ping >&4; dd bs=1 count=4 <&4 2>/dev/null; if exec 5<>/dev/tcp/example.com/81; then exit 1; fi",
+        ],
         &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
-        env,
+        env.clone(),
         NETWORK_TIMEOUT_MS,
     )
     .await;
-    assert_eq!(direct_egress_output.status.success(), false);
+
+    assert!(
+        direct_output.status.success(),
+        "direct routing failed: status={:?}, stderr={}",
+        direct_output.status.code(),
+        String::from_utf8_lossy(&direct_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&direct_output.stdout);
+    assert!(
+        stdout.contains("HTTP/1.1 200 OK"),
+        "expected captured HTTP response, got stdout: {stdout}"
+    );
+    assert!(
+        ["CapEff", "CapBnd", "CapAmb"]
+            .iter()
+            .all(|name| stdout.contains(&format!("{name}=0000000000000000"))),
+        "expected workload capabilities to be cleared, got stdout: {stdout}"
+    );
+    assert!(
+        stdout.ends_with("pong"),
+        "expected HTTPS tunnel payload, got: {stdout}"
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("expected direct HTTP request at proxy");
+    assert!(
+        request.starts_with("GET /direct HTTP/1.1\r\n"),
+        "expected captured origin-form request, got request: {request}"
+    );
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("expected CONNECT request at proxy");
+    assert!(
+        request.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"),
+        "expected captured hostname in CONNECT request, got: {request}"
+    );
 }
 
 #[tokio::test]

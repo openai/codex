@@ -17,7 +17,9 @@ use std::fs;
 use std::fs::File;
 use std::fs::Metadata;
 use std::io;
+use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -54,6 +56,9 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
+const SANDBOX_RESOLV_CONF: &[u8] = b"nameserver 127.0.0.1\n";
+const PROXY_SETUP_CAPABILITIES: &[&str] = &["CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_SETPCAP"];
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +70,8 @@ pub(crate) struct BwrapOptions {
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
+    /// Whether proxy-only mode should configure transparent HTTP routing.
+    pub enable_transparent_proxy: bool,
     /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
@@ -77,6 +84,7 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            enable_transparent_proxy: false,
             glob_scan_max_depth: None,
         }
     }
@@ -251,7 +259,7 @@ pub(crate) fn create_bwrap_command_args(
                 protected_create_targets: Vec::new(),
             })
         } else {
-            Ok(create_bwrap_flags_full_filesystem(command, options))
+            create_bwrap_flags_full_filesystem(command, options)
         };
     }
 
@@ -264,7 +272,10 @@ pub(crate) fn create_bwrap_command_args(
     )
 }
 
-fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
+fn create_bwrap_flags_full_filesystem(
+    command: Vec<String>,
+    options: BwrapOptions,
+) -> Result<BwrapArgs> {
     let mut args = vec![
         "--new-session".to_string(),
         "--die-with-parent".to_string(),
@@ -283,14 +294,21 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    let mut preserved_files = Vec::new();
+    append_proxy_only_setup_args(
+        &mut args,
+        &mut preserved_files,
+        options.network_mode,
+        options.enable_transparent_proxy,
+    )?;
     args.push("--".to_string());
     args.extend(command);
-    BwrapArgs {
+    Ok(BwrapArgs {
         args,
-        preserved_files: Vec::new(),
+        preserved_files,
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
-    }
+    })
 }
 
 /// Build the bubblewrap flags (everything after `argv[0]`).
@@ -303,7 +321,7 @@ fn create_bwrap_flags(
 ) -> Result<BwrapArgs> {
     let BwrapArgs {
         args: filesystem_args,
-        preserved_files,
+        mut preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
     } = create_filesystem_args(
@@ -330,6 +348,12 @@ fn create_bwrap_flags(
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    append_proxy_only_setup_args(
+        &mut args,
+        &mut preserved_files,
+        options.network_mode,
+        options.enable_transparent_proxy,
+    )?;
     if normalized_command_cwd.as_path() != command_cwd {
         // Bubblewrap otherwise inherits the helper's logical cwd, which can be
         // a symlink alias that disappears once the sandbox only mounts
@@ -346,6 +370,51 @@ fn create_bwrap_flags(
         synthetic_mount_targets,
         protected_create_targets,
     })
+}
+
+fn append_proxy_only_setup_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    network_mode: BwrapNetworkMode,
+    enable_transparent_proxy: bool,
+) -> Result<()> {
+    if network_mode != BwrapNetworkMode::ProxyOnly || !enable_transparent_proxy {
+        return Ok(());
+    }
+
+    for capability in PROXY_SETUP_CAPABILITIES {
+        args.push("--cap-add".to_string());
+        args.push((*capability).to_string());
+    }
+
+    let resolv_conf_target = fs::canonicalize(RESOLV_CONF_PATH)?;
+    let resolv_conf = anonymous_data_file(SANDBOX_RESOLV_CONF)?;
+    let resolv_conf_fd = resolv_conf.as_raw_fd().to_string();
+    preserved_files.push(resolv_conf);
+    append_mount_target_parent_dir_args(args, &resolv_conf_target, Path::new("/"));
+    args.extend([
+        "--perms".to_string(),
+        "0444".to_string(),
+        "--ro-bind-data".to_string(),
+        resolv_conf_fd,
+        path_to_string(&resolv_conf_target),
+    ]);
+    Ok(())
+}
+
+fn anonymous_data_file(contents: &[u8]) -> io::Result<File> {
+    let mut pipe_fds = [0; 2];
+    if unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // SAFETY: pipe2 initialized both descriptors, and each is moved into exactly one File.
+    let read_file = unsafe { File::from_raw_fd(pipe_fds[0]) };
+    // SAFETY: see above.
+    let mut write_file = unsafe { File::from_raw_fd(pipe_fds[1]) };
+    write_file.write_all(contents)?;
+    drop(write_file);
+    Ok(read_file)
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.
@@ -1391,7 +1460,6 @@ mod tests {
             },
         )
         .expect("create bwrap args");
-
         assert_eq!(
             args.args,
             vec![

@@ -214,14 +214,14 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let proxy_route_spec =
-            if allow_network_for_proxy {
-                Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
-                    panic!("failed to prepare host proxy routing bridge: {err}")
-                }))
-            } else {
-                None
-            };
+        let prepared_proxy_route = allow_network_for_proxy.then(|| {
+            prepare_host_proxy_route_spec()
+                .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"))
+        });
+        let enable_transparent_proxy = prepared_proxy_route
+            .as_ref()
+            .is_some_and(|route| route.enable_transparent_proxy);
+        let proxy_route_spec = prepared_proxy_route.map(|route| route.serialized_spec);
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -230,14 +230,18 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        let bwrap_options = BwrapOptions {
+            mount_proc: !no_proc,
+            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            enable_transparent_proxy,
+            ..Default::default()
+        };
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            network_sandbox_policy,
             inner,
-            !no_proc,
-            allow_network_for_proxy,
+            bwrap_options,
         );
     }
 
@@ -318,34 +322,25 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
-    mount_proc: bool,
-    allow_network_for_proxy: bool,
+    mut options: BwrapOptions,
 ) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
-    let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
-    if mount_proc
+    if options.mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
             command_cwd,
             file_system_sandbox_policy,
-            network_mode,
+            options.network_mode,
         )
         .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
-        mount_proc = false;
+        options.mount_proc = false;
     }
 
-    let options = BwrapOptions {
-        mount_proc,
-        network_mode,
-        ..Default::default()
-    };
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
@@ -464,6 +459,10 @@ fn build_preflight_bwrap_argv(
     network_mode: BwrapNetworkMode,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let preflight_command = vec![resolve_true_command()];
+    let preflight_network_mode = match network_mode {
+        BwrapNetworkMode::ProxyOnly => BwrapNetworkMode::Isolated,
+        mode => mode,
+    };
     build_bwrap_argv(
         preflight_command,
         file_system_sandbox_policy,
@@ -471,7 +470,7 @@ fn build_preflight_bwrap_argv(
         command_cwd,
         BwrapOptions {
             mount_proc: true,
-            network_mode,
+            network_mode: preflight_network_mode,
             ..Default::default()
         },
     )

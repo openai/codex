@@ -15,9 +15,11 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
@@ -25,6 +27,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use url::Url;
+
+use crate::capabilities::drop_all_capabilities;
+use crate::launcher::preferred_bwrap_supports_cap_add;
+use crate::transparent_network::configure_and_spawn;
 
 const PROXY_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
@@ -52,6 +58,13 @@ const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ProxyRouteSpec {
     routes: Vec<ProxyRouteEntry>,
+    host_netns_inode: u64,
+    transparent_networking: bool,
+}
+
+pub(crate) struct PreparedProxyRoute {
+    pub serialized_spec: String,
+    pub enable_transparent_proxy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,9 +83,10 @@ struct PlannedProxyRoute {
 struct ProxyRoutePlan {
     routes: Vec<PlannedProxyRoute>,
     has_proxy_config: bool,
+    has_http_proxy_route: bool,
 }
 
-pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
+pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<PreparedProxyRoute> {
     let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
     // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
     // executes the user command.
@@ -88,6 +102,10 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         };
         return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
     }
+    let host_netns_inode = std::fs::metadata("/proc/self/ns/net")?.ino();
+    let transparent_networking = plan.has_http_proxy_route
+        && preferred_bwrap_supports_cap_add()
+        && std::fs::canonicalize("/etc/resolv.conf").is_ok();
 
     let socket_parent_dir = proxy_socket_parent_dir();
     let _ = cleanup_stale_proxy_socket_dirs_in(socket_parent_dir.as_path());
@@ -128,7 +146,16 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         });
     }
 
-    serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)
+    let serialized_spec = serde_json::to_string(&ProxyRouteSpec {
+        routes,
+        host_netns_inode,
+        transparent_networking,
+    })
+    .map_err(io::Error::other)?;
+    Ok(PreparedProxyRoute {
+        serialized_spec,
+        enable_transparent_proxy: transparent_networking,
+    })
 }
 
 fn extract_attribution_token_and_plan(
@@ -148,15 +175,41 @@ pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Resul
             "proxy routing spec contained no routes",
         ));
     }
+    if spec.transparent_networking
+        && current_network_namespace_inode_from_socket()? == spec.host_netns_inode
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to activate proxy routes in the host network namespace",
+        ));
+    }
 
     let mut local_port_by_uds_path: BTreeMap<PathBuf, u16> = BTreeMap::new();
     for route in &spec.routes {
         if local_port_by_uds_path.contains_key(&route.uds_path) {
             continue;
         }
-        let local_port = spawn_local_bridge(route.uds_path.as_path())?;
+        let local_port = spawn_local_bridge(
+            route.uds_path.as_path(),
+            /*drop_setup_capabilities*/ spec.transparent_networking,
+        )?;
         local_port_by_uds_path.insert(route.uds_path.clone(), local_port);
     }
+
+    let http_proxy_port = if spec.transparent_networking {
+        Some(
+            spec.routes
+                .iter()
+                .find(|route| {
+                    std::env::var(&route.env_key).is_ok_and(|value| is_plain_http_proxy_url(&value))
+                })
+                .and_then(|route| local_port_by_uds_path.get(&route.uds_path))
+                .copied()
+                .ok_or_else(|| io::Error::other("missing local HTTP proxy bridge"))?,
+        )
+    } else {
+        None
+    };
 
     for route in spec.routes {
         let Some(local_port) = local_port_by_uds_path.get(&route.uds_path) else {
@@ -184,12 +237,28 @@ pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Resul
         }
     }
 
+    if let Some(http_proxy_port) = http_proxy_port {
+        configure_and_spawn(http_proxy_port)?;
+        drop_all_capabilities()?;
+    }
+
     Ok(())
+}
+
+fn current_network_namespace_inode_from_socket() -> io::Result<u64> {
+    let socket = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let namespace_fd = unsafe { libc::ioctl(socket.as_raw_fd(), libc::SIOCGSKNS) };
+    if namespace_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let namespace = unsafe { File::from_raw_fd(namespace_fd) };
+    namespace.metadata().map(|metadata| metadata.ino())
 }
 
 fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
     let mut routes = Vec::new();
     let mut has_proxy_config = false;
+    let mut has_http_proxy_route = false;
 
     for (key, value) in env {
         if !is_proxy_env_key(key) {
@@ -205,6 +274,9 @@ fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
         let Some(endpoint) = parse_loopback_proxy_endpoint(trimmed) else {
             continue;
         };
+        if is_plain_http_proxy_url(trimmed) {
+            has_http_proxy_route = true;
+        }
         routes.push(PlannedProxyRoute {
             env_key: key.clone(),
             endpoint,
@@ -215,6 +287,7 @@ fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
     ProxyRoutePlan {
         routes,
         has_proxy_config,
+        has_http_proxy_route,
     }
 }
 
@@ -254,6 +327,17 @@ fn parse_loopback_proxy_endpoint(proxy_url: &str) -> Option<SocketAddr> {
     } else {
         None
     }
+}
+
+fn is_plain_http_proxy_url(proxy_url: &str) -> bool {
+    let candidate = if proxy_url.contains("://") {
+        proxy_url.to_string()
+    } else {
+        format!("http://{proxy_url}")
+    };
+    Url::parse(&candidate).is_ok_and(|url| {
+        url.scheme() == "http" && url.username().is_empty() && url.password().is_none()
+    })
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -530,7 +614,7 @@ fn run_host_bridge(
     }
 }
 
-fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
+fn spawn_local_bridge(uds_path: &Path, drop_setup_capabilities: bool) -> io::Result<u16> {
     let (read_fd, write_fd) = create_ready_pipe()?;
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -544,7 +628,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
         if close_fd(read_fd).is_err() {
             unsafe { libc::_exit(1) };
         }
-        let result = run_local_bridge(uds_path, write_fd);
+        let result = run_local_bridge(uds_path, write_fd, drop_setup_capabilities);
         if result.is_err() {
             unsafe { libc::_exit(1) };
         }
@@ -558,10 +642,17 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
     Ok(u16::from_be_bytes(port_bytes))
 }
 
-fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
+fn run_local_bridge(
+    uds_path: &Path,
+    ready_fd: libc::c_int,
+    drop_setup_capabilities: bool,
+) -> io::Result<()> {
     harden_bridge_process()?;
     let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
+    if drop_setup_capabilities {
+        drop_all_capabilities()?;
+    }
 
     let mut ready_file = unsafe { File::from_raw_fd(ready_fd) };
     ready_file.write_all(&port.to_be_bytes())?;
@@ -599,7 +690,7 @@ fn bind_local_loopback_listener() -> io::Result<TcpListener> {
     }
 }
 
-fn ensure_loopback_interface_up() -> io::Result<()> {
+pub(crate) fn ensure_loopback_interface_up() -> io::Result<()> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -658,6 +749,19 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
         }
     }
 
+    for (index, byte) in b"lo:codex".iter().copied().enumerate() {
+        addr_req.ifr_name[index] = byte as libc::c_char;
+    }
+    let mut proxy_addr = loopback_addr;
+    proxy_addr.sin_addr.s_addr = libc::htonl(0xc000_0201);
+    addr_req.ifr_ifru.ifru_addr =
+        unsafe { *(&proxy_addr as *const libc::sockaddr_in as *const libc::sockaddr) };
+    if unsafe { libc::ioctl(fd, libc::SIOCSIFADDR as libc::Ioctl, &addr_req) } < 0 {
+        let err = io::Error::last_os_error();
+        let _ = close_fd(fd);
+        return Err(err);
+    }
+
     close_fd(fd)
 }
 
@@ -672,7 +776,7 @@ fn set_parent_death_signal() -> io::Result<()> {
     }
 }
 
-fn harden_bridge_process() -> io::Result<()> {
+pub(crate) fn harden_bridge_process() -> io::Result<()> {
     set_parent_death_signal()?;
     codex_process_hardening::disable_process_dumping()
 }
@@ -806,6 +910,7 @@ mod tests {
                         .expect("valid socket"),
                 }],
                 has_proxy_config: true,
+                has_http_proxy_route: true,
             }
         );
     }
@@ -857,12 +962,14 @@ mod tests {
                 env_key: "HTTP_PROXY".to_string(),
                 uds_path: PathBuf::from("/tmp/proxy-route-0.sock"),
             }],
+            host_netns_inode: 42,
+            transparent_networking: true,
         };
         let serialized = serde_json::to_string(&spec).expect("proxy route spec should serialize");
 
         assert_eq!(
             serialized,
-            r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}]}"#
+            r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}],"host_netns_inode":42,"transparent_networking":true}"#
         );
     }
 
