@@ -20,6 +20,7 @@ use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -484,6 +485,85 @@ async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
     assert_eq!(
         with_app_enabled_state(vec![slack.clone(), app("connector_drive")], &config),
         vec![slack, drive]
+    );
+}
+
+#[tokio::test]
+async fn app_is_enabled_uses_local_default_and_connector_override() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[apps._default]
+enabled = false
+
+[apps.connector_drive]
+enabled = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+
+    assert!(!app_is_enabled(&config, "connector_slack"));
+    assert!(app_is_enabled(&config, "connector_drive"));
+}
+
+#[tokio::test]
+async fn app_is_enabled_applies_managed_disable_at_read_time() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("config should build");
+    let requirements = ConfigRequirementsToml {
+        apps: Some(AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                "connector_drive".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                    tools: None,
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+    config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack");
+
+    assert!(app_is_enabled(&config, "connector_slack"));
+    assert!(!app_is_enabled(&config, "connector_drive"));
+}
+
+#[tokio::test]
+async fn callable_app_ids_apply_effective_mcp_tool_filter() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    let mut server_config = codex_mcp::codex_apps_mcp_server_config(
+        "https://example.invalid",
+        /*apps_mcp_product_sku*/ None,
+    );
+    server_config.enabled_tools = Some(vec!["alpha_tool".to_string(), "beta_tool".to_string()]);
+    server_config.disabled_tools = Some(vec!["alpha_tool".to_string()]);
+    let tools = vec![
+        codex_app_tool("alpha_tool", "alpha", Some("Alpha"), &[]),
+        codex_app_tool("beta_tool", "beta", Some("Beta"), &[]),
+        codex_app_tool("not_allowlisted", "hidden", Some("Hidden"), &[]),
+    ];
+
+    assert_eq!(
+        callable_app_ids_for_tools(&config, &server_config, &tools),
+        BTreeSet::from(["beta".to_string()])
     );
 }
 

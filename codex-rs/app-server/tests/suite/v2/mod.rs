@@ -1,5 +1,6 @@
 mod account;
 mod analytics;
+mod app_installed;
 mod app_list;
 mod attestation;
 mod auto_env;

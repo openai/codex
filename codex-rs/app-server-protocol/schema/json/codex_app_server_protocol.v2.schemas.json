@@ -945,6 +945,45 @@
       },
       "type": "object"
     },
+    "AppsInstalledParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Read the committed installed connector runtime snapshot.",
+      "properties": {
+        "reload": {
+          "description": "When true, refresh workspace policy and, when Apps are permitted, atomically refresh and publish the hosted connector runtime snapshot first.",
+          "type": "boolean"
+        },
+        "threadId": {
+          "description": "Optional loaded thread id used to evaluate effective app configuration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "reload"
+      ],
+      "title": "AppsInstalledParams",
+      "type": "object"
+    },
+    "AppsInstalledResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "The installed connectors in one committed runtime snapshot.",
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/InstalledApp"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "apps"
+      ],
+      "title": "AppsInstalledResponse",
+      "type": "object"
+    },
     "AppsListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL - list available apps/connectors.",
@@ -2122,6 +2161,30 @@
             "params"
           ],
           "title": "App/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "app/installed"
+              ],
+              "title": "App/installedRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AppsInstalledParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "App/installedRequest",
           "type": "object"
         },
         {
@@ -7588,6 +7651,28 @@
           "type": "string"
         }
       ]
+    },
+    "InstalledApp": {
+      "description": "Installed connector runtime state.",
+      "properties": {
+        "callable": {
+          "description": "Whether the connector is enabled and has a non-synthetic, model-visible tool allowed by effective MCP and app/tool policy in the committed runtime snapshot.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Effective enabled state after applying global, workspace, local, and managed configuration at read time.",
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callable",
+        "enabled",
+        "id"
+      ],
+      "type": "object"
     },
     "InternalChatMessageMetadataPassthrough": {
       "description": "Internal Responses API passthrough metadata copied into underlying chat messages.\n\nResponses API strongly types this payload. Do not modify it without first getting API approval and making the corresponding Responses API change.",

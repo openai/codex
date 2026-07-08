@@ -536,6 +536,31 @@ fn activating_new_context_discards_old_context_without_state_bleed() {
         &snapshot_b,
         &context_b.current_snapshot().expect("context B snapshot")
     ));
+    assert!(
+        manager
+            .peek_current_snapshot(
+                codex_home.path().to_path_buf(),
+                ConnectorRuntimeContextKey {
+                    account_id: Some("account-a".to_string()),
+                    chatgpt_user_id: Some("user-a".to_string()),
+                    is_workspace_account: false,
+                },
+            )
+            .is_none()
+    );
+    assert!(Arc::ptr_eq(
+        &snapshot_b,
+        &manager
+            .peek_current_snapshot(
+                codex_home.path().to_path_buf(),
+                ConnectorRuntimeContextKey {
+                    account_id: Some("account-b".to_string()),
+                    chatgpt_user_id: Some("user-b".to_string()),
+                    is_workspace_account: false,
+                },
+            )
+            .expect("peek should preserve active context B")
+    ));
 }
 
 #[test]

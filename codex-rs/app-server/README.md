@@ -218,6 +218,7 @@ Example with notification opt-out:
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/hooks/apps/MCP server names. Remote plugin details expose the canonical `shareUrl` supplied by the remote catalog when available; it is `null` for local plugins or when the catalog omits it. This field is separate from `summary.shareContext`, which continues to describe user and workspace sharing state. Returned plugin skills include their current `enabled` state after local config filtering; bundled hooks are returned as lightweight declaration summaries keyed for correlation with `hooks/list`. Use `plugin/install`'s `appsNeedingAuth` to drive post-install authentication and `app/list`'s `isAccessible` to determine current connector accessibility (**under development; do not call from production clients yet**).
 - `plugin/skill/read` — read remote plugin skill markdown on demand by `remoteMarketplaceName`, `remotePluginId`, and `skillName`. This lets clients preview uninstalled remote plugin skills without downloading the plugin bundle.
 - `skills/changed` — notification emitted when watched local skill files change.
+- `app/installed` — read installed connector runtime state from the last committed snapshot, optionally refreshing it first.
 - `app/list` — list available apps.
 - `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. By default, any missing enrollment is completed before the response and the preference is persisted for the current app-server client scope. Pass `ephemeral: true` to enable remote control only for the current process without changing the persisted preference.
 - `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. By default, the disabled preference is persisted for the current app-server client scope. Pass `ephemeral: true` to disable only for the current process without changing the persisted preference. This does not revoke already enrolled controller devices.
@@ -1787,6 +1788,34 @@ To disable a non-managed hook, upsert a state entry at `hooks.state` with `confi
 
 To re-enable it, upsert the same hook key with `"enabled": true`.
 ## Apps
+
+Use `app/installed` to read installed connector runtime state without loading connector-directory metadata. The method is available when the under-development `apps_runtime_state_refactor` feature is enabled. When that feature is disabled, clients can continue using the legacy `app/list` compatibility path.
+
+```json
+{ "method": "app/installed", "id": 49, "params": {
+    "threadId": "thr_123",
+    "reload": false
+} }
+{ "id": 49, "result": {
+    "apps": [
+        {
+            "id": "demo-app",
+            "enabled": true,
+            "callable": true
+        }
+    ]
+} }
+```
+
+Each returned row is a unique, non-empty connector ID observed on at least one tool in the committed runtime snapshot. IDs are retained before read-time configuration and policy projection, so a connector whose returned tools are locally disabled or policy-blocked remains present with `callable: false`. A connector with no tools in `/ps/mcp tools/list` is absent; this is a deliberate narrowing from the RFC draft because the runtime no longer consumes `_meta.installedApps`.
+
+`enabled` is computed from effective global, workspace, local, and managed configuration for `threadId`, or from the current global configuration when `threadId` is omitted. `callable` is true only when the connector is enabled and the committed snapshot contains at least one non-synthetic, model-visible tool allowed by effective MCP and app/tool policy.
+
+Full connector metadata is intentionally outside this response. Once the M3 dependency lands, canonical names, descriptions, branding, labels, and install URLs remain the responsibility of `app/read` and `ConnectorMetadataStore`; tool-level connector name and description fields are compact runtime/search metadata, not the canonical metadata authority.
+
+The response deliberately omits connector MCP tool definitions. Those remain internal to runtime publication through the host-owned `codex_apps` MCP path. The endpoint also deliberately returns the full lightweight `apps` array without cursor pagination: it is an atomic read of one committed snapshot rather than a directory-listing API, and returning it as one value avoids mixing snapshot generations across pages.
+
+`reload` is required. With `reload: false`, the server reads the last committed snapshot and cached workspace policy without a network refresh; unknown workspace policy fails closed for `enabled` and `callable` while retaining tool-derived identities. With `reload: true`, it refreshes workspace policy and, when global and workspace policy permit Apps, performs one uncached hosted-connector refresh under the shared refresh lock, publishes the resulting snapshot atomically, and returns that exact committed state. Global or workspace policy blocks skip the network tools refresh, retain any previously committed identities, and report them as disabled and non-callable.
 
 Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, legacy logo URLs, structured light and dark icon assets, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 

@@ -160,6 +160,23 @@ impl ConnectorRuntimeManager {
     ) -> Option<Arc<ConnectorRuntimeSnapshot>> {
         self.context(codex_home, key).current_snapshot()
     }
+
+    /// Returns the snapshot only when the requested context is already active.
+    ///
+    /// Unlike [`Self::current_snapshot`], this never activates a context or reads persistence, so
+    /// observations such as failure telemetry cannot displace a newer account/workspace context.
+    pub fn peek_current_snapshot(
+        &self,
+        codex_home: PathBuf,
+        key: ConnectorRuntimeContextKey,
+    ) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+        let identity = ConnectorRuntimeIdentity { codex_home, key };
+        let active = lock_unpoisoned(&self.inner.active);
+        active
+            .as_ref()
+            .filter(|active| active.identity == identity)
+            .and_then(|active| active.entry.current_snapshot.load_full())
+    }
 }
 
 impl ConnectorRuntimeContext {
