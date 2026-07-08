@@ -13,7 +13,6 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
-use codex_login::DeviceAuthMetadata;
 use codex_login::ServerOptions;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
@@ -345,7 +344,7 @@ pub async fn run_login_with_device_code(
         opts.issuer = iss;
     }
     if uses_default_issuer {
-        opts.device_auth_metadata = Some(DeviceAuthMetadata { installation_id });
+        opts.device_auth_installation_id = Some(installation_id);
     }
     match run_device_code_login(opts).await {
         Ok(()) => {
@@ -405,7 +404,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         opts.issuer = iss;
     }
     if uses_default_issuer {
-        opts.device_auth_metadata = Some(DeviceAuthMetadata { installation_id });
+        opts.device_auth_installation_id = Some(installation_id);
     }
     opts.open_browser = false;
 

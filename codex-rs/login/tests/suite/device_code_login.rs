@@ -5,7 +5,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
-use codex_login::DeviceAuthMetadata;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
@@ -147,9 +146,7 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     let issuer = mock_server.uri();
     let installation_id = "123e4567-e89b-42d3-a456-426614174099";
     let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
-    opts.device_auth_metadata = Some(DeviceAuthMetadata {
-        installation_id: installation_id.to_string(),
-    });
+    opts.device_auth_installation_id = Some(installation_id.to_string());
 
     run_device_code_login(opts)
         .await

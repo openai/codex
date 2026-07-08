@@ -381,9 +381,7 @@ impl AccountRequestProcessor {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
-            device_auth_metadata: Some(codex_login::DeviceAuthMetadata {
-                installation_id: self.installation_id.clone(),
-            }),
+            device_auth_installation_id: Some(self.installation_id.clone()),
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -400,7 +398,7 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
-                opts.device_auth_metadata = None;
+                opts.device_auth_installation_id = None;
             }
             if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
                 && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)

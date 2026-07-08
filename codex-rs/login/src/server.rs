@@ -78,13 +78,8 @@ pub struct ServerOptions {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
     pub auth_route_config: Option<AuthRouteConfig>,
-    pub device_auth_metadata: Option<DeviceAuthMetadata>,
-}
-
-/// Metadata attached only to device authorization requests sent to a trusted issuer.
-#[derive(Debug, Clone)]
-pub struct DeviceAuthMetadata {
-    pub installation_id: String,
+    /// Installation ID attached only to device authorization requests sent to a trusted issuer.
+    pub device_auth_installation_id: Option<String>,
 }
 
 impl ServerOptions {
@@ -110,7 +105,7 @@ impl ServerOptions {
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
             auth_route_config,
-            device_auth_metadata: None,
+            device_auth_installation_id: None,
         }
     }
 }

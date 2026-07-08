@@ -167,10 +167,7 @@ pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<Device
     // paths are not resolved separately.
     let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let installation_id = opts
-        .device_auth_metadata
-        .as_ref()
-        .map(|metadata| metadata.installation_id.as_str());
+    let installation_id = opts.device_auth_installation_id.as_deref();
     let uc = request_user_code(&client, &api_base_url, &opts.client_id, installation_id).await?;
 
     Ok(DeviceCode {
@@ -188,10 +185,7 @@ pub async fn complete_device_code_login(
     let base_url = opts.issuer.trim_end_matches('/');
     let client = build_default_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let installation_id = opts
-        .device_auth_metadata
-        .as_ref()
-        .map(|metadata| metadata.installation_id.as_str());
+    let installation_id = opts.device_auth_installation_id.as_deref();
 
     let code_resp = poll_for_token(
         &client,
