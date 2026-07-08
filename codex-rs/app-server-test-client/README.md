@@ -24,10 +24,10 @@ and the client will send the response and continue streaming the same turn.
 
 ## Testing Codex-managed Amazon Bedrock login
 
-`test-amazon-bedrock-login` initializes the experimental app-server API, logs in with an Amazon
-Bedrock API key, waits for the login completion notification, and verifies that `account/read`
-reports a Codex-managed Amazon Bedrock account. Login replaces the current primary credential and
-sets `model_provider = "amazon-bedrock"`, so use an isolated `CODEX_HOME` when testing.
+`test-login --amazon-bedrock` initializes the experimental app-server API and sends an
+`account/login/start` request with an Amazon Bedrock API key. Login replaces the current primary
+credential and sets `model_provider = "amazon-bedrock"`, so use an isolated `CODEX_HOME` when
+testing.
 
 ```bash
 export CODEX_HOME="$(mktemp -d)"
@@ -37,7 +37,8 @@ export AWS_BEARER_TOKEN_BEDROCK="<BEDROCK_API_KEY>"
 cargo build -p codex-cli --bin codex
 cargo run -p codex-app-server-test-client -- \
   --codex-bin ./target/debug/codex \
-  test-amazon-bedrock-login \
+  test-login \
+  --amazon-bedrock \
   --region us-west-2
 ```
 

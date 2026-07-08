@@ -25,7 +25,6 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
-use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -38,9 +37,7 @@ use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
@@ -73,7 +70,6 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::Config;
 use codex_otel::OtelProvider;
 use codex_otel::current_span_w3c_trace_context;
-use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::dynamic_tools::normalize_dynamic_tool_specs;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::W3cTraceContext;
@@ -234,20 +230,20 @@ enum CliCommand {
         #[arg(long)]
         abort_on: Option<usize>,
     },
-    /// Trigger the ChatGPT login flow and wait for completion.
+    /// Trigger a ChatGPT or Amazon Bedrock login flow.
     TestLogin {
         /// Use the device-code login flow instead of the browser callback flow.
-        #[arg(long, default_value_t = false)]
+        #[arg(long, default_value_t = false, conflicts_with = "amazon_bedrock")]
         device_code: bool,
-    },
-    /// Log in with a Codex-managed Amazon Bedrock API key and verify the account state.
-    TestAmazonBedrockLogin {
+        /// Use a Codex-managed Amazon Bedrock API key.
+        #[arg(long, default_value_t = false, conflicts_with = "device_code")]
+        amazon_bedrock: bool,
         /// Amazon Bedrock API key. Defaults to AWS_BEARER_TOKEN_BEDROCK.
         #[arg(long, env = "AWS_BEARER_TOKEN_BEDROCK", hide_env_values = true)]
-        api_key: String,
+        api_key: Option<String>,
         /// AWS Region for the Amazon Bedrock Mantle endpoint.
         #[arg(long, env = "AWS_REGION")]
-        region: String,
+        region: Option<String>,
     },
     /// Fetch the current account rate limits from the Codex app-server.
     GetAccountRateLimits,
@@ -324,6 +320,12 @@ enum CliCommand {
         #[arg(long)]
         confirm_account_mutation: bool,
     },
+}
+
+enum TestLoginMode {
+    ChatgptBrowser,
+    ChatgptDeviceCode,
+    AmazonBedrock { api_key: String, region: String },
 }
 
 pub async fn run() -> Result<()> {
@@ -428,15 +430,27 @@ pub async fn run() -> Result<()> {
             )
             .await
         }
-        CliCommand::TestLogin { device_code } => {
+        CliCommand::TestLogin {
+            device_code,
+            amazon_bedrock,
+            api_key,
+            region,
+        } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "test-login")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            test_login(&endpoint, &config_overrides, device_code).await
-        }
-        CliCommand::TestAmazonBedrockLogin { api_key, region } => {
-            ensure_dynamic_tools_unused(&dynamic_tools, "test-amazon-bedrock-login")?;
-            let endpoint = resolve_endpoint(codex_bin, url)?;
-            test_amazon_bedrock_login(&endpoint, &config_overrides, api_key, region).await
+            let mode = if amazon_bedrock {
+                let api_key = api_key.context(
+                    "--api-key or AWS_BEARER_TOKEN_BEDROCK is required with --amazon-bedrock",
+                )?;
+                let region =
+                    region.context("--region or AWS_REGION is required with --amazon-bedrock")?;
+                TestLoginMode::AmazonBedrock { api_key, region }
+            } else if device_code {
+                TestLoginMode::ChatgptDeviceCode
+            } else {
+                TestLoginMode::ChatgptBrowser
+            };
+            test_login(&endpoint, &config_overrides, mode).await
         }
         CliCommand::GetAccountRateLimits => {
             ensure_dynamic_tools_unused(&dynamic_tools, "get-account-rate-limits")?;
@@ -1146,16 +1160,31 @@ async fn send_follow_up_v2(
 async fn test_login(
     endpoint: &Endpoint,
     config_overrides: &[String],
-    device_code: bool,
+    mode: TestLoginMode,
 ) -> Result<()> {
     with_client("test-login", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
 
-        let login_response = if device_code {
-            client.login_account_chatgpt_device_code()?
-        } else {
-            client.login_account_chatgpt()?
+        let login_response = match mode {
+            TestLoginMode::ChatgptBrowser => client.login_account_chatgpt()?,
+            TestLoginMode::ChatgptDeviceCode => client.login_account_chatgpt_device_code()?,
+            TestLoginMode::AmazonBedrock { api_key, region } => {
+                let request_id = client.request_id();
+                let login_response: LoginAccountResponse = client.send_request(
+                    ClientRequest::LoginAccount {
+                        request_id: request_id.clone(),
+                        params: codex_app_server_protocol::LoginAccountParams::AmazonBedrock {
+                            api_key,
+                            region,
+                        },
+                    },
+                    request_id,
+                    "account/login/start",
+                )?;
+                println!("< account/login/start response: {login_response:?}");
+                return Ok(());
+            }
         };
         println!("< account/login/start response: {login_response:?}");
         let login_id = match login_response {
@@ -1176,7 +1205,7 @@ async fn test_login(
             _ => bail!("expected chatgpt login response"),
         };
 
-        let completion = client.wait_for_account_login_completion(Some(&login_id))?;
+        let completion = client.wait_for_account_login_completion(&login_id)?;
         println!("< account/login/completed notification: {completion:?}");
 
         if completion.success {
@@ -1192,80 +1221,6 @@ async fn test_login(
             );
         }
     })
-    .await
-}
-
-async fn test_amazon_bedrock_login(
-    endpoint: &Endpoint,
-    config_overrides: &[String],
-    api_key: String,
-    region: String,
-) -> Result<()> {
-    with_client(
-        "test-amazon-bedrock-login",
-        endpoint,
-        config_overrides,
-        |client| {
-            let initialize =
-                client.initialize_with_experimental_api(/*experimental_api*/ true)?;
-            println!("< initialize response: {initialize:?}");
-
-            let request_id = client.request_id();
-            let login_response: LoginAccountResponse = client.send_request(
-                ClientRequest::LoginAccount {
-                    request_id: request_id.clone(),
-                    params: codex_app_server_protocol::LoginAccountParams::AmazonBedrock {
-                        api_key,
-                        region,
-                    },
-                },
-                request_id,
-                "account/login/start",
-            )?;
-            println!("< account/login/start response: {login_response:?}");
-            if login_response != (LoginAccountResponse::AmazonBedrock {}) {
-                bail!("expected Amazon Bedrock login response, got {login_response:?}");
-            }
-
-            let completion =
-                client.wait_for_account_login_completion(/*expected_login_id*/ None)?;
-            println!("< account/login/completed notification: {completion:?}");
-            if !completion.success {
-                bail!(
-                    "Amazon Bedrock login failed: {}",
-                    completion
-                        .error
-                        .as_deref()
-                        .unwrap_or("unknown error from account/login/completed")
-                );
-            }
-
-            let request_id = client.request_id();
-            let account: GetAccountResponse = client.send_request(
-                ClientRequest::GetAccount {
-                    request_id: request_id.clone(),
-                    params: GetAccountParams {
-                        refresh_token: false,
-                    },
-                },
-                request_id,
-                "account/read",
-            )?;
-            println!("< account/read response: {account:?}");
-            let expected_account = GetAccountResponse {
-                account: Some(Account::AmazonBedrock {
-                    credential_source: AmazonBedrockCredentialSource::CodexManaged,
-                }),
-                requires_openai_auth: false,
-            };
-            if account != expected_account {
-                bail!("expected managed Amazon Bedrock account, got {account:?}");
-            }
-
-            println!("Amazon Bedrock login succeeded.");
-            Ok(())
-        },
-    )
     .await
 }
 
@@ -1891,7 +1846,7 @@ impl CodexClient {
 
     fn wait_for_account_login_completion(
         &mut self,
-        expected_login_id: Option<&str>,
+        expected_login_id: &str,
     ) -> Result<AccountLoginCompletedNotification> {
         loop {
             let notification = self.next_notification()?;
@@ -1899,7 +1854,7 @@ impl CodexClient {
             if let Ok(server_notification) = ServerNotification::try_from(notification) {
                 match server_notification {
                     ServerNotification::AccountLoginCompleted(completion) => {
-                        if completion.login_id.as_deref() == expected_login_id {
+                        if completion.login_id.as_deref() == Some(expected_login_id) {
                             return Ok(completion);
                         }
 
