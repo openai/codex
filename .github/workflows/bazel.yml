@@ -307,7 +307,7 @@ jobs:
           }
 
           foreach ($trace in $traces) {
-            & $analyzer -extract File Disk Mark -fd $trace.FullName -NoCompress -Indent
+            & $analyzer -extract File Disk -fd $trace.FullName -NoCompress -Indent
             if ($LASTEXITCODE -ne 0) {
               throw "ETWAnalyzer failed for $($trace.FullName)"
             }
