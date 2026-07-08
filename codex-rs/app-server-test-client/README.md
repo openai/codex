@@ -24,8 +24,9 @@ and the client will send the response and continue streaming the same turn.
 
 ## Testing Codex-managed Amazon Bedrock login
 
-`test-login --amazon-bedrock` initializes the experimental app-server API and sends an
-`account/login/start` request with an Amazon Bedrock API key. Login replaces the current primary
+`test-login --amazon-bedrock` initializes the experimental app-server API, sends an
+`account/login/start` request with an Amazon Bedrock API key, and waits for the
+`account/login/completed` and `account/updated` notifications. Login replaces the current primary
 credential and sets `model_provider = "amazon-bedrock"`, so use an isolated `CODEX_HOME` when
 testing.
 

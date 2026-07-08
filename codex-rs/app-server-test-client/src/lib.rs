@@ -1180,6 +1180,20 @@ async fn test_login(
                     "account/login/start",
                 )?;
                 println!("< account/login/start response: {login_response:?}");
+
+                let completion =
+                    client.wait_for_account_login_completion(/*expected_login_id*/ None)?;
+                println!("< account/login/completed notification: {completion:?}");
+
+                loop {
+                    let notification = client.next_notification()?;
+                    if let Ok(ServerNotification::AccountUpdated(account_updated)) =
+                        ServerNotification::try_from(notification)
+                    {
+                        println!("< account/updated notification: {account_updated:?}");
+                        break;
+                    }
+                }
                 return Ok(());
             }
         };
@@ -1202,7 +1216,7 @@ async fn test_login(
             _ => bail!("expected chatgpt login response"),
         };
 
-        let completion = client.wait_for_account_login_completion(&login_id)?;
+        let completion = client.wait_for_account_login_completion(Some(&login_id))?;
         println!("< account/login/completed notification: {completion:?}");
 
         if completion.success {
@@ -1843,7 +1857,7 @@ impl CodexClient {
 
     fn wait_for_account_login_completion(
         &mut self,
-        expected_login_id: &str,
+        expected_login_id: Option<&str>,
     ) -> Result<AccountLoginCompletedNotification> {
         loop {
             let notification = self.next_notification()?;
@@ -1851,7 +1865,7 @@ impl CodexClient {
             if let Ok(server_notification) = ServerNotification::try_from(notification) {
                 match server_notification {
                     ServerNotification::AccountLoginCompleted(completion) => {
-                        if completion.login_id.as_deref() == Some(expected_login_id) {
+                        if completion.login_id.as_deref() == expected_login_id {
                             return Ok(completion);
                         }
 
