@@ -8,6 +8,11 @@ on:
   workflow_call:
   pull_request: {}
   workflow_dispatch:
+    inputs:
+      io_trace_run_id:
+        description: Existing workflow run whose Windows I/O trace artifacts should be extracted.
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
@@ -15,6 +20,7 @@ concurrency:
 
 jobs:
   metadata:
+    if: inputs.io_trace_run_id == ''
     runs-on: ubuntu-latest
     outputs:
       # A stale PR head can contain the old detector, which does not emit this
@@ -69,6 +75,55 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+  analyze-windows-io:
+    if: inputs.io_trace_run_id != ''
+    runs-on: windows-2025
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download Windows I/O trace artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.io_trace_run_id }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path traces | Out-Null
+          gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --pattern "windows-io-*" --dir traces
+
+      - name: Install ETWAnalyzer
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Siemens-Healthineers/ETWAnalyzer/releases/download/v4.5.0.4/ETWAnalyzer_SelfContained.zip" -OutFile ETWAnalyzer.zip
+          Expand-Archive -Path ETWAnalyzer.zip -DestinationPath ETWAnalyzer
+
+      - name: Extract file, disk, and marker data
+        shell: pwsh
+        run: |
+          $analyzer = (Get-ChildItem ETWAnalyzer -Filter ETWAnalyzer.exe -Recurse | Select-Object -First 1).FullName
+          if (-not $analyzer) {
+            throw "ETWAnalyzer.exe was not found"
+          }
+
+          $traces = Get-ChildItem traces -Filter *.etl -Recurse
+          if (-not $traces) {
+            throw "no ETL traces were downloaded"
+          }
+
+          foreach ($trace in $traces) {
+            & $analyzer -extract File Disk Mark -fd $trace.FullName -NoCompress -Indent
+            if ($LASTEXITCODE -ne 0) {
+              throw "ETWAnalyzer failed for $($trace.FullName)"
+            }
+          }
+
+      - name: Upload extracted Windows I/O data
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: windows-io-analysis-${{ inputs.io_trace_run_id }}
+          path: traces/**/Extract/*.json
+          if-no-files-found: error
 
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
