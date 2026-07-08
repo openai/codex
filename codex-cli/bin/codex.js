@@ -121,18 +121,21 @@ const binaryPath = findCodexExecutable();
  */
 function detectPackageManager() {
   // pnpm records installation metadata in node_modules/.modules.yaml. Search
-  // from the entry point because its global package and bin dirs can differ.
-  let currentDir = path.dirname(path.resolve(process.argv[1]));
-  while (true) {
-    if (existsSync(path.join(currentDir, "node_modules", ".modules.yaml"))) {
-      return "pnpm";
-    }
+  // the canonical package root and lexical entrypoint because either can be
+  // linked by pnpm.
+  const entrypointDir = path.dirname(path.resolve(process.argv[1]));
+  for (let currentDir of new Set([codexPackageRoot, entrypointDir])) {
+    while (true) {
+      if (existsSync(path.join(currentDir, "node_modules", ".modules.yaml"))) {
+        return "pnpm";
+      }
 
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      break;
+      const parentDir = path.dirname(currentDir);
+      if (parentDir === currentDir) {
+        break;
+      }
+      currentDir = parentDir;
     }
-    currentDir = parentDir;
   }
 
   const userAgent = process.env.npm_config_user_agent || "";
