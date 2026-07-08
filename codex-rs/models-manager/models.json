@@ -1,5 +1,5 @@
 {
-  "models": [
+  "models": [ 
     {
       "slug": "gpt-5.5",
       "prefer_websockets": true,
