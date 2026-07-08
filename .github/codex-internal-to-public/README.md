@@ -6,10 +6,11 @@ public lockfiles and replacing the source message with a public-safe message wri
 
 This directory is a self-contained internal staging bundle: it includes the Python pipeline, Codex
 prompt, tests, and this documentation. The first Copyberry hop copies the entire bundle and the
-matching workflow files to `copybara-no-internal-code`, where GitHub can run them.
-The workflow removes the complete `.github` directory from the ready branch. The final Copyberry
-hop also excludes `.github/**` from both its source and destination scopes, so `openai/codex` owns
-its GitHub configuration independently.
+matching workflow files to `copybara-no-internal-code`, where GitHub can run them. The workflow
+removes the root `.github` directory from the ready branch while retaining public repository files
+below `public/`, including `public/.github/**`. The final Copyberry hop flattens `public/` into the
+root, so Copyberry rather than the GitHub workflow authors changes to the public repository's
+`.github` directory.
 
 ## Pipeline
 
@@ -31,10 +32,12 @@ The two Copyberry jobs and this workflow have distinct responsibilities:
    public file filter and marker transforms, and writes non-empty public projections to
    `copybara-no-internal-code`.
 2. `.github/workflows/codex-internal-to-public-staging.yml` consumes exactly one candidate commit,
-   reconciles `codex-rs/Cargo.lock` and `MODULE.bazel.lock`, writes a public-safe message, and
-   appends exactly one commit to `copybara-no-internal-references`.
+   reconciles `codex-rs/Cargo.lock` and `MODULE.bazel.lock`, constructs the final-shaped public tree
+   used to write a public-safe message, and appends exactly one transport commit to
+   `copybara-no-internal-references`.
 3. `codex-internal-to-codex-oss` consumes the ready branch in iterative mode. Copyberry creates and
-   force-merges one public PR for each ready commit.
+   force-merges one public PR for each ready commit after flattening `public/` into the repository
+   root.
 
 The workflow runs for every push to `copybara-no-internal-code`; `workflow_dispatch` is available
 for recovery. Copyberry writes the source branch directly, so "push" is the precise GitHub event
@@ -45,9 +48,10 @@ dispatches itself once so a burst of source pushes cannot leave the final candid
 GitHub loads a `push` workflow from the pushed ref. The staging bundle and workflow deliberately use
 names that are not excluded by the first-hop Copyberry config, so the candidate commit contains
 everything needed to run it. Each internal job checks out the exact triggering revision; the model
-job still receives only the public-only artifacts described below. The pipeline removes all of
-`.github` before constructing the ready commit, and the final-hop Copyberry config does not read or
-write that directory.
+job still receives only the public-only artifacts described below. The pipeline removes the root
+`.github` directory before constructing the ready commit. Files below `public/.github` remain in
+the transport tree and appear at `.github` only in the effective public tree and the final
+Copyberry output.
 
 ## Internal-only namespace
 
@@ -57,9 +61,10 @@ Keep all runtime dependencies for this workflow under one of these two patterns:
 - `.github/workflows/codex-internal-to-public-*`
 
 Do not add a dependency elsewhere and assume it will be safe. The first hop must copy these patterns
-so the push-triggered workflow can run; the Python projection removes the complete `.github`
-directory from the ready branch. The final Copyberry hop independently excludes `.github/**` from
-both migration scopes, preserving the public repository's own workflows and settings.
+so the push-triggered workflow can run; the Python projection removes the complete root `.github`
+directory from the ready branch. Public workflows and related files belong below `public/.github`,
+which the final Copyberry hop moves into place without making the GitHub-authored ready commit touch
+root `.github` paths.
 
 ## One-commit state machine
 
@@ -73,14 +78,16 @@ For each run, `pipeline.py prepare`:
 1. fetches both staging branches and reads the state file from the ready tip;
 2. verifies that the recorded SHA is still an ancestor of the candidate tip;
 3. selects the oldest unprocessed first-parent candidate commit;
-4. creates a public-only tree for only that commit;
+4. creates a transport tree for that commit and a temporary effective tree with the final Copyberry
+   allowlist and `public/` flattening applied;
 5. starts with the previous ready branch's `Cargo.lock` and `MODULE.bazel.lock`, minimally
    reconciles each one, and verifies both in locked/error mode; and
 6. emits separate artifacts for model input, publication metadata, and the projected tree.
 
 The publish job verifies that neither branch moved unexpectedly, preserves the candidate commit's
-author and author date, updates the state file, and pushes with `--force-with-lease`. An empty tree
-diff is still committed so the candidate-to-ready mapping remains one-to-one.
+author and author date, updates the state file, verifies that the resulting commit has no root
+`.github` diff, and pushes with `--force-with-lease`. An empty tree diff is still committed so the
+candidate-to-ready mapping remains one-to-one.
 
 Do not add a revision trailer to the generated ready-branch message. Candidate-to-ready state stays
 in the internal-only state file. On the final hop, Copybara adds its standard
@@ -104,10 +111,12 @@ Its repository file inputs are limited to:
   which the isolated branch is imported.
 
 The synthetic branch deliberately has no internal ancestry. Its root omits the internal state file,
-and both commits omit `.github`. The public repository may lag the staging branches, so the root is
-not required to match the current public tip. Importing the branch into the public clone gives Codex
-both the exact before-and-after trees and normal access to public history without putting an
-internal checkout or internal Git object into the model job.
+and both commits use the final public layout: verbatim public roots retain their paths and
+`public/**` is flattened into the repository root. Consequently `public/.github/**` in the
+transport tree appears as `.github/**` to the model. The public repository may lag the staging
+branches, so the root is not required to match the current public tip. Importing the branch into the
+public clone gives Codex both the exact before-and-after trees and normal access to public history
+without putting an internal checkout or internal Git object into the model job.
 
 The two synthetic commits are not a compressed public history and may share no ancestry with
 `origin/main`. Since the workflow checks out the synthetic target branch, an unqualified `git log`
@@ -190,9 +199,9 @@ The two Copyberry hops intentionally need different lockfile rules:
   `openai/codex`.
 
 The final-hop config must not use the first hop's destination-lockfile preservation rule. Its
-`PUBLIC_FILES` and `destination_files` include `codex-rs/Cargo.lock` and `MODULE.bazel.lock`, while
-both scopes exclude `.github/**` and its source scope excludes
-`.codex-internal-to-public-state`.
+explicit public roots include `codex-rs/Cargo.lock`, `MODULE.bazel`, and `MODULE.bazel.lock`, while
+the private state file falls outside its source scope. Public `.github` files enter that scope only
+below `public/` and are flattened by Copyberry.
 
 ## Bootstrap
 
@@ -209,9 +218,9 @@ seeded ready commit; otherwise the first generated change will silently include 
 
 The final Copyberry hop also needs a one-time origin baseline before it can export to an existing
 `openai/codex` history. Configure or seed that mapping in Copyberry; do not add public provenance to
-the generated commit message. Before enabling that hop, audit the destination's `.github` directory
-and remove any internal staging files. Copyberry deliberately excludes `.github/**` from both
-migration scopes, so it will preserve the audited public directory without cleaning or updating it.
+the generated commit message. Before enabling that hop, audit `public/.github` and the destination's
+`.github` directory and remove any internal staging files. The final projection owns the complete
+destination tree, including the `.github` paths derived from `public/.github`.
 
 ## Operations and recovery
 

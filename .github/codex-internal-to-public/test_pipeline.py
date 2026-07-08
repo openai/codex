@@ -51,7 +51,7 @@ class PipelineIntegrationTest(unittest.TestCase):
                 fixture.ready_parent,
             )
             self.assertEqual(
-                git_output(fixture.repo, "show", f"{ready}:public.txt"),
+                git_output(fixture.repo, "show", f"{ready}:public/projected.txt"),
                 "candidate one",
             )
             self.assertEqual(
@@ -66,7 +66,30 @@ class PipelineIntegrationTest(unittest.TestCase):
                 git_output(fixture.repo, "show", f"{ready}:MODULE.bazel.lock"),
                 bazel_lockfile().strip(),
             )
+            self.assertEqual(
+                git_output(fixture.repo, "show", f"{ready}:MODULE.bazel"),
+                'module(name = "candidate")',
+            )
             self.assertFalse(git_path_exists(fixture.repo, ready, pipeline.GITHUB_DIR))
+            self.assertTrue(
+                git_path_exists(
+                    fixture.repo,
+                    ready,
+                    Path("public/.github/workflows/public-ci.yml"),
+                )
+            )
+            self.assertEqual(
+                git_output(
+                    fixture.repo,
+                    "diff",
+                    "--name-only",
+                    fixture.ready_parent,
+                    ready,
+                    "--",
+                    pipeline.GITHUB_DIR.as_posix(),
+                ),
+                "",
+            )
             self.assertEqual(
                 git_output(fixture.repo, "show", "--no-patch", "--format=%B", ready),
                 "Describe the public change\n\nPublic details.",
@@ -104,10 +127,38 @@ class PipelineIntegrationTest(unittest.TestCase):
             commit_all(fixture.repo, "Advance ready concurrently")
             git(fixture.repo, "push", "origin", pipeline.READY_BRANCH)
 
-            result = run_pipeline(fixture.repo, runner_temp, "publish", check=False)
+            result = run_pipeline(
+                fixture.repo, runner_temp, "publish", check=False
+            )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("advanced from", result.stderr)
+
+    def test_publish_rejects_root_github_in_ready_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = create_repository_fixture(root)
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+
+            git(fixture.repo, "checkout", pipeline.READY_BRANCH)
+            workflow = fixture.repo / ".github/workflows/unexpected.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("name: Unexpected\n", encoding="utf-8")
+            commit_all(fixture.repo, "Corrupt ready tree")
+            git(fixture.repo, "push", "origin", pipeline.READY_BRANCH)
+
+            run_pipeline(fixture.repo, runner_temp, "prepare")
+            (runner_temp / "public-commit-message.md").write_text(
+                "Describe the public change\n", encoding="utf-8"
+            )
+            result = run_pipeline(fixture.repo, runner_temp, "publish", check=False)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "ready branch unexpectedly contains a root .github directory",
+                result.stderr,
+            )
 
     def test_prepare_rejects_second_parent_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,7 +181,10 @@ class PipelineIntegrationTest(unittest.TestCase):
             fixture = create_repository_fixture(
                 root,
                 candidate_content="x" * 20_000,
-                additional_candidate_files={"nested/[second].txt": "second file\n"},
+                additional_candidate_files={
+                    "public/nested/[second].txt": "second file\n",
+                    "private.txt": "not exported\n",
+                },
             )
             runner_temp = root / "runner-temp"
             runner_temp.mkdir()
@@ -188,19 +242,42 @@ class PipelineIntegrationTest(unittest.TestCase):
                 "public history",
             )
             self.assertEqual(
-                git_output(workspace, "show", f"{target}^:public.txt"),
+                git_output(workspace, "show", f"{target}^:projected.txt"),
                 "baseline",
             )
             self.assertEqual(
-                git_output(workspace, "show", f"{target}:public.txt"),
+                git_output(workspace, "show", f"{target}:projected.txt"),
                 "x" * 20_000,
             )
             self.assertEqual(
                 git_output(workspace, "show", f"{target}:nested/[second].txt"),
                 "second file",
             )
-            self.assertFalse(git_path_exists(workspace, target, pipeline.GITHUB_DIR))
+            self.assertEqual(
+                git_output(
+                    workspace,
+                    "show",
+                    f"{target}:.github/workflows/public-ci.yml",
+                ),
+                "name: Projected public CI",
+            )
+            self.assertFalse(git_path_exists(workspace, target, pipeline.PUBLIC_DIR))
+            self.assertFalse(
+                git_path_exists(workspace, target, Path("private.txt"))
+            )
             self.assertFalse(git_path_exists(workspace, target, pipeline.STATE_FILE))
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}:{pipeline.BAZEL_LOCKFILE}"),
+                bazel_lockfile().strip(),
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}^:{pipeline.BAZEL_MODULE}"),
+                'module(name = "baseline")',
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}:{pipeline.BAZEL_MODULE}"),
+                'module(name = "candidate")',
+            )
             self.assertEqual(
                 git_output(workspace, "show", "--no-patch", "--format=%s", target),
                 pipeline.MESSAGE_PLACEHOLDER_SUBJECT,
@@ -220,6 +297,56 @@ class PipelineIntegrationTest(unittest.TestCase):
                     "--format=%an%x00%ae%x00%aI",
                     fixture.candidate,
                 ),
+            )
+
+    def test_prepare_includes_license_only_change_in_message_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = create_repository_fixture(
+                root,
+                candidate_content=None,
+                bazel_module_content=None,
+                public_workflow_content=None,
+                additional_candidate_files={"LICENSE": "candidate license\n"},
+            )
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+
+            run_pipeline(fixture.repo, runner_temp, "prepare")
+
+            message_input = runner_temp / "message-input"
+            target = (
+                (message_input / pipeline.MESSAGE_TARGET_FILE)
+                .read_text(encoding="utf-8")
+                .strip()
+            )
+            workspace = root / "message-workspace"
+            subprocess.run(
+                ["git", "init", "--initial-branch=main", workspace.as_posix()],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            git(
+                workspace,
+                "fetch",
+                (message_input / pipeline.MESSAGE_WORKSPACE_BUNDLE).as_posix(),
+                f"refs/heads/{pipeline.MESSAGE_WORKSPACE_BRANCH}:"
+                f"refs/heads/{pipeline.MESSAGE_WORKSPACE_BRANCH}",
+            )
+            git(workspace, "checkout", pipeline.MESSAGE_WORKSPACE_BRANCH)
+
+            self.assertEqual(
+                git_output(workspace, "diff", "--name-only", f"{target}^", target),
+                pipeline.LICENSE_FILE.as_posix(),
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}^:{pipeline.LICENSE_FILE}"),
+                "baseline license",
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}:{pipeline.LICENSE_FILE}"),
+                "candidate license",
             )
 
     def test_validate_message_reads_generated_file(self) -> None:
@@ -407,10 +534,58 @@ class PipelineLockfileTest(unittest.TestCase):
         )
 
 
+class PipelineProjectionTest(unittest.TestCase):
+    def test_public_overlay_merges_with_and_overrides_verbatim_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            transport = root / "transport"
+            (transport / "codex-rs").mkdir(parents=True)
+            (transport / "codex-rs/retained.rs").write_text(
+                "retained\n", encoding="utf-8"
+            )
+            (transport / "codex-rs/overridden.rs").write_text(
+                "verbatim\n", encoding="utf-8"
+            )
+            (transport / pipeline.BAZEL_MODULE).write_text(
+                "verbatim module\n", encoding="utf-8"
+            )
+            (transport / "public/codex-rs").mkdir(parents=True)
+            (transport / "public/codex-rs/overridden.rs").write_text(
+                "overlay\n", encoding="utf-8"
+            )
+            (transport / "public/codex-rs/added.rs").write_text(
+                "added\n", encoding="utf-8"
+            )
+            (transport / "public" / pipeline.BAZEL_MODULE).write_text(
+                "overlay module\n", encoding="utf-8"
+            )
+
+            effective_public = root / "effective-public"
+            pipeline.project_effective_public_tree(transport, effective_public)
+
+            self.assertEqual(
+                {
+                    path.relative_to(effective_public).as_posix(): path.read_text(
+                        encoding="utf-8"
+                    )
+                    for path in effective_public.rglob("*")
+                    if path.is_file()
+                },
+                {
+                    "MODULE.bazel": "overlay module\n",
+                    "codex-rs/added.rs": "added\n",
+                    "codex-rs/overridden.rs": "overlay\n",
+                    "codex-rs/retained.rs": "retained\n",
+                },
+            )
+
+
 def create_repository_fixture(
     root: Path,
     *,
-    candidate_content: str = "candidate one\n",
+    candidate_content: str | None = "candidate one\n",
+    bazel_module_content: str | None = 'module(name = "candidate")\n',
+    public_workflow_content: str | None = "name: Projected public CI\n",
     additional_candidate_files: dict[str, str] | None = None,
 ) -> RepositoryFixture:
     repo, baseline = create_base_repository(root)
@@ -429,12 +604,21 @@ def create_repository_fixture(
     workflow = repo / ".github/workflows/codex-internal-to-public-staging.yml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text("name: Internal staging\n", encoding="utf-8")
-    public_github_file = repo / ".github/workflows/public-ci.yml"
-    public_github_file.write_text("name: Public CI\n", encoding="utf-8")
+    public_github_file = repo / "public/.github/workflows/public-ci.yml"
+    public_github_file.parent.mkdir(parents=True, exist_ok=True)
+    if public_workflow_content is not None:
+        public_github_file.write_text(public_workflow_content, encoding="utf-8")
     (repo / pipeline.BAZEL_LOCKFILE).write_text(
         "internal candidate lockfile\n", encoding="utf-8"
     )
-    (repo / "public.txt").write_text(candidate_content, encoding="utf-8")
+    if bazel_module_content is not None:
+        (repo / pipeline.BAZEL_MODULE).write_text(
+            bazel_module_content, encoding="utf-8"
+        )
+    if candidate_content is not None:
+        (repo / "public/projected.txt").write_text(
+            candidate_content, encoding="utf-8"
+        )
     for relative_path, content in (additional_candidate_files or {}).items():
         path = repo / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,7 +629,9 @@ def create_repository_fixture(
         author="Candidate Author <candidate@example.com>",
         date=CANDIDATE_AUTHOR_DATE,
     )
-    (repo / "public.txt").write_text("candidate two\n", encoding="utf-8")
+    (repo / "public/projected.txt").write_text(
+        "candidate two\n", encoding="utf-8"
+    )
     later_candidate = commit_all(repo, "Candidate two")
     git(repo, "push", "origin", pipeline.CANDIDATE_BRANCH)
     git(repo, "checkout", "main")
@@ -508,8 +694,17 @@ def create_base_repository(root: Path) -> tuple[Path, str]:
     source.parent.mkdir()
     source.write_text("pub fn fixture() {}\n", encoding="utf-8")
     (repo / pipeline.CARGO_LOCKFILE).write_text(cargo_lockfile(), encoding="utf-8")
+    (repo / pipeline.BAZEL_MODULE).write_text(
+        'module(name = "baseline")\n', encoding="utf-8"
+    )
     (repo / pipeline.BAZEL_LOCKFILE).write_text(bazel_lockfile(), encoding="utf-8")
-    (repo / "public.txt").write_text("baseline\n", encoding="utf-8")
+    (repo / pipeline.LICENSE_FILE).write_text("baseline license\n", encoding="utf-8")
+    public_file = repo / "public/projected.txt"
+    public_file.parent.mkdir()
+    public_file.write_text("baseline\n", encoding="utf-8")
+    public_workflow = repo / "public/.github/workflows/public-ci.yml"
+    public_workflow.parent.mkdir(parents=True)
+    public_workflow.write_text("name: Public CI\n", encoding="utf-8")
     return repo, commit_all(repo, "Public baseline")
 
 

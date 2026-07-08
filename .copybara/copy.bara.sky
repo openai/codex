@@ -4,7 +4,7 @@ INTERNAL_ONLY_FILES = [
     ".copybara/**",
     ".github/internal/**",
     ".github/workflows/copybara-*.yml",
-    "codex-rs/internal-*/**",
+    "codex-rs/internal*/**",
 ]
 
 # The internal workspace lockfile contains internal package names. Preserve a

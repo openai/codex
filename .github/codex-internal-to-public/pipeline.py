@@ -3,15 +3,16 @@
 """Stage one private Codex commit at a time for public export.
 
 The candidate branch contains commits whose private-only code has already been filtered. The ready
-branch contains the projected public tree plus an internal state file recording the last processed
-candidate; the final export excludes that marker.
+branch contains a transport tree plus an internal state file recording the last processed
+candidate; the final export excludes that marker and flattens ``public/`` into the repository root.
 
 ``prepare`` selects the oldest unprocessed first-parent candidate, removes internal staging files,
-reconciles the public Cargo and Bazel lockfiles, and archives the projected tree. For message
-generation it also creates a public-only Git bundle with two synthetic commits: the exact previous
-public tree and the exact candidate tree with a placeholder message. A separate workflow imports
-that disconnected branch into a full ``openai/codex`` clone, so Codex can inspect the target and
-real public history without receiving internal Git objects or the original commit message.
+reconciles the public Cargo and Bazel lockfiles, and archives the transport tree. For message
+generation it applies the final export layout and creates a public-only Git bundle with two
+synthetic commits: the exact previous public tree and the exact candidate tree with a placeholder
+message. A separate workflow imports that disconnected branch into a full ``openai/codex`` clone,
+so Codex can inspect the target and real public history without receiving internal Git objects or
+the original commit message.
 
 ``validate-message`` enforces the public message policy on either the file produced by Codex or a
 reviewed manual override. ``publish`` rechecks branch state, applies the projected tree and
@@ -47,8 +48,20 @@ GITHUB_DIR = Path(".github")
 STATE_FILE = Path(".codex-internal-to-public-state")
 CARGO_MANIFEST = Path("codex-rs/Cargo.toml")
 CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
+LICENSE_FILE = Path("LICENSE")
+BAZEL_MODULE = Path("MODULE.bazel")
 BAZEL_LOCKFILE = Path("MODULE.bazel.lock")
 GENERATED_LOCKFILES = (CARGO_LOCKFILE, BAZEL_LOCKFILE)
+PUBLIC_DIR = Path("public")
+VERBATIM_PUBLIC_PATHS = (
+    LICENSE_FILE,
+    Path("codex-cli"),
+    Path("codex-rs"),
+    Path("sdk"),
+    Path("third_party"),
+    BAZEL_MODULE,
+    BAZEL_LOCKFILE,
+)
 BOT_NAME = "OpenAI Codex Sync"
 BOT_EMAIL = "codex-sync@openai.com"
 MESSAGE_WORKSPACE_BRANCH = "public-message-workspace"
@@ -176,9 +189,11 @@ def prepare(
             reconcile_bazel_lockfile(candidate_tree)
             reject_internal_dependency_references(candidate_tree)
             write_projection_archive(candidate_tree, projection_archive)
+            public_tree = temp_root / "effective-public-tree"
+            project_effective_public_tree(candidate_tree, public_tree)
             if message_override is None:
                 write_message_inputs(
-                    projection_archive,
+                    public_tree,
                     ready_parent,
                     candidate_revision,
                     metadata.author,
@@ -220,12 +235,14 @@ def publish(
         extract_projection_archive(projection_archive, projection)
         reject_internal_paths(projection)
         with git_worktree(metadata.ready_parent, temp_root / "ready") as ready_tree:
+            reject_root_github(ready_tree)
             replace_worktree(ready_tree, projection)
             state_file = ready_tree / STATE_FILE
             state_file.parent.mkdir(parents=True, exist_ok=True)
             state_file.write_text(f"{metadata.candidate_revision}\n", encoding="utf-8")
             commit_ready_change(ready_tree, metadata, message_file)
             new_revision = output(["git", "rev-parse", "HEAD"], cwd=ready_tree)
+            reject_github_diff(ready_tree, metadata.ready_parent, new_revision)
             run(
                 [
                     "git",
@@ -353,17 +370,75 @@ def remove_github_files(tree: Path) -> None:
     shutil.rmtree(tree / GITHUB_DIR, ignore_errors=True)
 
 
-def reject_internal_paths(tree: Path) -> None:
+def reject_root_github(tree: Path) -> None:
     if (tree / GITHUB_DIR).exists():
-        raise RuntimeError("The public projection unexpectedly contains .github.")
+        raise RuntimeError("The ready branch unexpectedly contains a root .github directory.")
+
+
+def reject_internal_paths(tree: Path) -> None:
+    reject_root_github(tree)
     if (tree / STATE_FILE).exists():
         raise RuntimeError(
             f"The public projection unexpectedly contains {STATE_FILE}."
         )
 
 
+def reject_github_diff(tree: Path, parent: str, revision: str) -> None:
+    changed_paths = output(
+        ["git", "diff", "--name-only", parent, revision, "--", GITHUB_DIR.as_posix()],
+        cwd=tree,
+    )
+    if changed_paths:
+        raise RuntimeError(
+            "Refusing to push a ready-branch commit that changes root .github paths: "
+            f"{changed_paths}"
+        )
+
+
+def project_effective_public_tree(transport_tree: Path, public_tree: Path) -> None:
+    public_tree.mkdir(parents=True)
+    for relative_path in VERBATIM_PUBLIC_PATHS:
+        source = transport_tree / relative_path
+        if source.exists() or source.is_symlink():
+            copy_projection_entry(source, public_tree / relative_path)
+
+    public_overlay = transport_tree / PUBLIC_DIR
+    if not public_overlay.exists():
+        return
+    if not public_overlay.is_dir() or public_overlay.is_symlink():
+        raise RuntimeError(f"{PUBLIC_DIR} must be a directory in the transport tree.")
+    for source in sorted(public_overlay.iterdir()):
+        overlay_projection_entry(source, public_tree / source.name)
+
+
+def copy_projection_entry(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, destination, symlinks=True)
+    else:
+        shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def overlay_projection_entry(source: Path, destination: Path) -> None:
+    if source.is_dir() and not source.is_symlink():
+        if destination.is_symlink() or (
+            destination.exists() and not destination.is_dir()
+        ):
+            destination.unlink()
+        destination.mkdir(parents=True, exist_ok=True)
+        for child in sorted(source.iterdir()):
+            overlay_projection_entry(child, destination / child.name)
+        return
+
+    if destination.is_dir() and not destination.is_symlink():
+        shutil.rmtree(destination)
+    else:
+        destination.unlink(missing_ok=True)
+    copy_projection_entry(source, destination)
+
+
 def write_message_inputs(
-    projection_archive: Path,
+    candidate_public_tree: Path,
     ready_parent: str,
     candidate_revision: str,
     author: GitAuthor,
@@ -372,18 +447,13 @@ def write_message_inputs(
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="codex-public-message-") as temp_dir:
         temp_root = Path(temp_dir)
-        baseline_archive = temp_root / "baseline.tgz"
+        baseline_public_tree = temp_root / "effective-public-baseline"
         with git_worktree(ready_parent, temp_root / "ready-parent") as ready_tree:
             remove_github_files(ready_tree)
             (ready_tree / STATE_FILE).unlink(missing_ok=True)
             reject_internal_paths(ready_tree)
             reject_internal_dependency_references(ready_tree)
-            write_projection_archive(ready_tree, baseline_archive)
-
-        baseline = temp_root / "baseline"
-        extract_projection_archive(baseline_archive, baseline)
-        candidate = temp_root / "candidate"
-        extract_projection_archive(projection_archive, candidate)
+            project_effective_public_tree(ready_tree, baseline_public_tree)
 
         workspace = temp_root / "message-workspace"
         run(
@@ -396,7 +466,7 @@ def write_message_inputs(
         )
         run(["git", "config", "user.name", BOT_NAME], cwd=workspace)
         run(["git", "config", "user.email", BOT_EMAIL], cwd=workspace)
-        replace_worktree(workspace, baseline)
+        replace_worktree(workspace, baseline_public_tree)
         run(["git", "add", "--all"], cwd=workspace)
         run(
             [
@@ -410,7 +480,7 @@ def write_message_inputs(
             cwd=workspace,
         )
 
-        replace_worktree(workspace, candidate)
+        replace_worktree(workspace, candidate_public_tree)
         run(["git", "add", "--all"], cwd=workspace)
         run(
             [
