@@ -1269,7 +1269,11 @@ impl Renderable for ListSelectionView {
         // -- List rows --
         if list_area.height > 0 {
             let render_area = Rect {
-                x: list_area.x.saturating_sub(2),
+                x: if rows.is_empty() {
+                    list_area.x
+                } else {
+                    list_area.x.saturating_sub(2)
+                },
                 y: list_area.y,
                 width: effective_rows_width.max(1),
                 height: list_area.height,
@@ -1713,6 +1717,29 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+
+    #[test]
+    fn empty_searchable_list_aligns_message_with_search() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = new_view(
+            SelectionViewParams {
+                title: Some("Select a base branch".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                is_searchable: true,
+                search_placeholder: Some("Type to search branches".to_string()),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, /*width*/ 48)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!("list_selection_empty_searchable", rendered);
     }
 
     #[test]
