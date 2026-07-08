@@ -142,8 +142,8 @@ pub(super) async fn list_rollout_threads(
             params.search_term.as_deref(),
         )
         .await
-        .ok_or_else(|| ThreadStoreError::Internal {
-            message: "state DB unavailable for relationship-filtered thread listing".to_string(),
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: "SQLite state DB unavailable for thread relationship filters".to_string(),
         })?;
         return Ok(page.into());
     }

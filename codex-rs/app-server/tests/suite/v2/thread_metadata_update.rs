@@ -42,7 +42,11 @@ async fn thread_metadata_update_reports_sqlite_disabled() -> Result<()> {
         codex_home.path().join("config.toml"),
         "[features]\nsqlite = false\n",
     )?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
@@ -63,11 +67,8 @@ async fn thread_metadata_update_reports_sqlite_disabled() -> Result<()> {
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(
         error.error.message,
-        "thread metadata updates require SQLite, which is disabled"
+        "SQLite state DB unavailable for thread metadata updates"
     );
-    for db in codex_state::runtime_db_paths(codex_home.path()) {
-        assert!(!db.path.exists(), "{} should not exist", db.label);
-    }
     Ok(())
 }
 

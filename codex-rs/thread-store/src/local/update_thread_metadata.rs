@@ -54,6 +54,13 @@ pub(super) async fn update_thread_metadata(
         .await;
     }
 
+    let require_sqlite_write = sqlite_write_failure_should_block(&patch);
+    if require_sqlite_write && store.state_db().await.is_none() {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: "SQLite state DB unavailable for thread metadata updates".to_string(),
+        });
+    }
+
     let needs_rollout_compat = needs_rollout_compatibility_update(&patch);
     if needs_rollout_compat {
         // These explicit patches still write legacy rollout/name-index state after the
@@ -69,7 +76,6 @@ pub(super) async fn update_thread_metadata(
         .await?;
         reject_paginated_history_mode(thread.history_mode)?;
     }
-    let require_sqlite_write = sqlite_write_failure_should_block(&patch);
     let updated = apply_metadata_update(
         store,
         thread_id,

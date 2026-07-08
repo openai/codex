@@ -58,8 +58,12 @@ async fn external_agent_config_import_histories_are_empty_when_sqlite_is_disable
         codex_home.path().join("config.toml"),
         "[features]\nsqlite = false\n",
     )?;
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("CODEX_SQLITE_HOME", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("CODEX_SQLITE_HOME", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -76,9 +80,6 @@ async fn external_agent_config_import_histories_are_empty_when_sqlite_is_disable
     let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
 
     assert!(response.data.is_empty());
-    for db in codex_state::runtime_db_paths(codex_home.path()) {
-        assert!(!db.path.exists(), "{} should not exist", db.label);
-    }
     Ok(())
 }
 

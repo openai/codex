@@ -3073,6 +3073,9 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        if !features.enabled(Feature::Sqlite) {
+            startup_warnings.push("SQLite is disabled. Codex is running in degraded mode; SQLite-dependent features and operations are unavailable. Changes to this setting require restarting Codex.".to_string());
+        }
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);

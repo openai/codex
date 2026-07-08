@@ -2166,13 +2166,11 @@ async fn state_check(config: &Config) -> DoctorCheck {
     path_readiness(&mut details, "log dir", &config.log_dir);
     path_readiness(&mut details, "sqlite home", &config.sqlite_home);
     let mut integrity_failures = Vec::new();
-    for db in codex_state::runtime_db_paths(&config.sqlite_home) {
-        path_readiness(&mut details, db.label, &db.path);
-        if sqlite_enabled {
+    if sqlite_enabled {
+        for db in codex_state::runtime_db_paths(&config.sqlite_home) {
+            path_readiness(&mut details, db.label, &db.path);
             sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path)
                 .await;
-        } else {
-            details.push(format!("{} integrity: skipped (SQLite disabled)", db.label));
         }
     }
     rollout_stats_details(&mut details, &config.codex_home);
@@ -3132,12 +3130,6 @@ mod tests {
             "state paths are inspectable; SQLite is disabled"
         );
         assert_eq!(check.remediation, None);
-        assert!(
-            check
-                .details
-                .iter()
-                .any(|detail| detail == "state DB integrity: skipped (SQLite disabled)")
-        );
     }
 
     #[derive(Default)]

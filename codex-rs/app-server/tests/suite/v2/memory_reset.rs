@@ -80,7 +80,11 @@ async fn memory_reset_reports_sqlite_disabled() -> Result<()> {
     tokio::fs::create_dir_all(&memory_root).await?;
     tokio::fs::write(memory_root.join("MEMORY.md"), "stale memory\n").await?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request("memory/reset", /*params*/ None)
@@ -94,7 +98,7 @@ async fn memory_reset_reports_sqlite_disabled() -> Result<()> {
     assert_eq!(error.error.code, -32600);
     assert_eq!(
         error.error.message,
-        "memory reset requires SQLite, which is disabled"
+        "SQLite state DB unavailable for memory reset"
     );
     assert!(memory_root.join("MEMORY.md").is_file());
     for db in codex_state::runtime_db_paths(codex_home.path()) {

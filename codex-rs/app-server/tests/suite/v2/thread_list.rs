@@ -1244,7 +1244,7 @@ async fn thread_list_relation_filters_report_sqlite_disabled() -> Result<()> {
     assert_eq!(error.error.code, -32600);
     assert_eq!(
         error.error.message,
-        "thread relationship filters require SQLite, which is disabled"
+        "SQLite state DB unavailable for thread relationship filters"
     );
     Ok(())
 }
