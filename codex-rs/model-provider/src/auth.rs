@@ -123,9 +123,9 @@ impl AuthProvider for HeaderAuthProvider {
 
 struct AuthManagerAuthProvider {
     auth_manager: Arc<AuthManager>,
-    expected_account_id: Option<String>,
-    expected_chatgpt_user_id: Option<String>,
-    expected_is_workspace_account: bool,
+    // Startup auth is only the account-scoped identity anchor. Request
+    // headers always come from the current AuthManager snapshot below.
+    expected_auth: CodexAuth,
 }
 
 impl AuthProvider for AuthManagerAuthProvider {
@@ -140,9 +140,9 @@ impl AuthProvider for AuthManagerAuthProvider {
         // The caller's account-scoped state was built for the expected
         // identity. Follow token refreshes for that identity, but never cross
         // an account or workspace boundary without rebuilding that state.
-        if auth.get_account_id().as_deref() != self.expected_account_id.as_deref()
-            || auth.get_chatgpt_user_id().as_deref() != self.expected_chatgpt_user_id.as_deref()
-            || auth.is_workspace_account() != self.expected_is_workspace_account
+        if auth.get_account_id() != self.expected_auth.get_account_id()
+            || auth.get_chatgpt_user_id() != self.expected_auth.get_chatgpt_user_id()
+            || auth.is_workspace_account() != self.expected_auth.is_workspace_account()
         {
             return;
         }
@@ -308,9 +308,7 @@ pub fn auth_provider_from_auth_manager(
 ) -> SharedAuthProvider {
     Arc::new(AuthManagerAuthProvider {
         auth_manager,
-        expected_account_id: expected_auth.get_account_id(),
-        expected_chatgpt_user_id: expected_auth.get_chatgpt_user_id(),
-        expected_is_workspace_account: expected_auth.is_workspace_account(),
+        expected_auth: expected_auth.clone(),
     })
 }
 
