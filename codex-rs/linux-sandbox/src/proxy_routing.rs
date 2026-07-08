@@ -1,3 +1,9 @@
+use crate::dns_routing::BoundDnsStub;
+use crate::dns_routing::DnsRouteSpec;
+use crate::dns_routing::bind_netns_dns_stub;
+use crate::dns_routing::spawn_host_dns_relay;
+use crate::dns_routing::spawn_netns_dns_stub;
+use codex_network_proxy::ManagedNetworkDomainPolicy;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
 use serde::Deserialize;
@@ -15,6 +21,7 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
@@ -52,6 +59,28 @@ const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ProxyRouteSpec {
     routes: Vec<ProxyRouteEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dns: Option<DnsRouteSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    loader_environment: Option<LoaderEnvironment>,
+}
+
+pub(crate) type LoaderEnvironment = Vec<(String, String)>;
+
+pub(crate) struct DnsRouteConfig<'a> {
+    pub(crate) policy: &'a ManagedNetworkDomainPolicy,
+    pub(crate) loader_environment: LoaderEnvironment,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedProxyRoutes {
+    pub(crate) serialized_spec: String,
+    pub(crate) dns_relay_files: Vec<File>,
+}
+
+pub(crate) struct BoundDnsRoute {
+    pub(crate) stub: BoundDnsStub,
+    pub(crate) loader_environment: LoaderEnvironment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +102,12 @@ struct ProxyRoutePlan {
 }
 
 pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
+    Ok(prepare_host_proxy_routes(None)?.serialized_spec)
+}
+
+pub(crate) fn prepare_host_proxy_routes(
+    dns_route: Option<DnsRouteConfig<'_>>,
+) -> io::Result<PreparedProxyRoutes> {
     let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
     // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
     // executes the user command.
@@ -104,7 +139,7 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         socket_by_endpoint.insert(route.endpoint, socket_path);
     }
 
-    let mut host_bridge_pids = Vec::with_capacity(socket_by_endpoint.len());
+    let mut host_bridge_pids = Vec::with_capacity(socket_by_endpoint.len() + 1);
     for (endpoint, socket_path) in &socket_by_endpoint {
         host_bridge_pids.push(spawn_host_bridge(
             *endpoint,
@@ -112,7 +147,22 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
             attribution_token.as_deref(),
         )?);
     }
-    spawn_proxy_socket_dir_cleanup_worker(socket_dir, host_bridge_pids)?;
+
+    let (dns, dns_relay_files, dns_relay_pid, loader_environment) =
+        if let Some(dns_route) = dns_route {
+            let (spec, files, pid) = spawn_host_dns_relay(dns_route.policy)?;
+            (
+                Some(spec),
+                files,
+                Some(pid),
+                Some(dns_route.loader_environment),
+            )
+        } else {
+            (None, Vec::new(), None, None)
+        };
+    if let Some(pid) = dns_relay_pid {
+        host_bridge_pids.push(pid);
+    }
 
     let mut routes = Vec::with_capacity(plan.routes.len());
     for route in plan.routes {
@@ -128,7 +178,21 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         });
     }
 
-    serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)
+    let serialized_spec = serde_json::to_string(&ProxyRouteSpec {
+        routes,
+        dns,
+        loader_environment,
+    })
+    .map_err(io::Error::other)?;
+    spawn_proxy_socket_dir_cleanup_worker(
+        socket_dir,
+        host_bridge_pids,
+        dns_relay_files.as_slice(),
+    )?;
+    Ok(PreparedProxyRoutes {
+        serialized_spec,
+        dns_relay_files,
+    })
 }
 
 fn extract_attribution_token_and_plan(
@@ -139,7 +203,29 @@ fn extract_attribution_token_and_plan(
     (attribution_token, plan)
 }
 
+pub(crate) fn bind_dns_route_in_netns(serialized_spec: &str) -> io::Result<Option<BoundDnsRoute>> {
+    let spec: ProxyRouteSpec = serde_json::from_str(serialized_spec).map_err(io::Error::other)?;
+    match (spec.dns, spec.loader_environment) {
+        (Some(_), Some(loader_environment)) => Ok(Some(BoundDnsRoute {
+            stub: bind_netns_dns_stub()?,
+            loader_environment,
+        })),
+        (None, None) => Ok(None),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DNS route state did not match its loader environment",
+        )),
+    }
+}
+
 pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Result<()> {
+    activate_proxy_routes_with_dns_in_netns(serialized_spec, None)
+}
+
+pub(crate) fn activate_proxy_routes_with_dns_in_netns(
+    serialized_spec: &str,
+    bound_dns_stub: Option<BoundDnsStub>,
+) -> io::Result<()> {
     let spec: ProxyRouteSpec = serde_json::from_str(serialized_spec).map_err(io::Error::other)?;
 
     if spec.routes.is_empty() {
@@ -147,6 +233,19 @@ pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Resul
             io::ErrorKind::InvalidInput,
             "proxy routing spec contained no routes",
         ));
+    }
+
+    match (&spec.dns, bound_dns_stub) {
+        (Some(dns), Some(bound_dns_stub)) => {
+            spawn_netns_dns_stub(dns, bound_dns_stub)?;
+        }
+        (None, None) => {}
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "DNS route state did not match its bound sockets",
+            ));
+        }
     }
 
     let mut local_port_by_uds_path: BTreeMap<PathBuf, u16> = BTreeMap::new();
@@ -415,6 +514,7 @@ fn is_pid_alive_raw(pid: libc::pid_t) -> bool {
 fn spawn_proxy_socket_dir_cleanup_worker(
     socket_dir: PathBuf,
     host_bridge_pids: Vec<libc::pid_t>,
+    inherited_dns_files: &[File],
 ) -> io::Result<()> {
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -422,6 +522,9 @@ fn spawn_proxy_socket_dir_cleanup_worker(
     }
 
     if pid == 0 {
+        for file in inherited_dns_files {
+            let _ = close_fd(file.as_raw_fd());
+        }
         loop {
             if host_bridge_pids
                 .iter()
@@ -857,6 +960,8 @@ mod tests {
                 env_key: "HTTP_PROXY".to_string(),
                 uds_path: PathBuf::from("/tmp/proxy-route-0.sock"),
             }],
+            dns: None,
+            loader_environment: None,
         };
         let serialized = serde_json::to_string(&spec).expect("proxy route spec should serialize");
 
@@ -864,6 +969,9 @@ mod tests {
             serialized,
             r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}]}"#
         );
+        let deserialized: ProxyRouteSpec =
+            serde_json::from_str(serialized.as_str()).expect("proxy route spec should deserialize");
+        assert_eq!(deserialized, spec);
     }
 
     #[test]
