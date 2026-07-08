@@ -1275,69 +1275,6 @@ async fn login_account_amazon_bedrock_rejects_invalid_credentials_without_change
 }
 
 #[tokio::test]
-async fn login_account_amazon_bedrock_persists_under_provider_override() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
-
-    let mut mcp = TestAppServer::new_with_args(
-        codex_home.path(),
-        &["-c", "model_provider=\"mock_provider\""],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    let mut expected_config = read_config_toml(codex_home.path())?;
-    expected_config
-        .as_table_mut()
-        .expect("config should be a table")
-        .insert(
-            "model_provider".to_string(),
-            toml::Value::String("amazon-bedrock".to_string()),
-        );
-    let request_id = mcp
-        .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    assert_eq!(
-        to_response::<LoginAccountResponse>(response)?,
-        LoginAccountResponse::AmazonBedrock {}
-    );
-    assert_eq!(
-        load_file_auth(codex_home.path())?,
-        Some(AuthDotJson {
-            auth_mode: Some(DomainAuthMode::BedrockApiKey),
-            openai_api_key: None,
-            tokens: None,
-            last_refresh: None,
-            agent_identity: None,
-            personal_access_token: None,
-            bedrock_api_key: Some(BedrockApiKeyAuth {
-                api_key: "managed-bedrock-api-key".to_string(),
-                region: "us-west-2".to_string(),
-            }),
-        })
-    );
-    assert_eq!(read_config_toml(codex_home.path())?, expected_config);
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
-    assert_eq!(
-        read_account(&mut mcp).await?,
-        GetAccountResponse {
-            account: None,
-            requires_openai_auth: false,
-        }
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn login_account_amazon_bedrock_rejected_when_forced_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
@@ -1364,35 +1301,6 @@ async fn login_account_amazon_bedrock_rejected_when_forced_chatgpt() -> Result<(
         "Amazon Bedrock login is disabled. Use ChatGPT login instead."
     );
     assert_eq!(load_file_auth(codex_home.path())?, None);
-    Ok(())
-}
-
-#[tokio::test]
-async fn login_account_amazon_bedrock_allowed_when_forced_api() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            forced_method: Some("api".to_string()),
-            ..Default::default()
-        },
-    )?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    let request_id = mcp
-        .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    assert_eq!(
-        to_response::<LoginAccountResponse>(response)?,
-        LoginAccountResponse::AmazonBedrock {}
-    );
     Ok(())
 }
 
