@@ -672,7 +672,7 @@ fn set_parent_death_signal() -> io::Result<()> {
     }
 }
 
-fn harden_bridge_process() -> io::Result<()> {
+pub(crate) fn harden_bridge_process() -> io::Result<()> {
     set_parent_death_signal()?;
     codex_process_hardening::disable_process_dumping()
 }
@@ -699,7 +699,7 @@ fn create_ready_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
     Ok((pipe_fds[0], pipe_fds[1]))
 }
 
-fn close_fd(fd: libc::c_int) -> io::Result<()> {
+pub(crate) fn close_fd(fd: libc::c_int) -> io::Result<()> {
     let res = unsafe { libc::close(fd) };
     if res < 0 {
         return Err(io::Error::last_os_error());

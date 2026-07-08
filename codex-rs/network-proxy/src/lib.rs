@@ -47,6 +47,7 @@ pub use network_policy::NetworkPolicyDecision;
 pub use network_policy::NetworkPolicyRequest;
 pub use network_policy::NetworkPolicyRequestArgs;
 pub use network_policy::NetworkProtocol;
+pub use policy::NetworkDomainMatcher;
 pub use policy::normalize_host;
 pub use proxy::ALL_PROXY_ENV_KEYS;
 pub use proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
