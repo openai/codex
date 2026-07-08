@@ -106,13 +106,12 @@ impl DnsPolicy {
             return refused_response(wire, parsed.as_ref());
         };
         let question = &query.queries()[0];
-        let lookup_name = question.name().to_utf8();
-        let host = normalize_host(&lookup_name);
+        let host = normalize_host(&question.name().to_utf8());
         match question.query_type() {
             RecordType::A | RecordType::AAAA | RecordType::CNAME
                 if self.matcher.is_allowed(&host) =>
             {
-                self.resolve_forward(query, &lookup_name, question.query_type())
+                self.resolve_forward(query, &host, question.query_type())
             }
             _ => refused_response(wire, Some(query)),
         }

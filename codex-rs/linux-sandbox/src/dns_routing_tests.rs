@@ -44,7 +44,8 @@ fn host_resolver_enforces_policy_over_udp_and_tcp_channels() {
         allowed
             .answers()
             .iter()
-            .any(|record| matches!(record.data(), RData::A(_)))
+            .any(|record| matches!(record.data(), RData::A(_))),
+        "expected an A answer, got {allowed:#?}"
     );
     let denied = exchange(&mut udp, &query("blocked.test", RecordType::A, 2));
     assert_eq!(denied.response_code(), ResponseCode::Refused);
