@@ -190,10 +190,10 @@ async fn run_sync_with_transport_overrides(
     let api_base_url = api_base_url.into();
     let backup_archive_api_url = backup_archive_api_url.into();
     tokio::task::spawn_blocking(move || {
-        let git_transport = GitTransport::Available(PathBuf::from(git_binary));
+        let git_binary = PathBuf::from(git_binary);
         sync_openai_plugins_repo_with_transport_overrides(
             codex_home.as_path(),
-            &git_transport,
+            Some(git_binary.as_path()),
             &api_base_url,
             &backup_archive_api_url,
         )
@@ -212,7 +212,7 @@ async fn run_sync_without_git(
     tokio::task::spawn_blocking(move || {
         sync_openai_plugins_repo_with_transport_overrides(
             codex_home.as_path(),
-            &GitTransport::Unavailable,
+            None,
             &api_base_url,
             &backup_archive_api_url,
         )
@@ -363,7 +363,7 @@ exit 1
             barrier.wait();
             sync_openai_plugins_repo_with_transport_overrides(
                 tmp.path(),
-                &GitTransport::Available(git_path.clone()),
+                Some(git_path.as_path()),
                 "http://127.0.0.1:9",
                 "http://127.0.0.1:9/backend-api/plugins/export/curated",
             )
@@ -639,25 +639,25 @@ async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
 #[test]
 fn apple_git_without_developer_tools_is_unavailable() {
     assert_eq!(
-        macos_git_transport_from_path(
+        macos_git_binary_from_path(
             PathBuf::from("/usr/bin/git"),
             /*apple_developer_tools_available*/ false,
         ),
-        GitTransport::Unavailable
+        None
     );
     assert_eq!(
-        macos_git_transport_from_path(
+        macos_git_binary_from_path(
             PathBuf::from("/usr/bin/git"),
             /*apple_developer_tools_available*/ true,
         ),
-        GitTransport::Available(PathBuf::from("/usr/bin/git"))
+        Some(PathBuf::from("/usr/bin/git"))
     );
     assert_eq!(
-        macos_git_transport_from_path(
+        macos_git_binary_from_path(
             PathBuf::from("/opt/homebrew/bin/git"),
             /*apple_developer_tools_available*/ false,
         ),
-        GitTransport::Available(PathBuf::from("/opt/homebrew/bin/git"))
+        Some(PathBuf::from("/opt/homebrew/bin/git"))
     );
 }
 

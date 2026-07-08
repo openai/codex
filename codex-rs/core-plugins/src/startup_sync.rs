@@ -76,12 +76,6 @@ struct CuratedPluginsBackupArchiveResponse {
     download_url: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum GitTransport {
-    Available(PathBuf),
-    Unavailable,
-}
-
 pub fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
@@ -100,16 +94,16 @@ fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
 
 pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
     #[cfg(target_os = "macos")]
-    let git_transport = match which::which("git") {
-        Ok(git_path) => macos_git_transport_from_path(git_path, apple_developer_tools_available()),
-        Err(_) => GitTransport::Unavailable,
+    let git_binary = match which::which("git") {
+        Ok(git_path) => macos_git_binary_from_path(git_path, apple_developer_tools_available()),
+        Err(_) => None,
     };
     #[cfg(not(target_os = "macos"))]
-    let git_transport = GitTransport::Available(PathBuf::from("git"));
+    let git_binary = Some(PathBuf::from("git"));
 
     sync_openai_plugins_repo_with_transport_overrides(
         codex_home,
-        &git_transport,
+        git_binary.as_deref(),
         GITHUB_API_BASE_URL,
         CURATED_PLUGINS_BACKUP_ARCHIVE_API_URL,
     )
@@ -117,17 +111,15 @@ pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
 
 fn sync_openai_plugins_repo_with_transport_overrides(
     codex_home: &Path,
-    git_transport: &GitTransport,
+    git_binary: Option<&Path>,
     api_base_url: &str,
     backup_archive_api_url: &str,
 ) -> Result<String, String> {
     let _file_guard = lock_curated_plugins_startup_sync(codex_home)?;
 
-    let git_sync_result = match git_transport {
-        GitTransport::Available(git_binary) => {
-            sync_openai_plugins_repo_via_git(codex_home, git_binary)
-        }
-        GitTransport::Unavailable => Err("git executable is unavailable".to_string()),
+    let git_sync_result = match git_binary {
+        Some(git_binary) => sync_openai_plugins_repo_via_git(codex_home, git_binary),
+        None => Err("git executable is unavailable".to_string()),
     };
 
     match git_sync_result {
@@ -680,14 +672,14 @@ fn git_command(git_binary: &Path) -> Command {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn macos_git_transport_from_path(
+fn macos_git_binary_from_path(
     git_path: PathBuf,
     apple_developer_tools_available: bool,
-) -> GitTransport {
+) -> Option<PathBuf> {
     if git_path == Path::new("/usr/bin/git") && !apple_developer_tools_available {
-        GitTransport::Unavailable
+        None
     } else {
-        GitTransport::Available(git_path)
+        Some(git_path)
     }
 }
 
