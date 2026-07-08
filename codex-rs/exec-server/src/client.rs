@@ -115,7 +115,6 @@ const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_PROCESS_EVENTS: usize = 256;
 const MAX_PENDING_PROCESS_EVENT_BYTES: usize = 1024 * 1024;
-const MAX_PROCESS_EVENT_SEQUENCE_GAP: u64 = 256;
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -975,11 +974,6 @@ impl OrderedSessionEvents {
         // The next expected event is synchronously published by every caller,
         // so it can drain a full buffer without becoming retained state.
         let closes_gap = seq == next_seq;
-        if seq.saturating_sub(next_seq) > MAX_PROCESS_EVENT_SEQUENCE_GAP {
-            return Err(format!(
-                "process event sequence {seq} is more than {MAX_PROCESS_EVENT_SEQUENCE_GAP} entries ahead of {next_seq}"
-            ));
-        }
         if !closes_gap && self.pending.len() >= MAX_PENDING_PROCESS_EVENTS {
             return Err(format!(
                 "process event reorder buffer exceeds {MAX_PENDING_PROCESS_EVENTS} entries"

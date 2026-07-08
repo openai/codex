@@ -60,17 +60,6 @@ fn recovery_does_not_retry_other_registry_conflicts() {
 }
 
 #[test]
-fn process_event_reorder_rejects_large_sequence_gap() {
-    let state = SessionState::new(/*recoverable*/ true);
-
-    let error = state
-        .publish_ordered_event(ExecProcessEvent::Closed { seq: u64::MAX })
-        .expect_err("large process event sequence gap should be rejected");
-
-    assert!(error.contains("ahead"));
-}
-
-#[test]
 fn process_event_reorder_rejects_oversized_output() {
     let state = SessionState::new(/*recoverable*/ true);
 
@@ -128,10 +117,20 @@ fn process_event_reorder_accepts_gap_closing_event_at_limits() {
 }
 
 #[test]
-fn recovery_publishes_dense_output_beyond_reorder_entry_limit() {
+fn recovery_handles_dense_tail_output_and_newer_notification() {
     let state = SessionState::new(/*recoverable*/ true);
-    let last_seq = super::super::MAX_PENDING_PROCESS_EVENTS as u64 + 1;
-    let chunks = (1..=last_seq)
+    let last_seq = super::super::MAX_PENDING_PROCESS_EVENTS as u64 + 2;
+    let live_seq = last_seq + 1;
+    assert!(
+        !state
+            .publish_ordered_event(ExecProcessEvent::Output(ProcessOutputChunk {
+                seq: live_seq,
+                stream: ExecOutputStream::Stdout,
+                chunk: b"live".to_vec().into(),
+            }))
+            .expect("live output should remain bounded while recovery fills the gap")
+    );
+    let chunks = (2..=last_seq)
         .map(|seq| ProcessOutputChunk {
             seq,
             stream: ExecOutputStream::Stdout,
@@ -144,8 +143,8 @@ fn recovery_publishes_dense_output_beyond_reorder_entry_limit() {
             .recover_events(ReadResponse {
                 chunks,
                 next_seq: last_seq + 1,
-                exited: false,
-                exit_code: None,
+                exited: true,
+                exit_code: Some(17),
                 closed: false,
                 failure: None,
                 sandbox_denied: false,
@@ -163,7 +162,34 @@ fn recovery_publishes_dense_output_beyond_reorder_entry_limit() {
             ordered_events.pending.len(),
             ordered_events.pending_bytes,
         ),
-        (last_seq, 0, 0)
+        (live_seq, 0, 0)
+    );
+}
+
+#[test]
+fn recovery_rejects_output_at_closed_sequence() {
+    let state = SessionState::new(/*recoverable*/ true);
+
+    let error = state
+        .recover_events(ReadResponse {
+            chunks: vec![ProcessOutputChunk {
+                seq: 1,
+                stream: ExecOutputStream::Stdout,
+                chunk: b"output".to_vec().into(),
+            }],
+            next_seq: 2,
+            exited: false,
+            exit_code: None,
+            closed: true,
+            failure: None,
+            sandbox_denied: false,
+        })
+        .expect_err("output should not occupy the closed sequence");
+
+    assert!(
+        error
+            .to_string()
+            .contains("conflicts with recovered output")
     );
 }
 

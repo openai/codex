@@ -92,6 +92,17 @@ impl SessionState {
                 *pending_sandbox_denied =
                     Some(pending_sandbox_denied.unwrap_or(false) || sandbox_denied);
             }
+            let mut exit_known = ordered_events.exit_published || exit_pending;
+            if closed
+                && (matches!(
+                    ordered_events.pending.get(&target_seq),
+                    Some(event) if !matches!(event, ExecProcessEvent::Closed { .. })
+                ) || chunks.iter().any(|chunk| chunk.seq == target_seq))
+            {
+                return Err(ExecServerError::Protocol(format!(
+                    "process close sequence {target_seq} conflicts with recovered output"
+                )));
+            }
             let mut published_closed = false;
             for chunk in chunks {
                 if chunk.seq > target_seq {
@@ -99,6 +110,23 @@ impl SessionState {
                         "recovered process output sequence {} exceeds target sequence {target_seq}",
                         chunk.seq
                     )));
+                }
+                let next_seq = ordered_events.last_published_seq.saturating_add(1);
+                if exited && !exit_known && chunk.seq > next_seq {
+                    let exit_code = exit_code.ok_or_else(|| {
+                        ExecServerError::Protocol(
+                            "recovering exited process did not include its exit code".to_string(),
+                        )
+                    })?;
+                    ordered_events
+                        .insert_pending(ExecProcessEvent::Exited {
+                            seq: next_seq,
+                            exit_code,
+                            sandbox_denied: Some(sandbox_denied),
+                        })
+                        .map_err(ExecServerError::Protocol)?;
+                    published_closed |= self.publish_ready(&mut ordered_events);
+                    exit_known = true;
                 }
                 if chunk.seq > ordered_events.last_published_seq {
                     ordered_events
@@ -108,23 +136,19 @@ impl SessionState {
                 }
             }
             if closed {
-                match ordered_events.pending.get(&target_seq) {
-                    Some(ExecProcessEvent::Closed { .. }) => {}
-                    Some(_) => {
-                        return Err(ExecServerError::Protocol(format!(
-                            "process close sequence {target_seq} conflicts with recovered output"
-                        )));
-                    }
-                    None => {
-                        ordered_events
-                            .insert_pending(ExecProcessEvent::Closed { seq: target_seq })
-                            .map_err(ExecServerError::Protocol)?;
-                    }
+                if !ordered_events.closed_published
+                    && !matches!(
+                        ordered_events.pending.get(&target_seq),
+                        Some(ExecProcessEvent::Closed { .. })
+                    )
+                {
+                    ordered_events
+                        .insert_pending(ExecProcessEvent::Closed { seq: target_seq })
+                        .map_err(ExecServerError::Protocol)?;
                 }
             }
 
-            let exit_known = ordered_events.exit_published || exit_pending;
-            let event_count = target_seq - ordered_events.last_published_seq;
+            let event_count = target_seq.saturating_sub(ordered_events.last_published_seq);
             let first_unpublished_seq = ordered_events.last_published_seq.saturating_add(1);
             let retained_count = if first_unpublished_seq <= target_seq {
                 ordered_events
