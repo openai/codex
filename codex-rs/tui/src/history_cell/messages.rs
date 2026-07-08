@@ -227,31 +227,6 @@ impl ReasoningSummaryCell {
     /// Create a reasoning summary cell that will render local file links relative to the session
     /// cwd active when the summary was recorded.
     pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
-        // Empty reasoning-summary parts can arrive as an HTML comment. Remove that placeholder;
-        // when the content consists only of empty parts, suppress their orphaned status headers
-        // instead of rendering them as transcript content.
-        let content = if content.contains("<!-- -->") {
-            let mut lines = content
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty());
-            let mut contains_only_empty_parts = lines.next() == Some("<!-- -->");
-            while contains_only_empty_parts && let Some(line) = lines.next() {
-                let is_header = line
-                    .strip_prefix("**")
-                    .and_then(|line| line.strip_suffix("**"))
-                    .is_some_and(|header| !header.is_empty() && !header.contains("**"));
-                contains_only_empty_parts = is_header && lines.next() == Some("<!-- -->");
-            }
-
-            if contains_only_empty_parts {
-                String::new()
-            } else {
-                content.replace("<!-- -->", "")
-            }
-        } else {
-            content
-        };
         Self {
             _header: header,
             content,
@@ -520,37 +495,73 @@ pub(crate) fn new_user_prompt(
 /// Create the reasoning history cell emitted at the end of a reasoning block.
 ///
 /// The helper snapshots `cwd` into the returned cell so local file links render the same way they
-/// did while the turn was live, even if rendering happens after other app state has advanced.
+/// did while the turn was live, even if rendering happens after other app state has advanced. Part
+/// boundaries are preserved so standalone empty placeholders can be removed without changing
+/// literal HTML comments or bold-only summary content.
 pub(crate) fn new_reasoning_summary_block(
-    full_reasoning_buffer: String,
+    reasoning_parts: Vec<String>,
     cwd: &Path,
 ) -> Box<dyn HistoryCell> {
-    let cwd = cwd.to_path_buf();
-    let full_reasoning_buffer = full_reasoning_buffer.trim();
-    if let Some(open) = full_reasoning_buffer.find("**") {
-        let after_open = &full_reasoning_buffer[(open + 2)..];
+    let (header, content) = split_reasoning_summary_parts(&reasoning_parts);
+    let transcript_only = header.is_empty();
+    Box::new(ReasoningSummaryCell::new(
+        header,
+        content,
+        cwd,
+        transcript_only,
+    ))
+}
+
+/// Split structured reasoning-summary parts into the status header and renderable content.
+pub(crate) fn split_reasoning_summary_parts(reasoning_parts: &[String]) -> (String, String) {
+    let mut leading_empty_part_header = None;
+    let mut content_parts = Vec::with_capacity(reasoning_parts.len());
+
+    for part in reasoning_parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let header_end = part.strip_prefix("**").and_then(|after_open| {
+            after_open
+                .find("**")
+                .and_then(|close| (close > 0).then_some(close + 4))
+        });
+        let body = header_end.map_or(part, |header_end| &part[header_end..]);
+        if body.trim() == "<!-- -->" {
+            if content_parts.is_empty()
+                && leading_empty_part_header.is_none()
+                && let Some(header_end) = header_end
+            {
+                leading_empty_part_header = Some(part[..header_end].to_string());
+            }
+            continue;
+        }
+
+        content_parts.push(part);
+    }
+
+    let content = content_parts.join("\n\n");
+    if content.is_empty() {
+        return (leading_empty_part_header.unwrap_or_default(), content);
+    }
+    if let Some(header) = leading_empty_part_header {
+        return (header, content);
+    }
+
+    if let Some(open) = content.find("**") {
+        let after_open = &content[(open + 2)..];
         if let Some(close) = after_open.find("**") {
             let after_close_idx = open + 2 + close + 2;
-            // if we don't have anything beyond `after_close_idx`
-            // then we don't have a summary to inject into history
-            if after_close_idx < full_reasoning_buffer.len() {
-                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                // Preserve the session cwd so local file links render the same way in the
-                // collapsed reasoning block as they did while streaming live content.
-                return Box::new(ReasoningSummaryCell::new(
-                    header_buffer,
-                    summary_buffer,
-                    &cwd,
-                    /*transcript_only*/ false,
-                ));
+            if after_close_idx < content.len() {
+                return (
+                    content[..after_close_idx].to_string(),
+                    content[after_close_idx..].to_string(),
+                );
             }
         }
     }
-    Box::new(ReasoningSummaryCell::new(
-        "".to_string(),
-        full_reasoning_buffer.to_string(),
-        &cwd,
-        /*transcript_only*/ true,
-    ))
+
+    (String::new(), content)
 }
