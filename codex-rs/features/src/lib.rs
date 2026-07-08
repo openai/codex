@@ -1063,7 +1063,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodexAppsParallelToolCalls,
         key: "codex_apps_parallel_tool_calls",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {

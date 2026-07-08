@@ -105,7 +105,7 @@ async fn run_codex_apps_calls(parallel_tool_calls: bool) -> Result<Vec<McpCallEv
                 .set_enabled(Feature::CodexAppsParallelToolCalls, parallel_tool_calls)
                 .expect("test config should allow feature update");
         });
-    let fixture = builder.build(&server).await?;
+    let fixture = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&fixture.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     submit_auto_approved_turn(&fixture).await?;
 

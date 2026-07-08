@@ -749,10 +749,15 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
         TomlValue::Boolean(true),
     );
     configured_features.insert("personality".to_string(), TomlValue::Boolean(true));
+    configured_features.insert(
+        "codex_apps_parallel_tool_calls".to_string(),
+        TomlValue::Boolean(true),
+    );
     configured_features.insert("unknown".to_string(), TomlValue::Boolean(true));
 
     let mut features = Features::with_defaults();
     features.enable(Feature::ApplyPatchStreamingEvents);
+    features.enable(Feature::CodexAppsParallelToolCalls);
 
     let warning = unstable_features_warning_event(
         Some(&configured_features),
@@ -766,6 +771,7 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
         panic!("expected warning event");
     };
     assert!(message.contains("apply_patch_streaming_events"));
+    assert!(!message.contains("codex_apps_parallel_tool_calls"));
     assert!(!message.contains("personality"));
     assert!(message.contains("/tmp/config.toml"));
 }
