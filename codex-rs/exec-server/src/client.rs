@@ -276,6 +276,13 @@ impl LazyRemoteExecServerClient {
         self.startup.get().is_some()
     }
 
+    pub(crate) fn startup_result(&self) -> Option<Result<(), ExecServerError>> {
+        self.startup.get().map(|result| match result {
+            Ok(_) => Ok(()),
+            Err(error) => Err(ExecServerError::ConnectionAttempt(Arc::clone(error))),
+        })
+    }
+
     pub(crate) async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
         self.initial_client().await.map(drop)
     }

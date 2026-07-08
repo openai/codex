@@ -608,6 +608,14 @@ impl Environment {
         }
     }
 
+    /// Returns the completed initial startup result without initiating startup.
+    pub fn startup_result(&self) -> Option<Result<(), ExecServerError>> {
+        match &self.remote_client {
+            Some(client) => client.startup_result(),
+            None => Some(Ok(())),
+        }
+    }
+
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
     }
@@ -1081,6 +1089,72 @@ mod tests {
         assert!(!environment.startup_finished());
         assert!(environment.wait_until_ready().await.is_err());
         assert!(environment.startup_finished());
+    }
+
+    #[tokio::test]
+    async fn selected_capability_inspection_keeps_stdio_environment_lazy() {
+        use codex_protocol::capabilities::CapabilityRootLocation;
+        use codex_protocol::capabilities::SelectedCapabilityRoot;
+
+        let environment = Environment::remote_with_transport(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "codex-missing-exec-server-for-test".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(1),
+            },
+            /*local_runtime_paths*/ None,
+        );
+        let manager = EnvironmentManager::from_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: vec![("stdio".to_string(), environment)],
+                default: EnvironmentDefault::Disabled,
+                include_local: false,
+            },
+            /*local_runtime_paths*/ None,
+        )
+        .expect("environment manager");
+        let environment = manager.get_environment("stdio").expect("stdio environment");
+        let selected_root = SelectedCapabilityRoot {
+            id: "demo@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "stdio".to_string(),
+                path: PathUri::parse("file:///plugins/demo").expect("plugin path URI"),
+            },
+        };
+
+        let status =
+            manager.inspect_selected_capability_roots(std::slice::from_ref(&selected_root));
+        assert!(status.ready_roots.is_empty());
+        assert_eq!(status.warnings, Vec::<String>::new());
+        assert!(!environment.startup_finished());
+
+        let missing_root = SelectedCapabilityRoot {
+            id: "missing@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "missing".to_string(),
+                path: PathUri::parse("file:///plugins/missing").expect("missing plugin path URI"),
+            },
+        };
+        let status = manager.inspect_selected_capability_roots(&[missing_root]);
+        assert!(status.ready_roots.is_empty());
+        assert_eq!(
+            status.warnings,
+            vec![
+                "selected capability root `missing@1` references unavailable environment `missing`"
+                    .to_string()
+            ]
+        );
+
+        assert!(environment.wait_until_ready().await.is_err());
+
+        let status = manager.inspect_selected_capability_roots(&[selected_root]);
+        assert!(status.ready_roots.is_empty());
+        assert_eq!(status.warnings.len(), 1);
+        assert!(status.warnings[0].contains("environment `stdio` failed to start"));
     }
 
     #[tokio::test]
