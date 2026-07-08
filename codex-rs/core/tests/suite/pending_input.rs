@@ -337,7 +337,10 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
         .try_start_turn_if_idle(vec![responses::user_message_item(CONTINUATION)])
         .await
         .expect("start automatic turn");
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::StreamError(_))
+    })
+    .await;
     steer_user_input(&test.codex, STEER).await;
     wait_for_turn_complete(&test.codex).await;
 

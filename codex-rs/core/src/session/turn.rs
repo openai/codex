@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -39,6 +40,7 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::session::InputQueueActivity;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -102,6 +104,7 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
+use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -149,6 +152,14 @@ pub(crate) async fn run_turn(
 ) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let turn_state = sess
+        .input_queue
+        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
+        .await;
+    let (mut retry_activity_rx, _) = sess
+        .input_queue
+        .subscribe_activity(turn_state.as_deref())
+        .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -164,7 +175,7 @@ pub(crate) async fn run_turn(
         let Some(delay) = retry_delay else {
             return Ok(None);
         };
-        tokio::time::sleep(delay).await;
+        wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
     }
 
     // run_turn owns the step used to seed context and make the first sampling request.
@@ -374,7 +385,7 @@ pub(crate) async fn run_turn(
                         let Some(delay) = retry_delay else {
                             return Ok(None);
                         };
-                        tokio::time::sleep(delay).await;
+                        wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -460,28 +471,25 @@ pub(crate) async fn run_turn(
                     .emit_turn_error_lifecycle(turn_context.as_ref(), error)
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
+                let error_event = e.to_error_event(/*message_prefix*/ None);
                 if let Some(delay) = retry_delay {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::StreamError(StreamErrorEvent {
+                            message: error_event.message,
+                            codex_error_info: error_event.codex_error_info,
+                            additional_details: None,
+                        }),
+                    )
+                    .await;
                     // Keep this turn alive so its recorded input is not appended again.
-                    let turn_state = sess
-                        .input_queue
-                        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
-                        .await;
-                    let (mut activity_rx, pending_activity) = sess
-                        .input_queue
-                        .subscribe_activity(turn_state.as_deref())
-                        .await;
                     // Let queued input interrupt the backoff instead of parking the live turn.
-                    if pending_activity.is_none() {
-                        tokio::select! {
-                            _ = tokio::time::sleep(delay) => {}
-                            _ = activity_rx.changed() => {}
-                        }
-                    }
+                    wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
                     can_drain_pending_input = true;
                     continue;
                 }
+                sess.send_event(&turn_context, EventMsg::Error(error_event))
+                    .await;
                 // let the user continue the conversation
                 break;
             }
@@ -489,6 +497,22 @@ pub(crate) async fn run_turn(
     }
 
     Ok(last_agent_message)
+}
+
+async fn wait_for_retry_delay(
+    sess: &Session,
+    delay: Duration,
+    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
+) {
+    let _ = tokio::time::timeout(delay, async {
+        while activity_rx.changed().await.is_ok() {
+            // Ignore mailbox activity that is deferred to the next turn.
+            if sess.input_queue.has_pending_input(&sess.active_turn).await {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 #[instrument(level = "trace", skip_all)]
