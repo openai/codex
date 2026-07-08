@@ -33,7 +33,8 @@ pub(crate) enum ResolvedOAuthCredentialStore {
 impl ResolvedOAuthCredentialStore {
     /// Loads credentials only from this already-resolved authority.
     ///
-    /// Unlike `resolve_oauth_tokens`, this never evaluates configured `Auto` fallback policy.
+    /// Unlike `resolve_oauth_tokens_from_store_policy`, this never evaluates configured
+    /// `Auto` fallback policy.
     pub(crate) fn load<K: KeyringStore + Clone + 'static>(
         self,
         keyring_store: &K,
@@ -102,7 +103,7 @@ pub(crate) struct ResolvedOAuthTokens {
     pub(crate) store: ResolvedOAuthCredentialStore,
 }
 
-pub(crate) fn resolve_oauth_tokens<K: KeyringStore + Clone + 'static>(
+pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     url: &str,

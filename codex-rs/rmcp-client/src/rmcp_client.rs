@@ -70,7 +70,7 @@ use crate::oauth::OAuthPersistor;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::ResolvedOAuthTokens;
 use crate::oauth::StoredOAuthTokens;
-use crate::oauth::resolve_oauth_tokens;
+use crate::oauth::resolve_oauth_tokens_from_store_policy;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
@@ -130,7 +130,7 @@ enum TransportRecipe {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
-        resolved_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
+        pinned_credential_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     },
@@ -407,7 +407,7 @@ impl RmcpClient {
             env_http_headers,
             store_mode,
             keyring_backend_kind,
-            resolved_store: Arc::new(OnceLock::new()),
+            pinned_credential_store: Arc::new(OnceLock::new()),
             http_client,
             auth_provider,
         };
@@ -787,7 +787,7 @@ impl RmcpClient {
                 env_http_headers,
                 store_mode,
                 keyring_backend_kind,
-                resolved_store,
+                pinned_credential_store,
                 http_client,
                 auth_provider,
             } => {
@@ -804,14 +804,14 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    if let Some(store) = resolved_store.get().copied() {
+                    if let Some(store) = pinned_credential_store.get().copied() {
                         // Rebuilds reread the source selected during first construction. Only the
                         // initial construction below evaluates configured store policy.
                         store
                             .load(&DefaultKeyringStore, server_name, url)?
                             .map(|tokens| ResolvedOAuthTokens { tokens, store })
                     } else {
-                        match resolve_oauth_tokens(
+                        match resolve_oauth_tokens_from_store_policy(
                             &DefaultKeyringStore,
                             server_name,
                             url,
@@ -822,9 +822,9 @@ impl RmcpClient {
                                 if let Some(resolved) = tokens.as_ref() {
                                     // Retries and session recovery rebuild this transport. Pin the
                                     // first concrete source so Auto is not reevaluated mid-client.
-                                    resolved_store.set(resolved.store).map_err(|_| {
+                                    pinned_credential_store.set(resolved.store).map_err(|_| {
                                         anyhow!(
-                                            "OAuth credential store resolved concurrently for MCP server `{server_name}`"
+                                            "OAuth credential store pinned concurrently for MCP server `{server_name}`"
                                         )
                                     })?;
                                 }

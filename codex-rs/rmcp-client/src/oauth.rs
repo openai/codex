@@ -69,7 +69,7 @@ use codex_utils_home_dir::find_codex_home;
 
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
-pub(crate) use self::resolved_store::resolve_oauth_tokens;
+pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
@@ -111,7 +111,7 @@ pub(crate) fn oauth_token_status(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<StoredOAuthTokenStatus> {
-    let resolved = resolve_oauth_tokens(
+    let resolved = resolve_oauth_tokens_from_store_policy(
         &DefaultKeyringStore,
         server_name,
         url,
@@ -862,7 +862,7 @@ mod tests {
     use super::test_support::TempCodexHome;
 
     #[test]
-    fn resolve_oauth_tokens_uses_keyring_when_available() -> Result<()> {
+    fn resolve_oauth_tokens_from_store_policy_uses_keyring_when_available() -> Result<()> {
         let _env = TempCodexHome::new();
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
@@ -871,7 +871,7 @@ mod tests {
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         store.save(KEYRING_SERVICE, &key, &serialized)?;
 
-        let resolved = super::resolve_oauth_tokens(
+        let resolved = super::resolve_oauth_tokens_from_store_policy(
             &store,
             &tokens.server_name,
             &tokens.url,
@@ -896,7 +896,7 @@ mod tests {
 
         super::save_oauth_tokens_to_file(&tokens)?;
 
-        let resolved = super::resolve_oauth_tokens(
+        let resolved = super::resolve_oauth_tokens_from_store_policy(
             &store,
             &tokens.server_name,
             &tokens.url,
@@ -920,7 +920,7 @@ mod tests {
 
         super::save_oauth_tokens_to_file(&tokens)?;
 
-        let resolved = super::resolve_oauth_tokens(
+        let resolved = super::resolve_oauth_tokens_from_store_policy(
             &store,
             &tokens.server_name,
             &tokens.url,
