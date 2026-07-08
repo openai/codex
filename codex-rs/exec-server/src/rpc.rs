@@ -31,7 +31,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
-const MAX_IN_FLIGHT_REGULAR_CALLS: usize = 64;
+const MAX_IN_FLIGHT_REGULAR_CALLS: usize = 1024;
 const RESERVED_CLEANUP_CALLS: usize = 1;
 
 #[derive(Debug)]
