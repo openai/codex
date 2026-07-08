@@ -32,20 +32,18 @@ testing.
 ```bash
 export CODEX_HOME="$(mktemp -d)"
 printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
-export AWS_BEARER_TOKEN_BEDROCK="<BEDROCK_API_KEY>"
 
 cargo build -p codex-cli --bin codex
 cargo run -p codex-app-server-test-client -- \
   --codex-bin ./target/debug/codex \
   test-login \
   --amazon-bedrock \
+  --api-key "<BEDROCK_API_KEY>" \
   --region us-west-2
 ```
 
-The key can instead be passed with `--api-key`, but the environment variable avoids exposing it in
-shell history. The test client redacts `apiKey` from its outbound request log. After login, unset
-`AWS_BEARER_TOKEN_BEDROCK` and start a fresh Codex process with the same `CODEX_HOME` to verify that
-it uses the persisted managed credential.
+The test client redacts `apiKey` from its outbound request log. After login, start a fresh Codex
+process with the same `CODEX_HOME` to verify that it uses the persisted managed credential.
 
 ## Testing Plugin Analytics
 

@@ -238,11 +238,11 @@ enum CliCommand {
         /// Use a Codex-managed Amazon Bedrock API key.
         #[arg(long, default_value_t = false, conflicts_with = "device_code")]
         amazon_bedrock: bool,
-        /// Amazon Bedrock API key. Defaults to AWS_BEARER_TOKEN_BEDROCK.
-        #[arg(long, env = "AWS_BEARER_TOKEN_BEDROCK", hide_env_values = true)]
+        /// Amazon Bedrock API key.
+        #[arg(long, value_name = "API_KEY")]
         api_key: Option<String>,
         /// AWS Region for the Amazon Bedrock Mantle endpoint.
-        #[arg(long, env = "AWS_REGION")]
+        #[arg(long, value_name = "REGION")]
         region: Option<String>,
     },
     /// Fetch the current account rate limits from the Codex app-server.
@@ -439,11 +439,8 @@ pub async fn run() -> Result<()> {
             ensure_dynamic_tools_unused(&dynamic_tools, "test-login")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             let mode = if amazon_bedrock {
-                let api_key = api_key.context(
-                    "--api-key or AWS_BEARER_TOKEN_BEDROCK is required with --amazon-bedrock",
-                )?;
-                let region =
-                    region.context("--region or AWS_REGION is required with --amazon-bedrock")?;
+                let api_key = api_key.context("--api-key is required with --amazon-bedrock")?;
+                let region = region.context("--region is required with --amazon-bedrock")?;
                 TestLoginMode::AmazonBedrock { api_key, region }
             } else if device_code {
                 TestLoginMode::ChatgptDeviceCode
