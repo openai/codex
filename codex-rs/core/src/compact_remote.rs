@@ -9,6 +9,7 @@ use crate::compact::compaction_error_event;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact_model_fallback::record_model_fallback;
+use crate::compact_model_fallback::select_model_fallback_error;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -251,7 +252,9 @@ async fn run_remote_compact_task_inner_impl(
             );
             match fallback_result {
                 Ok(attempt) => (attempt, fallback_turn_context),
-                Err(_) => return Err(error),
+                Err(fallback_error) => {
+                    return Err(select_model_fallback_error(error, fallback_error));
+                }
             }
         }
     };

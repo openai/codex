@@ -10,6 +10,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::compaction_error_event;
 use crate::compact::compaction_status_from_result;
 use crate::compact_model_fallback::record_model_fallback;
+use crate::compact_model_fallback::select_model_fallback_error;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -58,6 +59,7 @@ const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
 // retry budget smaller than the general Responses stream retry budget.
 const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
@@ -205,6 +207,7 @@ async fn run_remote_compact_task_inner(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
@@ -275,7 +278,9 @@ async fn run_remote_compact_task_inner_impl(
             );
             match fallback_result {
                 Ok(attempt) => (attempt, fallback_turn_context),
-                Err(_) => return Err(error),
+                Err(fallback_error) => {
+                    return Err(select_model_fallback_error(error, fallback_error));
+                }
             }
         }
     };

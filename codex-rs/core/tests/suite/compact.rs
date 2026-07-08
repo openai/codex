@@ -2678,6 +2678,120 @@ async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on
     assert_eq!(requests[3].body_json()["model"].as_str(), Some(next_model));
 }
 
+#[tokio::test]
+async fn pre_sampling_compact_reports_capacity_exhaustion_from_fallback_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let retired_model = "gpt-5.6";
+    let previous_model_family = "gpt-5.6";
+    let next_model = "gpt-5.5";
+    let mut previous_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 273_000);
+    previous_model_info.slug = previous_model_family.to_string();
+    let mut next_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 125_000);
+    next_model_info.slug = next_model.to_string();
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![previous_model_info, next_model_info],
+        },
+    )
+    .await;
+    let overloaded = || {
+        ResponseTemplate::new(/*status*/ 503).set_body_json(json!({
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "selected model is at capacity",
+            }
+        }))
+    };
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
+            ])),
+            invalid_request_response("previous-model compaction was rejected"),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            retired_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    tokio::time::pause();
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "input that must remain uncommitted",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit smaller-model turn");
+    let mut terminal_error_info = None;
+    loop {
+        match test.codex.next_event().await.expect("next event").msg {
+            EventMsg::StreamError(_) => {
+                tokio::time::advance(std::time::Duration::from_secs(600)).await
+            }
+            EventMsg::Error(error) => terminal_error_info = error.codex_error_info,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    tokio::time::resume();
+
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        terminal_error_info,
+        Some(CodexErrorInfo::ServerOverloadedBeforeInput)
+    );
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 6);
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    for request in &requests[2..] {
+        assert_eq!(request.body_json()["model"].as_str(), Some(next_model));
+        assert!(
+            !request
+                .body_json()
+                .to_string()
+                .contains("input that must remain uncommitted")
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_legacy_remote_compact_falls_back_after_previous_model_invalid_request() {
     skip_if_no_network!();

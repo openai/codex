@@ -969,6 +969,7 @@ async fn maybe_run_previous_model_inline_compact(
     skip_all,
     fields(reason = ?reason, phase = ?phase)
 )]
+#[allow(clippy::too_many_arguments)]
 async fn run_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,

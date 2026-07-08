@@ -47,3 +47,15 @@ pub(crate) fn record_model_fallback(
         "previous-model compaction failed; retried with current model"
     );
 }
+
+/// Preserve the previous-model rejection unless the fallback exposes a
+/// user-actionable recovery signal or cancellation.
+pub(crate) fn select_model_fallback_error(
+    original_error: CodexErr,
+    fallback_error: CodexErr,
+) -> CodexErr {
+    match fallback_error {
+        error @ (CodexErr::ServerOverloaded | CodexErr::TurnAborted) => error,
+        _ => original_error,
+    }
+}
