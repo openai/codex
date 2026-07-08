@@ -229,6 +229,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         workspace_roots_explicit: false,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         mcp_servers: Constrained::allow_any(HashMap::new()),
+        server_registered_mcp_tools: BTreeMap::new(),
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::File,
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,

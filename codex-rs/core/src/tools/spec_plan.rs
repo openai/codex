@@ -348,7 +348,8 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
-    features.enabled(Feature::ToolSuggest)
+    !server_registered_tools_only(turn_context)
+        && features.enabled(Feature::ToolSuggest)
         && features.enabled(Feature::Apps)
         && features.enabled(Feature::Plugins)
 }
