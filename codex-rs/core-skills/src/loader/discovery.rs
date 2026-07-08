@@ -71,6 +71,10 @@ pub(super) async fn discover_skills(
                     options.directory_symlinks,
                     DirectorySymlinkPolicy::Follow
                 ),
+                prune_hidden_directories: matches!(
+                    options.hidden_directories,
+                    HiddenDirectoryPolicy::Skip
+                ),
             },
             /*sandbox*/ None,
         )
