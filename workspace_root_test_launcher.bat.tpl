@@ -104,14 +104,24 @@ if defined TEST_WORKSPACE set "workspace_logical_path=%TEST_WORKSPACE%/%logical_
 set "native_logical_path=%logical_path:/=\%"
 set "native_workspace_logical_path=%workspace_logical_path:/=\%"
 
+rem Capture paths in FOR variables before ENDLOCAL. Delayed !variables! are
+rem unavailable after ENDLOCAL restores the caller's expansion mode.
 for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
   set "runfiles_root=%%~R"
   if defined runfiles_root (
     if exist "!runfiles_root!\!native_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_logical_path!" & exit /b 0
+      for %%P in ("!runfiles_root!\!native_logical_path!") do (
+        endlocal
+        set "%~1=%%~P"
+        exit /b 0
+      )
     )
     if exist "!runfiles_root!\!native_workspace_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_workspace_logical_path!" & exit /b 0
+      for %%P in ("!runfiles_root!\!native_workspace_logical_path!") do (
+        endlocal
+        set "%~1=%%~P"
+        exit /b 0
+      )
     )
   )
 )
@@ -128,13 +138,18 @@ if defined manifest if exist "%manifest%" (
   rem Bazel tests even though the manifest file was present.
   for /f "usebackq tokens=1,* delims= " %%A in ("%manifest%") do (
     if "%%A"=="%logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+      endlocal
+      set "%~1=%%B"
+      exit /b 0
     )
     if "%%A"=="%workspace_logical_path%" (
-      endlocal & set "%~1=%%B" & exit /b 0
+      endlocal
+      set "%~1=%%B"
+      exit /b 0
     )
   )
 )
 
 >&2 echo failed to resolve runfile: %logical_path%
-endlocal & exit /b 1
+endlocal
+exit /b 1
