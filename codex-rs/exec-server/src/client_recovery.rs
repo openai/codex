@@ -445,7 +445,7 @@ impl Inner {
                 Ok(false) => {}
                 Err(error) => {
                     let terminated: Result<TerminateResponse, ExecServerError> = rpc_client
-                        .call(
+                        .call_for_cleanup(
                             EXEC_TERMINATE_METHOD,
                             &TerminateParams {
                                 process_id: process_id.clone(),
