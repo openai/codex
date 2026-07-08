@@ -185,8 +185,15 @@ pub struct SkillRoot {
     pub scope: SkillScope,
     pub file_system: Arc<dyn ExecutorFileSystem>,
     pub plugin_id: Option<String>,
+    pub remote_plugin_id: Option<String>,
     pub plugin_namespace: Option<String>,
     pub plugin_root: Option<AbsolutePathBuf>,
+}
+
+#[derive(Clone, Copy)]
+struct PluginSkillIdentity<'a> {
+    plugin_id: &'a str,
+    remote_plugin_id: Option<&'a str>,
 }
 
 pub async fn load_skills_from_roots<I>(
@@ -213,16 +220,21 @@ pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {
         scope,
         file_system,
         plugin_id,
+        remote_plugin_id,
         plugin_namespace,
         plugin_root,
     } = root;
     let root = canonicalize_for_skill_identity(file_system.as_ref(), &path).await;
+    let plugin_identity = plugin_id.as_deref().map(|plugin_id| PluginSkillIdentity {
+        plugin_id,
+        remote_plugin_id: remote_plugin_id.as_deref(),
+    });
     let mut outcome = SkillLoadOutcome::default();
     load_skills_under_root(
         file_system.as_ref(),
         &root,
         scope,
-        plugin_id.as_deref(),
+        plugin_identity,
         plugin_namespace.as_deref(),
         plugin_root.as_ref(),
         &mut outcome,
@@ -270,6 +282,7 @@ async fn skill_roots_with_home_dir(
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some(root.plugin_id),
+        remote_plugin_id: root.remote_plugin_id,
         plugin_namespace: Some(root.plugin_namespace),
         plugin_root: Some(root.plugin_root),
     }));
@@ -278,6 +291,7 @@ async fn skill_roots_with_home_dir(
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        remote_plugin_id: None,
         plugin_namespace: None,
         plugin_root: None,
     }));
@@ -309,6 +323,7 @@ fn skill_roots_from_layer_stack_inner(
                         scope: SkillScope::Repo,
                         file_system: Arc::clone(repo_fs),
                         plugin_id: None,
+                        remote_plugin_id: None,
                         plugin_namespace: None,
                         plugin_root: None,
                     });
@@ -322,6 +337,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::User,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    remote_plugin_id: None,
                     plugin_namespace: None,
                     plugin_root: None,
                 });
@@ -333,6 +349,7 @@ fn skill_roots_from_layer_stack_inner(
                         scope: SkillScope::User,
                         file_system: Arc::clone(&LOCAL_FS),
                         plugin_id: None,
+                        remote_plugin_id: None,
                         plugin_namespace: None,
                         plugin_root: None,
                     });
@@ -345,6 +362,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::System,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    remote_plugin_id: None,
                     plugin_namespace: None,
                     plugin_root: None,
                 });
@@ -357,6 +375,7 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::Admin,
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
+                    remote_plugin_id: None,
                     plugin_namespace: None,
                     plugin_root: None,
                 });
@@ -393,6 +412,7 @@ async fn repo_agents_skill_roots(
                 scope: SkillScope::Repo,
                 file_system: Arc::clone(&fs),
                 plugin_id: None,
+                remote_plugin_id: None,
                 plugin_namespace: None,
                 plugin_root: None,
             }),
@@ -667,7 +687,7 @@ async fn load_skills_under_root(
     fs: &dyn ExecutorFileSystem,
     root: &AbsolutePathBuf,
     scope: SkillScope,
-    plugin_id: Option<&str>,
+    plugin_identity: Option<PluginSkillIdentity<'_>>,
     plugin_namespace: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
     outcome: &mut SkillLoadOutcome,
@@ -715,7 +735,7 @@ async fn load_skills_under_root(
             fs,
             &path,
             scope,
-            plugin_id,
+            plugin_identity,
             namespace_resolver.for_skill(&root_uri, &path_uri),
             plugin_root.as_ref(),
         )
@@ -735,7 +755,7 @@ async fn parse_skill_file(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
     scope: SkillScope,
-    plugin_id: Option<&str>,
+    plugin_identity: Option<PluginSkillIdentity<'_>>,
     namespace: &ResolvedSkillNamespace,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
@@ -769,7 +789,12 @@ async fn parse_skill_file(
         policy,
         path_to_skills_md: resolved_path,
         scope,
-        plugin_id: plugin_id.map(str::to_string),
+        plugin_id: plugin_identity.map(|identity| identity.plugin_id.to_string()),
+        remote_plugin_id: plugin_identity.and_then(|identity| {
+            identity
+                .remote_plugin_id
+                .map(std::string::ToString::to_string)
+        }),
     })
 }
 

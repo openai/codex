@@ -63,6 +63,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         skill_scope: candidate.scope,
         skill_path: candidate.path_to_skills_md.to_path_buf(),
         plugin_id: candidate.plugin_id,
+        remote_plugin_id: candidate.remote_plugin_id,
         invocation_type: InvocationType::Implicit,
     };
     let skill_scope = match invocation.skill_scope {

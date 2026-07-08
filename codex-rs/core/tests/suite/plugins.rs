@@ -579,3 +579,82 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_skill_mentions_track_remote_identity() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
+    std::fs::write(
+        sample_plugin_root(codex_home.as_ref())
+            .parent()
+            .expect("plugin version root should have a parent")
+            .join(".codex-remote-plugin-install.json"),
+        serde_json::json!({
+            "schema_version": 1,
+            "remote_plugin_id": "plugins~Plugin_sample"
+        })
+        .to_string(),
+    )
+    .expect("write remote plugin identity");
+    let skill_path = skill_path
+        .canonicalize()
+        .unwrap_or_else(|_| skill_path.clone());
+    let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&test_codex.codex);
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Skill {
+                name: "sample:sample-search".to_string(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let skill_event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == "skill_invocation")
+                        .cloned()
+                })
+            })
+        {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for skill invocation analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    assert_eq!(skill_event["skill_name"], "sample:sample-search");
+    assert_eq!(skill_event["event_params"]["plugin_id"], "sample@test");
+    assert_eq!(
+        skill_event["event_params"]["remote_plugin_id"],
+        "plugins~Plugin_sample"
+    );
+    assert_eq!(skill_event["event_params"]["invoke_type"], "explicit");
+
+    Ok(())
+}

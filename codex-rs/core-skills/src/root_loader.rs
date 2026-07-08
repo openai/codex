@@ -54,6 +54,7 @@ where
             (Some(plugin_id), Some(plugin_namespace), Some(plugin_root)) => Some(PluginSkillRoot {
                 path: root.path.clone(),
                 plugin_id,
+                remote_plugin_id: root.remote_plugin_id.clone(),
                 plugin_namespace,
                 plugin_root,
             }),

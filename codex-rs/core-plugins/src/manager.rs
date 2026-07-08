@@ -10,7 +10,7 @@ use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers_from_manifest;
-use crate::loader::load_plugin_skills;
+use crate::loader::load_plugin_skills_with_remote_id;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
@@ -561,6 +561,7 @@ impl PluginsManager {
         let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
+            self.remote_plugin_ids_by_plugin_key(),
             &self.store,
             Some(&plugin_skill_snapshots),
             self.restriction_product,
@@ -646,6 +647,7 @@ impl PluginsManager {
         let plugins = load_plugins_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(),
+            self.remote_plugin_ids_by_plugin_key(),
             &self.store,
             /*plugin_skill_snapshots*/ None,
             self.restriction_product,
@@ -731,6 +733,25 @@ impl PluginsManager {
         };
 
         remote_installed_plugins_to_config(plugins, &self.store)
+    }
+
+    fn remote_plugin_ids_by_plugin_key(&self) -> HashMap<String, String> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let Some(plugins) = cache.as_ref() else {
+            return HashMap::new();
+        };
+
+        plugins
+            .iter()
+            .filter_map(|plugin| {
+                PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
+                    .ok()
+                    .map(|plugin_id| (plugin_id.as_key(), plugin.id.clone()))
+            })
+            .collect()
     }
 
     fn remote_plugin_id_for(&self, plugin_id: &PluginId) -> Option<String> {
@@ -1844,9 +1865,11 @@ impl PluginsManager {
             manifest.interface.clone(),
             marketplace_category,
         );
-        let resolved_skills = load_plugin_skills(
+        let remote_plugin_id = self.remote_plugin_id_for(&plugin_id);
+        let resolved_skills = load_plugin_skills_with_remote_id(
             &source_path,
             &plugin_id,
+            remote_plugin_id.as_deref(),
             &manifest,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(

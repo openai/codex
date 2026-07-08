@@ -17,6 +17,7 @@ pub use plugin_namespace::plugin_namespace_for_skill_uri;
 pub struct PluginSkillRoot {
     pub path: AbsolutePathBuf,
     pub plugin_id: String,
+    pub remote_plugin_id: Option<String>,
     pub plugin_namespace: String,
     pub plugin_root: AbsolutePathBuf,
 }

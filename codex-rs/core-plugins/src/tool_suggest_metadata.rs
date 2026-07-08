@@ -213,6 +213,7 @@ async fn load_plugin_metadata(
     let skill_inventory = load_plugin_skill_inventory(
         plugin_root,
         &plugin_id,
+        /*remote_plugin_id*/ None,
         &manifest,
         restriction_product,
         /*plugin_skill_snapshots*/ None,

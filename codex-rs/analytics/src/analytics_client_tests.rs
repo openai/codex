@@ -3438,6 +3438,7 @@ async fn reducer_ingests_skill_invoked_fact() {
                     skill_scope: codex_protocol::protocol::SkillScope::User,
                     skill_path,
                     plugin_id: None,
+                    remote_plugin_id: None,
                     invocation_type: InvocationType::Explicit,
                 }],
             })),
@@ -3456,6 +3457,7 @@ async fn reducer_ingests_skill_invoked_fact() {
                 "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "skill_scope": "user",
                 "plugin_id": null,
+                "remote_plugin_id": null,
                 "repo_url": null,
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
@@ -3467,7 +3469,7 @@ async fn reducer_ingests_skill_invoked_fact() {
 }
 
 #[tokio::test]
-async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
+async fn reducer_includes_plugin_ids_for_plugin_skill_invocations() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let tracking = test_tracking_context("thread-1", "turn-1");
@@ -3483,6 +3485,7 @@ async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
                     skill_scope: codex_protocol::protocol::SkillScope::User,
                     skill_path,
                     plugin_id: Some("sample@test".to_string()),
+                    remote_plugin_id: Some("plugins~Plugin_sample".to_string()),
                     invocation_type: InvocationType::Explicit,
                 }],
             })),
@@ -3494,6 +3497,10 @@ async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
     assert_eq!(
         payload[0]["event_params"]["plugin_id"],
         json!("sample@test")
+    );
+    assert_eq!(
+        payload[0]["event_params"]["remote_plugin_id"],
+        json!("plugins~Plugin_sample")
     );
 }
 

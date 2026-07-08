@@ -16,6 +16,7 @@ const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedPlugin<M> {
     pub config_name: String,
+    pub remote_plugin_id: Option<String>,
     pub manifest_name: Option<String>,
     pub plugin_namespace: Option<String>,
     pub manifest_description: Option<String>,
@@ -135,6 +136,7 @@ impl<M: Clone> PluginLoadOutcome<M> {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
+                        remote_plugin_id: plugin.remote_plugin_id.clone(),
                         plugin_namespace: plugin_namespace.clone(),
                         plugin_root: plugin.root.clone(),
                     });
@@ -222,6 +224,7 @@ mod tests {
     fn loaded_plugin(config_name: &str, skill_roots: Vec<AbsolutePathBuf>) -> LoadedPlugin<()> {
         LoadedPlugin {
             config_name: config_name.to_string(),
+            remote_plugin_id: None,
             manifest_name: None,
             plugin_namespace: Some(
                 config_name
@@ -246,8 +249,10 @@ mod tests {
     #[test]
     fn effective_plugin_skill_roots_preserves_first_plugin_for_shared_root() {
         let shared_root = test_path("shared-skills");
+        let mut first_plugin = loaded_plugin("zeta@test", vec![shared_root.clone()]);
+        first_plugin.remote_plugin_id = Some("plugins~Plugin_zeta".to_string());
         let outcome = PluginLoadOutcome::from_plugins(vec![
-            loaded_plugin("zeta@test", vec![shared_root.clone()]),
+            first_plugin,
             loaded_plugin("alpha@test", vec![shared_root.clone()]),
         ]);
 
@@ -256,6 +261,7 @@ mod tests {
             vec![PluginSkillRoot {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
+                remote_plugin_id: Some("plugins~Plugin_zeta".to_string()),
                 plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
             }]

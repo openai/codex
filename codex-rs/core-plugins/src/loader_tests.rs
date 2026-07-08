@@ -159,6 +159,7 @@ enabled = true
     let full = load_plugins_from_layer_stack(
         &stack,
         HashMap::new(),
+        HashMap::new(),
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),

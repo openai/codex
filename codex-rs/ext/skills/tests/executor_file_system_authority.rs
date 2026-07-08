@@ -207,6 +207,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
                 has_plugin_manifest: false,
             }),
             plugin_id: None,
+            remote_plugin_id: None,
             plugin_namespace: None,
             plugin_root: None,
         }],

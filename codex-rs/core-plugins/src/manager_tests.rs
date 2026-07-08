@@ -857,6 +857,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
         outcome.plugins(),
         vec![LoadedPlugin {
             config_name: "sample@test".to_string(),
+            remote_plugin_id: None,
             manifest_name: Some("sample".to_string()),
             plugin_namespace: Some("sample".to_string()),
             manifest_description: Some(
@@ -2140,6 +2141,7 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
         outcome.plugins(),
         vec![LoadedPlugin {
             config_name: "sample@test".to_string(),
+            remote_plugin_id: None,
             manifest_name: None,
             plugin_namespace: None,
             manifest_description: None,
@@ -2310,6 +2312,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     };
     let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
         config_name: config_name.to_string(),
+        remote_plugin_id: None,
         manifest_name: Some(manifest_name.to_string()),
         plugin_namespace: Some(
             config_name
@@ -2494,7 +2497,7 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
 }
 
 #[tokio::test]
-async fn skills_service_reuses_skills_parsed_during_plugin_load() {
+async fn skill_snapshots_preserve_remote_plugin_identity() {
     let codex_home = TempDir::new().unwrap();
     let codex_home_abs = codex_home.path().to_path_buf().abs();
     let plugin_root = codex_home
@@ -2513,8 +2516,15 @@ async fn skills_service_reuses_skills_parsed_during_plugin_load() {
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
     );
 
+    let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
+    PluginStore::new(codex_home.path().to_path_buf())
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_stale")
+        .expect("persist stale remote plugin id");
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin_in_marketplace(
+        "sample", "test",
+    )]);
     let plugin_outcome = manager.plugins_for_config(&config).await;
     let plugin_skill_snapshots = manager.plugin_skill_snapshots_for_config(&config);
     write_file(&skill_path, "---\nname: search\ndescription: second\n---\n");
@@ -2536,9 +2546,13 @@ async fn skills_service_reuses_skills_parsed_during_plugin_load() {
             .outcome()
             .skills
             .iter()
-            .map(|skill| skill.description.as_str())
+            .map(|skill| (
+                skill.description.as_str(),
+                skill.plugin_id.as_deref(),
+                skill.remote_plugin_id.as_deref(),
+            ))
             .collect::<Vec<_>>(),
-        vec!["first"]
+        vec![("first", Some("sample@test"), Some("plugins~Plugin_sample"),)]
     );
 }
 
@@ -5817,6 +5831,7 @@ async fn load_plugins_ignores_project_config_files() {
 
     let plugins = load_plugins_from_layer_stack(
         &stack,
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         /*plugin_skill_snapshots*/ None,
