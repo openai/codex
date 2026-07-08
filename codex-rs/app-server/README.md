@@ -424,7 +424,7 @@ replace that sweep or recover mutations missed while disconnected.
 
 `threadCatalog/changed` contains persisted sidebar metadata only. It never contains turns, items,
 messages, deltas, tool state, or loaded runtime status. Subagent summaries include relationship and
-display metadata such as `parentThreadId`, `threadSource`, `agentNickname`, and `agentRole`; clients
+display metadata such as `parentThreadId`, `source`, `agentNickname`, and `agentRole`; clients
 compose runtime state from `thread/status/changed` rather than this feed.
 
 ### Example: List descendant threads

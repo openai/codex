@@ -4030,16 +4030,14 @@ config_file = "./custom-role.toml"
     assert_eq!(
         (
             child_summary.parent_thread_id.as_deref(),
-            child_summary.thread_source.as_ref(),
+            matches!(
+                child_summary.source,
+                codex_app_server_protocol::SessionSource::SubAgent(_)
+            ),
             child_summary.agent_nickname.as_deref().map(str::is_empty),
             child_summary.agent_role.as_deref(),
         ),
-        (
-            Some(thread.id.as_str()),
-            Some(&ThreadSource::Subagent),
-            Some(false),
-            Some("custom"),
-        )
+        (Some(thread.id.as_str()), true, Some(false), Some("custom"),)
     );
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
