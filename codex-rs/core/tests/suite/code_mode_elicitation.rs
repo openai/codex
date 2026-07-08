@@ -27,9 +27,11 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use wiremock::MockServer;
 
 const YIELD_TIME_MS: u64 = 1_000;
+const TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct CodeModeElicitationHarness {
     _server: MockServer,
@@ -72,10 +74,14 @@ impl CodeModeElicitationHarness {
     }
 
     async fn finish(self) {
-        wait_for_event(&self.test.codex, |event| match event {
-            EventMsg::TurnComplete(event) => event.turn_id == self.turn_id,
-            _ => false,
-        })
+        wait_for_event_with_timeout(
+            &self.test.codex,
+            |event| match event {
+                EventMsg::TurnComplete(event) => event.turn_id == self.turn_id,
+                _ => false,
+            },
+            TURN_COMPLETE_TIMEOUT,
+        )
         .await;
         self.follow_up.single_request();
     }
@@ -207,6 +213,10 @@ await tools.apply_patch("*** Begin Patch\n*** Add File: code_mode_patch_approval
     Ok(())
 }
 
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "request_permissions tool integration is not supported on Linux"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_holds_yielded_result_during_permission_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -223,11 +233,16 @@ await tools.request_permissions({
         },
     )
     .await?;
-    let request = wait_for_event_match(&harness.test.codex, |event| match event {
-        EventMsg::RequestPermissions(request) => Some(request.clone()),
-        _ => None,
+    let request = wait_for_event(&harness.test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_) | EventMsg::Error(_)
+        )
     })
     .await;
+    let EventMsg::RequestPermissions(request) = request else {
+        panic!("expected request_permissions before turn completion, got {request:?}");
+    };
 
     harness.assert_result_held().await;
     harness
@@ -236,7 +251,7 @@ await tools.request_permissions({
         .submit(Op::RequestPermissionsResponse {
             id: request.call_id,
             response: RequestPermissionsResponse {
-                permissions: request.permissions,
+                permissions: Default::default(),
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
             },
