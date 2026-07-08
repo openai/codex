@@ -466,14 +466,17 @@ impl ModelInfo {
                 .get_personality_message(personality)
                 .unwrap_or_default();
             template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
-        } else if let Some(personality) = personality {
-            warn!(
-                model = %self.slug,
-                %personality,
-                "Model personality requested but model_messages is missing, falling back to base instructions."
-            );
-            self.base_instructions.clone()
         } else {
+            match personality {
+                Some(personality @ (Personality::Friendly | Personality::Pragmatic)) => {
+                    warn!(
+                        model = %self.slug,
+                        %personality,
+                        "Model personality requested but model_messages is missing, falling back to base instructions."
+                    );
+                }
+                Some(Personality::None) | None => {}
+            }
             self.base_instructions.clone()
         }
     }
