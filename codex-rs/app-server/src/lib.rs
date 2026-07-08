@@ -526,10 +526,7 @@ pub async fn run_main_with_transport_options(
                 return Err(err);
             }
 
-            let message = config_warning_from_error(
-                "Invalid configuration; using defaults with SQLite disabled.",
-                &err,
-            );
+            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
             let mut config = config_manager.load_default_config().await.map_err(|e| {
                 std::io::Error::new(
@@ -544,6 +541,14 @@ pub async fn run_main_with_transport_options(
             (config, false)
         }
     };
+    if !config.features.enabled(codex_features::Feature::Sqlite) {
+        config_warnings.push(ConfigWarningNotification {
+            summary: "SQLite is disabled. Codex is running in degraded mode; SQLite-dependent features and operations are unavailable.".to_string(),
+            details: None,
+            path: None,
+            range: None,
+        });
+    }
 
     let otel = codex_core::otel_init::build_provider(
         &config,

@@ -40,12 +40,46 @@ use tokio::time::timeout;
 // Bazel CI can spend tens of seconds starting app-server subprocesses or
 // processing config RPCs under load.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const SQLITE_DISABLED_WARNING_SUMMARY: &str = "SQLite is disabled. Codex is running in degraded mode; SQLite-dependent features and operations are unavailable.";
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
     Ok(std::fs::write(
         codex_home.path().join("config.toml"),
         contents,
     )?)
+}
+
+#[tokio::test]
+async fn sqlite_disabled_emits_degraded_mode_warning() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, "[features]\nsqlite = false\n")?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("CODEX_SQLITE_HOME", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let warning = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification("SQLite disabled config warning", |message| {
+            message.method == "configWarning"
+                && message
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("summary"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(SQLITE_DISABLED_WARNING_SUMMARY)
+        }),
+    )
+    .await??;
+
+    assert_eq!(
+        warning
+            .params
+            .as_ref()
+            .and_then(|params| params.get("summary"))
+            .and_then(serde_json::Value::as_str),
+        Some(SQLITE_DISABLED_WARNING_SUMMARY)
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
