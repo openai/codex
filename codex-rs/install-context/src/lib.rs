@@ -71,16 +71,8 @@ impl InstallContext {
     pub fn from_exe(
         is_macos: bool,
         current_exe: Option<&Path>,
-        managed_by_npm: bool,
-        managed_by_bun: bool,
+        method_override: Option<InstallMethod>,
     ) -> Self {
-        let method_override = if managed_by_npm {
-            Some(InstallMethod::Npm)
-        } else if managed_by_bun {
-            Some(InstallMethod::Bun)
-        } else {
-            None
-        };
         let codex_home = codex_utils_home_dir::find_codex_home().ok();
         Self::from_exe_with_codex_home(
             is_macos,
@@ -123,12 +115,10 @@ impl InstallContext {
             } else {
                 None
             };
-            let codex_home = codex_utils_home_dir::find_codex_home().ok();
-            Self::from_exe_with_codex_home(
+            Self::from_exe(
                 cfg!(target_os = "macos"),
                 current_exe.as_deref(),
                 method_override,
-                codex_home.as_deref(),
             )
         })
     }
@@ -508,8 +498,7 @@ mod tests {
         let context = InstallContext::from_exe(
             /*is_macos*/ false,
             /*current_exe*/ Some(&exe_path),
-            /*managed_by_npm*/ true,
-            /*managed_by_bun*/ false,
+            /*method_override*/ Some(InstallMethod::Npm),
         );
         assert_eq!(context.method, InstallMethod::Npm);
         assert!(context.package_layout.is_some());
@@ -566,12 +555,11 @@ mod tests {
     }
 
     #[test]
-    fn package_manager_markers_take_precedence() {
-        let pnpm_context = InstallContext::from_exe_with_codex_home(
+    fn package_manager_method_overrides_take_precedence() {
+        let pnpm_context = InstallContext::from_exe(
             /*is_macos*/ false,
             /*current_exe*/ Some(Path::new("/tmp/codex")),
             /*method_override*/ Some(InstallMethod::Pnpm),
-            /*codex_home*/ None,
         );
         assert_eq!(
             pnpm_context,
@@ -584,8 +572,7 @@ mod tests {
         let npm_context = InstallContext::from_exe(
             /*is_macos*/ false,
             /*current_exe*/ Some(Path::new("/tmp/codex")),
-            /*managed_by_npm*/ true,
-            /*managed_by_bun*/ false,
+            /*method_override*/ Some(InstallMethod::Npm),
         );
         assert_eq!(
             npm_context,
@@ -598,8 +585,7 @@ mod tests {
         let bun_context = InstallContext::from_exe(
             /*is_macos*/ false,
             /*current_exe*/ Some(Path::new("/tmp/codex")),
-            /*managed_by_npm*/ false,
-            /*managed_by_bun*/ true,
+            /*method_override*/ Some(InstallMethod::Bun),
         );
         assert_eq!(
             bun_context,
