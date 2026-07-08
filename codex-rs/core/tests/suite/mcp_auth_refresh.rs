@@ -4,10 +4,12 @@ use anyhow::Result;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core::config::Constrained;
-use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
-use codex_login::auth::login_with_chatgpt_auth_tokens;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::CodexAppsToolsCache;
 use codex_mcp::EffectiveMcpServer;
@@ -29,34 +31,35 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+// Installs a known snapshot through AuthManager's public external-auth path.
+struct StaticExternalAuth(CodexAuth);
+
+impl ExternalAuth for StaticExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_reloaded_auth_manager_token() -> Result<()> {
+async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount_hosted_plugin_runtime_searchable(&server).await?;
     let home = Arc::new(TempDir::new()?);
-    login_with_chatgpt_auth_tokens(
-        home.path(),
+    let expected_auth = CodexAuth::from_external_chatgpt_tokens(
         "header.e30.first",
         "test-account",
         /*chatgpt_plan_type*/ None,
     )?;
-    let auth_manager = Arc::new(
-        AuthManager::new(
-            home.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::Ephemeral,
-            /*forced_chatgpt_workspace_id*/ None,
-            /*chatgpt_base_url*/ None,
-            AuthKeyringBackendKind::default(),
-            /*auth_route_config*/ None,
-        )
-        .await,
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(
+        expected_auth.clone(),
+        home.path().to_path_buf(),
     );
-    let expected_auth = auth_manager
-        .auth_cached()
-        .expect("initial auth should be cached");
     // Build the hosted-plugin config directly so the local test origin can
     // exercise the connection-manager auth path. Effective server resolution
     // correctly strips ChatGPT auth from untrusted localhost origins.
@@ -109,17 +112,22 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_reloaded_auth_manager_token
         ElicitationRequestRouter::default(),
     )
     .await;
-    login_with_chatgpt_auth_tokens(
-        home.path(),
-        "header.e30.reloaded",
-        "test-account",
-        /*chatgpt_plan_type*/ None,
-    )?;
-    auth_manager.reload().await;
+    // The model-provider test covers AuthManager reload behavior. Keep this
+    // regression focused on core MCP wiring by updating the same shared
+    // manager after the MCP client has been created.
+    auth_manager
+        .set_external_auth(Arc::new(StaticExternalAuth(
+            CodexAuth::from_external_chatgpt_tokens(
+                "header.e30.reloaded",
+                "test-account",
+                /*chatgpt_plan_type*/ None,
+            )?,
+        )))
+        .await?;
 
-    // The manager and its static fallback were created before reload, so this
-    // tool call only sees the new token if the Codex Apps provider reads the
-    // shared AuthManager at request time.
+    // The manager and its static fallback were created before the auth update,
+    // so this tool call only sees the new token if the Codex Apps provider
+    // reads the shared AuthManager at request time.
     let tool_result = manager
         .call_tool(
             CODEX_APPS_MCP_SERVER_NAME,
