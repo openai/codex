@@ -27,7 +27,10 @@ async fn thread_memory_mode_set_updates_loaded_thread_state() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
     let state_db = init_state_db(codex_home.path()).await?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -79,7 +82,11 @@ async fn thread_memory_mode_set_updates_stored_thread_state() -> Result<()> {
     )?;
     let thread_uuid = ThreadId::from_string(&thread_id)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     for mode in [ThreadMemoryMode::Disabled, ThreadMemoryMode::Enabled] {

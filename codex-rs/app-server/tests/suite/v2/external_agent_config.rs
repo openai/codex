@@ -58,14 +58,15 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     let sqlite_home = TempDir::new()?;
     let home_dir = codex_home.path().display().to_string();
     let sqlite_home_dir = sqlite_home.path().display().to_string();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("HOME", Some(home_dir.as_str())),
             ("CODEX_SQLITE_HOME", Some(sqlite_home_dir.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -189,17 +190,18 @@ async fn external_agent_config_import_reports_failed_sync_import_in_completion()
     let home_dir = codex_home.path().display().to_string();
     let analytics_capture_file = codex_home.path().join("analytics-events.jsonl");
     let analytics_capture_file = analytics_capture_file.display().to_string();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("HOME", Some(home_dir.as_str())),
             (
                 "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE",
                 Some(analytics_capture_file.as_str()),
             ),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -335,9 +337,12 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
         external_agent_home(codex_home.path()).join("projects/repo/missing.jsonl");
     let project_root = codex_home.path().join("repo");
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -458,9 +463,12 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -551,9 +559,12 @@ async fn external_agent_config_import_sends_completion_notification_after_pendin
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -633,9 +644,12 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -845,9 +859,12 @@ required = true
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -931,9 +948,12 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1022,9 +1042,12 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1115,9 +1138,12 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     std::fs::write(&session_path, &session_contents)?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1291,9 +1317,12 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

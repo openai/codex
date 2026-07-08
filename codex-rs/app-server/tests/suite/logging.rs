@@ -68,11 +68,11 @@ async fn app_server_emits_structured_tool_call_timing_event() -> Result<()> {
         "compact",
     )?;
 
-    let mut app_server = TestAppServer::new_with_auto_env_and_json_logging(
-        codex_home.path(),
-        "warn,codex_core::tools::parallel=info",
-    )
-    .await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_json_logging("warn,codex_core::tools::parallel=info")
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
     let thread_start_id = app_server

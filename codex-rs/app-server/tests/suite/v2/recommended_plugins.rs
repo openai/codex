@@ -72,11 +72,13 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
     )?;
 
     let sqlite_home = codex_home.path().to_string_lossy();
-    let mut app_server = TestAppServer::new_without_managed_config_with_env(
-        codex_home.path(),
-        &[("CODEX_SQLITE_HOME", Some(sqlite_home.as_ref()))],
-    )
-    .await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .without_managed_config()
+        .with_env_overrides(&[("CODEX_SQLITE_HOME", Some(sqlite_home.as_ref()))])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let access_token = encode_id_token(

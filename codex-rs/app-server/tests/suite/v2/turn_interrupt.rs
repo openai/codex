@@ -57,7 +57,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         .await;
     create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
-    let mut mcp = TestAppServer::new(&codex_home).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread and capture its id.
@@ -141,7 +145,10 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
     .await;
     create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(&codex_home).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -236,7 +243,11 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     .await;
     create_config_toml(&codex_home, &server.uri(), "untrusted", "read-only")?;
 
-    let mut mcp = TestAppServer::new(&codex_home).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp

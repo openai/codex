@@ -746,12 +746,13 @@ async fn create_zsh_test_mcp_process(
 ) -> Result<TestAppServer> {
     let app_server = create_test_package_app_server(codex_home, zsh_path)?;
     let zdotdir = zdotdir.to_string_lossy().into_owned();
-    TestAppServer::new_with_program_and_env(
-        codex_home,
-        &app_server,
-        &[("ZDOTDIR", Some(zdotdir.as_str()))],
-    )
-    .await
+    TestAppServer::builder()
+        .with_codex_home(codex_home)
+        .without_auto_env()
+        .with_program(&app_server)
+        .with_env_overrides(&[("ZDOTDIR", Some(zdotdir.as_str()))])
+        .build()
+        .await
 }
 
 fn create_test_package_app_server(codex_home: &Path, zsh_path: &Path) -> Result<PathBuf> {

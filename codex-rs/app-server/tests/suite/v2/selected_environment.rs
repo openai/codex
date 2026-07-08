@@ -45,7 +45,10 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         "mock_provider",
         "compact",
     )?;
-    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server
@@ -105,7 +108,10 @@ async fn thread_start_reports_selected_environment_instruction_source() -> Resul
         "mock_provider",
         "compact",
     )?;
-    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let (agents_source, environment_cwd) = {
@@ -180,7 +186,10 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         "mock_provider",
         "compact",
     )?;
-    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
     let (environment_cwd, environment_shell) = {
         let auto_env = app_server.auto_env()?;
