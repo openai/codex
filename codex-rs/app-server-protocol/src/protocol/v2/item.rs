@@ -10,7 +10,12 @@ use super::UserInput;
 use super::shared::v2_enum_from_core;
 use crate::protocol::item_builders::command_actions_for_path_uri;
 use crate::protocol::item_builders::convert_patch_changes;
+use crate::protocol::item_builders::review_output_text;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_extension_items::ExtensionItem;
+pub use codex_extension_items::image_generation::ImageGenerationItem;
+pub use codex_extension_items::web_search::WebSearchAction;
+pub use codex_extension_items::web_search::WebSearchItem;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
@@ -246,7 +251,10 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
-    Plan { id: String, text: String },
+    Plan {
+        id: String,
+        text: String,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -353,13 +361,7 @@ pub enum ThreadItem {
         agent_thread_id: String,
         agent_path: String,
     },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    WebSearch {
-        id: String,
-        query: String,
-        action: Option<WebSearchAction>,
-    },
+    WebSearch(WebSearchItem),
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageView {
@@ -373,26 +375,24 @@ pub enum ThreadItem {
         #[ts(type = "number")]
         duration_ms: u64,
     },
+    ImageGeneration(ImageGenerationItem),
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageGeneration {
+    EnteredReviewMode {
         id: String,
-        status: String,
-        revised_prompt: Option<String>,
-        result: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        saved_path: Option<AbsolutePathBuf>,
+        review: String,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode { id: String, review: String },
+    ExitedReviewMode {
+        id: String,
+        review: String,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode { id: String, review: String },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    ContextCompaction { id: String },
+    ContextCompaction {
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -429,13 +429,13 @@ impl ThreadItem {
             | ThreadItem::DynamicToolCall { id, .. }
             | ThreadItem::CollabAgentToolCall { id, .. }
             | ThreadItem::SubAgentActivity { id, .. }
-            | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
             | ThreadItem::Sleep { id, .. }
-            | ThreadItem::ImageGeneration { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
+            ThreadItem::WebSearch(item) => &item.id,
+            ThreadItem::ImageGeneration(item) => &item.id,
         }
     }
 }
@@ -783,40 +783,20 @@ impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type", rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum WebSearchAction {
-    Search {
-        query: Option<String>,
-        queries: Option<Vec<String>>,
-    },
-    OpenPage {
-        url: Option<String>,
-    },
-    FindInPage {
-        url: Option<String>,
-        pattern: Option<String>,
-    },
-    #[serde(other)]
-    Other,
-}
-
-impl From<codex_protocol::models::WebSearchAction> for WebSearchAction {
-    fn from(value: codex_protocol::models::WebSearchAction) -> Self {
-        match value {
-            codex_protocol::models::WebSearchAction::Search { query, queries } => {
-                WebSearchAction::Search { query, queries }
-            }
-            codex_protocol::models::WebSearchAction::OpenPage { url } => {
-                WebSearchAction::OpenPage { url }
-            }
-            codex_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
-                WebSearchAction::FindInPage { url, pattern }
-            }
-            codex_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
+pub(crate) fn web_search_action_from_core(
+    value: codex_protocol::models::WebSearchAction,
+) -> WebSearchAction {
+    match value {
+        codex_protocol::models::WebSearchAction::Search { query, queries } => {
+            WebSearchAction::Search { query, queries }
         }
+        codex_protocol::models::WebSearchAction::OpenPage { url } => {
+            WebSearchAction::OpenPage { url }
+        }
+        codex_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
+            WebSearchAction::FindInPage { url, pattern }
+        }
+        codex_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
     }
 }
 
@@ -918,11 +898,11 @@ impl From<CoreTurnItem> for ThreadItem {
                 agent_thread_id: activity.agent_thread_id.to_string(),
                 agent_path: String::from(activity.agent_path),
             },
-            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
+            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch(WebSearchItem {
                 id: search.id,
                 query: search.query,
-                action: Some(WebSearchAction::from(search.action)),
-            },
+                action: Some(web_search_action_from_core(search.action)),
+            }),
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,
                 path: image.path.into(),
@@ -931,12 +911,26 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: sleep.id,
                 duration_ms: sleep.duration_ms,
             },
-            CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
-                id: image.id,
-                status: image.status,
-                revised_prompt: image.revised_prompt,
-                result: image.result,
-                saved_path: image.saved_path,
+            CoreTurnItem::Extension(extension) => match extension {
+                ExtensionItem::ImageGeneration(item) => ThreadItem::ImageGeneration(item),
+                ExtensionItem::WebSearch(item) => ThreadItem::WebSearch(item),
+            },
+            CoreTurnItem::ImageGeneration(image) => {
+                ThreadItem::ImageGeneration(ImageGenerationItem {
+                    id: image.id,
+                    status: image.status,
+                    revised_prompt: image.revised_prompt,
+                    result: image.result,
+                    saved_path: image.saved_path,
+                })
+            }
+            CoreTurnItem::EnteredReviewMode(review) => ThreadItem::EnteredReviewMode {
+                id: review.id,
+                review: review.user_facing_hint,
+            },
+            CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
+                id: review.id,
+                review: review_output_text(review.review_output.as_ref()),
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,

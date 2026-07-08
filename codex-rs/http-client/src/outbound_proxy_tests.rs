@@ -9,6 +9,41 @@ struct MapEnv {
     values: HashMap<String, String>,
 }
 
+#[test]
+fn websocket_route_uses_http_equivalent_for_system_resolution() {
+    let route = resolve_proxy_route(
+        "wss://api.openai.com/v1/responses",
+        OutboundProxyPolicy::RespectSystemProxy,
+        |request_url, origin| {
+            assert_eq!(request_url, "https://api.openai.com/v1/responses");
+            assert_eq!(origin.scheme, "https");
+            assert_eq!(origin.host, "api.openai.com");
+            assert_eq!(origin.port, 443);
+            SystemProxyDecision::Proxy {
+                url: "http://proxy.example:8080".to_string(),
+            }
+        },
+    );
+
+    assert_eq!(
+        route,
+        OutboundProxyRoute::Proxy {
+            url: "http://proxy.example:8080".to_string(),
+        }
+    );
+}
+
+#[test]
+fn reqwest_default_route_preserves_transport_proxy_behavior() {
+    let route = resolve_proxy_route(
+        "wss://api.openai.com/v1/responses",
+        OutboundProxyPolicy::ReqwestDefault,
+        |_, _| panic!("default policy should not resolve system proxy settings"),
+    );
+
+    assert_eq!(route, OutboundProxyRoute::TransportDefault);
+}
+
 impl EnvSource for MapEnv {
     fn var(&self, key: &str) -> Option<String> {
         self.values.get(key).cloned()
@@ -79,13 +114,12 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
         values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
     };
     let request_url = "http://enabled-proxy.test/proxy-check";
-    let config = OutboundProxyConfig::respect_system_proxy();
     let builder = configure_proxy_for_route(
         &env,
         reqwest::Client::builder().timeout(Duration::from_secs(2)),
         request_url,
         ClientRouteClass::Auth,
-        Some(&config),
+        OutboundProxyPolicy::RespectSystemProxy,
         |_, _| SystemProxyDecision::Unavailable {
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         },

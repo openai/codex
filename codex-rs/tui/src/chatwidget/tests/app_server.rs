@@ -1182,11 +1182,26 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
 
 #[tokio::test]
 async fn app_server_safety_access_errors_render_dedicated_notice() {
-    let message = "Invalid prompt: we've limited access to this content for safety reasons.";
-    for message in [
-        message.to_string(),
-        json!({ "error": { "message": message } }).to_string(),
-    ] {
+    let legacy_message = "Invalid prompt: we've limited access to this content for safety reasons.";
+    let bio_policy_message = "This content was flagged for possible biological risk.";
+    let cases = [
+        ("legacy plain message", legacy_message.to_string()),
+        (
+            "legacy JSON message",
+            json!({ "error": { "message": legacy_message } }).to_string(),
+        ),
+        ("bio policy plain message", bio_policy_message.to_string()),
+        (
+            "bio policy JSON message",
+            json!({ "error": { "message": bio_policy_message } }).to_string(),
+        ),
+        (
+            "bio policy code",
+            json!({ "error": { "code": "bio_policy", "message": "copy may change" } }).to_string(),
+        ),
+    ];
+    let mut rendered_cases = Vec::new();
+    for (case, message) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.handle_non_retry_error(message, /*codex_error_info*/ None);
 
@@ -1195,8 +1210,17 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
         assert!(rendered.contains("biological research"));
-        assert!(!rendered.contains("Invalid prompt:"));
+        rendered_cases.push((case, rendered));
     }
+
+    let canonical = &rendered_cases[0].1;
+    for (case, rendered) in &rendered_cases[1..] {
+        assert_eq!(rendered, canonical, "unexpected rendering for {case}");
+    }
+    insta::assert_snapshot!(
+        "app_server_bio_policy_error_renders_dedicated_notice",
+        rendered_cases.last().unwrap().1.as_str()
+    );
 }
 
 #[tokio::test]

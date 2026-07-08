@@ -308,13 +308,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/upstream-rusty-v8/target
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2022
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
-          - runner: windows-2022
+          - runner: windows-2025
             target: aarch64-pc-windows-msvc
 
     steps:
@@ -364,17 +366,17 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
-            upstream-rusty-v8/target/sccache
-            upstream-rusty-v8/target/${{ matrix.target }}/release/gn_out
-          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+            ${{ env.CARGO_TARGET_DIR }}/sccache
+            ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/gn_out
+          key: rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
           restore-keys: |
-            rusty-v8-source-${{ matrix.target }}-sandbox-
+            rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-
 
       - name: Install and start sccache
         shell: pwsh
         env:
           SCCACHE_CACHE_SIZE: 256M
-          SCCACHE_DIR: ${{ github.workspace }}/upstream-rusty-v8/target/sccache
+          SCCACHE_DIR: ${{ env.CARGO_TARGET_DIR }}/sccache
           SCCACHE_IDLE_TIMEOUT: 0
         run: |
           $version = "v0.8.2"
@@ -409,7 +411,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
-            --source-root upstream-rusty-v8 \
+            --target-dir "${CARGO_TARGET_DIR}" \
             --target "${TARGET}" \
             --output-dir "dist/${TARGET}" \
             --sandbox

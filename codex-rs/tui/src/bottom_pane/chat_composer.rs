@@ -16,6 +16,21 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # Completion and Popup Dismissal
+//!
+//! Popup selection passes the detected token range directly to the insertion path. After replacing
+//! that range, completion leaves the cursor after one horizontal separator. It advances across an
+//! existing separator when no suffix would be joined; otherwise it inserts a space, preserving the
+//! existing separator before a non-whitespace suffix. It also inserts a space rather than crossing
+//! a line break.
+//!
+//! `Esc` records the active token as dismissed. A completed value that begins with `@` or `$` is
+//! also re-dismissed before popup synchronization, because separator affinity can still identify
+//! the completed token to the left of the cursor. Synchronization keeps the popup hidden only while
+//! the query, complete token text, and ordinal among matching whitespace-delimited tokens remain
+//! the same. This preserves dismissal across offset-only edits without suppressing a later
+//! identical token.
+//!
 //! # History Navigation (↑/↓)
 //!
 //! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
@@ -196,6 +211,7 @@ use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
 use crate::keymap::RuntimeKeymap;
@@ -225,6 +241,7 @@ use self::draft_state::DraftState;
 use self::footer_state::FooterState;
 use self::history_search::HistorySearchSession;
 use self::popup_state::ActivePopup;
+use self::popup_state::DismissedToken;
 use self::popup_state::PopupState;
 use self::slash_input::SlashInput;
 use self::slash_input::SlashValidation;
@@ -871,6 +888,7 @@ impl ChatComposer {
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        let pasted = sanitize_user_text(&pasted);
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
@@ -1802,8 +1820,16 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = Self::current_at_token(&self.draft.textarea) {
-                    self.popups.dismissed_file_token = Some(tok);
+                if let Some((range, query)) = Self::current_prefixed_token_range(
+                    &self.draft.textarea,
+                    '@',
+                    /*allow_empty*/ false,
+                ) {
+                    self.popups.dismissed_file_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1879,8 +1905,12 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_mention_token() {
-                    self.popups.dismissed_mention_token = Some(tok);
+                if let Some((range, query)) = self.current_mention_token_range() {
+                    self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1983,8 +2013,12 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_mentions_v2_token() {
-                    self.popups.dismissed_mention_token = Some(tok);
+                if let Some((range, query)) = self.current_mentions_v2_token_range() {
+                    self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                        self.draft.textarea.text(),
+                        range,
+                        query,
+                    ));
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -2044,6 +2078,86 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
+    /// Leaves the cursor after one horizontal separator following a completion.
+    ///
+    /// Another separator is preserved before any non-whitespace suffix so subsequent typing does
+    /// not merge into it. Line breaks are never reused as separators; a space is inserted before
+    /// them so subsequent typing stays on the completed token's line.
+    fn advance_past_completion_separator(&mut self) {
+        let cursor = self.draft.textarea.cursor();
+        let existing_separator_len = self.draft.textarea.text()[cursor..]
+            .chars()
+            .next()
+            .filter(|c| {
+                c.is_whitespace()
+                    && !matches!(
+                        *c,
+                        '\n' | '\r'
+                            | '\u{000B}'
+                            | '\u{000C}'
+                            | '\u{0085}'
+                            | '\u{2028}'
+                            | '\u{2029}'
+                    )
+            })
+            .map(char::len_utf8);
+        if let Some(separator_len) = existing_separator_len {
+            let after_separator = cursor + separator_len;
+            let separator_precedes_suffix = self.draft.textarea.text()[after_separator..]
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace());
+            if separator_precedes_suffix {
+                self.draft.textarea.insert_str(" ");
+            } else {
+                self.draft.textarea.set_cursor(after_separator);
+            }
+        } else {
+            self.draft.textarea.insert_str(" ");
+        }
+    }
+
+    /// Dismisses popup synchronization only for the exact token occurrence just inserted.
+    ///
+    /// Matching both range and text prevents an identical token later in the draft from inheriting
+    /// the completed token's dismissal state.
+    fn dismiss_completed_prefixed_token(
+        &mut self,
+        prefix: char,
+        inserted_range: Range<usize>,
+        inserted_text: &str,
+    ) {
+        let Some(completed_token) = inserted_text.strip_prefix(prefix) else {
+            return;
+        };
+        // Completion leaves the cursor on separator whitespace, where normal token affinity would
+        // otherwise immediately reopen the popup for sigil-prefixed inserted text.
+        let Some((current_range, current_token)) = Self::current_prefixed_token_range(
+            &self.draft.textarea,
+            prefix,
+            /*allow_empty*/ true,
+        ) else {
+            return;
+        };
+        if current_range != inserted_range || current_token != completed_token {
+            return;
+        }
+
+        if prefix == '@' && !self.mentions_v2_enabled {
+            self.popups.dismissed_file_token = Some(DismissedToken::new(
+                self.draft.textarea.text(),
+                current_range,
+                current_token,
+            ));
+        } else {
+            self.popups.dismissed_mention_token = Some(DismissedToken::new(
+                self.draft.textarea.text(),
+                current_range,
+                current_token,
+            ));
+        }
+    }
+
     fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
@@ -2054,7 +2168,7 @@ impl ChatComposer {
                     self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
                     self.attach_image(path_buf);
-                    self.draft.textarea.insert_str(" ");
+                    self.advance_past_completion_separator();
                 }
                 Err(err) => {
                     tracing::trace!("image dimensions lookup failed: {err}");
@@ -2395,10 +2509,6 @@ impl ChatComposer {
         Self::current_prefixed_token_range(&self.draft.textarea, '$', /*allow_empty*/ true)
     }
 
-    fn current_mention_token(&self) -> Option<String> {
-        self.current_mention_token_range().map(|(_, token)| token)
-    }
-
     /// Replace the active `@token` (the one under the cursor) with `path`.
     fn insert_selected_path(&mut self, token_range: Range<usize>, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
@@ -2414,11 +2524,11 @@ impl ChatComposer {
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
         let start_idx = token_range.start;
-        self.draft
-            .textarea
-            .replace_range(token_range, &format!("{inserted} "));
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
-        self.draft.textarea.set_cursor(new_cursor);
+        self.draft.textarea.replace_range(token_range, &inserted);
+        let inserted_range = start_idx..start_idx.saturating_add(inserted.len());
+        self.draft.textarea.set_cursor(inserted_range.end);
+        self.advance_past_completion_separator();
+        self.dismiss_completed_prefixed_token('@', inserted_range, &inserted);
     }
 
     fn insert_selected_mention(
@@ -2432,6 +2542,7 @@ impl ChatComposer {
         self.draft.textarea.replace_range(token_range, "");
         self.draft.textarea.set_cursor(start_idx);
         let id = self.draft.textarea.insert_element(insert_text);
+        let inserted_range = start_idx..start_idx.saturating_add(insert_text.len());
 
         if let (Some(path), Some((sigil, mention))) =
             (path, Self::mention_token_from_insert_text(insert_text))
@@ -2446,11 +2557,12 @@ impl ChatComposer {
             );
         }
 
-        self.draft.textarea.insert_str(" ");
-        let new_cursor = start_idx
-            .saturating_add(insert_text.len())
-            .saturating_add(1);
-        self.draft.textarea.set_cursor(new_cursor);
+        self.advance_past_completion_separator();
+        if let Some(sigil) = insert_text.chars().next()
+            && matches!(sigil, '$' | '@')
+        {
+            self.dismiss_completed_prefixed_token(sigil, inserted_range, insert_text);
+        }
     }
 
     fn mention_token_from_insert_text(insert_text: &str) -> Option<(char, String)> {
@@ -3450,11 +3562,11 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
             return;
         }
-        let mentions_v2_token = self.current_mentions_v2_token();
+        let mentions_v2_token = self.current_mentions_v2_token_range();
         let file_token = if self.mentions_v2_enabled {
             None
         } else {
-            self.current_editable_at_token()
+            self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
         };
         let browsing_history = self
             .history
@@ -3470,7 +3582,7 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
             return;
         }
-        let mention_token = self.current_mention_token();
+        let mention_token = self.current_mention_token_range();
 
         let allow_command_popup = self.slash_commands_enabled()
             && !self.draft.is_bash_mode
@@ -3490,24 +3602,24 @@ impl ChatComposer {
             return;
         }
 
-        if let Some(token) = mentions_v2_token {
-            self.sync_mentions_v2_popup(token);
+        if let Some((range, token)) = mentions_v2_token {
+            self.sync_mentions_v2_popup(range, token);
             return;
         }
 
-        if let Some(token) = mention_token {
+        if let Some((range, token)) = mention_token {
             if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
                 self.popups.current_file_query = None;
             }
-            self.sync_mention_popup(token);
+            self.sync_mention_popup(range, token);
             return;
         }
         self.popups.dismissed_mention_token = None;
 
-        if let Some(token) = file_token {
-            self.sync_file_search_popup(token);
+        if let Some((range, token)) = file_token {
+            self.sync_file_search_popup(range, token);
             return;
         }
 
@@ -3581,8 +3693,14 @@ impl ChatComposer {
     }
 
     /// Synchronize the legacy file-search popup with the current `@` token.
-    fn sync_file_search_popup(&mut self, query: String) {
-        if self.popups.dismissed_file_token.as_ref() == Some(&query) {
+    fn sync_file_search_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
+        if self
+            .popups
+            .dismissed_file_token
+            .as_ref()
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
+        {
             return;
         }
 
@@ -3621,8 +3739,14 @@ impl ChatComposer {
         self.popups.dismissed_file_token = None;
     }
 
-    fn sync_mention_popup(&mut self, query: String) {
-        if self.popups.dismissed_mention_token.as_ref() == Some(&query) {
+    fn sync_mention_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
+        if self
+            .popups
+            .dismissed_mention_token
+            .as_ref()
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
+        {
             return;
         }
 
@@ -3645,8 +3769,14 @@ impl ChatComposer {
         }
     }
 
-    fn sync_mentions_v2_popup(&mut self, query: String) {
-        if self.popups.dismissed_mention_token.as_ref() == Some(&query) {
+    fn sync_mentions_v2_popup(&mut self, range: Range<usize>, query: String) {
+        let text = self.draft.textarea.text();
+        if self
+            .popups
+            .dismissed_mention_token
+            .as_ref()
+            .is_some_and(|dismissed| dismissed.matches(text, &range, &query))
+        {
             return;
         }
 
@@ -4419,7 +4549,23 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use codex_protocol::models::local_image_label_text;
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn new_test_composer() -> (ChatComposer, UnboundedReceiver<AppEvent>) {
+        let (tx, rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        (
+            ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            ),
+            rx,
+        )
+    }
 
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
@@ -7415,15 +7561,17 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        let needs_redraw = composer.handle_paste("hello".to_string());
+        let sanitized = "_count_rows\tindent\ntwo";
+        let needs_redraw =
+            composer.handle_paste("_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}".to_string());
         assert!(needs_redraw);
-        assert_eq!(composer.draft.textarea.text(), "hello");
+        assert_eq!(composer.draft.textarea.text(), sanitized);
         assert!(composer.draft.pending_pastes.is_empty());
 
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted { text, .. } => assert_eq!(text, "hello"),
+            InputResult::Submitted { text, .. } => assert_eq!(text, sanitized),
             _ => panic!("expected Submitted"),
         }
     }
@@ -8970,6 +9118,156 @@ mod tests {
             }
             _ => panic!("expected Submitted"),
         }
+    }
+
+    fn complete_file(
+        composer: &mut ChatComposer,
+        text: &str,
+        cursor: usize,
+        query: &str,
+        selected_path: PathBuf,
+    ) {
+        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor(cursor);
+        composer.sync_popups();
+        let root = selected_path
+            .parent()
+            .filter(|_| selected_path.is_absolute())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        composer.on_file_search_result(
+            query.to_string(),
+            vec![FileMatch {
+                score: 1,
+                path: selected_path,
+                match_type: codex_file_search::MatchType::File,
+                root,
+                indices: None,
+            }],
+        );
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn file_completion_preserves_separator_before_existing_suffix() {
+        let (mut composer, _rx) = new_test_composer();
+        complete_file(
+            &mut composer,
+            "@ma next",
+            /*cursor*/ "@ma".len(),
+            "ma",
+            PathBuf::from("src/main.rs"),
+        );
+        composer.insert_str("foo");
+
+        assert_eq!(composer.current_text(), "src/main.rs foo next");
+    }
+
+    #[test]
+    fn file_completion_preserves_separator_before_sigiled_suffix() {
+        for suffix in ["@next", "$next"] {
+            let (mut composer, _rx) = new_test_composer();
+            composer.set_text_content(format!("@ma {suffix}"), Vec::new(), Vec::new());
+            composer.insert_selected_path(0.."@ma".len(), "src/main.rs");
+            composer.insert_str("foo");
+
+            assert_eq!(composer.current_text(), format!("src/main.rs foo {suffix}"));
+        }
+    }
+
+    #[test]
+    fn file_completion_inserts_separator_before_line_break() {
+        let (mut composer, _rx) = new_test_composer();
+        complete_file(
+            &mut composer,
+            "@ma\nnext",
+            /*cursor*/ "@ma".len(),
+            "ma",
+            PathBuf::from("src/main.rs"),
+        );
+        composer.insert_str("foo");
+
+        assert_eq!(composer.current_text(), "src/main.rs foo\nnext");
+    }
+
+    #[test]
+    fn file_completion_for_sigil_path_does_not_reopen_popup() {
+        let (mut composer, _rx) = new_test_composer();
+        complete_file(
+            &mut composer,
+            "@ma\nnext",
+            /*cursor*/ "@ma".len(),
+            "ma",
+            PathBuf::from("@scope/main.rs"),
+        );
+
+        assert_eq!(composer.current_text(), "@scope/main.rs \nnext");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(consumed);
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "@scope/main.rs \nnext"),
+            _ => panic!("expected completed path to submit"),
+        }
+    }
+
+    #[test]
+    fn file_completion_does_not_dismiss_identical_next_token() {
+        let (mut composer, _rx) = new_test_composer();
+        complete_file(
+            &mut composer,
+            "@ma  @scope/main.rs",
+            /*cursor*/ "@ma".len(),
+            "ma",
+            PathBuf::from("@scope/main.rs"),
+        );
+        composer.draft.textarea.set_cursor("@scope/main.rs  ".len());
+        composer.sync_popups();
+
+        assert!(matches!(composer.popups.active, ActivePopup::File(_)));
+    }
+
+    #[test]
+    fn dismissed_file_popup_tracks_token_across_leading_whitespace_edits() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_text_content("@ma".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@ma".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::File(_)));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.insert_str("   ");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        for _ in 0..3 {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+            assert!(matches!(composer.popups.active, ActivePopup::None));
+        }
+    }
+
+    #[test]
+    fn dismissed_file_popup_ignores_token_substrings_in_leading_paste() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_text_content("@ma".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@ma".len());
+        composer.sync_popups();
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.handle_paste("email@ma.com ".to_string());
+
+        assert_eq!(composer.current_text(), "email@ma.com @ma");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their

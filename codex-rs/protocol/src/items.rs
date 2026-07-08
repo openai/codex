@@ -13,12 +13,16 @@ use crate::parse_command::ParsedCommand;
 use crate::protocol::AgentStatus;
 use crate::protocol::CollabAgentRef;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyStatus;
+use crate::protocol::ReviewOutputEvent;
+use crate::protocol::ReviewTarget;
 use crate::protocol::SubAgentActivityKind;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
+use codex_extension_items::ExtensionItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use quick_xml::de::from_str as from_xml_str;
@@ -45,10 +49,25 @@ pub enum TurnItem {
     DynamicToolCall(DynamicToolCallItem),
     CollabAgentToolCall(CollabAgentToolCallItem),
     SubAgentActivity(SubAgentActivityItem),
+    /// Hosted Responses API web-search item handled directly by core.
+    ///
+    /// Standalone web search uses Self::Extension instead because its display
+    /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
+    /// Item whose schema and lifecycle details are owned by an extension.
+    ///
+    /// Standalone image generation and web search use this path. App-server
+    /// wraps the same typed items in their public variants.
+    Extension(ExtensionItem),
+    /// Hosted Responses API image-generation item handled directly by core.
+    ///
+    /// This remains separate from [`Self::Extension`] because core still owns
+    /// hosted image persistence and legacy-event fanout.
     ImageGeneration(ImageGenerationItem),
+    EnteredReviewMode(EnteredReviewModeItem),
+    ExitedReviewMode(ExitedReviewModeItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
@@ -115,6 +134,19 @@ pub struct AgentMessageItem {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct EnteredReviewModeItem {
+    pub id: String,
+    pub target: ReviewTarget,
+    pub user_facing_hint: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ExitedReviewModeItem {
+    pub id: String,
+    pub review_output: Option<ReviewOutputEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct PlanItem {
     pub id: String,
     pub text: String,
@@ -135,6 +167,16 @@ pub enum CommandExecutionStatus {
     Completed,
     Failed,
     Declined,
+}
+
+impl From<ExecCommandStatus> for CommandExecutionStatus {
+    fn from(value: ExecCommandStatus) -> Self {
+        match value {
+            ExecCommandStatus::Completed => Self::Completed,
+            ExecCommandStatus::Failed => Self::Failed,
+            ExecCommandStatus::Declined => Self::Declined,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -594,7 +636,10 @@ impl TurnItem {
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Sleep(item) => item.id.clone(),
+            TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
+            TurnItem::EnteredReviewMode(item) => item.id.clone(),
+            TurnItem::ExitedReviewMode(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),

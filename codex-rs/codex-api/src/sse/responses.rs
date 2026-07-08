@@ -167,6 +167,7 @@ pub struct ResponsesStreamEvent {
     item_id: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
+    text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
@@ -358,6 +359,17 @@ pub fn process_responses_event(
                 }));
             }
         }
+        "response.reasoning_summary_text.done" => {
+            if let (Some(item_id), Some(text), Some(summary_index)) =
+                (event.item_id, event.text, event.summary_index)
+            {
+                return Ok(Some(ResponseEvent::ReasoningSummaryDone {
+                    item_id,
+                    text,
+                    summary_index,
+                }));
+            }
+        }
         "response.reasoning_text.delta" => {
             if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
@@ -386,7 +398,8 @@ pub fn process_responses_event(
                     } else if is_cyber_policy_error(&error) {
                         let message = cyber_policy_message(error.message);
                         response_error = ApiError::CyberPolicy { message };
-                    } else if is_invalid_prompt_error(&error) {
+                    } else if matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy"))
+                    {
                         let message = error
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
@@ -620,10 +633,6 @@ fn is_usage_not_included(error: &Error) -> bool {
     error.code.as_deref() == Some("usage_not_included")
 }
 
-fn is_invalid_prompt_error(error: &Error) -> bool {
-    error.code.as_deref() == Some("invalid_prompt")
-}
-
 fn is_cyber_policy_error(error: &Error) -> bool {
     error.code.as_deref() == Some("cyber_policy")
 }
@@ -794,6 +803,32 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn parses_reasoning_summary_done() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "item_id": "reasoning-1",
+                "summary_index": 0,
+                "text": "Checking",
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" },
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryDone {
+                item_id,
+                text,
+                summary_index: 0,
+            } if item_id == "reasoning-1" && text == "Checking"
+        );
     }
 
     #[tokio::test]
@@ -1038,23 +1073,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_prompt_without_type_is_invalid_request() {
-        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_prompt_no_type","object":"response","created_at":1759771628,"status":"failed","background":false,"error":{"code":"invalid_prompt","message":"Invalid prompt: we've limited access to this content for safety reasons."},"incomplete_details":null}}"#;
+    async fn content_policy_errors_without_type_are_invalid_requests() {
+        for (code, expected_message) in [
+            (
+                "invalid_prompt",
+                "Invalid prompt: we've limited access to this content for safety reasons.",
+            ),
+            (
+                "bio_policy",
+                "This content was flagged for possible biological risk.",
+            ),
+        ] {
+            let raw_error = json!({
+                "type": "response.failed",
+                "sequence_number": 3,
+                "response": {
+                    "id": "resp_content_policy_no_type",
+                    "object": "response",
+                    "created_at": 1759771628,
+                    "status": "failed",
+                    "background": false,
+                    "error": { "code": code, "message": expected_message },
+                    "incomplete_details": null,
+                },
+            })
+            .to_string();
+            let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
 
-        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+            let events = collect_events(&[sse1.as_bytes()]).await;
 
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Err(ApiError::InvalidRequest { message }) => {
-                assert_eq!(
-                    message,
-                    "Invalid prompt: we've limited access to this content for safety reasons."
-                );
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                Err(ApiError::InvalidRequest { message }) => {
+                    assert_eq!(message, expected_message);
+                }
+                other => panic!("unexpected event for {code}: {other:?}"),
             }
-            other => panic!("unexpected event: {other:?}"),
         }
     }
 
