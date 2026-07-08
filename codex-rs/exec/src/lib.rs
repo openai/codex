@@ -206,6 +206,7 @@ struct ExecRunArgs {
     state_db: Option<StateDbHandle>,
     command: Option<ExecCommand>,
     config: Config,
+    resume_approvals_reviewer_override: Option<codex_app_server_protocol::ApprovalsReviewer>,
     dangerously_bypass_approvals_and_sandbox: bool,
     exec_span: tracing::Span,
     images: Vec<PathBuf>,
@@ -463,6 +464,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         build_config,
     )
     .await?;
+    let resume_approvals_reviewer_override =
+        approvals_reviewer_override_for_resume(&config, &cli_kv_overrides);
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -576,6 +579,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         state_db,
         command,
         config,
+        resume_approvals_reviewer_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span: exec_span.clone(),
         images,
@@ -673,6 +677,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         state_db,
         command,
         config,
+        resume_approvals_reviewer_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span,
         images,
@@ -804,7 +809,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadResume {
                     request_id: request_ids.next(),
-                    params: thread_resume_params_from_config(&config, thread_id),
+                    params: thread_resume_params_from_config(
+                        &config,
+                        thread_id,
+                        resume_approvals_reviewer_override,
+                    ),
                 },
                 "thread/resume",
             )
@@ -1066,7 +1075,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: approvals_reviewer_override_from_config(config),
+        approvals_reviewer: Some(config.approvals_reviewer.into()),
         sandbox: sandbox.flatten(),
         permissions,
         config: thread_config_overrides_from_config(config),
@@ -1076,7 +1085,11 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    approvals_reviewer_override: Option<codex_app_server_protocol::ApprovalsReviewer>,
+) -> ThreadResumeParams {
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
@@ -1091,7 +1104,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: approvals_reviewer_override_from_config(config),
+        approvals_reviewer: approvals_reviewer_override,
         sandbox: sandbox.flatten(),
         permissions,
         config: thread_config_overrides_from_config(config),
@@ -1103,6 +1116,16 @@ fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String
     config
         .bypass_hook_trust
         .then(|| HashMap::from([("bypass_hook_trust".to_string(), Value::Bool(true))]))
+}
+
+fn approvals_reviewer_override_for_resume(
+    config: &Config,
+    cli_kv_overrides: &[(String, codex_config::TomlValue)],
+) -> Option<codex_app_server_protocol::ApprovalsReviewer> {
+    cli_kv_overrides
+        .iter()
+        .any(|(key, _)| key == "approvals_reviewer")
+        .then(|| config.approvals_reviewer.into())
 }
 
 fn permissions_selection_from_config(config: &Config) -> Option<String> {
@@ -1139,12 +1162,6 @@ fn sandbox_mode_from_permission_profile(
             }
         }
     }
-}
-
-fn approvals_reviewer_override_from_config(
-    config: &Config,
-) -> Option<codex_app_server_protocol::ApprovalsReviewer> {
-    Some(config.approvals_reviewer.into())
 }
 
 async fn send_request_with_response<T>(
