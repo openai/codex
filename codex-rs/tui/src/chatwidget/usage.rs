@@ -169,42 +169,41 @@ impl ChatWidget {
         picker_request_id: u64,
         reset_credits: &RateLimitResetCreditsSummary,
     ) -> SelectionViewParams {
-        let mut items = vec![SelectionItem {
+        let mut items = reset_credit_options(reset_credits)
+            .into_iter()
+            .map(|option| {
+                let confirmation_gate = Arc::new(AtomicBool::new(true));
+                let credit_id = option.credit_id;
+                let reset_title = option.name.clone();
+                let reset_detail = option.detail;
+                let reset_description = option.description;
+                let picker_description = reset_detail
+                    .clone()
+                    .unwrap_or_else(|| reset_description.clone());
+                SelectionItem {
+                    name: option.name,
+                    description: Some(picker_description),
+                    actions: vec![Box::new(move |tx| {
+                        if confirmation_gate.swap(false, Ordering::AcqRel) {
+                            tx.send(AppEvent::OpenRateLimitResetConfirmation {
+                                picker_request_id,
+                                confirmation_gate: confirmation_gate.clone(),
+                                credit_id: credit_id.clone(),
+                                reset_title: reset_title.clone(),
+                                reset_detail: reset_detail.clone(),
+                                reset_description: reset_description.clone(),
+                            });
+                        }
+                    })],
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        items.push(SelectionItem {
             name: "Cancel".to_string(),
             dismiss_on_select: true,
             ..Default::default()
-        }];
-        items.extend(
-            reset_credit_options(reset_credits)
-                .into_iter()
-                .map(|option| {
-                    let confirmation_gate = Arc::new(AtomicBool::new(true));
-                    let credit_id = option.credit_id;
-                    let reset_title = option.name.clone();
-                    let reset_detail = option.detail;
-                    let reset_description = option.description;
-                    let picker_description = reset_detail
-                        .clone()
-                        .unwrap_or_else(|| reset_description.clone());
-                    SelectionItem {
-                        name: option.name,
-                        description: Some(picker_description),
-                        actions: vec![Box::new(move |tx| {
-                            if confirmation_gate.swap(false, Ordering::AcqRel) {
-                                tx.send(AppEvent::OpenRateLimitResetConfirmation {
-                                    picker_request_id,
-                                    confirmation_gate: confirmation_gate.clone(),
-                                    credit_id: credit_id.clone(),
-                                    reset_title: reset_title.clone(),
-                                    reset_detail: reset_detail.clone(),
-                                    reset_description: reset_description.clone(),
-                                });
-                            }
-                        })],
-                        ..Default::default()
-                    }
-                }),
-        );
+        });
         SelectionViewParams {
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),

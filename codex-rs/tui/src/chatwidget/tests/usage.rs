@@ -441,7 +441,6 @@ async fn rate_limit_reset_confirmation_uses_backend_copy_snapshot() {
             vec![credit],
         )),
     ));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let Ok(AppEvent::OpenRateLimitResetConfirmation {
@@ -495,7 +494,6 @@ async fn rate_limit_reset_confirmation_no_and_escape_return_to_picker() {
         Vec::new(),
         Ok(reset_credits(/*available_count*/ 1)),
     ));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     let picker = render_bottom_popup(&chat, /*width*/ 80);
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -533,7 +531,6 @@ async fn rejected_reset_confirmation_rearms_its_picker_row() {
         )),
     ));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -594,7 +591,7 @@ async fn rate_limit_reset_picker_starts_with_soonest_expiries_and_keeps_all_rows
     );
     assert!(!rendered.contains("Full reset ("), "{rendered}");
 
-    for _ in 0..9 {
+    for _ in 0..8 {
         chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -629,7 +626,6 @@ async fn rate_limit_reset_confirmation_can_use_reset() {
         )),
     ));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
     assert!(rx.try_recv().is_err());
