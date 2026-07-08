@@ -37,6 +37,7 @@ use discovery::SkillDiscovery;
 use discovery::SkillDiscoveryOptions;
 use discovery::SkillMetadataDiscovery;
 use discovery::discover_skills;
+use futures::FutureExt;
 use futures::StreamExt;
 use namespace::SkillNamespaceResolver;
 use serde::Deserialize;
@@ -193,9 +194,12 @@ pub async fn load_skills_from_roots<I>(
     plugin_skill_snapshots: Option<&crate::PluginSkillSnapshots>,
 ) -> SkillLoadOutcome
 where
-    I: IntoIterator<Item = SkillRoot>,
+    I: IntoIterator<Item = SkillRoot> + Send,
+    I::IntoIter: Send,
 {
-    crate::root_loader::load_and_merge_skill_roots(roots, plugin_skill_snapshots).await
+    crate::root_loader::load_and_merge_skill_roots(roots, plugin_skill_snapshots)
+        .boxed()
+        .await
 }
 
 #[derive(Clone)]
@@ -584,27 +588,29 @@ async fn load_skills_under_root(
             async move {
                 let result =
                     parse_skill_file(fs, &skill.skill, &skill.path, scope, plugin_id, plugin_root)
-                        .await;
+                        .await
+                        .map_err(|err| err.to_string());
                 (skill.path, skill.path_uri, result)
             }
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .boxed();
     let (namespace_resolver, skill_results) = tokio::join!(namespace_resolver, skill_results);
     for (path, path_uri, result) in skill_results {
         let result = result.and_then(|mut skill| {
             skill.name = namespace_resolver
                 .for_skill(&root_uri, &path_uri)
                 .qualify(&skill.name);
-            validate_len(&skill.name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
+            validate_len(&skill.name, MAX_QUALIFIED_NAME_LEN, "qualified name")
+                .map_err(|err| err.to_string())?;
             Ok(skill)
         });
         match result {
             Ok(skill) => outcome.skills.push(skill),
-            Err(err) if scope != SkillScope::System => outcome.errors.push(SkillError {
-                path,
-                message: err.to_string(),
-            }),
+            Err(err) if scope != SkillScope::System => {
+                outcome.errors.push(SkillError { path, message: err })
+            }
             Err(_) => {}
         }
     }

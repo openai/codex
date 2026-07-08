@@ -531,7 +531,7 @@ async fn host_skill_loading_uses_walk_inventory_and_overlaps_file_reads() {
     let recording = Arc::new(RecordingFileSystem::new(Arc::clone(&LOCAL_FS)));
     let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
 
-    let outcome = load_skills_from_roots(
+    let future = load_skills_from_roots(
         [SkillRoot {
             path: root.path().abs(),
             scope: SkillScope::Repo,
@@ -541,8 +541,10 @@ async fn host_skill_loading_uses_walk_inventory_and_overlaps_file_reads() {
             plugin_root: None,
         }],
         /*plugin_skill_snapshots*/ None,
-    )
-    .await;
+    );
+    fn assert_send<T: Send>(_: &T) {}
+    assert_send(&future);
+    let outcome = future.await;
 
     assert!(
         outcome.errors.is_empty(),
