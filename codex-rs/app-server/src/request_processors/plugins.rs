@@ -1129,6 +1129,7 @@ impl PluginRequestProcessor {
                     apps: app_summaries,
                     app_templates: Vec::new(),
                     mcp_servers: outcome.plugin.mcp_server_names,
+                    scheduled_tasks: None,
                 }
             }
             Err(remote_marketplace_name) => {
@@ -2276,6 +2277,7 @@ fn remote_plugin_detail_to_info(
         apps,
         app_templates,
         mcp_servers: detail.mcp_servers,
+        scheduled_tasks: detail.scheduled_tasks,
     }
 }
 

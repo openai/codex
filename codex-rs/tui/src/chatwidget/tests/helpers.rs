@@ -1505,6 +1505,7 @@ pub(super) fn plugins_test_detail(
             .collect(),
         app_templates: Vec::new(),
         mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
+        scheduled_tasks: None,
     }
 }
 
@@ -1524,6 +1525,7 @@ pub(super) fn plugins_test_remote_detail(
         apps: Vec::new(),
         app_templates: Vec::new(),
         mcp_servers: Vec::new(),
+        scheduled_tasks: None,
     }
 }
 
