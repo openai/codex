@@ -126,8 +126,18 @@ function detectPackageManager() {
   const entrypointDir = path.dirname(path.resolve(process.argv[1]));
   for (let currentDir of new Set([codexPackageRoot, entrypointDir])) {
     while (true) {
-      if (existsSync(path.join(currentDir, ".modules.yaml"))) {
-        return "pnpm";
+      const nodeModulesDir = path.join(currentDir, "node_modules");
+      if (existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {
+        try {
+          if (
+            realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
+            codexPackageRoot
+          ) {
+            return "pnpm";
+          }
+        } catch {
+          // Keep looking if this installation does not contain Codex.
+        }
       }
 
       const parentDir = path.dirname(currentDir);
