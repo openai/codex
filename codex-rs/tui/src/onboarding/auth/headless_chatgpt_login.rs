@@ -126,7 +126,7 @@ pub(super) fn render_device_code_login(
         ]));
         lines.push("".into());
         lines.push(
-            "  Only continue if you started this login in Codex. If a website or another person gave you this code, cancel."
+            "  Continue only if you started this login in Codex. If a website or another person gave you this code, cancel."
                 .dim()
                 .into(),
         );
