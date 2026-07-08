@@ -27,13 +27,18 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                 return vec![McpServerContribution::Remove { name }];
             }
 
+            let mut server_config = hosted_plugin_runtime_mcp_server_config(
+                &config.chatgpt_base_url,
+                config.apps_mcp_product_sku.as_deref(),
+                context.originator(),
+            );
+            server_config.supports_parallel_tool_calls = config
+                .features
+                .enabled(codex_features::Feature::CodexAppsParallelToolCalls);
+
             vec![McpServerContribution::Set {
                 name,
-                config: Box::new(hosted_plugin_runtime_mcp_server_config(
-                    &config.chatgpt_base_url,
-                    config.apps_mcp_product_sku.as_deref(),
-                    context.originator(),
-                )),
+                config: Box::new(server_config),
             }]
         })
     }

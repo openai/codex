@@ -23,6 +23,10 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cli_overrides(vec![
             ("features.apps".to_string(), true.into()),
+            (
+                "features.codex_apps_parallel_tool_calls".to_string(),
+                true.into(),
+            ),
             ("chatgpt_base_url".to_string(), "https://chatgpt.com".into()),
         ])
         .build()
@@ -39,6 +43,7 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
         panic!("hosted plugin runtime should use streamable HTTP");
     };
     assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
+    assert!(server.supports_parallel_tool_calls);
 
     Ok(())
 }
