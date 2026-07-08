@@ -1,3 +1,5 @@
+use codex_network_proxy::ManagedNetworkDomainPolicy;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
 use std::path::Path;
 
@@ -10,6 +12,36 @@ pub fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
     // networking from the Linux sandbox helper. Without managed requirements,
     // preserve existing behavior.
     enforce_managed_network
+}
+
+pub(crate) fn dns_domain_policy_for_proxy(
+    enforce_managed_network: bool,
+    managed_network: Option<&ManagedNetworkSandboxContext>,
+) -> Option<&ManagedNetworkDomainPolicy> {
+    let managed_network = managed_network?;
+    if !enforce_managed_network
+        || !managed_network.allow_local_binding
+        || managed_network.loopback_ports.is_empty()
+    {
+        return None;
+    }
+    managed_network
+        .domain_policy
+        .as_ref()
+        .filter(|policy| !policy.allowed_domains.is_empty())
+}
+
+pub(crate) fn insert_dns_policy_args(args: &mut Vec<String>, policy: &ManagedNetworkDomainPolicy) {
+    let Some(index) = args.iter().position(|arg| arg == "--") else {
+        panic!("missing `--`");
+    };
+    args.splice(
+        index..index,
+        [
+            "--dns-domain-policy".to_string(),
+            serde_json::to_string(policy).unwrap_or_else(|err| panic!("{err}")),
+        ],
+    );
 }
 
 /// Converts the permission profile into the CLI invocation for

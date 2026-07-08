@@ -7,6 +7,10 @@ use super::SandboxType;
 use super::SandboxablePreference;
 use super::get_platform_sandbox;
 use super::with_managed_mitm_ca_readable_root;
+#[cfg(target_os = "linux")]
+use codex_network_proxy::ManagedNetworkDomainPolicy;
+#[cfg(target_os = "linux")]
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
@@ -335,6 +339,38 @@ fn transform_linux_seccomp_request(
 }
 
 #[cfg(target_os = "linux")]
+fn transform_linux_seccomp_request_with_managed_network(
+    managed_network: ManagedNetworkSandboxContext,
+) -> super::SandboxExecRequest {
+    let manager = SandboxManager::new();
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let permissions = PermissionProfile::Disabled;
+    manager
+        .transform(SandboxTransformRequest {
+            command: SandboxCommand {
+                program: "true".into(),
+                args: Vec::new(),
+                cwd: cwd_uri.clone(),
+                env: HashMap::new(),
+                managed_network: Some(managed_network),
+                additional_permissions: None,
+            },
+            permissions: &permissions,
+            sandbox: SandboxType::LinuxSeccomp,
+            enforce_managed_network: true,
+            environment_id: None,
+            network: None,
+            sandbox_policy_cwd: &cwd_uri,
+            codex_linux_sandbox_exe: Some(std::path::Path::new("/tmp/codex-linux-sandbox")),
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+        })
+        .expect("transform")
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn wsl1_rejects_linux_bubblewrap_path() {
     let restricted_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
@@ -422,6 +458,64 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
     let exec_request = transform_linux_seccomp_request(&codex_linux_sandbox_exe);
 
     assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transform_linux_seccomp_places_managed_dns_policy_before_command() {
+    let domain_policy = ManagedNetworkDomainPolicy {
+        allowed_domains: vec!["example.com".to_string()],
+        denied_domains: vec!["blocked.example.com".to_string()],
+    };
+    let exec_request =
+        transform_linux_seccomp_request_with_managed_network(ManagedNetworkSandboxContext {
+            loopback_ports: vec![18080, 19090],
+            allow_local_binding: true,
+            domain_policy: Some(domain_policy.clone()),
+        });
+
+    let separator_index = exec_request
+        .command
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("sandbox argv separator");
+    assert_eq!(
+        exec_request
+            .command
+            .get(separator_index - 2)
+            .map(String::as_str),
+        Some("--dns-domain-policy")
+    );
+    let serialized_policy = exec_request
+        .command
+        .get(separator_index - 1)
+        .expect("serialized DNS domain policy");
+    assert_eq!(
+        serde_json::from_str::<ManagedNetworkDomainPolicy>(serialized_policy)
+            .expect("deserialize DNS domain policy"),
+        domain_policy
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transform_linux_seccomp_omits_managed_dns_policy_without_local_binding() {
+    let exec_request =
+        transform_linux_seccomp_request_with_managed_network(ManagedNetworkSandboxContext {
+            loopback_ports: vec![18080, 19090],
+            allow_local_binding: false,
+            domain_policy: Some(ManagedNetworkDomainPolicy {
+                allowed_domains: vec!["example.com".to_string()],
+                denied_domains: Vec::new(),
+            }),
+        });
+
+    assert!(
+        !exec_request
+            .command
+            .iter()
+            .any(|arg| arg == "--dns-domain-policy")
+    );
 }
 
 #[cfg(target_os = "windows")]

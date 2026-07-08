@@ -5,6 +5,8 @@ use crate::bwrap::is_wsl1;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
+use crate::landlock::dns_domain_policy_for_proxy;
+use crate::landlock::insert_dns_policy_args;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
 #[cfg(target_os = "windows")]
@@ -335,7 +337,6 @@ impl SandboxManager {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
-        #[cfg(target_os = "macos")]
         let managed_network = command.managed_network.as_ref();
         let additional_permissions = command.additional_permissions.take();
         let managed_mitm_ca_trust_bundle_path =
@@ -402,6 +403,11 @@ impl SandboxManager {
                     use_legacy_landlock,
                     allow_proxy_network,
                 );
+                if let Some(domain_policy) =
+                    dns_domain_policy_for_proxy(enforce_managed_network, managed_network)
+                {
+                    insert_dns_policy_args(&mut args, domain_policy);
+                }
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
                 full_command.append(&mut args);

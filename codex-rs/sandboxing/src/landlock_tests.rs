@@ -93,3 +93,34 @@ fn proxy_network_requires_managed_requirements() {
         true
     );
 }
+
+#[test]
+fn dns_domain_policy_requires_managed_local_binding_and_proxy_ports() {
+    for flags in 0_u8..32 {
+        let context = ManagedNetworkSandboxContext {
+            loopback_ports: (flags & 1 != 0).then_some(43123).into_iter().collect(),
+            allow_local_binding: flags & 2 != 0,
+            domain_policy: (flags & 4 != 0).then(|| ManagedNetworkDomainPolicy {
+                allowed_domains: (flags & 8 != 0)
+                    .then(|| "example.com".to_string())
+                    .into_iter()
+                    .collect(),
+                denied_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            dns_domain_policy_for_proxy(flags & 16 != 0, Some(&context)).is_some(),
+            flags == 31
+        );
+    }
+}
+
+#[test]
+fn linux_args_include_dns_domain_policy_immediately_before_separator() {
+    let mut args = vec!["--".to_string()];
+    insert_dns_policy_args(&mut args, &ManagedNetworkDomainPolicy::default());
+    assert_eq!(
+        args.join(" "),
+        r#"--dns-domain-policy {"allowedDomains":[],"deniedDomains":[]} --"#
+    );
+}
