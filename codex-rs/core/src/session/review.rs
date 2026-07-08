@@ -165,10 +165,11 @@ pub(super) async fn spawn_review_thread(
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
-    let review_request = ReviewRequest {
+    let item = TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+        id: uuid::Uuid::now_v7().to_string(),
         target: resolved.target,
-        user_facing_hint: Some(resolved.user_facing_hint),
-    };
-    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
-        .await;
+        user_facing_hint: resolved.user_facing_hint,
+    });
+    sess.emit_turn_item_started(&tc, &item).await;
+    sess.emit_turn_item_completed(&tc, item).await;
 }

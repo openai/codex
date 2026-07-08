@@ -20,6 +20,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
 use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
 use core_test_support::apps_test_server::search_capable_apps_builder;
@@ -45,6 +46,7 @@ fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApprova
     let approval_mode = match approval_mode {
         AppToolApproval::Auto => "auto",
         AppToolApproval::Prompt => "prompt",
+        AppToolApproval::Writes => "writes",
         AppToolApproval::Approve => "approve",
     };
     let user_config_path = config.codex_home.join("config.toml").abs();
@@ -68,6 +70,7 @@ fn set_default_app_approval_mode_and_reviewer(
     let approval_mode = match approval_mode {
         AppToolApproval::Auto => "auto",
         AppToolApproval::Prompt => "prompt",
+        AppToolApproval::Writes => "writes",
         AppToolApproval::Approve => "approve",
     };
     let user_config_path = config.codex_home.join("config.toml").abs();
@@ -329,6 +332,127 @@ async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guar
         apps_tool_call.pointer("/params/arguments/title"),
         Some(&json!("Lunch"))
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let read_call_id = "calendar-read";
+    let write_call_id = "calendar-write";
+    let list_args = serde_json::to_string(&json!({}))?;
+    let create_args = serde_json::to_string(&json!({
+        "title": "Lunch",
+        "starts_at": "2026-03-10T12:00:00Z"
+    }))?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-read"),
+                ev_function_call_with_namespace(
+                    read_call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_LIST_TOOL,
+                    &list_args,
+                ),
+                ev_completed("resp-read"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-write"),
+                ev_function_call_with_namespace(
+                    write_call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    &create_args,
+                ),
+                ev_completed("resp-write"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-done"),
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ToolCallMcpElicitation)
+                .expect("test config should allow feature update");
+            set_default_app_approval_mode_and_reviewer(
+                config,
+                AppToolApproval::Writes,
+                ApprovalsReviewer::User,
+            );
+        });
+    let test = builder.build(&server).await?;
+
+    submit_user_turn(
+        &test,
+        "Use [$calendar](app://calendar) to list events, then create one.",
+        AskForApproval::OnRequest,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let EventMsg::McpToolCallBegin(read_begin) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallBegin(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(read_begin.call_id, read_call_id);
+
+    let next_route = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::McpToolCallBegin(_) | EventMsg::ElicitationRequest(_)
+        )
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(write_begin) = next_route else {
+        panic!("read-only app action should not prompt in writes mode");
+    };
+    assert_eq!(write_begin.call_id, write_call_id);
+
+    let EventMsg::ElicitationRequest(request) = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await
+    else {
+        panic!("write app action should prompt in writes mode");
+    };
+
+    test.codex
+        .submit(Op::ResolveElicitation {
+            server_name: request.server_name,
+            request_id: request.id,
+            decision: ElicitationAction::Accept,
+            content: None,
+            meta: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(responses.requests().len(), 3);
+    recorded_apps_tool_call_by_call_id(&server, read_call_id).await;
+    recorded_apps_tool_call_by_call_id(&server, write_call_id).await;
 
     Ok(())
 }

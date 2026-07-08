@@ -21,9 +21,11 @@ ROOT = Path(__file__).resolve().parents[2]
 CANARY_PATH_PATTERNS = {
     ".bazelrc",
     ".github/actions/setup-bazel-ci/**",
+    ".github/actions/setup-ci/**",
     ".github/scripts/run_bazel_with_buildbuddy.py",
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
+    ".github/scripts/setup-dev-drive.ps1",
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/postmerge-ci.yml",
     ".github/workflows/rusty-v8-release.yml",
@@ -40,8 +42,10 @@ CANARY_PATH_PATTERNS = {
 # Windows source builds are a narrower, more expensive subset of the canary.
 # A V8 version change also requires them even when no path below changed.
 WINDOWS_SOURCE_BUILD_PATHS = {
+    ".github/actions/setup-ci/**",
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
+    ".github/scripts/setup-dev-drive.ps1",
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/rusty-v8-release.yml",
     ".github/workflows/v8-canary.yml",
@@ -72,6 +76,15 @@ def canary_required(
     )
 
 
+def matching_windows_source_paths(changed_files: set[str]) -> set[str]:
+    """Return changed paths that require Windows rusty_v8 source builds."""
+    return {
+        path
+        for path in changed_files
+        if any(fnmatchcase(path, pattern) for pattern in WINDOWS_SOURCE_BUILD_PATHS)
+    }
+
+
 def resolved_v8_version(cargo_lock: bytes) -> str:
     versions = sorted(
         {
@@ -96,7 +109,7 @@ def windows_source_required(
     return (
         force
         or base_v8_version != head_v8_version
-        or not changed_files.isdisjoint(WINDOWS_SOURCE_BUILD_PATHS)
+        or bool(matching_windows_source_paths(changed_files))
     )
 
 
@@ -165,7 +178,7 @@ def main() -> None:
                 if matched_canary_paths
                 else "no relevant changes"
             )
-            matched_windows_paths = sorted(files & WINDOWS_SOURCE_BUILD_PATHS)
+            matched_windows_paths = sorted(matching_windows_source_paths(files))
             windows_source_reason = (
                 ", ".join(matched_windows_paths)
                 if matched_windows_paths

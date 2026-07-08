@@ -9,6 +9,7 @@ Usage: build-codex-package-archive.sh \
   --entrypoint-dir <dir> \
   --archive-dir <dir> \
   [--bwrap-bin <path>] \
+  [--code-mode-host-bin <path>] \
   [--zsh-manifest <path>] \
   [--codex-command-runner-bin <path>] \
   [--codex-windows-sandbox-setup-bin <path>] \
@@ -23,6 +24,7 @@ archive_dir=""
 target_suffixed_entrypoint="false"
 resource_args=()
 bwrap_bin_provided="false"
+code_mode_host_bin_provided="false"
 command_runner_bin_provided="false"
 sandbox_setup_bin_provided="false"
 
@@ -47,6 +49,11 @@ while [[ $# -gt 0 ]]; do
     --bwrap-bin)
       resource_args+=(--bwrap-bin "${2:?--bwrap-bin requires a value}")
       bwrap_bin_provided="true"
+      shift 2
+      ;;
+    --code-mode-host-bin)
+      resource_args+=(--code-mode-host-bin "${2:?--code-mode-host-bin requires a value}")
+      code_mode_host_bin_provided="true"
       shift 2
       ;;
     --zsh-manifest)
@@ -113,6 +120,11 @@ case "$target" in
     exe_suffix=".exe"
     ;;
 esac
+
+code_mode_host_bin="${entrypoint_dir%/}/codex-code-mode-host${exe_suffix}"
+if [[ "$code_mode_host_bin_provided" == "false" && -f "$code_mode_host_bin" ]]; then
+  resource_args+=(--code-mode-host-bin "$code_mode_host_bin")
+fi
 
 entrypoint_name="$entrypoint"
 if [[ "$target_suffixed_entrypoint" == "true" ]]; then

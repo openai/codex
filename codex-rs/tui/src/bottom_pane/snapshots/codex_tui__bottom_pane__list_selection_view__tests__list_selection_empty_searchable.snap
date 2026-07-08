@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: rendered
+---
+
+  Select a base branch
+
+  Type to search branches
+  no matches
+
+  Press enter to confirm or esc to go back

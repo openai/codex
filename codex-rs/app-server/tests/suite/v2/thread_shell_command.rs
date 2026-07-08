@@ -60,7 +60,12 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.as_path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        // thread/shellCommand intentionally executes on the app-server host.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -193,11 +198,13 @@ async fn thread_shell_command_returns_error_when_local_environment_is_disabled()
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.as_path(),
-        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
-    )
-    .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        // This test intentionally exercises thread/shellCommand without a local host environment.
+        .without_auto_env()
+        .with_env_overrides(&[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -252,7 +259,12 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.as_path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        // thread/shellCommand intentionally joins the app-server's host-local active turn.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp

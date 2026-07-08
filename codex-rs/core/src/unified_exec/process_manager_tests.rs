@@ -315,21 +315,24 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
 
     let event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
         .await
-        .expect("timed out waiting for failed exec end event")
+        .expect("timed out waiting for failed command execution item")
         .expect("event channel closed");
-    let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = event.msg else {
-        panic!("expected ExecCommandEnd event");
+    let codex_protocol::protocol::EventMsg::ItemCompleted(completed_event) = event.msg else {
+        panic!("expected ItemCompleted event");
     };
-    assert_eq!(end_event.call_id, "call-unified-denied");
+    let codex_protocol::items::TurnItem::CommandExecution(item) = completed_event.item else {
+        panic!("expected CommandExecution item");
+    };
+    assert_eq!(item.id, "call-unified-denied");
     assert_eq!(
-        end_event.status,
-        codex_protocol::protocol::ExecCommandStatus::Failed
+        item.status,
+        codex_protocol::items::CommandExecutionStatus::Failed
     );
-    assert_eq!(end_event.exit_code, -1);
-    assert_eq!(end_event.process_id.as_deref(), Some("123"));
+    assert_eq!(item.exit_code, Some(-1));
+    assert_eq!(item.process_id.as_deref(), Some("123"));
     assert_eq!(
-        end_event.aggregated_output,
-        "PRE_DENIAL_MARKER\nNetwork access denied"
+        item.aggregated_output.as_deref(),
+        Some("PRE_DENIAL_MARKER\nNetwork access denied")
     );
 }
 

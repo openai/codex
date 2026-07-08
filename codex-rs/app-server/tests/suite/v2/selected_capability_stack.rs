@@ -140,7 +140,12 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     )
     .await;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        // This fixture owns environments.toml and selects its environments explicitly.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let thread_id = start_thread(
         &mut app_server,
@@ -186,7 +191,12 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     drop(app_server);
     std::fs::remove_file(&fixture.pid_file)?;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        // This fixture owns environments.toml and selects its environments explicitly.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let request_id = app_server
         .send_thread_resume_request(ThreadResumeParams {
@@ -333,7 +343,12 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
     )
     .await;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        // This fixture owns environments.toml and selects its environments explicitly.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let thread_id = start_thread(
         &mut app_server,

@@ -40,7 +40,11 @@ async fn environment_info_returns_remote_environment_info() -> Result<()> {
     });
 
     let codex_home = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(RPC_TIMEOUT, app_server.initialize()).await??;
     add_environment(
         &mut app_server,
@@ -88,7 +92,11 @@ async fn environment_info_accepts_missing_cwd() -> Result<()> {
     });
 
     let codex_home = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(RPC_TIMEOUT, app_server.initialize()).await??;
     add_environment(
         &mut app_server,
@@ -125,7 +133,11 @@ async fn environment_info_accepts_missing_cwd() -> Result<()> {
 #[tokio::test]
 async fn environment_info_rejects_unknown_environment() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(RPC_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server
@@ -158,7 +170,11 @@ async fn environment_info_reports_connection_failure() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let codex_home = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(RPC_TIMEOUT, app_server.initialize()).await??;
     add_environment(&mut app_server, &exec_server_url, Some(50)).await?;
 

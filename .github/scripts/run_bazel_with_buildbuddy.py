@@ -131,25 +131,54 @@ def bazel_args_without_remote_execution(args: Sequence[str]) -> list[str]:
 def bazel_args_with_remote_config(
     args: Sequence[str], env: Mapping[str, str]
 ) -> list[str]:
+    command_idx = next(
+        (idx for idx, arg in enumerate(args) if not arg.startswith("-")),
+        None,
+    )
+    if command_idx is None:
+        raise ValueError("expected a Bazel command")
+
     config = remote_config(args, env)
     if config is None:
-        return bazel_args_without_remote_execution(args)
+        configured_args = bazel_args_without_remote_execution(args)
+    else:
+        # `remote_config()` returns a configuration only when this key is present.
+        api_key = env["BUILDBUDDY_API_KEY"]
+        remote_args = [
+            f"--config={config}",
+            f"--remote_header=x-buildbuddy-api-key={api_key}",
+        ]
 
-    # `remote_config()` returns a configuration only when this key is present.
-    api_key = env["BUILDBUDDY_API_KEY"]
-    remote_args = [
-        f"--config={config}",
-        f"--remote_header=x-buildbuddy-api-key={api_key}",
+        # Insert immediately after the Bazel command. This keeps wrapper-added
+        # options out of positional payloads and lets later CI configs override
+        # shared RBE defaults such as the Windows cross-compilation exec platforms.
+        configured_args = [
+            *args[: command_idx + 1],
+            *remote_args,
+            *args[command_idx + 1 :],
+        ]
+
+    try:
+        separator_idx = configured_args.index("--")
+    except ValueError:
+        separator_idx = len(configured_args)
+
+    cache_args = [
+        f"{option_prefix}{env[env_name]}"
+        for env_name, option_prefix in (
+            ("BAZEL_REPO_CONTENTS_CACHE", "--repo_contents_cache="),
+            ("BAZEL_REPOSITORY_CACHE", "--repository_cache="),
+        )
+        if env.get(env_name)
+        and not any(
+            arg.startswith(option_prefix) for arg in configured_args[:separator_idx]
+        )
     ]
-
-    # Insert immediately after the Bazel command. This keeps wrapper-added
-    # options out of positional payloads and lets later CI configs override
-    # shared RBE defaults such as the Windows cross-compilation exec platforms.
-    insertion_idx = next(
-        (idx + 1 for idx, arg in enumerate(args) if not arg.startswith("-")),
-        len(args),
-    )
-    return [*args[:insertion_idx], *remote_args, *args[insertion_idx:]]
+    return [
+        *configured_args[:separator_idx],
+        *cache_args,
+        *configured_args[separator_idx:],
+    ]
 
 
 def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]:
