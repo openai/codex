@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: "&warnings[0]"
+---
+⚠ Ultra reasoning may proactively use multiple agents. This session is
+  configured for 8 concurrent threads with up to 7 subagents which can increase
+  usage quickly. Consider setting
+  features.multi_agent_v2.max_concurrent_threads_per_session below 8.

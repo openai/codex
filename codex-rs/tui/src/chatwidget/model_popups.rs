@@ -5,6 +5,8 @@
 
 use super::*;
 
+const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
+
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
@@ -102,7 +104,7 @@ impl ChatWidget {
                     model.as_str(),
                     Some(preset.default_reasoning_effort.clone()),
                 );
-                let actions = Self::model_selection_actions(
+                let actions = self.model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort.clone()),
                     should_prompt_plan_mode_scope,
@@ -214,10 +216,14 @@ impl ChatWidget {
     }
 
     fn model_selection_actions(
+        &self,
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
+        let warning = effort_for_action
+            .as_ref()
+            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -233,6 +239,11 @@ impl ChatWidget {
                 model: model_for_action.clone(),
                 effort: effort_for_action.clone(),
             });
+            if let Some(warning) = warning.clone() {
+                tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_warning_event(warning),
+                )));
+            }
         })]
     }
 
@@ -299,14 +310,23 @@ impl ChatWidget {
             "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
         );
         let subtitle = format!("Choose where to apply {reasoning_phrase}.");
+        let warning = effort
+            .as_ref()
+            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             let effort = effort.clone();
+            let warning = warning.clone();
             move |tx| {
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
+                if let Some(warning) = warning.clone() {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_warning_event(warning),
+                    )));
+                }
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -318,6 +338,11 @@ impl ChatWidget {
                 model: model.clone(),
                 effort: effort.clone(),
             });
+            if let Some(warning) = warning.clone() {
+                tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_warning_event(warning),
+                )));
+            }
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -427,6 +452,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.clone();
+            let warning = self.ultra_reasoning_concurrency_warning(&effort);
             let mut effort_label = Self::reasoning_effort_label(&effort);
             if Some(choice) == default_choice.as_ref() {
                 effort_label.push_str(" (default)");
@@ -469,6 +495,11 @@ impl ChatWidget {
                         model: model_for_action.clone(),
                         effort: choice_effort.clone(),
                     });
+                    if let Some(warning) = warning.clone() {
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_warning_event(warning),
+                        )));
+                    }
                 }
             })];
 
@@ -518,14 +549,47 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn ultra_reasoning_concurrency_warning(
+        &self,
+        effort: &ReasoningEffortConfig,
+    ) -> Option<String> {
+        if effort != &ReasoningEffortConfig::Ultra {
+            return None;
+        }
+
+        let max_threads = self
+            .config
+            .multi_agent_v2
+            .max_concurrent_threads_per_session;
+        if max_threads < ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD {
+            return None;
+        }
+
+        let max_subagents = max_threads.saturating_sub(1);
+        Some(format!(
+            "Ultra reasoning may proactively use multiple agents. This session is configured for \
+             {max_threads} concurrent threads with up to {max_subagents} subagents which can \
+             increase usage quickly. Consider setting \
+             features.multi_agent_v2.max_concurrent_threads_per_session below 8."
+        ))
+    }
+
     pub(super) fn apply_model_and_effort_without_persist(
         &self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
+        let warning = effort
+            .as_ref()
+            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         self.app_event_tx.send(AppEvent::UpdateModel(model));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
+        if let Some(warning) = warning {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_warning_event(warning),
+            )));
+        }
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
