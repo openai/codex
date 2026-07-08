@@ -1327,6 +1327,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         AuthMode::ApiKey => "api_key",
         AuthMode::Chatgpt => "chatgpt",
         AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
+        AuthMode::Headers => "headers",
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
@@ -1396,6 +1397,9 @@ fn stored_auth_issues(
             if auth.last_refresh.is_none() {
                 issues.push("external ChatGPT auth is missing refresh metadata");
             }
+        }
+        AuthMode::Headers => {
+            issues.push("header auth cannot be loaded from auth storage");
         }
         AuthMode::AgentIdentity => {
             if auth
@@ -2466,6 +2470,7 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         AuthMode::ApiKey => "api_key",
         AuthMode::Chatgpt => "chatgpt",
         AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
+        AuthMode::Headers => "headers",
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
@@ -2605,6 +2610,7 @@ fn provider_auth_reachability_mode_from_auth(
         Some(
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens
+            | AuthMode::Headers
             | AuthMode::AgentIdentity
             | AuthMode::PersonalAccessToken,
         )

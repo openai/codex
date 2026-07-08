@@ -2141,6 +2141,7 @@ impl AuthRequestTelemetryContext {
                 AuthMode::ApiKey | AuthMode::BedrockApiKey => "ApiKey",
                 AuthMode::Chatgpt
                 | AuthMode::ChatgptAuthTokens
+                | AuthMode::Headers
                 | AuthMode::AgentIdentity
                 | AuthMode::PersonalAccessToken => "Chatgpt",
             }),

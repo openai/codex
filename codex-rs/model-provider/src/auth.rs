@@ -7,6 +7,7 @@ use codex_agent_identity::authorization_header_for_agent_task;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuth;
@@ -106,6 +107,17 @@ impl AuthProvider for AgentIdentityAuthProvider {
         if self.auth.is_fedramp_account() {
             let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HeaderAuthProvider {
+    auth: AuthHeaders,
+}
+
+impl AuthProvider for HeaderAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        headers.extend(self.auth.headers().clone());
     }
 }
 
@@ -243,6 +255,7 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
         CodexAuth::AgentIdentity(auth) => {
             Arc::new(AgentIdentityAuthProvider { auth: auth.clone() })
         }
+        CodexAuth::Headers(auth) => Arc::new(HeaderAuthProvider { auth: auth.clone() }),
         CodexAuth::BedrockApiKey(_) => unreachable!("{BEDROCK_API_KEY_UNSUPPORTED_MESSAGE}"),
         CodexAuth::ApiKey(_)
         | CodexAuth::Chatgpt(_)
@@ -386,6 +399,21 @@ mod tests {
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn header_auth_adds_predefined_headers() {
+        let mut expected = HeaderMap::new();
+        expected.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer external"),
+        );
+        expected.insert("x-external-auth", HeaderValue::from_static("enabled"));
+        let auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
+
+        let actual = auth_provider_from_auth(&auth).to_auth_headers();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
