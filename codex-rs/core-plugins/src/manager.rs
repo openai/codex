@@ -1408,7 +1408,7 @@ impl PluginsManager {
         tracing::warn!(
             plugin_id = %plugin_id.as_key(),
             error_type = %error_type,
-            sub_error_type = ?sub_error_type,
+            sub_error_type = sub_error_type.as_deref(),
             error = %error_message,
             "plugin install failed"
         );

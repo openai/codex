@@ -1745,7 +1745,7 @@ impl PluginRequestProcessor {
             remote_plugin_id = %remote_plugin_id,
             marketplace_name = %marketplace_name,
             error_type = %error_type,
-            sub_error_type = ?sub_error_type,
+            sub_error_type = sub_error_type.as_deref(),
             error = %error_message,
             "remote plugin install failed"
         );
