@@ -420,14 +420,10 @@ mod tests {
         assert_eq!(
             [
                 ThreadCatalogChange::Upsert { thread_id },
-                ThreadCatalogChange::Upsert { thread_id },
-                ThreadCatalogChange::Upsert { thread_id },
                 ThreadCatalogChange::Delete { thread_id },
             ],
             [
                 changes.recv().await.expect("metadata change"),
-                changes.recv().await.expect("archive change"),
-                changes.recv().await.expect("unarchive change"),
                 changes.recv().await.expect("delete change"),
             ]
         );
@@ -840,8 +836,6 @@ impl ThreadStore for InMemoryThreadStore {
             let mut state = self.state.lock().await;
             state.calls.archive_thread += 1;
             stored_thread_from_state(&state, thread_id, /*include_history*/ false)?;
-            drop(state);
-            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
             Ok(())
         })
     }
@@ -853,8 +847,6 @@ impl ThreadStore for InMemoryThreadStore {
             state.calls.unarchive_thread += 1;
             let thread =
                 stored_thread_from_state(&state, thread_id, /*include_history*/ false)?;
-            drop(state);
-            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
             Ok(thread)
         })
     }

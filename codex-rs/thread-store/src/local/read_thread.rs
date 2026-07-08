@@ -255,7 +255,7 @@ async fn resolve_rollout_path(
     }
 }
 
-async fn read_thread_from_rollout_path(
+pub(super) async fn read_thread_from_rollout_path(
     store: &LocalThreadStore,
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {

@@ -455,7 +455,7 @@ async fn canonical_history_mode(
     Ok(session_meta.meta.history_mode)
 }
 
-fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
+pub(super) fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
     if patch.name.is_some() {
         return true;
     }

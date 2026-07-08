@@ -19,6 +19,7 @@ use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -120,21 +121,29 @@ impl LocalThreadStore {
         let _ = self.catalog_changes_tx.send(change);
     }
 
+    async fn rollout_is_catalog_visible(&self, rollout_path: &Path) -> bool {
+        read_thread::read_thread_from_rollout_path(self, rollout_path.to_path_buf())
+            .await
+            .is_ok_and(|thread| !thread.preview.is_empty())
+    }
+
+    async fn publish_catalog_upsert_if_visible(&self, thread_id: ThreadId, thread: &StoredThread) {
+        if let Some(rollout_path) = thread.rollout_path.as_ref()
+            && self.rollout_is_catalog_visible(rollout_path).await
+        {
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+        }
+    }
+
     async fn track_catalog_visibility<T>(
         &self,
         thread_id: ThreadId,
         operation: impl Future<Output = ThreadStoreResult<T>>,
     ) -> ThreadStoreResult<T> {
         let rollout_path = live_writer::rollout_path(self, thread_id).await?;
-        let was_visible = codex_rollout::existing_rollout_path(&rollout_path)
-            .await
-            .is_some();
+        let was_visible = self.rollout_is_catalog_visible(&rollout_path).await;
         let result = operation.await?;
-        if !was_visible
-            && codex_rollout::existing_rollout_path(&rollout_path)
-                .await
-                .is_some()
-        {
+        if !was_visible && self.rollout_is_catalog_visible(&rollout_path).await {
             self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
         }
         Ok(result)
@@ -348,15 +357,34 @@ impl ThreadStore for LocalThreadStore {
     ) -> ThreadStoreFuture<'_, StoredThread> {
         let thread_id = params.thread_id;
         let changed = !params.patch.is_empty();
+        let may_partially_apply =
+            update_thread_metadata::needs_rollout_compatibility_update(&params.patch);
+        let include_archived = params.include_archived;
         Box::pin(async move {
-            let thread = update_thread_metadata::update_thread_metadata(self, params).await?;
-            if changed
-                && let Some(rollout_path) = thread.rollout_path.as_ref()
-                && codex_rollout::existing_rollout_path(rollout_path)
-                    .await
-                    .is_some()
-            {
-                self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            let thread = match update_thread_metadata::update_thread_metadata(self, params).await {
+                Ok(thread) => thread,
+                Err(err) => {
+                    if changed
+                        && may_partially_apply
+                        && let Ok(thread) = read_thread::read_thread(
+                            self,
+                            ReadThreadParams {
+                                thread_id,
+                                include_archived,
+                                include_history: false,
+                            },
+                        )
+                        .await
+                    {
+                        self.publish_catalog_upsert_if_visible(thread_id, &thread)
+                            .await;
+                    }
+                    return Err(err);
+                }
+            };
+            if changed {
+                self.publish_catalog_upsert_if_visible(thread_id, &thread)
+                    .await;
             }
             Ok(thread)
         })
@@ -435,6 +463,15 @@ mod tests {
             .live_rollout_path(thread_id)
             .await
             .expect("load rollout path");
+
+        store
+            .persist_thread(thread_id)
+            .await
+            .expect("persist empty thread");
+        assert!(matches!(
+            catalog_changes.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
 
         store
             .append_items(AppendThreadItemsParams {
@@ -732,7 +769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_thread_shutdown_with_buffered_items_materializes_before_metadata_read() {
+    async fn live_thread_shutdown_with_buffered_user_message_materializes_before_metadata_read() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -753,14 +790,9 @@ mod tests {
             .expect("live rollout path");
 
         live_thread
-            .append_items(&[RolloutItem::EventMsg(EventMsg::TokenCount(
-                codex_protocol::protocol::TokenCountEvent {
-                    info: None,
-                    rate_limits: None,
-                },
-            ))])
+            .append_items(&[user_message_item("buffered message")])
             .await
-            .expect("append metadata-only item");
+            .expect("append user message");
         live_thread.shutdown().await.expect("shutdown thread");
         assert_eq!(
             catalog_changes.recv().await.expect("creation change"),
