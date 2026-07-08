@@ -586,10 +586,17 @@ async fn load_skills_under_root(
         .map(|skill| {
             let plugin_root = plugin_root.as_ref();
             async move {
-                let result =
-                    parse_skill_file(fs, &skill.skill, &skill.path, scope, plugin_id, plugin_root)
-                        .await
-                        .map_err(|err| err.to_string());
+                let result = parse_skill_file(
+                    fs,
+                    &skill.skill,
+                    &skill.path,
+                    &skill.path_uri,
+                    scope,
+                    plugin_id,
+                    plugin_root,
+                )
+                .await
+                .map_err(|err| err.to_string());
                 (skill.path, skill.path_uri, result)
             }
         })
@@ -620,13 +627,24 @@ async fn parse_skill_file(
     fs: &dyn ExecutorFileSystem,
     skill: &DiscoveredSkill,
     path: &AbsolutePathBuf,
+    path_uri: &PathUri,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
+    let metadata_path = path_uri
+        .parent()
+        .and_then(|parent| parent.join(SKILLS_METADATA_DIR).ok())
+        .and_then(|directory| directory.join(SKILLS_METADATA_FILENAME).ok());
+    let metadata = match &skill.metadata {
+        SkillMetadataDiscovery::Present(_) => metadata_path.map(SkillMetadataDiscovery::Present),
+        SkillMetadataDiscovery::Probe(_) => metadata_path.map(SkillMetadataDiscovery::Probe),
+        SkillMetadataDiscovery::Absent => None,
+    }
+    .unwrap_or(SkillMetadataDiscovery::Absent);
     let (contents, loaded_metadata) = tokio::join!(
-        fs.read_file_text(&skill.path, /*sandbox*/ None),
-        load_skill_metadata(fs, path, &skill.metadata, plugin_root),
+        fs.read_file_text(path_uri, /*sandbox*/ None),
+        load_skill_metadata(fs, path, &metadata, plugin_root),
     );
     let contents = contents.map_err(SkillParseError::Read)?;
     let ParsedSkillFrontmatter {

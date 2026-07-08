@@ -438,10 +438,18 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
         )
         .expect("skill");
     }
+    let metadata_path = skills_root.join("first/agents/openai.yaml");
+    fs::create_dir_all(metadata_path.parent().expect("metadata parent")).expect("metadata dir");
+    fs::write(
+        &metadata_path,
+        "policy:\n  allow_implicit_invocation: false\n",
+    )
+    .expect("metadata");
 
     let host_root = root.path().join("skills");
     fs::create_dir_all(&host_root).expect("host skills dir");
-    symlink(&skills_root, host_root.join("linked-plugin")).expect("skill pack symlink");
+    let linked_root = host_root.join("linked-plugin");
+    symlink(&skills_root, &linked_root).expect("skill pack symlink");
 
     let recording = Arc::new(RecordingFileSystem::new(
         LOCAL_FS.as_ref(),
@@ -475,6 +483,13 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
 
     let calls = recording.calls();
     assert_eq!(calls.walks, 1);
+    let linked_root = PathUri::from_host_native_path(linked_root).unwrap();
+    assert!(
+        calls
+            .read_files
+            .iter()
+            .all(|path| !path.starts_with(&linked_root))
+    );
     assert!(
         calls
             .metadata_files
