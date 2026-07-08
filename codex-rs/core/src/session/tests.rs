@@ -9892,6 +9892,42 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
 }
 
 #[tokio::test]
+async fn task_finish_clears_active_turn_before_publishing_turn_complete() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    let turn_context_mut =
+        Arc::get_mut(&mut turn_context).expect("turn context should not be shared");
+    turn_context_mut.multi_agent_version = MultiAgentVersion::V2;
+    turn_context_mut.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path should parse")),
+        agent_nickname: Some("worker".to_string()),
+        agent_role: None,
+    });
+
+    // Hold the first post-publication lock so the assertion observes the state exactly when the
+    // terminal event becomes visible, rather than after the rest of completion happens to run.
+    let terminal_error = Arc::clone(&turn_context.terminal_error);
+    let terminal_error_guard = terminal_error.lock().await;
+    session
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), CompletingTask)
+        .await;
+
+    loop {
+        let event = timeout(StdDuration::from_secs(2), rx.recv())
+            .await
+            .expect("turn complete event")
+            .expect("event channel open");
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    assert!(session.active_turn.lock().await.is_none());
+    drop(terminal_error_guard);
+}
+
+#[tokio::test]
 async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
     struct ThreadIdleRecorder {
         calls: Arc<std::sync::atomic::AtomicUsize>,
