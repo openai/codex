@@ -404,6 +404,10 @@ mod tests {
             ]),
         )
         .expect("update session");
+        set_modified_at(
+            &session_path,
+            SystemTime::now() + Duration::from_secs(/*secs*/ 1),
+        );
 
         let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
         assert_eq!(
