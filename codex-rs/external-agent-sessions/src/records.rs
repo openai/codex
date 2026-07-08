@@ -1,7 +1,9 @@
 use crate::ConversationMessage;
 use crate::ExternalAgentSessionMigration;
 use crate::MessageRole;
-use crate::summarize_for_label;
+use crate::title::IMPORTED_SESSION_FALLBACK_TITLE;
+use crate::title::SessionTitleCandidates;
+use crate::title::fallback_title_from_user_message;
 use crate::truncate;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
@@ -25,7 +27,8 @@ pub struct SessionSummary {
 
 pub(super) struct ParsedSessionImport {
     pub cwd: Option<PathBuf>,
-    pub source_title: Option<String>,
+    pub custom_title: Option<String>,
+    pub ai_title: Option<String>,
     pub messages: Vec<ConversationMessage>,
     pub content_sha256: String,
 }
@@ -36,7 +39,8 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     let mut cwd = None;
     let mut custom_title = None;
     let mut ai_title = None;
-    let mut title = None;
+    let mut fallback_title = None;
+    let mut saw_user_message = false;
     let mut latest_timestamp = None;
     let mut saw_message = false;
 
@@ -65,8 +69,11 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
             continue;
         };
         saw_message = true;
-        if title.is_none() && message.role == MessageRole::User {
-            title = Some(summarize_for_label(&message.text));
+        if message.role == MessageRole::User {
+            saw_user_message = true;
+            if fallback_title.is_none() {
+                fallback_title = fallback_title_from_user_message(&message.text);
+            }
         }
         if let Some(timestamp) = message.timestamp {
             latest_timestamp =
@@ -88,7 +95,14 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         migration: ExternalAgentSessionMigration {
             path: path.to_path_buf(),
             cwd,
-            title: custom_title.or(ai_title).or(title),
+            title: SessionTitleCandidates {
+                custom_title,
+                ai_title,
+                fallback_title: fallback_title.or_else(|| {
+                    saw_user_message.then(|| IMPORTED_SESSION_FALLBACK_TITLE.to_string())
+                }),
+            }
+            .select(),
         },
     }))
 }
@@ -133,7 +147,8 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
     }
     Ok(ParsedSessionImport {
         cwd,
-        source_title: custom_title.or(ai_title),
+        custom_title,
+        ai_title,
         messages,
         content_sha256: format!("{:x}", hasher.finalize()),
     })
@@ -373,7 +388,8 @@ mod tests {
         let parsed = read_session_import(&path).expect("parse session");
 
         assert_eq!(parsed.cwd.as_deref(), Some(root.path()));
-        assert_eq!(parsed.source_title.as_deref(), Some("custom title"));
+        assert_eq!(parsed.custom_title.as_deref(), Some("custom title"));
+        assert_eq!(parsed.ai_title.as_deref(), Some("generated title"));
         assert_eq!(parsed.messages.len(), 1);
         assert_eq!(parsed.messages[0].text, "first request");
         assert_eq!(
