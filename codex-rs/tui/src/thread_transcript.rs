@@ -8,7 +8,7 @@ use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
-use crate::history_cell::new_user_prompt;
+use crate::history_cell::UserHistoryCell;
 use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
@@ -62,12 +62,12 @@ pub(crate) fn thread_to_transcript_cells(
                         .map(codex_app_server_protocol::UserInput::into_core)
                         .collect(),
                 };
-                cells.push(Arc::new(new_user_prompt(
-                    item.message(),
-                    item.text_elements(),
-                    item.local_image_paths(),
-                    item.image_urls(),
-                )));
+                cells.push(Arc::new(UserHistoryCell {
+                    message: item.message(),
+                    text_elements: item.text_elements(),
+                    local_image_paths: item.local_image_paths(),
+                    remote_image_urls: item.image_urls(),
+                }));
             }
             ThreadItem::AgentMessage { text, .. } => {
                 let parsed = parse_assistant_markdown(text, cwd);

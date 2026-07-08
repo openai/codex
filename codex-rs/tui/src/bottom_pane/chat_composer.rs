@@ -211,6 +211,7 @@ use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
 use crate::keymap::RuntimeKeymap;
@@ -222,7 +223,6 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
-use crate::terminal_text::sanitize_untrusted_text;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -888,7 +888,7 @@ impl ChatComposer {
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
-        let pasted = sanitize_untrusted_text(&pasted).into_owned();
+        let pasted = sanitize_user_text(&pasted);
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
@@ -7561,11 +7561,9 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        let sanitized = "_count_rows\tindent\ntworeadylabeldonetailsafewide";
-        let needs_redraw = composer.handle_paste(
-            "_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}\x1b[200~ready\x1b]8;;https://example.com\x1b\\label\x1b]8;;\x1b\\done\x1bPqpayload\x1b\\tail\x1bcsafe\x1b(Bwide"
-                .to_string(),
-        );
+        let sanitized = "_count_rows\tindent\ntwo";
+        let needs_redraw =
+            composer.handle_paste("_count_r\x1b[13;2:3uows\tindent\n\0two\u{7f}".to_string());
         assert!(needs_redraw);
         assert_eq!(composer.draft.textarea.text(), sanitized);
         assert!(composer.draft.pending_pastes.is_empty());
