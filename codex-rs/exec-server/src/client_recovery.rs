@@ -516,6 +516,13 @@ impl ExecServerClient {
                         inner.request_recovery(rpc_client, disconnected_message(reason.as_deref()));
                         return;
                     }
+                    RpcClientEvent::ProtocolError { reason } => {
+                        rpc_client.close_transport().await;
+                        inner
+                            .fail(format!("exec-server protocol violation: {reason}"))
+                            .await;
+                        return;
+                    }
                 }
             }
         });

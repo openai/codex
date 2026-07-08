@@ -125,7 +125,7 @@ async fn run_connection(
                     break;
                 }
             }
-            JsonRpcConnectionEvent::Message(message) => match message {
+            JsonRpcConnectionEvent::Message { message, .. } => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {

@@ -25,6 +25,7 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::connection::MAX_JSONRPC_MESSAGE_BYTES;
 use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
@@ -194,9 +195,16 @@ impl RelayMessageFrame {
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+    fn into_jsonrpc_message(self) -> Result<(JSONRPCMessage, usize), ExecServerError> {
         let payload = self.into_data()?.payload;
-        serde_json::from_slice(&payload).map_err(ExecServerError::Json)
+        let encoded_len = payload.len();
+        if encoded_len > MAX_JSONRPC_MESSAGE_BYTES {
+            return Err(ExecServerError::Protocol(format!(
+                "relay JSON-RPC message exceeds {MAX_JSONRPC_MESSAGE_BYTES} bytes"
+            )));
+        }
+        let message = serde_json::from_slice(&payload).map_err(ExecServerError::Json)?;
+        Ok((message, encoded_len))
     }
 
     pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
@@ -365,12 +373,15 @@ where
                             };
                             match kind {
                                 RelayFrameBodyKind::Data => match frame.into_jsonrpc_message() {
-                                    Ok(message) => {
+                                    Ok((message, encoded_len)) => {
                                         match send_event_with_keepalive(
                                             &mut websocket,
                                             &mut keepalive,
                                             &incoming_tx,
-                                            JsonRpcConnectionEvent::Message(message),
+                                            JsonRpcConnectionEvent::Message {
+                                                message,
+                                                encoded_len,
+                                            },
                                         )
                                         .await
                                         {
@@ -969,7 +980,7 @@ mod tests {
             .await?;
         assert!(matches!(
             timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
-            Some(JsonRpcConnectionEvent::Message(actual)) if actual == message
+            Some(JsonRpcConnectionEvent::Message { message: actual, .. }) if actual == message
         ));
 
         drop(connection);
@@ -1019,6 +1030,7 @@ mod tests {
             ControlledWebSocket::new(/*write_ready*/ true);
         let (incoming_tx, mut incoming_rx) = mpsc::channel(/*buffer*/ 1);
         let message = test_jsonrpc_message();
+        let encoded_len = serde_json::to_vec(&message)?.len();
         let expected_message = message.clone();
         incoming_tx
             .send(JsonRpcConnectionEvent::MalformedMessage {
@@ -1036,7 +1048,10 @@ mod tests {
                 &mut websocket,
                 &mut keepalive,
                 &incoming_tx,
-                JsonRpcConnectionEvent::Message(message),
+                JsonRpcConnectionEvent::Message {
+                    encoded_len,
+                    message,
+                },
             )
             .await
         });
@@ -1055,7 +1070,8 @@ mod tests {
         ));
         assert!(matches!(
             incoming_rx.recv().await,
-            Some(JsonRpcConnectionEvent::Message(actual)) if actual == expected_message
+            Some(JsonRpcConnectionEvent::Message { message: actual, .. })
+                if actual == expected_message
         ));
         Ok(())
     }
@@ -1129,7 +1145,7 @@ mod tests {
         };
         let frame = decode_relay_message_frame(data_payload.as_ref())?;
         assert_eq!(frame.stream_id, stream_id);
-        assert_eq!(frame.into_jsonrpc_message()?, message);
+        assert_eq!(frame.into_jsonrpc_message()?.0, message);
         drop(connection);
         Ok(())
     }

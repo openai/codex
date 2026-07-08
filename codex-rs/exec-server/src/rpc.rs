@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCErrorError;
@@ -29,6 +30,9 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
+const INGRESS_RATE_WINDOW: Duration = Duration::from_secs(1);
+const MAX_INBOUND_JSONRPC_BYTES_PER_WINDOW: usize = 8 * 1024 * 1024;
+const MAX_INBOUND_JSONRPC_MESSAGES_PER_WINDOW: usize = 8 * 1024;
 
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
@@ -59,6 +63,54 @@ enum RpcCallTimeout {
 pub(crate) enum RpcClientEvent {
     Notification(JSONRPCNotification),
     Disconnected { reason: Option<String> },
+    ProtocolError { reason: String },
+}
+
+enum RpcReaderEnd {
+    Disconnected { reason: Option<String> },
+    ProtocolError { reason: String },
+}
+
+struct IngressRateWindow {
+    started_at: Instant,
+    bytes: usize,
+    messages: usize,
+}
+
+impl IngressRateWindow {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            bytes: 0,
+            messages: 0,
+        }
+    }
+
+    fn record(&mut self, encoded_len: usize) -> Result<(), String> {
+        let now = Instant::now();
+        if now.duration_since(self.started_at) >= INGRESS_RATE_WINDOW {
+            self.started_at = now;
+            self.bytes = 0;
+            self.messages = 0;
+        }
+
+        let next_bytes = self.bytes.saturating_add(encoded_len);
+        let next_messages = self.messages.saturating_add(1);
+        if next_bytes > MAX_INBOUND_JSONRPC_BYTES_PER_WINDOW {
+            return Err(format!(
+                "exec-server sent more than {MAX_INBOUND_JSONRPC_BYTES_PER_WINDOW} JSON-RPC bytes in one second"
+            ));
+        }
+        if next_messages > MAX_INBOUND_JSONRPC_MESSAGES_PER_WINDOW {
+            return Err(format!(
+                "exec-server sent more than {MAX_INBOUND_JSONRPC_MESSAGES_PER_WINDOW} JSON-RPC messages in one second"
+            ));
+        }
+
+        self.bytes = next_bytes;
+        self.messages = next_messages;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -263,36 +315,41 @@ impl RpcClient {
         let closed_for_reader = Arc::clone(&closed);
         let transport_for_reader = transport.clone();
         let reader_task = tokio::spawn(async move {
-            let disconnect_reason = loop {
+            let mut ingress_rate = IngressRateWindow::new();
+            let reader_end = loop {
                 let Some(event) = incoming_rx.recv().await else {
-                    break None;
+                    break RpcReaderEnd::Disconnected { reason: None };
                 };
                 match event {
-                    JsonRpcConnectionEvent::Message(message) => {
+                    JsonRpcConnectionEvent::Message {
+                        message,
+                        encoded_len,
+                    } => {
+                        if let Err(reason) = ingress_rate.record(encoded_len) {
+                            break RpcReaderEnd::ProtocolError { reason };
+                        }
                         if let Err(err) =
                             handle_server_message(&pending_for_reader, &event_tx, message).await
                         {
-                            let _ = err;
-                            break None;
+                            break RpcReaderEnd::ProtocolError { reason: err };
                         }
                     }
                     JsonRpcConnectionEvent::MalformedMessage { reason } => {
-                        let _ = reason;
-                        break None;
+                        break RpcReaderEnd::ProtocolError { reason };
                     }
                     JsonRpcConnectionEvent::Disconnected { reason } => {
-                        break reason;
+                        break RpcReaderEnd::Disconnected { reason };
                     }
                 }
             };
 
             closed_for_reader.store(true, Ordering::Release);
             drain_pending(&pending_for_reader).await;
-            let _ = event_tx
-                .send(RpcClientEvent::Disconnected {
-                    reason: disconnect_reason,
-                })
-                .await;
+            let event = match reader_end {
+                RpcReaderEnd::Disconnected { reason } => RpcClientEvent::Disconnected { reason },
+                RpcReaderEnd::ProtocolError { reason } => RpcClientEvent::ProtocolError { reason },
+            };
+            let _ = event_tx.send(event).await;
             transport_for_reader.terminate();
         });
 
@@ -626,6 +683,9 @@ mod tests {
     use tracing_subscriber::filter::filter_fn;
     use tracing_subscriber::prelude::*;
 
+    use super::IngressRateWindow;
+    use super::MAX_INBOUND_JSONRPC_BYTES_PER_WINDOW;
+    use super::MAX_INBOUND_JSONRPC_MESSAGES_PER_WINDOW;
     use super::RpcClient;
     use crate::connection::JsonRpcConnection;
 
@@ -663,6 +723,24 @@ mod tests {
         if let Err(err) = writer.write_all(format!("{encoded}\n").as_bytes()).await {
             panic!("failed to write JSON-RPC line: {err}");
         }
+    }
+
+    #[test]
+    fn ingress_rate_window_bounds_bytes() {
+        let mut window = IngressRateWindow::new();
+
+        assert!(window.record(MAX_INBOUND_JSONRPC_BYTES_PER_WINDOW).is_ok());
+        assert!(window.record(1).is_err());
+    }
+
+    #[test]
+    fn ingress_rate_window_bounds_messages() {
+        let mut window = IngressRateWindow::new();
+
+        for _ in 0..MAX_INBOUND_JSONRPC_MESSAGES_PER_WINDOW {
+            assert!(window.record(0).is_ok());
+        }
+        assert!(window.record(0).is_err());
     }
 
     #[tokio::test]

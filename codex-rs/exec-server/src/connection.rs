@@ -24,11 +24,14 @@ use tracing::debug;
 use tracing::warn;
 
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::BufWriter;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
+pub(crate) const MAX_JSONRPC_MESSAGE_BYTES: usize = 1024 * 1024;
 const STDIO_TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 #[cfg(test)]
 pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_millis(25);
@@ -37,9 +40,16 @@ pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30
 
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
-    Message(JSONRPCMessage),
-    MalformedMessage { reason: String },
-    Disconnected { reason: Option<String> },
+    Message {
+        message: JSONRPCMessage,
+        encoded_len: usize,
+    },
+    MalformedMessage {
+        reason: String,
+    },
+    Disconnected {
+        reason: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -242,17 +252,51 @@ impl JsonRpcConnection {
         let incoming_tx_for_reader = incoming_tx.clone();
         let disconnected_tx_for_reader = disconnected_tx.clone();
         let reader_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(reader).lines();
+            let mut reader = BufReader::new(reader);
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
-                        if line.trim().is_empty() {
+                let mut encoded = Vec::new();
+                match (&mut reader)
+                    .take((MAX_JSONRPC_MESSAGE_BYTES + 2) as u64)
+                    .read_until(b'\n', &mut encoded)
+                    .await
+                {
+                    Ok(0) => {
+                        send_disconnected(
+                            &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
+                            /*reason*/ None,
+                        )
+                        .await;
+                        break;
+                    }
+                    Ok(_) => {
+                        if encoded.last() == Some(&b'\n') {
+                            encoded.pop();
+                            if encoded.last() == Some(&b'\r') {
+                                encoded.pop();
+                            }
+                        }
+                        if encoded.len() > MAX_JSONRPC_MESSAGE_BYTES {
+                            send_malformed_message(
+                                &incoming_tx_for_reader,
+                                Some(format!(
+                                    "JSON-RPC message from {reader_label} exceeds {MAX_JSONRPC_MESSAGE_BYTES} bytes"
+                                )),
+                            )
+                            .await;
+                            break;
+                        }
+                        if encoded.iter().all(u8::is_ascii_whitespace) {
                             continue;
                         }
-                        match serde_json::from_str::<JSONRPCMessage>(&line) {
+                        let encoded_len = encoded.len();
+                        match serde_json::from_slice::<JSONRPCMessage>(&encoded) {
                             Ok(message) => {
                                 if incoming_tx_for_reader
-                                    .send(JsonRpcConnectionEvent::Message(message))
+                                    .send(JsonRpcConnectionEvent::Message {
+                                        message,
+                                        encoded_len,
+                                    })
                                     .await
                                     .is_err()
                                 {
@@ -269,15 +313,6 @@ impl JsonRpcConnection {
                                 .await;
                             }
                         }
-                    }
-                    Ok(None) => {
-                        send_disconnected(
-                            &incoming_tx_for_reader,
-                            &disconnected_tx_for_reader,
-                            /*reason*/ None,
-                        )
-                        .await;
-                        break;
                     }
                     Err(err) => {
                         send_disconnected(
@@ -392,36 +427,52 @@ impl JsonRpcConnection {
                     }
                     incoming_message = websocket.next() => {
                         match incoming_message {
-                            Some(Ok(message)) => match message.parse_jsonrpc_frame() {
-                                Ok(JsonRpcWebSocketFrame::Message(message)) => {
-                                    if incoming_tx
-                                        .send(JsonRpcConnectionEvent::Message(message))
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
-                                Ok(JsonRpcWebSocketFrame::Close) => {
-                                    send_disconnected(
+                            Some(Ok(message)) => {
+                                let encoded_len = message.jsonrpc_payload_len();
+                                if encoded_len.is_some_and(|len| len > MAX_JSONRPC_MESSAGE_BYTES) {
+                                    send_malformed_message(
                                         &incoming_tx,
-                                        &disconnected_tx,
-                                        /*reason*/ None,
+                                        Some(format!(
+                                            "websocket JSON-RPC message from {connection_label} exceeds {MAX_JSONRPC_MESSAGE_BYTES} bytes"
+                                        )),
                                     )
                                     .await;
                                     break;
                                 }
-                                Ok(JsonRpcWebSocketFrame::Ignore) => {}
-                                Err(err) => {
-                                    send_malformed_message(
-                                        &incoming_tx,
-                                        Some(format!(
-                                            "failed to parse websocket JSON-RPC message from {connection_label}: {err}"
-                                        )),
-                                    )
-                                    .await;
+                                match message.parse_jsonrpc_frame() {
+                                    Ok(JsonRpcWebSocketFrame::Message(message)) => {
+                                        if incoming_tx
+                                            .send(JsonRpcConnectionEvent::Message {
+                                                message,
+                                                encoded_len: encoded_len.unwrap_or_default(),
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    Ok(JsonRpcWebSocketFrame::Close) => {
+                                        send_disconnected(
+                                            &incoming_tx,
+                                            &disconnected_tx,
+                                            /*reason*/ None,
+                                        )
+                                        .await;
+                                        break;
+                                    }
+                                    Ok(JsonRpcWebSocketFrame::Ignore) => {}
+                                    Err(err) => {
+                                        send_malformed_message(
+                                            &incoming_tx,
+                                            Some(format!(
+                                                "failed to parse websocket JSON-RPC message from {connection_label}: {err}"
+                                            )),
+                                        )
+                                        .await;
+                                    }
                                 }
-                            },
+                            }
                             Some(Err(err)) => {
                                 send_disconnected(
                                     &incoming_tx,
@@ -470,12 +521,21 @@ enum JsonRpcWebSocketFrame {
 }
 
 trait JsonRpcWebSocketMessage: Send + 'static {
+    fn jsonrpc_payload_len(&self) -> Option<usize>;
     fn parse_jsonrpc_frame(self) -> Result<JsonRpcWebSocketFrame, serde_json::Error>;
     fn from_text(text: String) -> Self;
     fn ping() -> Self;
 }
 
 impl JsonRpcWebSocketMessage for Message {
+    fn jsonrpc_payload_len(&self) -> Option<usize> {
+        match self {
+            Message::Text(text) => Some(text.len()),
+            Message::Binary(bytes) => Some(bytes.len()),
+            Message::Close(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => None,
+        }
+    }
+
     fn parse_jsonrpc_frame(self) -> Result<JsonRpcWebSocketFrame, serde_json::Error> {
         match self {
             Message::Text(text) => {
@@ -501,6 +561,16 @@ impl JsonRpcWebSocketMessage for Message {
 }
 
 impl JsonRpcWebSocketMessage for AxumWebSocketMessage {
+    fn jsonrpc_payload_len(&self) -> Option<usize> {
+        match self {
+            AxumWebSocketMessage::Text(text) => Some(text.len()),
+            AxumWebSocketMessage::Binary(bytes) => Some(bytes.len()),
+            AxumWebSocketMessage::Close(_)
+            | AxumWebSocketMessage::Ping(_)
+            | AxumWebSocketMessage::Pong(_) => None,
+        }
+    }
+
     fn parse_jsonrpc_frame(self) -> Result<JsonRpcWebSocketFrame, serde_json::Error> {
         match self {
             AxumWebSocketMessage::Text(text) => {
@@ -523,6 +593,12 @@ impl JsonRpcWebSocketMessage for AxumWebSocketMessage {
     fn ping() -> Self {
         Self::Ping(Vec::new().into())
     }
+}
+
+pub(crate) fn jsonrpc_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_frame_size(Some(MAX_JSONRPC_MESSAGE_BYTES))
+        .max_message_size(Some(MAX_JSONRPC_MESSAGE_BYTES))
 }
 
 async fn send_disconnected(
@@ -675,10 +751,51 @@ mod tests {
             .await?;
         assert!(matches!(
             timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
-            Some(JsonRpcConnectionEvent::Message(actual)) if actual == message
+            Some(JsonRpcConnectionEvent::Message { message: actual, .. }) if actual == message
         ));
 
         drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_connection_rejects_oversized_jsonrpc_message() -> anyhow::Result<()> {
+        let (websocket, control, _outbound_rx) =
+            ControlledWebSocket::new(/*write_ready*/ true);
+        let mut connection = JsonRpcConnection::from_websocket_stream(
+            websocket,
+            "test".into(),
+            /*ping_interval*/ None,
+        );
+
+        control.send_inbound(Message::Text(
+            "x".repeat(MAX_JSONRPC_MESSAGE_BYTES + 1).into(),
+        ))?;
+
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::MalformedMessage { reason })
+                if reason.contains("exceeds")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stdio_connection_rejects_oversized_jsonrpc_message() -> anyhow::Result<()> {
+        let (mut server_writer, client_reader) = tokio::io::duplex(MAX_JSONRPC_MESSAGE_BYTES + 2);
+        let (client_writer, _server_reader) = tokio::io::duplex(64);
+        let mut connection =
+            JsonRpcConnection::from_stdio(client_reader, client_writer, "test".into());
+
+        let mut oversized_message = vec![b'x'; MAX_JSONRPC_MESSAGE_BYTES + 1];
+        oversized_message.push(b'\n');
+        server_writer.write_all(&oversized_message).await?;
+
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::MalformedMessage { reason })
+                if reason.contains("exceeds")
+        ));
         Ok(())
     }
 

@@ -3,10 +3,10 @@ use codex_exec_server_protocol::JSONRPCNotification;
 use pretty_assertions::assert_eq;
 
 use super::JsonRpcMessageDecoder;
-use super::MAX_NOISE_JSONRPC_MESSAGE_LEN;
 use super::NOISE_RECORD_PLAINTEXT_LEN;
 use super::frame_jsonrpc_message;
 use crate::ExecServerError;
+use crate::connection::MAX_JSONRPC_MESSAGE_BYTES;
 
 #[test]
 fn fragments_and_reassembles_large_jsonrpc_message() {
@@ -25,13 +25,13 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
         decoded.extend(decoder.push(record).unwrap());
     }
 
-    assert_eq!(decoded, vec![message]);
+    assert_eq!(decoded, vec![(message, framed.len() - size_of::<u32>())]);
 }
 
 #[test]
 fn rejects_declared_message_length_above_limit_without_payload() {
     let mut decoder = JsonRpcMessageDecoder::default();
-    let declared_len = (MAX_NOISE_JSONRPC_MESSAGE_LEN as u32 + 1).to_be_bytes();
+    let declared_len = (MAX_JSONRPC_MESSAGE_BYTES as u32 + 1).to_be_bytes();
 
     assert!(matches!(
         decoder.push(&declared_len),

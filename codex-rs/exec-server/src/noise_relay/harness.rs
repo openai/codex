@@ -582,10 +582,13 @@ async fn receive_data(
 
         // The authenticated byte stream can carry partial or multiple JSON-RPC
         // messages; emit only complete, successfully parsed messages.
-        for message in decoder.push(&plaintext)? {
+        for (message, encoded_len) in decoder.push(&plaintext)? {
             send_incoming_event(
                 incoming_tx,
-                JsonRpcConnectionEvent::Message(message),
+                JsonRpcConnectionEvent::Message {
+                    message,
+                    encoded_len,
+                },
                 delivery_deadline,
             )
             .await?;
