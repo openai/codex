@@ -76,6 +76,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadCatalogChangedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
@@ -533,9 +534,21 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
+        let mut catalog_invalidation_pending = false;
 
         loop {
             tokio::select! {
+                permit = event_tx.reserve(), if catalog_invalidation_pending => {
+                    let Ok(permit) = permit else {
+                        break;
+                    };
+                    permit.send(InProcessServerEvent::ServerNotification(
+                        ServerNotification::ThreadCatalogChanged(
+                            ThreadCatalogChangedNotification::Invalidate,
+                        ),
+                    ));
+                    catalog_invalidation_pending = false;
+                }
                 message = client_rx.recv() => {
                     match message {
                         Some(InProcessClientMessage::Request { request, response_tx }) => {
@@ -668,7 +681,13 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             }
                         }
                         OutgoingMessage::AppServerNotification(notification) => {
-                            if server_notification_requires_delivery(&notification) {
+                            let is_catalog_change = matches!(
+                                notification,
+                                ServerNotification::ThreadCatalogChanged(_)
+                            );
+                            if is_catalog_change && catalog_invalidation_pending {
+                                // The pending invalidation supersedes later catalog details.
+                            } else if server_notification_requires_delivery(&notification) {
                                 if event_tx
                                     .send(InProcessServerEvent::ServerNotification(notification))
                                     .await
@@ -681,7 +700,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             {
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {
-                                        warn!("dropping in-process server notification (queue full)");
+                                        if is_catalog_change {
+                                            catalog_invalidation_pending = true;
+                                        } else {
+                                            warn!("dropping in-process server notification (queue full)");
+                                        }
                                     }
                                     mpsc::error::TrySendError::Closed(_) => {
                                         break;
