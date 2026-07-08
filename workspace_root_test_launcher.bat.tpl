@@ -132,13 +132,19 @@ if defined resolve_runfile_manifest if exist "!resolve_runfile_manifest!" (
   rem GitHub Windows runner, the nested `findstr` path produced
   rem `FINDSTR: Cannot open D:MANIFEST`, which then broke runfile resolution for
   rem Bazel tests even though the manifest file was present.
+  rem A one-field manifest entry maps to itself, so fall back to %%A when the
+  rem optional mapped path in %%B is empty.
   for /f "usebackq tokens=1,* delims= " %%A in ("!resolve_runfile_manifest!") do (
     if "%%A"=="!resolve_runfile_logical_path!" (
-      set "%~1=%%B"
+      set "resolve_runfile_manifest_path=%%B"
+      if not defined resolve_runfile_manifest_path set "resolve_runfile_manifest_path=%%A"
+      set "%~1=!resolve_runfile_manifest_path!"
       goto :resolve_runfile_success
     )
     if "%%A"=="!resolve_runfile_workspace_logical_path!" (
-      set "%~1=%%B"
+      set "resolve_runfile_manifest_path=%%B"
+      if not defined resolve_runfile_manifest_path set "resolve_runfile_manifest_path=%%A"
+      set "%~1=!resolve_runfile_manifest_path!"
       goto :resolve_runfile_success
     )
   )
@@ -159,4 +165,5 @@ set "resolve_runfile_native_logical_path="
 set "resolve_runfile_native_workspace_logical_path="
 set "resolve_runfile_root="
 set "resolve_runfile_manifest="
+set "resolve_runfile_manifest_path="
 exit /b 0
