@@ -197,7 +197,8 @@ impl HistoryCell for UserHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = raw_lines_from_source(self.message.trim_end_matches(['\r', '\n']));
+        let message = sanitize_user_text(&self.message);
+        let mut lines = raw_lines_from_source(message.trim_end_matches(['\r', '\n']));
         if !self.remote_image_urls.is_empty() {
             if !lines.is_empty() {
                 lines.push(Line::from(""));

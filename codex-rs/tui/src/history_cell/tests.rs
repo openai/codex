@@ -1982,6 +1982,7 @@ fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
     let lines = cell.display_lines(width);
     let rendered = render_lines(&lines).join("\n");
 
+    assert_eq!(render_lines(&cell.raw_lines()), ["_count_rows"]);
     insta::assert_snapshot!(rendered);
 }
 
