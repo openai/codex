@@ -43,6 +43,12 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
+    /// Full request-stable metadata for delegated MCP calls awaiting parent event forwarding.
+    ///
+    /// This stays internal rather than widening the public tool-call-begin event with approval
+    /// details or connected-account data.
+    pub(crate) pending_delegated_mcp_tool_metadata:
+        Mutex<HashMap<String, crate::mcp_tool_call::McpToolApprovalMetadata>>,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
 }
@@ -1143,6 +1149,7 @@ impl Session {
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
+                pending_delegated_mcp_tool_metadata: Mutex::new(HashMap::new()),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),
             });

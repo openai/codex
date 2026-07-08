@@ -154,6 +154,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Use the connector-owned runtime snapshot for installed app state.
+    AppsRuntimeStateRefactor,
     /// Enable MCP apps.
     EnableMcpApps,
     /// Removed compatibility flag for the legacy Apps MCP path override.
@@ -1059,6 +1061,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AppsRuntimeStateRefactor,
+        key: "apps_runtime_state_refactor",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableMcpApps,

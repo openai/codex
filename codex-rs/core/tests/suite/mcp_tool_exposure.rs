@@ -98,6 +98,15 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Result<()> {
+    assert_apps_recover_between_sampling_steps(Feature::DeferredExecutor).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connector_runtime_snapshot_updates_between_sampling_steps() -> Result<()> {
+    assert_apps_recover_between_sampling_steps(Feature::AppsRuntimeStateRefactor).await
+}
+
+async fn assert_apps_recover_between_sampling_steps(step_refresh_feature: Feature) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -141,11 +150,17 @@ async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Resu
     )
     .await;
     let mut builder =
-        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
             config
                 .features
-                .enable(Feature::DeferredExecutor)
+                .enable(step_refresh_feature)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("test config should allow feature update");
+            config.code_mode.direct_only_tool_namespaces =
+                vec![SEARCH_CALENDAR_NAMESPACE.to_string()];
             config
                 .features
                 .enable(Feature::DefaultModeRequestUserInput)
@@ -182,6 +197,15 @@ async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Resu
             .filter(|text| text.contains("<apps_instructions>"))
             .count(),
         0
+    );
+    assert!(
+        namespace_child_tool(
+            &initial_request.body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL,
+        )
+        .is_none(),
+        "Calendar should not be exposed before Apps recovers"
     );
 
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -221,6 +245,15 @@ async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Resu
             .filter(|text| text.contains("<apps_instructions>"))
             .count(),
         1
+    );
+    assert!(
+        namespace_child_tool(
+            &requests[1].body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL,
+        )
+        .is_some(),
+        "Calendar should be exposed after Apps recovers"
     );
 
     Ok(())

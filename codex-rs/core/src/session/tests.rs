@@ -197,6 +197,7 @@ impl StepContext {
             environments,
             Vec::new(),
             crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            ConnectorRuntimeCapture::LegacyLive,
             /*loaded_agents_md*/ None,
         ))
     }
@@ -5529,6 +5530,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
+        pending_delegated_mcp_tool_metadata: Mutex::new(HashMap::new()),
         services,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7660,6 +7662,7 @@ where
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
+        pending_delegated_mcp_tool_metadata: Mutex::new(HashMap::new()),
         services,
         next_internal_sub_id: AtomicU64::new(0),
     });

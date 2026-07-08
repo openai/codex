@@ -39,6 +39,7 @@ use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
@@ -66,7 +67,9 @@ use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_TOOL_APPROVAL_TOOL_
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -145,10 +148,12 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
+    let mcp_tools = step_context.mcp_tools().await;
     let metadata = lookup_mcp_tool_metadata(
         sess.as_ref(),
         turn_context.as_ref(),
         manager,
+        &mcp_tools,
         &server,
         &tool_name,
     )
@@ -223,6 +228,17 @@ pub(crate) async fn handle_mcp_tool_call(
             tool_input: arguments_value
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
+    }
+    if turn_context
+        .config
+        .features
+        .enabled(Feature::AppsRuntimeStateRefactor)
+        && server == CODEX_APPS_MCP_SERVER_NAME
+        && matches!(&turn_context.session_source, SessionSource::SubAgent(_))
+        && let Some(metadata) = metadata.clone()
+    {
+        sess.store_delegated_mcp_tool_metadata(call_id.clone(), metadata)
+            .await;
     }
     notify_mcp_tool_call_started(
         sess.as_ref(),
@@ -438,7 +454,7 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
-    maybe_track_codex_app_used(sess, turn_context, manager, &server, &tool_name).await;
+    maybe_track_codex_app_used(sess, turn_context, &server, metadata).await;
 
     let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
@@ -950,24 +966,22 @@ async fn notify_mcp_tool_call_completed(
     sess.emit_turn_item_completed(turn_context, item).await;
 }
 
-struct McpAppUsageMetadata {
-    connector_id: Option<String>,
-    app_name: Option<String>,
-}
-
 async fn maybe_track_codex_app_used(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
     server: &str,
-    tool_name: &str,
+    metadata: Option<&McpToolApprovalMetadata>,
 ) {
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return;
     }
-    let metadata = lookup_mcp_app_usage_metadata(manager, server, tool_name).await;
     let (connector_id, app_name) = metadata
-        .map(|metadata| (metadata.connector_id, metadata.app_name))
+        .map(|metadata| {
+            (
+                metadata.connector_id.clone(),
+                metadata.connector_name.clone(),
+            )
+        })
         .unwrap_or((None, None));
     let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
         let mentioned_connector_ids = sess.get_connector_selection().await;
@@ -1005,7 +1019,7 @@ enum McpToolApprovalDecision {
     Cancel,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
@@ -1020,6 +1034,53 @@ pub(crate) struct McpToolApprovalMetadata {
     template_id: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
+}
+
+impl Session {
+    pub(crate) async fn store_delegated_mcp_tool_metadata(
+        &self,
+        call_id: String,
+        metadata: McpToolApprovalMetadata,
+    ) {
+        self.pending_delegated_mcp_tool_metadata
+            .lock()
+            .await
+            .insert(call_id, metadata);
+    }
+
+    pub(crate) async fn take_delegated_mcp_tool_metadata(
+        &self,
+        call_id: &str,
+    ) -> Option<McpToolApprovalMetadata> {
+        self.pending_delegated_mcp_tool_metadata
+            .lock()
+            .await
+            .remove(call_id)
+    }
+}
+
+pub(crate) fn mcp_tool_approval_metadata_from_begin_event(
+    event: &McpToolCallBeginEvent,
+) -> Option<McpToolApprovalMetadata> {
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: event.connector_id.clone(),
+        link_id: event.link_id.clone(),
+        connector_name: event.app_name.clone(),
+        connector_description: None,
+        connected_account_email: None,
+        plugin_id: event.plugin_id.clone(),
+        tool_title: None,
+        tool_description: None,
+        mcp_app_resource_uri: event.mcp_app_resource_uri.clone(),
+        template_id: event.template_id.clone(),
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+    (metadata.connector_id.is_some()
+        || metadata.connector_name.is_some()
+        || metadata.plugin_id.is_some())
+    .then_some(metadata)
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
@@ -1475,42 +1536,53 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
     manager: &McpConnectionManager,
+    mcp_tools: &[ToolInfo],
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
     let plugin_id = manager
         .plugin_id_for_mcp_server_name(server)
         .map(str::to_string);
-    let tools = manager.list_all_tools().await;
-    let tool_info = tools
-        .into_iter()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    let tool_info = mcp_tools
+        .iter()
+        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?
+        .clone();
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
-        let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
-            turn_context.config.as_ref(),
-        )
-        .await
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::AppsRuntimeStateRefactor)
         {
-            Some(connectors) => Some(connectors),
-            None => {
-                connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-                    turn_context.config.as_ref(),
-                    /*force_refetch*/ false,
-                    sess.services.turn_environments.environment_manager(),
-                    Arc::clone(&sess.services.mcp_manager),
-                )
-                .await
-                .ok()
-                .map(|status| status.connectors)
-            }
-        };
-        connectors.and_then(|connectors| {
-            let connector_id = tool_info.connector_id.as_deref()?;
-            connectors
-                .into_iter()
-                .find(|connector| connector.id == connector_id)
-                .and_then(|connector| connector.description)
-        })
+            // Gateway tool metadata is a request-stable runtime fallback, not canonical app
+            // metadata. Canonical descriptions remain owned by app/read.
+            tool_info.namespace_description.clone()
+        } else {
+            let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
+                turn_context.config.as_ref(),
+            )
+            .await
+            {
+                Some(connectors) => Some(connectors),
+                None => {
+                    connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                        turn_context.config.as_ref(),
+                        /*force_refetch*/ false,
+                        sess.services.turn_environments.environment_manager(),
+                        Arc::clone(&sess.services.mcp_manager),
+                    )
+                    .await
+                    .ok()
+                    .map(|status| status.connectors)
+                }
+            };
+            connectors.and_then(|connectors| {
+                let connector_id = tool_info.connector_id.as_deref()?;
+                connectors
+                    .into_iter()
+                    .find(|connector| connector.id == connector_id)
+                    .and_then(|connector| connector.description)
+            })
+        }
     } else {
         None
     };
@@ -1591,25 +1663,6 @@ fn get_mcp_app_resource_uri(
                     .and_then(serde_json::Value::as_str)
             })
             .map(str::to_string)
-    })
-}
-
-async fn lookup_mcp_app_usage_metadata(
-    manager: &McpConnectionManager,
-    server: &str,
-    tool_name: &str,
-) -> Option<McpAppUsageMetadata> {
-    let tools = manager.list_all_tools().await;
-
-    tools.into_iter().find_map(|tool_info| {
-        if tool_info.server_name == server && tool_info.tool.name == tool_name {
-            Some(McpAppUsageMetadata {
-                connector_id: tool_info.connector_id,
-                app_name: tool_info.connector_name,
-            })
-        } else {
-            None
-        }
     })
 }
 

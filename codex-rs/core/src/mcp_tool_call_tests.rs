@@ -93,6 +93,115 @@ fn approval_metadata(
     }
 }
 
+#[tokio::test]
+async fn delegated_mcp_metadata_handoff_preserves_full_snapshot_metadata() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    Arc::make_mut(&mut turn_context.config)
+        .features
+        .enable(Feature::AppsRuntimeStateRefactor)
+        .expect("enable runtime-state refactor");
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: Some("connector_docs".to_string()),
+        link_id: Some("link-docs".to_string()),
+        connector_name: Some("Docs".to_string()),
+        connector_description: Some("Search workspace documents".to_string()),
+        connected_account_email: Some("user@example.com".to_string()),
+        plugin_id: Some("docs-plugin".to_string()),
+        tool_title: Some("Search docs".to_string()),
+        tool_description: Some("Find matching documents".to_string()),
+        mcp_app_resource_uri: Some("ui://docs/search".to_string()),
+        template_id: Some("search-template".to_string()),
+        codex_apps_meta: Some(serde_json::Map::from_iter([(
+            "request_type".to_string(),
+            serde_json::Value::String("search".to_string()),
+        )])),
+        openai_file_input_params: Some(vec!["attachment".to_string()]),
+    };
+
+    session
+        .store_delegated_mcp_tool_metadata("call-1".to_string(), metadata.clone())
+        .await;
+    let event = McpToolCallBeginEvent {
+        call_id: "call-1".to_string(),
+        invocation: McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "search".to_string(),
+            arguments: Some(serde_json::json!({"query": "roadmap"})),
+        },
+        connector_id: metadata.connector_id.clone(),
+        mcp_app_resource_uri: metadata.mcp_app_resource_uri.clone(),
+        link_id: metadata.link_id.clone(),
+        app_name: metadata.connector_name.clone(),
+        template_id: metadata.template_id.clone(),
+        action_name: None,
+        plugin_id: metadata.plugin_id.clone(),
+    };
+    let mcp = session.services.latest_mcp_runtime();
+    let resolved = crate::codex_delegate::delegated_mcp_tool_metadata_for_begin(
+        &session,
+        &turn_context,
+        mcp.manager(),
+        &event,
+    )
+    .await;
+
+    assert_eq!(resolved, Some(metadata.clone()));
+    assert_eq!(
+        build_guardian_mcp_tool_review_request("call-1", &event.invocation, resolved.as_ref(),),
+        GuardianApprovalRequest::McpToolCall {
+            id: "call-1".to_string(),
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool_name: "search".to_string(),
+            arguments: Some(serde_json::json!({"query": "roadmap"})),
+            connector_id: Some("connector_docs".to_string()),
+            connector_name: Some("Docs".to_string()),
+            connector_description: Some("Search workspace documents".to_string()),
+            connected_account_email: Some("user@example.com".to_string()),
+            tool_title: Some("Search docs".to_string()),
+            tool_description: Some("Find matching documents".to_string()),
+            annotations: Some(GuardianMcpAnnotations {
+                destructive_hint: Some(true),
+                open_world_hint: Some(true),
+                read_only_hint: Some(false),
+            }),
+        }
+    );
+
+    session
+        .store_delegated_mcp_tool_metadata("call-2".to_string(), metadata.clone())
+        .await;
+    let custom_event = McpToolCallBeginEvent {
+        call_id: "call-2".to_string(),
+        invocation: McpInvocation {
+            server: "custom".to_string(),
+            tool: "search".to_string(),
+            arguments: None,
+        },
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        link_id: None,
+        app_name: None,
+        template_id: None,
+        action_name: None,
+        plugin_id: None,
+    };
+    assert_eq!(
+        crate::codex_delegate::delegated_mcp_tool_metadata_for_begin(
+            &session,
+            &turn_context,
+            mcp.manager(),
+            &custom_event,
+        )
+        .await,
+        None
+    );
+    assert_eq!(
+        session.take_delegated_mcp_tool_metadata("call-2").await,
+        Some(metadata)
+    );
+}
+
 fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {
     McpTurnMetadataContext {
         model: turn_context.model_info.slug.as_str(),

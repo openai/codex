@@ -6,11 +6,14 @@ use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_extension_api::LoadedUserInstructions;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpConnectionManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -45,6 +48,7 @@ use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::mcp_tool_call::mcp_approvals_reviewer;
+use crate::mcp_tool_call::mcp_tool_approval_metadata_from_begin_event;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
@@ -52,6 +56,7 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -366,19 +371,18 @@ async fn forward_events(
                         id,
                         msg: EventMsg::McpToolCallBegin(event),
                     } => {
-                        // Runtime refreshes are published before a request step is captured, so
-                        // the child runtime at call begin is the one executing this invocation.
-                        // Cache its metadata now; the later approval event has only a call ID.
+                        // Cache metadata now; the later approval event has only a call ID. Under
+                        // the runtime refactor, consume the child's internal request-stable
+                        // metadata handoff rather than re-listing a newer connector snapshot.
                         let metadata = if let Some(turn_context) =
                             codex.session.turn_context_for_sub_id(&id).await
                         {
                             let mcp = codex.session.services.latest_mcp_runtime();
-                            lookup_mcp_tool_metadata(
+                            delegated_mcp_tool_metadata_for_begin(
                                 codex.session.as_ref(),
                                 turn_context.as_ref(),
                                 mcp.manager(),
-                                &event.invocation.server,
-                                &event.invocation.tool,
+                                &event,
                             )
                             .await
                         } else {
@@ -412,6 +416,10 @@ async fn forward_events(
                         id,
                         msg: EventMsg::McpToolCallEnd(event),
                     } => {
+                        let _ = codex
+                            .session
+                            .take_delegated_mcp_tool_metadata(&event.call_id)
+                            .await;
                         pending_mcp_invocations.lock().await.remove(&event.call_id);
                         if !forward_event_or_shutdown(
                             &codex,
@@ -437,6 +445,36 @@ async fn forward_events(
             }
         }
     }
+}
+
+pub(crate) async fn delegated_mcp_tool_metadata_for_begin(
+    session: &Session,
+    turn_context: &TurnContext,
+    manager: &McpConnectionManager,
+    event: &McpToolCallBeginEvent,
+) -> Option<McpToolApprovalMetadata> {
+    if turn_context
+        .config
+        .features
+        .enabled(Feature::AppsRuntimeStateRefactor)
+        && event.invocation.server == CODEX_APPS_MCP_SERVER_NAME
+    {
+        return session
+            .take_delegated_mcp_tool_metadata(&event.call_id)
+            .await
+            .or_else(|| mcp_tool_approval_metadata_from_begin_event(event));
+    }
+
+    let mcp_tools = manager.list_all_tools().await;
+    lookup_mcp_tool_metadata(
+        session,
+        turn_context,
+        manager,
+        &mcp_tools,
+        &event.invocation.server,
+        &event.invocation.tool,
+    )
+    .await
 }
 
 /// Ask the delegate to stop and drain its events so background sends do not hit a closed channel.

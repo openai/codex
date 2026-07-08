@@ -39,6 +39,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::session::step_context::ConnectorRuntimeCapture;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
@@ -2890,11 +2891,26 @@ impl Session {
                 &selected_capability_roots,
             )
             .await;
+        let connector_runtime = if turn_context
+            .config
+            .features
+            .enabled(Feature::AppsRuntimeStateRefactor)
+        {
+            let snapshot = if turn_context.apps_enabled() {
+                mcp.manager().connector_runtime_snapshot()
+            } else {
+                None
+            };
+            ConnectorRuntimeCapture::Snapshot(snapshot)
+        } else {
+            ConnectorRuntimeCapture::LegacyLive
+        };
         Arc::new(StepContext::new(
             turn_context,
             environments,
             selected_capability_roots,
             mcp,
+            connector_runtime,
             loaded_agents_md,
         ))
     }

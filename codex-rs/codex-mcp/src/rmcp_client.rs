@@ -23,6 +23,7 @@ use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::connector_runtime::CodexAppsToolsCacheContext;
 use crate::connector_runtime::CodexAppsToolsFetchSource;
+use crate::connector_runtime::ConnectorRuntimeSnapshot;
 use crate::connector_runtime::load_startup_cached_codex_apps_server_info;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -544,6 +545,30 @@ impl AsyncManagedClient {
             .as_ref()
             .and_then(CodexAppsToolsCacheContext::current_tools)
             .map(|tools| filter_tools(tools, &self.tool_filter))
+    }
+
+    pub(crate) fn connector_runtime_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .and_then(CodexAppsToolsCacheContext::current_snapshot)
+    }
+
+    pub(crate) fn listed_tools_from_connector_runtime_snapshot(
+        &self,
+        snapshot: Option<&ConnectorRuntimeSnapshot>,
+    ) -> Vec<ToolInfo> {
+        debug_assert!(self.is_codex_apps_mcp_server);
+        if self
+            .codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(|context| !context.is_active())
+        {
+            return Vec::new();
+        }
+        let tools = snapshot
+            .map(|snapshot| filter_tools(snapshot.tools().to_vec(), &self.tool_filter))
+            .unwrap_or_default();
+        prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
