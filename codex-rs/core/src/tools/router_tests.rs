@@ -361,7 +361,6 @@ fn mcp_tool_info(
                 "type": "object",
             }))),
         ),
-        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),

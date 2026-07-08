@@ -49,11 +49,6 @@ pub struct ToolInfo {
     pub namespace_description: Option<String>,
     /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
-    /// Optional provided-file fields accepted by each declared `openai/fileParams`
-    /// argument. This is derived from the raw MCP schema before file arguments are
-    /// masked as local paths for the model.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub openai_file_input_optional_fields: HashMap<String, Vec<String>>,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]
@@ -266,87 +261,6 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
-const OPENAI_FILE_FIELDS: [&str; 4] = ["download_url", "file_id", "mime_type", "file_name"];
-
-#[derive(Default)]
-struct OpenAiFileSchemaInfo {
-    is_array: bool,
-    accepts_mime_type: bool,
-    accepts_file_name: bool,
-}
-
-pub(crate) fn declared_openai_file_input_optional_fields(
-    tool: &Tool,
-) -> HashMap<String, Vec<String>> {
-    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
-    let properties = tool
-        .input_schema
-        .get("properties")
-        .and_then(JsonValue::as_object);
-
-    file_params
-        .into_iter()
-        .map(|field_name| {
-            let optional_fields = properties
-                .and_then(|properties| properties.get(&field_name))
-                .map(|schema| {
-                    let schema_info = openai_file_schema_info(schema);
-                    let mut optional_fields = Vec::new();
-                    if schema_info.accepts_mime_type {
-                        optional_fields.push("mime_type".to_string());
-                    }
-                    if schema_info.accepts_file_name {
-                        optional_fields.push("file_name".to_string());
-                    }
-                    optional_fields
-                })
-                .unwrap_or_default();
-            (field_name, optional_fields)
-        })
-        .collect()
-}
-
-fn openai_file_schema_info(schema: &JsonValue) -> OpenAiFileSchemaInfo {
-    let mut info = OpenAiFileSchemaInfo::default();
-    let mut pending = vec![(schema, false)];
-
-    while let Some((schema, inside_array)) = pending.pop() {
-        let Some(schema) = schema.as_object() else {
-            continue;
-        };
-
-        for keyword in ["anyOf", "oneOf", "allOf"] {
-            if let Some(variants) = schema.get(keyword).and_then(JsonValue::as_array) {
-                pending.extend(variants.iter().map(|variant| (variant, inside_array)));
-            }
-        }
-
-        if schema.get("type").and_then(JsonValue::as_str) == Some("array") {
-            if let Some(items) = schema.get("items") {
-                pending.push((items, true));
-            }
-            continue;
-        }
-
-        let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) else {
-            continue;
-        };
-        if !properties.contains_key("download_url")
-            || !properties.contains_key("file_id")
-            || !properties
-                .keys()
-                .all(|field| OPENAI_FILE_FIELDS.contains(&field.as_str()))
-        {
-            continue;
-        }
-
-        info.is_array |= inside_array;
-        info.accepts_mime_type |= properties.contains_key("mime_type");
-        info.accepts_file_name |= properties.contains_key("file_name");
-    }
-
-    info
-}
 
 fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
     let Some(properties) = input_schema
@@ -366,7 +280,6 @@ fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_
 }
 
 fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
-    let is_array = openai_file_schema_info(schema).is_array;
     let Some(object) = schema.as_object_mut() else {
         return;
     };
@@ -383,6 +296,8 @@ fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
         description = format!("{description} {guidance}");
     }
 
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
     object.clear();
     object.insert("description".to_string(), JsonValue::String(description));
     if is_array {

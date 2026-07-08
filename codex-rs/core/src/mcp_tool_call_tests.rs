@@ -349,14 +349,17 @@ fn mcp_app_resource_uri_reads_known_tool_meta_keys() {
 
 #[test]
 fn openai_file_params_are_only_honored_for_codex_apps() {
-    let params = HashMap::from([("file".to_string(), Vec::new())]);
+    let meta = serde_json::json!({
+        "openai/fileParams": ["file"],
+    });
+    let meta = meta.as_object();
 
     assert_eq!(
-        openai_file_input_params_for_server(CODEX_APPS_MCP_SERVER_NAME, &params),
-        Some(params.clone())
+        openai_file_input_params_for_server(CODEX_APPS_MCP_SERVER_NAME, meta),
+        Some(vec!["file".to_string()])
     );
     assert_eq!(
-        openai_file_input_params_for_server("minimaltest", &params),
+        openai_file_input_params_for_server("minimaltest", meta),
         None
     );
 }

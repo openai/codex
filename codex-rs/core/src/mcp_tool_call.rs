@@ -41,6 +41,7 @@ use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
+use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
@@ -381,7 +382,7 @@ async fn handle_approved_mcp_tool_call(
         sess,
         turn_context,
         arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_ref()),
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
     .await;
     let tool_input = match &rewrite {
@@ -1018,7 +1019,7 @@ pub(crate) struct McpToolApprovalMetadata {
     mcp_app_resource_uri: Option<String>,
     template_id: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
-    openai_file_input_params: Option<HashMap<String, Vec<String>>>,
+    openai_file_input_params: Option<Vec<String>>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
@@ -1560,17 +1561,17 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         // Disallow custom MCPs from uploading files via fileParams.
         openai_file_input_params: openai_file_input_params_for_server(
             server,
-            &tool_info.openai_file_input_optional_fields,
+            tool_info.tool.meta.as_deref(),
         ),
     })
 }
 
 fn openai_file_input_params_for_server(
     server: &str,
-    openai_file_input_optional_fields: &HashMap<String, Vec<String>>,
-) -> Option<HashMap<String, Vec<String>>> {
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<Vec<String>> {
     (server == CODEX_APPS_MCP_SERVER_NAME)
-        .then(|| openai_file_input_optional_fields.clone())
+        .then_some(declared_openai_file_input_param_names(meta))
         .filter(|params| !params.is_empty())
 }
 

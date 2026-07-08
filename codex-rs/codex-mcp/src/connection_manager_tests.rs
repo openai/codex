@@ -17,7 +17,6 @@ use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
-use crate::tools::declared_openai_file_input_optional_fields;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
@@ -44,7 +43,6 @@ use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::sync::Arc;
@@ -65,7 +63,6 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
             format!("Test tool: {tool_name}"),
             Arc::new(JsonObject::default()),
         ),
-        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -234,28 +231,11 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
             "properties": {
                 "file": {
                     "type": "object",
-                    "description": "Original file payload.",
-                    "properties": {
-                        "download_url": {"type": "string"},
-                        "file_id": {"type": "string"}
-                    }
+                    "description": "Original file payload."
                 },
                 "files": {
-                    "description": "Original file payloads.",
-                    "anyOf": [
-                        {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "download_url": {"type": "string"},
-                                    "file_id": {"type": "string"},
-                                    "mime_type": {"type": "string"}
-                                }
-                            }
-                        },
-                        {"type": "null"}
-                    ]
+                    "type": "array",
+                    "items": {"type": "object"}
                 }
             }
         })
@@ -286,114 +266,13 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Original file payloads. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                 }
             }
         })
         .as_object()
         .expect("object")
         .clone()
-    );
-}
-
-#[test]
-fn declared_openai_file_input_optional_fields_follow_canonical_payload_schemas() {
-    let mut tool = Tool::new(
-        "upload".to_string(),
-        "Upload files".to_string(),
-        Arc::new(
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "photoshop_image": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"}
-                        }
-                    },
-                    "drive_import": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
-                            "mime_type": {"type": "string"},
-                            "file_name": {"type": "string"}
-                        }
-                    },
-                    "attachments": {
-                        "anyOf": [
-                            {
-                                "type": "array",
-                                "items": {
-                                    "oneOf": [
-                                        {
-                                            "allOf": [{
-                                                "type": "object",
-                                                "properties": {
-                                                    "download_url": {"type": "string"},
-                                                    "file_id": {"type": "string"},
-                                                    "mime_type": {"type": "string"}
-                                                }
-                                            }]
-                                        },
-                                        {"type": "null"}
-                                    ]
-                                }
-                            },
-                            {"type": "null"}
-                        ]
-                    },
-                    "noncanonical_file": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
-                            "mime_type": {"type": "string"},
-                            "uri": {"type": "string"}
-                        }
-                    },
-                    "unrelated_object": {
-                        "type": "object",
-                        "properties": {
-                            "mime_type": {"type": "string"},
-                            "file_name": {"type": "string"}
-                        }
-                    }
-                }
-            })
-            .as_object()
-            .expect("object")
-            .clone(),
-        ),
-    );
-    tool.meta = Some(Meta(
-        serde_json::json!({
-            "openai/fileParams": [
-                "photoshop_image",
-                "drive_import",
-                "attachments",
-                "noncanonical_file",
-                "unrelated_object"
-            ]
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    ));
-
-    assert_eq!(
-        declared_openai_file_input_optional_fields(&tool),
-        HashMap::from([
-            ("photoshop_image".to_string(), Vec::new()),
-            (
-                "drive_import".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            ("attachments".to_string(), vec!["mime_type".to_string()]),
-            ("noncanonical_file".to_string(), Vec::new()),
-            ("unrelated_object".to_string(), Vec::new()),
-        ])
     );
 }
 

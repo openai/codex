@@ -95,6 +95,8 @@ fn uploaded_file(server: &MockServer) -> Value {
     json!({
         "download_url": format!("{}/download/file_123", server.uri()),
         "file_id": "file_123",
+        "mime_type": "text/plain",
+        "file_name": "report.txt",
     })
 }
 
