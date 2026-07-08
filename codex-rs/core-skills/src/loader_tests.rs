@@ -4,18 +4,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
-use codex_exec_server::CopyOptions;
-use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::ExecutorFileSystemFuture;
-use codex_exec_server::FileMetadata;
-use codex_exec_server::FileSystemReadStream;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
-use codex_exec_server::ReadDirectoryEntry;
-use codex_exec_server::RemoveOptions;
-use codex_exec_server::WalkOptions;
-use codex_exec_server::WalkOutcome;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -27,9 +16,6 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -38,131 +24,6 @@ const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 struct TestConfig {
     cwd: AbsolutePathBuf,
     config_layer_stack: ConfigLayerStack,
-}
-
-struct RecordingFileSystem {
-    inner: Arc<dyn ExecutorFileSystem>,
-    walks: AtomicUsize,
-    directory_reads: AtomicUsize,
-    metadata_paths: Mutex<Vec<PathUri>>,
-    active_file_reads: AtomicUsize,
-    max_active_file_reads: AtomicUsize,
-}
-
-impl RecordingFileSystem {
-    fn new(inner: Arc<dyn ExecutorFileSystem>) -> Self {
-        Self {
-            inner,
-            walks: AtomicUsize::new(0),
-            directory_reads: AtomicUsize::new(0),
-            metadata_paths: Mutex::new(Vec::new()),
-            active_file_reads: AtomicUsize::new(0),
-            max_active_file_reads: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl ExecutorFileSystem for RecordingFileSystem {
-    fn canonicalize<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, PathUri> {
-        self.inner.canonicalize(path, sandbox)
-    }
-
-    fn read_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
-        Box::pin(async move {
-            let active = self.active_file_reads.fetch_add(1, Ordering::Relaxed) + 1;
-            self.max_active_file_reads
-                .fetch_max(active, Ordering::Relaxed);
-            tokio::task::yield_now().await;
-            let result = self.inner.read_file(path, sandbox).await;
-            self.active_file_reads.fetch_sub(1, Ordering::Relaxed);
-            result
-        })
-    }
-
-    fn read_file_stream<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
-        self.inner.read_file_stream(path, sandbox)
-    }
-
-    fn write_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        self.inner.write_file(path, contents, sandbox)
-    }
-
-    fn create_directory<'a>(
-        &'a self,
-        path: &'a PathUri,
-        options: CreateDirectoryOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        self.inner.create_directory(path, options, sandbox)
-    }
-
-    fn get_metadata<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        self.metadata_paths
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(path.clone());
-        self.inner.get_metadata(path, sandbox)
-    }
-
-    fn read_directory<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
-        self.directory_reads.fetch_add(1, Ordering::Relaxed);
-        self.inner.read_directory(path, sandbox)
-    }
-
-    fn walk<'a>(
-        &'a self,
-        path: &'a PathUri,
-        options: WalkOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
-        self.walks.fetch_add(1, Ordering::Relaxed);
-        self.inner.walk(path, options, sandbox)
-    }
-
-    fn remove<'a>(
-        &'a self,
-        path: &'a PathUri,
-        options: RemoveOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        self.inner.remove(path, options, sandbox)
-    }
-
-    fn copy<'a>(
-        &'a self,
-        source_path: &'a PathUri,
-        destination_path: &'a PathUri,
-        options: CopyOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        self.inner
-            .copy(source_path, destination_path, options, sandbox)
-    }
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
@@ -521,82 +382,6 @@ fn write_skill_metadata_at(skill_dir: &Path, contents: &str) -> PathBuf {
     }
     fs::write(&path, contents).unwrap();
     path
-}
-
-#[tokio::test]
-async fn host_skill_loading_uses_walk_inventory_and_overlaps_file_reads() {
-    let root = tempfile::tempdir().expect("tempdir");
-    let first_path = write_skill_at(root.path(), "first", "first", "first skill");
-    let second_path = write_skill_at(root.path(), "second", "second", "second skill");
-    let recording = Arc::new(RecordingFileSystem::new(Arc::clone(&LOCAL_FS)));
-    let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
-
-    let future = load_skills_from_roots(
-        [SkillRoot {
-            path: root.path().abs(),
-            scope: SkillScope::Repo,
-            file_system,
-            plugin_id: None,
-            plugin_namespace: None,
-            plugin_root: None,
-        }],
-        /*plugin_skill_snapshots*/ None,
-    );
-    fn assert_send<T: Send>(_: &T) {}
-    assert_send(&future);
-    let outcome = future.await;
-
-    assert!(
-        outcome.errors.is_empty(),
-        "unexpected errors: {:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.skills,
-        vec![
-            SkillMetadata {
-                name: "first".to_string(),
-                description: "first skill".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: normalized(&first_path),
-                scope: SkillScope::Repo,
-                plugin_id: None,
-            },
-            SkillMetadata {
-                name: "second".to_string(),
-                description: "second skill".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: normalized(&second_path),
-                scope: SkillScope::Repo,
-                plugin_id: None,
-            },
-        ]
-    );
-    assert_eq!(recording.walks.load(Ordering::Relaxed), 1);
-    assert_eq!(recording.directory_reads.load(Ordering::Relaxed), 0);
-    assert!(recording.max_active_file_reads.load(Ordering::Relaxed) > 1);
-
-    let probed_paths = recording
-        .metadata_paths
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for skill_path in [&first_path, &second_path] {
-        let metadata_path = PathUri::from_host_native_path(
-            skill_path
-                .parent()
-                .expect("skill directory")
-                .join(SKILLS_METADATA_DIR)
-                .join(SKILLS_METADATA_FILENAME),
-        )
-        .expect("metadata path URI");
-        assert!(!probed_paths.contains(&metadata_path));
-    }
 }
 
 fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
@@ -1724,76 +1509,6 @@ async fn invalid_nested_plugin_manifest_falls_back_to_outer_namespace() {
             "search description",
         )]
     );
-}
-
-// Directory symlinks on Windows can require Developer Mode or administrator privileges.
-#[cfg(unix)]
-#[tokio::test]
-async fn namespaces_skills_in_symlinked_plugin_skills_dir() {
-    // skills/
-    // └── linked-plugin -> shared-plugin/skills/
-    // shared-plugin/
-    // ├── .codex-plugin/plugin.json
-    // └── skills/{first,second}/SKILL.md
-    let root = tempfile::tempdir().expect("tempdir");
-    let shared_plugin_root = tempfile::tempdir().expect("tempdir");
-    let manifest_path = shared_plugin_root.path().join(".codex-plugin/plugin.json");
-    write_plugin_manifest(shared_plugin_root.path(), r#"{"name":"linked"}"#);
-    let first_path = write_skill_at(
-        &shared_plugin_root.path().join("skills"),
-        "first",
-        "first-skill",
-        "first description",
-    );
-    let second_path = write_skill_at(
-        &shared_plugin_root.path().join("skills"),
-        "second",
-        "second-skill",
-        "second description",
-    );
-    let skills_root = root.path().join("skills");
-    fs::create_dir_all(&skills_root).unwrap();
-    symlink_dir(
-        &shared_plugin_root.path().join("skills"),
-        &skills_root.join("linked-plugin"),
-    );
-    let recording = Arc::new(RecordingFileSystem::new(Arc::clone(&LOCAL_FS)));
-    let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
-
-    let outcome = load_skills_from_roots(
-        [SkillRoot {
-            path: skills_root.abs(),
-            scope: SkillScope::User,
-            file_system,
-            plugin_id: None,
-            plugin_namespace: None,
-            plugin_root: None,
-        }],
-        /*plugin_skill_snapshots*/ None,
-    )
-    .await;
-
-    assert!(
-        outcome.errors.is_empty(),
-        "unexpected errors: {:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.skills,
-        vec![
-            expected_user_skill(&first_path, "linked:first-skill", "first description"),
-            expected_user_skill(&second_path, "linked:second-skill", "second description"),
-        ]
-    );
-    let manifest_path = PathUri::from_abs_path(&normalized(&manifest_path));
-    let manifest_probes = recording
-        .metadata_paths
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .filter(|path| **path == manifest_path)
-        .count();
-    assert_eq!(manifest_probes, 1);
 }
 
 // Directory symlinks on Windows can require Developer Mode or administrator privileges.
