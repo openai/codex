@@ -464,8 +464,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         build_config,
     )
     .await?;
-    let resume_approvals_reviewer_override =
-        approvals_reviewer_override_for_resume(&config, &cli_kv_overrides);
+    let resume_approvals_reviewer_override = cli_kv_overrides
+        .iter()
+        .any(|(key, _)| key == "approvals_reviewer")
+        .then(|| config.approvals_reviewer.into());
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1116,16 +1118,6 @@ fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String
     config
         .bypass_hook_trust
         .then(|| HashMap::from([("bypass_hook_trust".to_string(), Value::Bool(true))]))
-}
-
-fn approvals_reviewer_override_for_resume(
-    config: &Config,
-    cli_kv_overrides: &[(String, codex_config::TomlValue)],
-) -> Option<codex_app_server_protocol::ApprovalsReviewer> {
-    cli_kv_overrides
-        .iter()
-        .any(|(key, _)| key == "approvals_reviewer")
-        .then(|| config.approvals_reviewer.into())
 }
 
 fn permissions_selection_from_config(config: &Config) -> Option<String> {

@@ -509,16 +509,12 @@ async fn thread_resume_params_only_include_explicit_review_policy_override() {
     let params_without_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        approvals_reviewer_override_for_resume(&config, &[]),
+        /* approvals_reviewer_override */ None,
     );
-    let cli_kv_overrides = vec![(
-        "approvals_reviewer".to_string(),
-        codex_config::TomlValue::String("auto_review".to_string()),
-    )];
     let params_with_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
-        approvals_reviewer_override_for_resume(&config, &cli_kv_overrides),
+        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview),
     );
 
     assert_eq!(params_without_override.approvals_reviewer, None);
