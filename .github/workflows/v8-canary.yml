@@ -381,7 +381,10 @@ jobs:
           $traceRoot = Join-Path $env:RUNNER_TEMP "codex-io-trace"
           New-Item -ItemType Directory -Force -Path $traceRoot | Out-Null
           $null = & wpr -cancel 2>&1
-          & wpr -start FileIO -start DiskIO -filemode -recordtempto $traceRoot
+          # A cold source build can run for hours. Keep a bounded in-memory
+          # ring buffer so stopping the trace does not have to merge hours of
+          # file-mode ETW before the job can upload its extracted tail sample.
+          & wpr -start FileIO -start DiskIO
           if ($LASTEXITCODE -ne 0) {
             throw "failed to start Windows I/O trace"
           }
