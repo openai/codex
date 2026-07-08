@@ -402,6 +402,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -447,6 +448,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -469,6 +471,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 1,
                 max_entries: 10,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -491,6 +494,7 @@ async fn file_system_walk_returns_a_bounded_tree(
                 max_directories: 10,
                 max_entries: 1,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -535,6 +539,7 @@ async fn file_system_walk_honors_read_sandbox(
                 max_directories: 2,
                 max_entries: 2,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             Some(&sandbox),
         )

@@ -237,14 +237,15 @@ async fn consume_timeout_releases_account_auth_queue() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (RATE_LIMIT_RESET_REQUEST_TIMEOUT_ENV_VAR, Some("100")),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let consume_id = send_consume_reset_credit(&mut mcp, "request-timeout").await?;
     let account_id = mcp
@@ -287,7 +288,12 @@ async fn chatgpt_test_context() -> Result<(TempDir, MockServer)> {
 }
 
 async fn initialized_app_server(codex_home: &Path) -> Result<TestAppServer> {
-    let mut mcp = TestAppServer::new_with_env(codex_home, &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home)
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }

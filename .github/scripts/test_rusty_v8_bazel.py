@@ -205,8 +205,8 @@ class RustyV8BazelTest(unittest.TestCase):
                 ),
             ),
             rusty_v8_bazel.upstream_release_pair_paths(
-                Path("/tmp/rusty_v8"),
                 "x86_64-apple-darwin",
+                Path("/tmp/rusty_v8/target"),
             ),
         )
         self.assertEqual(
@@ -221,25 +221,30 @@ class RustyV8BazelTest(unittest.TestCase):
                 ),
             ),
             rusty_v8_bazel.upstream_release_pair_paths(
-                Path("/tmp/rusty_v8"),
                 "x86_64-pc-windows-msvc",
+                Path("/tmp/rusty_v8/target"),
             ),
         )
 
     def test_stage_upstream_release_pair(self) -> None:
-        with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
-            source_root = Path(source_dir)
+        with (
+            TemporaryDirectory() as target_dir,
+            TemporaryDirectory() as output_dir,
+        ):
             gn_out = (
-                source_root / "target" / "x86_64-pc-windows-msvc" / "release" / "gn_out"
+                Path(target_dir)
+                / "x86_64-pc-windows-msvc"
+                / "release"
+                / "gn_out"
             )
             (gn_out / "obj").mkdir(parents=True)
             (gn_out / "obj" / "rusty_v8.lib").write_bytes(b"archive")
             (gn_out / "src_binding.rs").write_text("binding")
 
             rusty_v8_bazel.stage_upstream_release_pair(
-                source_root,
                 "x86_64-pc-windows-msvc",
                 Path(output_dir),
+                Path(target_dir),
                 sandbox=True,
             )
 

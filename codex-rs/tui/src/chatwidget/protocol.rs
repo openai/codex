@@ -290,10 +290,10 @@ impl ChatWidget {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
             }
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
-            ThreadItem::WebSearch { id, .. } => {
-                self.on_web_search_begin(id);
+            ThreadItem::WebSearch(item) => {
+                self.on_web_search_begin(item.id);
             }
-            ThreadItem::ImageGeneration { .. } => {
+            ThreadItem::ImageGeneration(_) => {
                 self.on_image_generation_begin();
             }
             ThreadItem::CollabAgentToolCall {

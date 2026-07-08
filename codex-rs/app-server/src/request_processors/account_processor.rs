@@ -1,5 +1,6 @@
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
+use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 
 mod rate_limit_resets;
@@ -654,14 +655,19 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+        let auth = CodexAuth::from_external_chatgpt_tokens(
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.auth_manager.reload().await;
+        self.auth_manager
+            .set_external_auth(Arc::new(ExternalAuthBridge::new(
+                Arc::clone(&self.outgoing),
+                auth,
+            )))
+            .await
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
@@ -849,7 +855,9 @@ impl AccountRequestProcessor {
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
-                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
+                        CodexAuth::Headers(_)
+                            | CodexAuth::AgentIdentity(_)
+                            | CodexAuth::PersonalAccessToken(_)
                     ) || include_token
                         && permanent_refresh_failure
                     {
