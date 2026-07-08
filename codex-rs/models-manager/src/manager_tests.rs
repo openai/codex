@@ -166,8 +166,9 @@ fn openai_manager_for_tests(
     codex_home: std::path::PathBuf,
     endpoint_client: Arc<dyn ModelsEndpointClient>,
 ) -> OpenAiModelsManager {
-    openai_manager_for_tests_with_auth(
+    openai_manager_for_tests_with_provider_and_auth(
         codex_home,
+        "openai",
         endpoint_client,
         Some(AuthManager::from_auth_for_testing(
             CodexAuth::create_dummy_chatgpt_auth_for_testing(),
@@ -180,14 +181,33 @@ fn openai_manager_for_tests_with_auth(
     endpoint_client: Arc<dyn ModelsEndpointClient>,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> OpenAiModelsManager {
-    OpenAiModelsManager::new(codex_home, endpoint_client, auth_manager)
+    openai_manager_for_tests_with_provider_and_auth(
+        codex_home,
+        "openai",
+        endpoint_client,
+        auth_manager,
+    )
+}
+
+fn openai_manager_for_tests_with_provider_and_auth(
+    codex_home: std::path::PathBuf,
+    model_provider_id: &str,
+    endpoint_client: Arc<dyn ModelsEndpointClient>,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> OpenAiModelsManager {
+    OpenAiModelsManager::new(
+        codex_home,
+        model_provider_id.to_string(),
+        endpoint_client,
+        auth_manager,
+    )
 }
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
 }
 
-async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
+async fn chatgpt_auth_tokens_for_tests(codex_home: &Path, account_id: &str) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
         openai_api_key: None,
@@ -200,7 +220,7 @@ c2ln",
             .expect("fake id token should parse"),
             access_token: "Access Token".to_string(),
             refresh_token: "test".to_string(),
-            account_id: Some("account_id".to_string()),
+            account_id: Some(account_id.to_string()),
         }),
         last_refresh: Some(Utc::now()),
         agent_identity: None,
@@ -513,6 +533,152 @@ async fn refresh_available_models_uses_cached_remote_only_catalog_for_chatgpt_au
         cache_endpoint.fetch_count(),
         0,
         "fresh cache should avoid a model fetch"
+    );
+}
+
+#[tokio::test]
+async fn offline_catalog_does_not_reuse_cache_written_by_another_provider() {
+    let auto_review_model = remote_model_with_visibility(
+        "codex-auto-review",
+        "Codex Auto Review",
+        /*priority*/ 1,
+        "hide",
+    );
+    let openai_models = vec![
+        remote_model("openai-visible", "OpenAI Visible", /*priority*/ 0),
+        auto_review_model.clone(),
+    ];
+    let foreign_model = remote_model("foreign-visible", "Foreign Visible", /*priority*/ 0);
+    let codex_home = tempdir().expect("temp dir");
+
+    let openai_endpoint = TestModelsEndpoint::new(vec![openai_models]);
+    let openai_manager = openai_manager_for_tests(codex_home.path().to_path_buf(), openai_endpoint);
+    openai_manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("OpenAI refresh succeeds");
+
+    let foreign_endpoint = TestModelsEndpoint::new(vec![vec![foreign_model.clone()]]);
+    let foreign_manager = openai_manager_for_tests_with_provider_and_auth(
+        codex_home.path().to_path_buf(),
+        "foreign",
+        foreign_endpoint,
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+    foreign_manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("foreign provider refresh succeeds");
+
+    let available = openai_manager.list_models(RefreshStrategy::Offline).await;
+
+    assert!(
+        available
+            .iter()
+            .any(|model| model.model == auto_review_model.slug),
+        "OpenAI's cached catalog should retain codex-auto-review"
+    );
+    assert!(
+        !available
+            .iter()
+            .any(|model| model.model == foreign_model.slug),
+        "OpenAI's cached catalog should not contain another provider's models"
+    );
+}
+
+#[tokio::test]
+async fn offline_catalog_does_not_reuse_cache_written_by_another_account() {
+    let auto_review_model = remote_model_with_visibility(
+        "codex-auto-review",
+        "Codex Auto Review",
+        /*priority*/ 1,
+        "hide",
+    );
+    let first_account_models = vec![
+        remote_model("first-visible", "First Visible", /*priority*/ 0),
+        auto_review_model.clone(),
+    ];
+    let second_account_model =
+        remote_model("second-visible", "Second Visible", /*priority*/ 0);
+    let cache_home = tempdir().expect("cache home");
+    let first_auth_home = tempdir().expect("first auth home");
+    let second_auth_home = tempdir().expect("second auth home");
+    let first_auth = chatgpt_auth_tokens_for_tests(first_auth_home.path(), "first-account").await;
+    let second_auth =
+        chatgpt_auth_tokens_for_tests(second_auth_home.path(), "second-account").await;
+
+    let first_endpoint = TestModelsEndpoint::new(vec![first_account_models]);
+    let first_manager = openai_manager_for_tests_with_provider_and_auth(
+        cache_home.path().to_path_buf(),
+        "openai",
+        first_endpoint,
+        Some(AuthManager::from_auth_for_testing(first_auth)),
+    );
+    first_manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("first account refresh succeeds");
+
+    let second_endpoint = TestModelsEndpoint::new(vec![vec![second_account_model.clone()]]);
+    let second_manager = openai_manager_for_tests_with_provider_and_auth(
+        cache_home.path().to_path_buf(),
+        "openai",
+        second_endpoint,
+        Some(AuthManager::from_auth_for_testing(second_auth)),
+    );
+    second_manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("second account refresh succeeds");
+
+    let available = first_manager.list_models(RefreshStrategy::Offline).await;
+
+    assert!(
+        available
+            .iter()
+            .any(|model| model.model == auto_review_model.slug),
+        "the first account's catalog should retain codex-auto-review"
+    );
+    assert!(
+        !available
+            .iter()
+            .any(|model| model.model == second_account_model.slug),
+        "the first account's catalog should not contain another account's models"
+    );
+}
+
+#[tokio::test]
+async fn matching_etag_refetches_when_cache_key_mismatches() {
+    let initial_model = remote_model("initial-model", "Initial Model", /*priority*/ 0);
+    let refreshed_model = remote_model("refreshed-model", "Refreshed Model", /*priority*/ 0);
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint =
+        TestModelsEndpoint::new(vec![vec![initial_model], vec![refreshed_model.clone()]]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("initial refresh succeeds");
+    *manager.etag.write().await = Some("same-etag".to_string());
+    manager
+        .cache_manager
+        .mutate_cache_for_test(|cache| cache.cache_key = None)
+        .await
+        .expect("cache key should be removed");
+
+    manager.refresh_if_new_etag("same-etag".to_string()).await;
+
+    assert_eq!(endpoint.fetch_count(), 2, "cache mismatch should refetch");
+    assert!(
+        manager
+            .get_remote_models()
+            .await
+            .iter()
+            .any(|model| model.slug == refreshed_model.slug),
+        "refetched catalog should be applied"
     );
 }
 
@@ -944,7 +1110,7 @@ async fn refresh_available_models_fetches_with_chatgpt_auth_tokens() {
         "ChatGPT Auth Tokens",
         /*priority*/ 1,
     )]]);
-    let auth = chatgpt_auth_tokens_for_tests(codex_home.path()).await;
+    let auth = chatgpt_auth_tokens_for_tests(codex_home.path(), "account_id").await;
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
         endpoint.clone(),

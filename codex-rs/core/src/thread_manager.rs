@@ -266,6 +266,7 @@ pub fn build_models_manager(
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
         config.codex_home.to_path_buf(),
+        config.model_provider_id.clone(),
         config.model_catalog.clone(),
     )
 }
@@ -457,7 +458,11 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                    .models_manager(
+                        codex_home,
+                        OPENAI_PROVIDER_ID.to_string(),
+                        /*config_model_catalog*/ None,
+                    ),
                 environment_manager,
                 skills_service,
                 plugins_manager,

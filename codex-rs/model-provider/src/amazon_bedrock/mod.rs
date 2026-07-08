@@ -165,6 +165,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
     fn models_manager(
         &self,
         _codex_home: PathBuf,
+        _model_provider_id: String,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
