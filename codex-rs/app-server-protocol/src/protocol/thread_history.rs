@@ -600,6 +600,7 @@ impl ThreadHistoryBuilder {
         let should_upsert = match item {
             codex_protocol::items::TurnItem::Plan(plan) => !plan.text.is_empty(),
             codex_protocol::items::TurnItem::Sleep(_)
+            | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::CommandExecution(_)
             | codex_protocol::items::TurnItem::DynamicToolCall(_)
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
@@ -608,7 +609,6 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::EnteredReviewMode(_)
             | codex_protocol::items::TurnItem::ExitedReviewMode(_) => true,
             codex_protocol::items::TurnItem::UserMessage(_)
-            | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
@@ -4024,6 +4024,37 @@ mod tests {
                     },
                 ],
             }
+        );
+    }
+
+    #[test]
+    fn canonical_hook_prompt_completion_updates_turn_history() {
+        let hook_prompt = CoreTurnItem::HookPrompt(codex_protocol::items::HookPromptItem {
+            id: "hook-prompt-1".into(),
+            fragments: vec![CoreHookPromptFragment::from_single_hook(
+                "Retry with tests.",
+                "hook-run-1",
+            )],
+        });
+        let expected_item = ThreadItem::from(hook_prompt.clone());
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-a".into(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-a".into(),
+            item: hook_prompt,
+            completed_at_ms: 0,
+        }));
+
+        assert_eq!(
+            builder.active_turn_snapshot().expect("active turn").items,
+            vec![expected_item]
         );
     }
 

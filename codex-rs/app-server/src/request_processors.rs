@@ -1,5 +1,4 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
-use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_manager::ConfigManager;
