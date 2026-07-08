@@ -1,5 +1,4 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
-use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_manager::ConfigManager;
@@ -386,7 +385,6 @@ use codex_login::LoginSuccessPage;
 use codex_login::LoginSuccessPageBrand;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
-use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
 use codex_login::login_with_api_key;
 use codex_login::oauth_client_id;

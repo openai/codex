@@ -110,13 +110,13 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
-          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          path: ${{ env.CARGO_TARGET_DIR }}/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
       - name: Stage Windows binaries
         shell: bash
         run: |
-          release_dir="target/${{ matrix.target }}/release"
+          release_dir="$CARGO_TARGET_DIR/${{ matrix.target }}/release"
           output_dir="$release_dir/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
@@ -139,7 +139,7 @@ jobs:
         with:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
-            codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
+            ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
 
   build-windows-symbols:
     needs:
@@ -168,14 +168,14 @@ jobs:
         with:
           pattern: windows-binaries-${{ matrix.target }}-*
           merge-multiple: true
-          path: codex-rs/target/${{ matrix.target }}/release
+          path: ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release
       - name: Build symbols archive
         shell: bash
         run: |
           bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
             --target "${{ matrix.target }}" \
             --artifact-name "${{ matrix.target }}" \
-            --release-dir "target/${{ matrix.target }}/release" \
+            --release-dir "${CARGO_TARGET_DIR}/${{ matrix.target }}/release" \
             --archive-dir "symbols-dist/${{ matrix.target }}" \
             --binaries "${WINDOWS_BINARIES}"
       - name: Upload symbols archive
@@ -226,26 +226,26 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-primary
-          path: codex-rs/target/${{ matrix.target }}/release
+          path: ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
-          path: codex-rs/target/${{ matrix.target }}/release
+          path: ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows app-server binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-app-server
-          path: codex-rs/target/${{ matrix.target }}/release
+          path: ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release
 
       - name: Verify binaries
         shell: bash
         run: |
           set -euo pipefail
           for binary in ${WINDOWS_BINARIES}; do
-            ls -lh "target/${{ matrix.target }}/release/${binary}.exe"
+            ls -lh "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${binary}.exe"
           done
 
       - name: Sign Windows binaries with Azure Trusted Signing
@@ -267,7 +267,7 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${WINDOWS_BINARIES}; do
-            cp "target/${{ matrix.target }}/release/${binary}.exe" \
+            cp "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${binary}.exe" \
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
@@ -291,7 +291,7 @@ jobs:
               bash "$archive_script" \
                 --target "$target" \
                 --bundle "{}" \
-                --entrypoint-dir "target/$target/release" \
+                --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
                 --archive-dir "dist/$target"
 
       - name: Build Python runtime wheel

@@ -42,8 +42,12 @@ const INTERNAL_ERROR_CODE: i64 = -32603;
 async fn get_account_rate_limits_requires_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_account_rate_limits_request().await?;
@@ -68,7 +72,11 @@ async fn get_account_rate_limits_requires_auth() -> Result<()> {
 async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key(&mut mcp, "sk-test-key").await?;
@@ -213,8 +221,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_account_rate_limits_request().await?;
@@ -371,8 +383,12 @@ async fn get_account_rate_limits_preserves_count_when_reset_credit_details_fail(
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_account_rate_limits_request().await?;
@@ -398,8 +414,12 @@ async fn get_account_rate_limits_preserves_count_when_reset_credit_details_fail(
 async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -428,7 +448,11 @@ async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
 async fn send_add_credits_nudge_email_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key(&mut mcp, "sk-test-key").await?;
@@ -482,8 +506,12 @@ async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -526,8 +554,12 @@ async fn send_add_credits_nudge_email_maps_cooldown() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -570,8 +602,12 @@ async fn send_add_credits_nudge_email_surfaces_backend_failure() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

@@ -28,7 +28,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn thread_rollback_does_not_emit_deprecation_notice_to_codex_tui() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
@@ -80,7 +83,10 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.

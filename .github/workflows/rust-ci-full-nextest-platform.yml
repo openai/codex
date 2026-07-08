@@ -71,11 +71,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure Dev Drive (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: ../.github/scripts/setup-dev-drive.ps1
-
       - uses: ./.github/actions/setup-ci
 
       - name: Install Linux build dependencies
@@ -136,11 +131,7 @@ jobs:
             echo "Using sccache GitHub backend"
           else
             echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-            if [[ -n "${DEV_DRIVE:-}" ]]; then
-              echo "SCCACHE_DIR=${DEV_DRIVE}\\.sccache" >> "$GITHUB_ENV"
-            else
-              echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
-            fi
+            echo "SCCACHE_DIR=${CI_BUILD_ROOT}/sccache" >> "$GITHUB_ENV"
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
@@ -206,7 +197,7 @@ jobs:
               --profile ${{ inputs.profile }} \
               -p codex-linux-sandbox \
               --bin codex-linux-sandbox
-            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-linux-sandbox" "${helper_dir}/"
+            cp "${CARGO_TARGET_DIR}/${{ inputs.target }}/${{ inputs.profile }}/codex-linux-sandbox" "${helper_dir}/"
           else
             cargo build \
               --target ${{ inputs.target }} \
@@ -214,8 +205,8 @@ jobs:
               -p codex-windows-sandbox \
               --bin codex-windows-sandbox-setup \
               --bin codex-command-runner
-            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-windows-sandbox-setup.exe" "${helper_dir}/"
-            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-command-runner.exe" "${helper_dir}/"
+            cp "${CARGO_TARGET_DIR}/${{ inputs.target }}/${{ inputs.profile }}/codex-windows-sandbox-setup.exe" "${helper_dir}/"
+            cp "${CARGO_TARGET_DIR}/${{ inputs.target }}/${{ inputs.profile }}/codex-command-runner.exe" "${helper_dir}/"
           fi
 
       - name: Upload Cargo timings (nextest)
@@ -223,7 +214,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: cargo-timings-rust-ci-nextest-${{ inputs.target }}-${{ inputs.profile }}
-          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          path: ${{ env.CARGO_TARGET_DIR }}/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
       - name: Upload nextest archive
@@ -369,13 +360,13 @@ jobs:
 
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
-            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
+            helper_target_dir="${CARGO_TARGET_DIR}/${{ inputs.target }}/${{ inputs.profile }}"
             mkdir -p "${helper_target_dir}"
             cp "${helper_dir}/codex-linux-sandbox" "${helper_target_dir}/"
             chmod +x "${helper_target_dir}/codex-linux-sandbox"
           elif [[ "${RUNNER_OS}" == "Windows" ]]; then
             helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
-            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
+            helper_target_dir="${CARGO_TARGET_DIR}/${{ inputs.target }}/${{ inputs.profile }}"
             mkdir -p "${helper_target_dir}"
             cp "${helper_dir}/codex-windows-sandbox-setup.exe" "${helper_target_dir}/"
             cp "${helper_dir}/codex-command-runner.exe" "${helper_target_dir}/"
@@ -423,7 +414,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: nextest-junit-rust-ci-${{ inputs.artifact_id }}-shard-${{ matrix.shard }}
-          path: codex-rs/target/nextest/default/junit.xml
+          path: ${{ env.CARGO_TARGET_DIR }}/nextest/default/junit.xml
           if-no-files-found: warn
 
       - name: Tear down remote test env

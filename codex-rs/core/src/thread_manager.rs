@@ -364,6 +364,16 @@ impl ThreadManager {
         }
     }
 
+    pub(crate) fn with_code_mode_host_program_for_tests(mut self, host_program: PathBuf) -> Self {
+        let Some(state) = Arc::get_mut(&mut self.state) else {
+            unreachable!("new thread manager state should not be shared");
+        };
+        state.code_mode_session_provider = Arc::new(
+            ProcessOwnedCodeModeSessionProvider::with_host_program(host_program),
+        );
+        self
+    }
+
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
     pub(crate) fn with_models_provider_for_tests(

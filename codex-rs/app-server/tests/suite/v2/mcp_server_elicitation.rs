@@ -422,7 +422,10 @@ impl ElicitationRoundTripFixture {
             AuthCredentialsStoreMode::File,
         )?;
 
-        let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build()
+            .await?;
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.initialize_with_capabilities(
