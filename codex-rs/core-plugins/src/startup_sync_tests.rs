@@ -212,7 +212,7 @@ async fn run_sync_without_git(
     tokio::task::spawn_blocking(move || {
         sync_openai_plugins_repo_with_transport_overrides(
             codex_home.as_path(),
-            None,
+            /*git_binary*/ None,
             &api_base_url,
             &backup_archive_api_url,
         )
