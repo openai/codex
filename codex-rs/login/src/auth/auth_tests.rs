@@ -1069,11 +1069,11 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
     let mut auth_config = script.auth_config();
     auth_config.refresh_interval_ms = 0;
     let manager = AuthManager::external_bearer_only(auth_config);
+    let mut recovery = manager.unauthorized_recovery();
     let initial_token = manager
         .auth()
         .await
         .and_then(|auth| auth.api_key().map(str::to_string));
-    let mut recovery = manager.unauthorized_recovery();
 
     assert!(recovery.has_next());
     assert_eq!(recovery.mode_name(), "external");
