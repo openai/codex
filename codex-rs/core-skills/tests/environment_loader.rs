@@ -1,5 +1,4 @@
 use std::fs;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -7,9 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_core_skills::loader::EnvironmentSkillMetadata;
-use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_environment_skills_from_root;
-use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
@@ -22,8 +19,6 @@ use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
-use codex_protocol::protocol::SkillScope;
-use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -421,6 +416,12 @@ async fn reads_skill_files_while_resolving_plugin_namespaces() {
 #[tokio::test]
 async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
     use std::os::unix::fs::symlink;
+    use std::sync::Arc;
+
+    use codex_core_skills::loader::SkillRoot;
+    use codex_core_skills::loader::load_skills_from_roots;
+    use codex_protocol::protocol::SkillScope;
+    use codex_utils_absolute_path::test_support::PathBufExt;
 
     let root = tempdir().expect("tempdir");
     let shared_plugin_root = tempdir().expect("tempdir");
