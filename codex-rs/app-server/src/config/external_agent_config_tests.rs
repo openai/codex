@@ -1,6 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use std::io;
+use std::path::Path;
 use tempfile::TempDir;
 
 const EXTERNAL_AGENT_PROJECT_CONFIG_FILE: &str = ".claude.json";
@@ -33,6 +34,40 @@ fn github_plugin_details() -> MigrationDetails {
         }],
         ..Default::default()
     }
+}
+
+fn write_repo_marketplace_plugin(repo_root: &Path, marketplace_name: &str, plugin_name: &str) {
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(EXTERNAL_AGENT_PLUGIN_MANIFEST_DIR))
+        .expect("create repo marketplace dir");
+    let plugin_root = repo_root.join("plugins").join(plugin_name);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::write(
+        repo_root
+            .join(EXTERNAL_AGENT_PLUGIN_MANIFEST_DIR)
+            .join("marketplace.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": marketplace_name,
+            "plugins": [{
+                "name": plugin_name,
+                "source": {
+                    "source": "local",
+                    "path": format!("./plugins/{plugin_name}"),
+                },
+            }],
+        }))
+        .expect("serialize repo marketplace"),
+    )
+    .expect("write repo marketplace");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": plugin_name,
+            "version": "0.1.0",
+        }))
+        .expect("serialize plugin manifest"),
+    )
+    .expect("write plugin manifest");
 }
 
 fn assert_single_plugin_raw_error(
@@ -1739,6 +1774,128 @@ async fn detect_home_lists_enabled_plugins_from_settings() {
                 ..Default::default()
             }),
         }]
+    );
+}
+
+#[tokio::test]
+async fn detect_repo_uses_home_enabled_plugins_from_repo_marketplace() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    write_repo_marketplace_plugin(&repo_root, "treehouse", "build-cop");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "build-cop@treehouse": true
+          }
+        }"#,
+    )
+    .expect("write home settings");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .await
+        .expect("detect");
+
+    let plugin_items = items
+        .into_iter()
+        .filter(|item| item.item_type == ExternalAgentConfigMigrationItemType::Plugins)
+        .collect::<Vec<_>>();
+    assert_eq!(plugin_items.len(), 1);
+    assert_eq!(plugin_items[0].cwd.as_ref(), Some(&repo_root));
+    assert_eq!(
+        plugin_items[0]
+            .details
+            .as_ref()
+            .expect("plugin details")
+            .plugins,
+        vec![PluginsMigration {
+            marketplace_name: "treehouse".to_string(),
+            plugin_names: vec!["build-cop".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn import_repo_plugin_uses_discovered_marketplace_without_extra_known_marketplaces() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    write_repo_marketplace_plugin(&repo_root, "treehouse", "build-cop");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "build-cop@treehouse": true
+          }
+        }"#,
+    )
+    .expect("write home settings");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import_plugins(
+            Some(repo_root.as_path()),
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "treehouse".to_string(),
+                    plugin_names: vec!["build-cop".to_string()],
+                }],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("import repo plugin");
+
+    assert_eq!(outcome.succeeded_marketplaces, vec!["treehouse"]);
+    assert_eq!(outcome.succeeded_plugin_ids, vec!["build-cop@treehouse"]);
+    assert!(outcome.failed_marketplaces.is_empty());
+    assert!(outcome.failed_plugin_ids.is_empty());
+    assert!(outcome.raw_errors.is_empty());
+    assert!(
+        codex_home
+            .join("plugins/cache/treehouse/build-cop/0.1.0")
+            .is_dir()
+    );
+    let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
+    assert!(config.contains(r#"[plugins."build-cop@treehouse"]"#));
+    assert!(config.contains("enabled = true"));
+}
+
+#[tokio::test]
+async fn detect_repo_skips_enabled_plugin_missing_from_repo_marketplace() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    write_repo_marketplace_plugin(&repo_root, "treehouse", "build-cop");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "missing@treehouse": true
+          }
+        }"#,
+    )
+    .expect("write home settings");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: Some(vec![repo_root]),
+        })
+        .await
+        .expect("detect");
+
+    assert!(
+        items
+            .iter()
+            .all(|item| item.item_type != ExternalAgentConfigMigrationItemType::Plugins)
     );
 }
 
