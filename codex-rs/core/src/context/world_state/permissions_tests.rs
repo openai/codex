@@ -97,15 +97,15 @@ fn missing_and_empty_catalog_messages_have_distinct_snapshots() {
         "model-a",
         AskForApproval::OnRequest,
         ApprovalsReviewer::User,
-        None,
-        None,
+        /*on_request*/ None,
+        /*on_request_auto_review*/ None,
     );
     let empty = permissions_state(
         "model-a",
         AskForApproval::OnRequest,
         ApprovalsReviewer::User,
         Some(""),
-        None,
+        /*on_request_auto_review*/ None,
     );
 
     assert_ne!(missing.snapshot(), empty.snapshot());
@@ -118,14 +118,14 @@ fn model_changes_render_even_when_catalog_messages_match() {
         AskForApproval::OnRequest,
         ApprovalsReviewer::User,
         Some("shared approvals"),
-        None,
+        /*on_request_auto_review*/ None,
     );
     let model_b = permissions_state(
         "model-b",
         AskForApproval::OnRequest,
         ApprovalsReviewer::User,
         Some("shared approvals"),
-        None,
+        /*on_request_auto_review*/ None,
     );
     let expected = render(&model_b, PreviousSectionState::Absent);
 
@@ -141,15 +141,15 @@ fn reviewer_changes_are_ignored_when_approval_policy_is_never() {
         "model-a",
         AskForApproval::Never,
         ApprovalsReviewer::User,
-        None,
-        None,
+        /*on_request*/ None,
+        /*on_request_auto_review*/ None,
     );
     let auto = permissions_state(
         "model-a",
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
-        None,
-        None,
+        /*on_request*/ None,
+        /*on_request_auto_review*/ None,
     );
 
     assert_eq!(user.snapshot(), auto.snapshot());
