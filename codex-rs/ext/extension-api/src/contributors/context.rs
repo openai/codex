@@ -3,7 +3,7 @@ use codex_protocol::ThreadId;
 use crate::ExtensionData;
 
 /// Host context available while extensions contribute the prompt for the
-/// best-effort turn immediately before an automatic compaction rollover.
+/// fallback turn immediately before an automatic compaction rollover.
 #[derive(Clone, Copy)]
 pub struct AutoCompactFallbackContributionInput<'a> {
     /// Stable host-owned thread identifier.

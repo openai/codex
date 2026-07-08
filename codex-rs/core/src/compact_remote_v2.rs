@@ -285,7 +285,7 @@ async fn run_remote_compact_task_inner_impl(
     let fallback_step_context = match (compaction_metadata.trigger(), client_session.as_deref_mut())
     {
         (CompactionTrigger::Auto, Some(client_session)) => {
-            run_auto_compact_fallback(sess, &compaction_step_context, client_session).await
+            run_auto_compact_fallback(sess, &compaction_step_context, client_session).await?
         }
         _ => None,
     };

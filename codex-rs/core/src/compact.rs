@@ -348,7 +348,7 @@ async fn run_compact_task_inner_impl(
 
     let fallback_step_context = match (auto_step_context, fallback_client_session) {
         (Some(step_context), Some(client_session)) => {
-            run_auto_compact_fallback(&sess, step_context, client_session).await
+            run_auto_compact_fallback(&sess, step_context, client_session).await?
         }
         _ => None,
     };

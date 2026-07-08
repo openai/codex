@@ -7113,7 +7113,6 @@ async fn loads_auto_compact_fallback_prompt() -> std::io::Result<()> {
         config.auto_compact_fallback_prompt.as_deref(),
         Some("write notes immediately")
     );
-
     Ok(())
 }
 

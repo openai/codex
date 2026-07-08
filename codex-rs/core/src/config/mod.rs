@@ -3610,7 +3610,6 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
-
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.

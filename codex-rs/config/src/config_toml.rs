@@ -244,7 +244,7 @@ pub struct ConfigToml {
     pub compact_prompt: Option<String>,
 
     /// Developer message contributed by the app-server extension for the single
-    /// best-effort turn before an automatic compaction rollover.
+    /// fallback turn before an automatic compaction rollover.
     pub auto_compact_fallback_prompt: Option<String>,
 
     /// When set, restricts ChatGPT login to one or more workspace identifiers.

@@ -99,7 +99,7 @@ async fn run_compact_task_inner(
         .await;
     if let (Some(step_context), Some(client_session)) = (auto_step_context, fallback_client_session)
         && let Some(refreshed_step_context) =
-            run_auto_compact_fallback(sess, step_context, client_session).await
+            run_auto_compact_fallback(sess, step_context, client_session).await?
     {
         world_state = Arc::new(
             sess.build_world_state_for_step(&refreshed_step_context)

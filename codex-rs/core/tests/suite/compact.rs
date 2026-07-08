@@ -2071,7 +2071,7 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_fallback_sampling_failure_still_rolls_over() {
+async fn auto_compact_fallback_retries_then_fails_without_rollover() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -2087,20 +2087,26 @@ async fn auto_compact_fallback_sampling_failure_still_rolls_over() {
                 ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
             ]),
             sse_failed(
-                "fallback-failed",
+                "fallback-failed-1",
                 "internal_error",
-                "fallback sampling failed",
+                "fallback sampling failed once",
             ),
-            sse(vec![
-                ev_assistant_message("next-message", FINAL_REPLY),
-                ev_completed_with_tokens("next-response", /*total_tokens*/ 10),
-            ]),
+            sse_failed(
+                "fallback-failed-2",
+                "internal_error",
+                "fallback sampling failed twice",
+            ),
+            sse_failed(
+                "fallback-failed-3",
+                "internal_error",
+                "fallback sampling failed three times",
+            ),
         ],
     )
     .await;
     let (extensions, prompt_calls, tool_calls) = auto_compact_fallback_test_extensions();
     let mut model_provider = non_openai_model_provider(&server);
-    model_provider.stream_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(10);
     let mut builder = test_codex()
         .with_extensions(extensions)
         .with_config(move |config| {
@@ -2118,26 +2124,25 @@ async fn auto_compact_fallback_sampling_failure_still_rolls_over() {
     test.submit_turn("fill the first context window")
         .await
         .expect("submit first turn");
-    test.submit_turn("continue despite fallback failure")
+    test.submit_turn("fail after fallback retries")
         .await
         .expect("submit second turn");
 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        4,
-        "failed fallback sample should not prevent post-rollover sampling"
+        5,
+        "expected initial, compact, and three fallback attempts without post-rollover sampling"
     );
     assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
-    assert!(
-        requests[2]
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT)
-    );
-    let post_rollover_body = requests[3].body_json().to_string();
-    assert!(post_rollover_body.contains("continue despite fallback failure"));
-    assert!(post_rollover_body.contains(AUTO_SUMMARY_TEXT));
+    for fallback_request in &requests[2..] {
+        assert!(
+            fallback_request
+                .message_input_texts("developer")
+                .iter()
+                .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT)
+        );
+    }
     assert_eq!(prompt_calls.load(Ordering::SeqCst), 1);
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
 }

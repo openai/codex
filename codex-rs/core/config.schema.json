@@ -4669,7 +4669,7 @@
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
     "auto_compact_fallback_prompt": {
-      "description": "Developer message contributed by the app-server extension for the single best-effort turn before an automatic compaction rollover.",
+      "description": "Developer message contributed by the app-server extension for the single fallback turn before an automatic compaction rollover.",
       "type": "string"
     },
     "auto_review": {

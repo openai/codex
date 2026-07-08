@@ -3,9 +3,9 @@ use std::sync::Arc;
 use codex_extension_api::AutoCompactFallbackContributionInput;
 use codex_features::Feature;
 use codex_mcp::McpConnectionManager;
+use codex_protocol::error::Result as CodexResult;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 use crate::client::ModelClientSession;
 use crate::context_manager::updates::build_developer_update_item;
@@ -16,8 +16,8 @@ use crate::session::turn::SamplingRequestOptions;
 use crate::session::turn::run_sampling_request;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
-/// Runs the optional, extension-configured best-effort turn immediately before an automatic
-/// compaction rollover. The response is sampled exactly once; tool follow-up inference is ignored.
+/// Runs the optional, extension-configured turn immediately before an automatic compaction
+/// rollover. Tool follow-up inference is ignored.
 ///
 /// The returned step refreshes request-scoped world state after any fallback tool side effects while
 /// retaining the model that successfully performed compaction.
@@ -25,14 +25,14 @@ pub(crate) async fn run_auto_compact_fallback(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
     client_session: &mut ModelClientSession,
-) -> Option<Arc<StepContext>> {
+) -> CodexResult<Option<Arc<StepContext>>> {
     let turn_context = &step_context.turn;
     if !turn_context
         .config
         .features
         .enabled(Feature::AutoCompactFallback)
     {
-        return None;
+        return Ok(None);
     }
 
     let mut prompt_sections = Vec::new();
@@ -54,7 +54,7 @@ pub(crate) async fn run_auto_compact_fallback(
     }
 
     let Some(developer_message) = build_developer_update_item(prompt_sections) else {
-        return None;
+        return Ok(None);
     };
     sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
         .await;
@@ -79,7 +79,7 @@ pub(crate) async fn run_auto_compact_fallback(
         .unwrap_or_else(CancellationToken::new);
 
     let _elicitation_guard = McpElicitationAutoDenyGuard::new(restricted_step.mcp.manager_arc());
-    if let Err(err) = run_sampling_request(
+    run_sampling_request(
         Arc::clone(sess),
         restricted_step,
         Arc::clone(&restricted_turn.extension_data),
@@ -90,12 +90,11 @@ pub(crate) async fn run_auto_compact_fallback(
         SamplingRequestOptions::auto_compact_fallback(),
         cancellation_token,
     )
-    .await
-    {
-        warn!(error = %err, "auto-compaction fallback turn failed; continuing rollover");
-    }
+    .await?;
 
-    Some(sess.capture_step_context(Arc::clone(turn_context)).await)
+    Ok(Some(
+        sess.capture_step_context(Arc::clone(turn_context)).await,
+    ))
 }
 
 struct McpElicitationAutoDenyGuard {

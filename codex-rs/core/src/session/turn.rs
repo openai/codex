@@ -1144,7 +1144,16 @@ pub(crate) async fn run_sampling_request(
         Arc::clone(&step_context),
         tool_runtime.for_code_mode_nested_dispatch(),
     );
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let max_retries = options.max_stream_retries.map_or_else(
+        || turn_context.provider.info().stream_max_retries(),
+        |max_stream_retries| {
+            turn_context
+                .provider
+                .info()
+                .stream_max_retries()
+                .min(max_stream_retries)
+        },
+    );
     let mut retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
@@ -1381,6 +1390,7 @@ pub(crate) struct SamplingRequestResult {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SamplingRequestOptions {
     pub(crate) parallel_tool_calls: Option<bool>,
+    pub(crate) max_stream_retries: Option<u64>,
     pub(crate) auto_compact_fallback: bool,
 }
 
@@ -1388,6 +1398,8 @@ impl SamplingRequestOptions {
     pub(crate) fn auto_compact_fallback() -> Self {
         Self {
             parallel_tool_calls: Some(false),
+            // Match remote compaction V2: retry a transient stream failure at most twice.
+            max_stream_retries: Some(2),
             auto_compact_fallback: true,
         }
     }

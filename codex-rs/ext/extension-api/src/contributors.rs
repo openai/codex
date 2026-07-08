@@ -111,7 +111,7 @@ pub trait ContextContributor: Send + Sync {
     }
 
     /// Returns an optional developer-message fragment for the single
-    /// best-effort turn run before an automatic compaction rollover.
+    /// fallback turn run before an automatic compaction rollover.
     ///
     /// The host combines non-empty contributions in registration order into
     /// one developer message. Implementations should keep the contribution

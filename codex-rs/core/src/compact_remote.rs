@@ -267,7 +267,7 @@ async fn run_remote_compact_task_inner_impl(
     } = attempt;
     let fallback_step_context = match (compaction_metadata.trigger(), fallback_client_session) {
         (CompactionTrigger::Auto, Some(client_session)) => {
-            run_auto_compact_fallback(sess, &compaction_step_context, client_session).await
+            run_auto_compact_fallback(sess, &compaction_step_context, client_session).await?
         }
         _ => None,
     };
