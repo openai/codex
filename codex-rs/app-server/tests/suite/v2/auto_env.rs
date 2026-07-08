@@ -27,12 +27,10 @@ async fn builder_interposes_fixed_delay_for_auto_env() -> Result<()> {
     skip_if_remote!(Ok(()), "the fixed-delay fixture is local-only");
 
     let codex_home = TempDir::new()?;
-    let exec_server = codex_utils_cargo_bin::cargo_bin("exec-server")?;
     let requested_delay = Duration::from_secs(1);
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_exec_server_delay(requested_delay)
-        .with_exec_server_program(&exec_server)
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

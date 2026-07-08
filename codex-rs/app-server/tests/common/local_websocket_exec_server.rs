@@ -17,7 +17,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// This is distinct from the ordinary local stdio executor: callers use it
 /// when they need a socket transport they can interpose.
 pub(crate) struct LocalWebsocketExecServer {
-    _child: Child,
+    child: Child,
     websocket_url: String,
 }
 
@@ -30,14 +30,19 @@ impl LocalWebsocketExecServer {
         command.current_dir(codex_home);
         command.env("CODEX_HOME", codex_home);
         command.kill_on_drop(true);
-        let mut child = command.spawn().context("start local exec-server fixture")?;
-        let stdout = child
+        let child = command.spawn().context("start local exec-server fixture")?;
+        let mut exec_server = Self {
+            child,
+            websocket_url: String::new(),
+        };
+        let stdout = exec_server
+            .child
             .stdout
             .take()
             .ok_or_else(|| anyhow!("local exec-server fixture stdout was not captured"))?;
         let mut lines = BufReader::new(stdout).lines();
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
-        let websocket_url = loop {
+        exec_server.websocket_url = loop {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .ok_or_else(|| anyhow!("timed out waiting for local exec-server listen URL"))?;
@@ -52,13 +57,26 @@ impl LocalWebsocketExecServer {
                 break listen_url.to_string();
             }
         };
-        Ok(Self {
-            _child: child,
-            websocket_url,
-        })
+        Ok(exec_server)
     }
 
     pub(crate) fn websocket_url(&self) -> &str {
         &self.websocket_url
+    }
+}
+
+impl Drop for LocalWebsocketExecServer {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(5);
+        while start.elapsed() < timeout {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => return,
+            }
+        }
     }
 }

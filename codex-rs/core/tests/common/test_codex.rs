@@ -126,34 +126,22 @@ pub struct TestEnv {
     remote_container_name: Option<String>,
 }
 
-enum LocalExecServerTransport {
-    Stdio,
-    WebSocket(String),
-}
-
 impl TestEnv {
     pub async fn local() -> Result<Self> {
-        Self::local_with_transport(LocalExecServerTransport::Stdio)
+        Self::local_with_exec_server_url(/*exec_server_url*/ None).await
     }
 
-    /// Builds a host-local test environment that uses a WebSocket exec-server
-    /// instead of the normal stdio executor.
-    pub async fn local_with_exec_server_url(exec_server_url: String) -> Result<Self> {
-        Self::local_with_transport(LocalExecServerTransport::WebSocket(exec_server_url))
-    }
-
-    fn local_with_transport(transport: LocalExecServerTransport) -> Result<Self> {
+    /// Builds a host-local test environment, optionally using the provided
+    /// exec-server URL instead of the normal implicit local executor.
+    pub async fn local_with_exec_server_url(exec_server_url: Option<String>) -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
-        let (exec_server_url, selection) = match transport {
-            LocalExecServerTransport::Stdio => (None, local(cwd.clone())),
-            LocalExecServerTransport::WebSocket(exec_server_url) => (
-                Some(exec_server_url),
-                TurnEnvironmentSelection {
-                    environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::from_abs_path(&cwd),
-                },
-            ),
+        let selection = match exec_server_url {
+            Some(_) => TurnEnvironmentSelection {
+                environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+            },
+            None => local(cwd.clone()),
         };
         let environment =
             codex_exec_server::Environment::create_for_tests(exec_server_url.clone())?;

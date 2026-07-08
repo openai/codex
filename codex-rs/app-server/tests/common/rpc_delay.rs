@@ -12,8 +12,10 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
+use tokio_util::task::AbortOnDropHandle;
 use url::Host;
 use url::Url;
 
@@ -33,17 +35,23 @@ impl WebsocketDelayInterposer {
             .context("bind RPC delay interposer")?;
         let websocket_url = format!("ws://{}", listener.local_addr()?);
         let accept_task = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
             loop {
-                let Ok((downstream, _peer)) = listener.accept().await else {
-                    break;
-                };
-                let upstream = upstream.clone();
-                tokio::spawn(async move {
-                    let Ok(upstream) = TcpStream::connect(upstream).await else {
-                        return;
-                    };
-                    let _ = proxy_connection(downstream, upstream, added_delay).await;
-                });
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((downstream, _peer)) = accepted else {
+                            break;
+                        };
+                        let upstream = upstream.clone();
+                        connections.spawn(async move {
+                            let Ok(upstream) = TcpStream::connect(upstream).await else {
+                                return;
+                            };
+                            let _ = proxy_connection(downstream, upstream, added_delay).await;
+                        });
+                    }
+                    _ = connections.join_next(), if !connections.is_empty() => {}
+                }
             }
         });
         Ok(Self {
@@ -109,7 +117,7 @@ where
     // a bounded queue lets close-together chunks emerge close together after
     // the same delay while still applying backpressure.
     let (tx, mut rx) = mpsc::channel::<DelayedChunk>(FORWARD_QUEUE_CHUNKS);
-    let reader_task = tokio::spawn(async move {
+    let reader_task = AbortOnDropHandle::new(tokio::spawn(async move {
         loop {
             let mut bytes = vec![0; FORWARD_BUFFER_BYTES];
             let read = reader.read(&mut bytes).await?;
@@ -126,7 +134,7 @@ where
             }
         }
         Ok::<(), io::Error>(())
-    });
+    }));
 
     while let Some(chunk) = rx.recv().await {
         sleep_until(chunk.deliver_at).await;
@@ -143,3 +151,7 @@ struct DelayedChunk {
     deliver_at: Instant,
     bytes: Vec<u8>,
 }
+
+#[cfg(test)]
+#[path = "rpc_delay_tests.rs"]
+mod tests;
