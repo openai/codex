@@ -381,7 +381,7 @@ pub struct ContextCompactionItem {
 impl ContextCompactionItem {
     pub fn new() -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
         }
     }
 }
@@ -395,7 +395,7 @@ impl Default for ContextCompactionItem {
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             client_id: None,
             content: content.to_vec(),
         }
@@ -499,7 +499,7 @@ impl HookPromptItem {
         Self {
             id: id
                 .cloned()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
             fragments,
         }
     }
@@ -529,7 +529,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
-        id: Some(uuid::Uuid::new_v4().to_string()),
+        id: Some(uuid::Uuid::now_v7().to_string()),
         role: "user".to_string(),
         content,
         phase: None,
@@ -582,7 +582,7 @@ fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<Strin
 impl AgentMessageItem {
     pub fn new(content: &[AgentMessageContent]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             content: content.to_vec(),
             phase: None,
             memory_citation: None,
