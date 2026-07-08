@@ -47,6 +47,16 @@ impl McpRuntimeSnapshot {
         Arc::clone(&self.manager)
     }
 
+    pub(crate) fn with_manager(&self, manager: Arc<McpConnectionManager>) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            plugins_available: self.plugins_available,
+            manager,
+            runtime_context: self.runtime_context.clone(),
+            available_environment_ids: self.available_environment_ids.clone(),
+        }
+    }
+
     pub fn runtime_context(&self) -> &McpRuntimeContext {
         &self.runtime_context
     }

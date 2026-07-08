@@ -133,9 +133,6 @@ impl SessionServices {
         manager: McpConnectionManager,
     ) -> Arc<McpRuntimeSnapshot> {
         let manager = Arc::new(manager);
-        // Publish the manager for legacy resource clients first. Once the paired snapshot is
-        // visible, every model-scoped consumer observes this exact manager.
-        self.mcp_connection_manager.store(Arc::clone(&manager));
         let runtime = Arc::new(McpRuntimeSnapshot::new(
             config,
             plugins_available,
@@ -143,8 +140,25 @@ impl SessionServices {
             runtime_context,
             available_environment_ids,
         ));
-        self.mcp_runtime.store(Some(Arc::clone(&runtime)));
+        self.store_mcp_runtime(Arc::clone(&runtime));
         runtime
+    }
+
+    pub(crate) fn publish_replacement_mcp_manager(
+        &self,
+        current_runtime: &McpRuntimeSnapshot,
+        manager: Arc<McpConnectionManager>,
+    ) -> Arc<McpRuntimeSnapshot> {
+        let runtime = Arc::new(current_runtime.with_manager(manager));
+        self.store_mcp_runtime(Arc::clone(&runtime));
+        runtime
+    }
+
+    fn store_mcp_runtime(&self, runtime: Arc<McpRuntimeSnapshot>) {
+        // Publish the manager for legacy resource clients first. Once the paired snapshot is
+        // visible, every model-scoped consumer observes this exact manager.
+        self.mcp_connection_manager.store(runtime.manager_arc());
+        self.mcp_runtime.store(Some(runtime));
     }
 
     pub(crate) fn latest_mcp_runtime(&self) -> Arc<McpRuntimeSnapshot> {

@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -109,6 +110,72 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
         .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
 }
 
+/// Immutable inputs needed to construct one MCP client during a live replacement.
+#[derive(Clone)]
+struct McpClientRuntime {
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    tx_event: Sender<Event>,
+    runtime_context: McpRuntimeContext,
+    codex_home: PathBuf,
+    codex_apps_tools_cache: CodexAppsToolsCache,
+    codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+    client_elicitation_capability: ElicitationCapability,
+    supports_openai_form_elicitation: bool,
+    chatgpt_auth_provider: Option<SharedAuthProvider>,
+}
+
+impl McpClientRuntime {
+    fn create_client(
+        &self,
+        server_name: String,
+        startup_submit_id: String,
+        server: EffectiveMcpServer,
+        cancel_token: CancellationToken,
+        elicitation_requests: ElicitationRequestManager,
+        tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    ) -> AsyncManagedClient {
+        let uses_env_bearer_token = server
+            .configured_config()
+            .is_some_and(|config| match &config.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            });
+        let codex_apps_tools_cache_context =
+            should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token).then(|| {
+                self.codex_apps_tools_cache.context(
+                    self.codex_home.clone(),
+                    self.codex_apps_tools_cache_key.clone(),
+                )
+            });
+        let runtime_auth_provider =
+            if server_name == CODEX_APPS_MCP_SERVER_NAME && uses_env_bearer_token {
+                None
+            } else {
+                chatgpt_auth_provider_for_server(&server, self.chatgpt_auth_provider.clone())
+            };
+        AsyncManagedClient::new(
+            server_name,
+            startup_submit_id,
+            server,
+            self.store_mode,
+            self.keyring_backend_kind,
+            cancel_token,
+            self.tx_event.clone(),
+            elicitation_requests,
+            codex_apps_tools_cache_context,
+            tool_plugin_provenance,
+            self.runtime_context.clone(),
+            runtime_auth_provider,
+            self.client_elicitation_capability.clone(),
+            self.supports_openai_form_elicitation,
+        )
+    }
+}
+
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
@@ -118,6 +185,10 @@ pub struct McpConnectionManager {
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
+    client_runtime: Option<Arc<McpClientRuntime>>,
+    cancel_on_drop: AtomicBool,
+    pending_replacement_cancellation_token: Option<CancellationToken>,
+    cancel_pending_replacement_on_drop: AtomicBool,
 }
 
 impl McpConnectionManager {
@@ -166,6 +237,18 @@ impl McpConnectionManager {
         let chatgpt_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
+        let client_runtime = Arc::new(McpClientRuntime {
+            store_mode,
+            keyring_backend_kind,
+            tx_event: tx_event.clone(),
+            runtime_context,
+            codex_home,
+            codex_apps_tools_cache,
+            codex_apps_tools_cache_key,
+            client_elicitation_capability,
+            supports_openai_form_elicitation,
+            chatgpt_auth_provider,
+        });
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()
@@ -182,90 +265,26 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let configured_config = server.configured_config();
-            // For built-in Codex Apps, `CODEX_CONNECTORS_TOKEN` is a debug
-            // override: it supplies runtime auth but bypasses the shared tools
-            // cache.
-            let uses_env_bearer_token =
-                configured_config.is_some_and(|config| match &config.transport {
-                    McpServerTransportConfig::StreamableHttp {
-                        bearer_token_env_var,
-                        ..
-                    } => bearer_token_env_var.is_some(),
-                    McpServerTransportConfig::Stdio { .. } => false,
-                });
-            let shares_codex_apps_tools_cache =
-                should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
-            let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                codex_apps_tools_cache
-                    .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
-            });
-            // If Codex Apps has an env bearer token, that is its auth path. Do
-            // not also attach the ambient CodexAuth provider.
-            let runtime_auth_provider =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME && uses_env_bearer_token {
-                    None
-                } else {
-                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone())
-                };
-            let async_managed_client = AsyncManagedClient::new(
+            let async_managed_client = client_runtime.create_client(
                 server_name.clone(),
                 startup_submit_id.clone(),
                 server,
-                store_mode,
-                keyring_backend_kind,
                 cancel_token.clone(),
-                tx_event.clone(),
                 elicitation_requests.clone(),
-                codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
-                runtime_context.clone(),
-                runtime_auth_provider,
-                client_elicitation_capability.clone(),
-                supports_openai_form_elicitation,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            join_set.spawn(async move {
-                let mut outcome = async_managed_client.client().await;
-                if cancel_token.is_cancelled() {
-                    outcome = Err(StartupOutcomeError::Cancelled);
-                }
-                let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let reason = mcp_startup_failure_reason(auth_entry.as_ref(), error);
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed {
-                            error: error_str,
-                            reason,
-                        }
-                    }
-                };
-
-                let _ = emit_update(
-                    submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status,
-                    },
-                )
-                .await;
-
-                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
-                    async_managed_client.reconnect_failed_startup().await;
-                }
-
-                (server_name, outcome)
-            });
+            join_set.spawn(observe_startup(
+                server_name,
+                async_managed_client,
+                cancel_token,
+                auth_entry,
+                submit_id,
+                tx_event,
+            ));
         }
         let manager = Self {
             clients,
@@ -275,21 +294,16 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
+            client_runtime: Some(client_runtime),
+            cancel_on_drop: AtomicBool::new(true),
+            pending_replacement_cancellation_token: None,
+            cancel_pending_replacement_on_drop: AtomicBool::new(false),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
             for (server_name, outcome) in outcomes {
-                match outcome {
-                    Ok(_) => summary.ready.push(server_name),
-                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error, .. }) => {
-                        summary.failed.push(McpStartupFailure {
-                            server: server_name,
-                            error,
-                        })
-                    }
-                }
+                record_startup_outcome(&mut summary, server_name, outcome);
             }
             let _ = tx_event
                 .send(Event {
@@ -366,11 +380,130 @@ impl McpConnectionManager {
                 ElicitationRequestRouter::default(),
             ),
             startup_cancellation_token: CancellationToken::new(),
+            client_runtime: None,
+            cancel_on_drop: AtomicBool::new(true),
+            pending_replacement_cancellation_token: None,
+            cancel_pending_replacement_on_drop: AtomicBool::new(false),
         }
     }
 
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    /// Builds a new manager that replaces only `server_name`.
+    ///
+    /// Unchanged clients and manager-scoped elicitation state are shared with
+    /// the replacement. The caller must swap the returned manager into place
+    /// before allowing this manager to drop, then retire the old named client
+    /// with [`Self::shutdown_server_after_readers_release`].
+    pub async fn prepare_server_replacement(
+        &self,
+        server_name: String,
+        server: EffectiveMcpServer,
+        auth_entry: Option<McpAuthStatusEntry>,
+        submit_id: String,
+    ) -> Result<Self> {
+        let runtime = self
+            .client_runtime
+            .as_ref()
+            .context("MCP client runtime is unavailable")?;
+        let mut clients = self.clients.clone();
+        clients.remove(&server_name);
+        let mut server_metadata = self.server_metadata.clone();
+        server_metadata.remove(&server_name);
+        let mut required_servers = self.required_servers.clone();
+        required_servers.retain(|required| required != &server_name);
+        let mut replacement_cancellation_token = None;
+
+        if server.enabled() {
+            if server.required() {
+                required_servers.push(server_name.clone());
+                required_servers.sort();
+            }
+            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
+            let cancel_token = self.startup_cancellation_token.child_token();
+            replacement_cancellation_token = Some(cancel_token.clone());
+            let _ = emit_update(
+                submit_id.as_str(),
+                &runtime.tx_event,
+                McpStartupUpdateEvent {
+                    server: server_name.clone(),
+                    status: McpStartupStatus::Starting,
+                },
+            )
+            .await;
+            let replacement_client = runtime.create_client(
+                server_name.clone(),
+                submit_id.clone(),
+                server,
+                cancel_token.clone(),
+                self.elicitation_requests.clone(),
+                Arc::clone(&self.tool_plugin_provenance),
+            );
+            clients.insert(server_name.clone(), replacement_client.clone());
+
+            let tx_event = runtime.tx_event.clone();
+            tokio::spawn(async move {
+                let (server_name, outcome) = observe_startup(
+                    server_name,
+                    replacement_client,
+                    cancel_token,
+                    auth_entry,
+                    submit_id.clone(),
+                    tx_event.clone(),
+                )
+                .await;
+                let mut summary = McpStartupCompleteEvent::default();
+                record_startup_outcome(&mut summary, server_name, outcome);
+                let _ = tx_event
+                    .send(Event {
+                        id: submit_id,
+                        msg: EventMsg::McpStartupComplete(summary),
+                    })
+                    .await;
+            });
+        }
+
+        Ok(Self {
+            clients,
+            server_metadata,
+            required_servers,
+            tool_plugin_provenance: Arc::clone(&self.tool_plugin_provenance),
+            prefix_mcp_tool_names: self.prefix_mcp_tool_names,
+            elicitation_requests: self.elicitation_requests.clone(),
+            startup_cancellation_token: self.startup_cancellation_token.clone(),
+            client_runtime: Some(Arc::clone(runtime)),
+            cancel_on_drop: AtomicBool::new(false),
+            pending_replacement_cancellation_token: replacement_cancellation_token,
+            cancel_pending_replacement_on_drop: AtomicBool::new(true),
+        })
+    }
+
+    /// Transfers ownership of the shared startup lifecycle after a successful swap.
+    pub fn take_cancellation_ownership_from(&self, superseded: &Self) {
+        // Once committed, this manager's replacement client belongs to the shared
+        // lifecycle. A later replacement may drop this snapshot without cancelling it.
+        self.cancel_pending_replacement_on_drop
+            .store(false, Ordering::Release);
+        self.cancel_on_drop.store(true, Ordering::Release);
+        superseded.cancel_on_drop.store(false, Ordering::Release);
+    }
+
+    /// Stops the replaced client after all readers release this manager snapshot.
+    pub async fn shutdown_server_after_readers_release(self: Arc<Self>, server_name: String) {
+        let client = self.clients.get(&server_name).cloned();
+        let weak_manager = Arc::downgrade(&self);
+        drop(self);
+
+        // A request keeps its ArcSwap snapshot for the complete MCP call. Wait
+        // for those snapshots before terminating the old server transport.
+        while weak_manager.strong_count() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        if let Some(client) = client {
+            client.shutdown().await;
+        }
     }
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
@@ -895,7 +1028,16 @@ impl McpConnectionManager {
 
 impl Drop for McpConnectionManager {
     fn drop(&mut self) {
-        self.startup_cancellation_token.cancel();
+        if self.cancel_on_drop.load(Ordering::Acquire) {
+            self.startup_cancellation_token.cancel();
+        } else if self
+            .cancel_pending_replacement_on_drop
+            .load(Ordering::Acquire)
+            && let Some(cancel_token) = &self.pending_replacement_cancellation_token
+        {
+            // A prepared replacement that was never committed owns only its new client.
+            cancel_token.cancel();
+        }
         self.clients.clear();
     }
 }
@@ -913,6 +1055,56 @@ fn chatgpt_auth_provider_for_server(
         return None;
     }
     chatgpt_auth_provider
+}
+
+async fn observe_startup(
+    server_name: String,
+    client: AsyncManagedClient,
+    cancel_token: CancellationToken,
+    auth_entry: Option<McpAuthStatusEntry>,
+    submit_id: String,
+    tx_event: Sender<Event>,
+) -> (String, Result<ManagedClient, StartupOutcomeError>) {
+    let mut outcome = client.client().await;
+    if cancel_token.is_cancelled() {
+        outcome = Err(StartupOutcomeError::Cancelled);
+    }
+    let status = match &outcome {
+        Ok(_) => McpStartupStatus::Ready,
+        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+        Err(error) => McpStartupStatus::Failed {
+            error: mcp_init_error_display(&server_name, auth_entry.as_ref(), error),
+            reason: mcp_startup_failure_reason(auth_entry.as_ref(), error),
+        },
+    };
+    let _ = emit_update(
+        &submit_id,
+        &tx_event,
+        McpStartupUpdateEvent {
+            server: server_name.clone(),
+            status,
+        },
+    )
+    .await;
+    if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+        client.reconnect_failed_startup().await;
+    }
+    (server_name, outcome)
+}
+
+fn record_startup_outcome(
+    summary: &mut McpStartupCompleteEvent,
+    server_name: String,
+    outcome: Result<ManagedClient, StartupOutcomeError>,
+) {
+    match outcome {
+        Ok(_) => summary.ready.push(server_name),
+        Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+        Err(StartupOutcomeError::Failed { error, .. }) => summary.failed.push(McpStartupFailure {
+            server: server_name,
+            error,
+        }),
+    }
 }
 
 fn should_share_codex_apps_tools_cache(server_name: &str, uses_env_bearer_token: bool) -> bool {

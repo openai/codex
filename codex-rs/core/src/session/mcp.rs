@@ -1,9 +1,11 @@
 use super::*;
 use crate::mcp::McpRuntimeProjection;
+use anyhow::Context;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::effective_mcp_servers_from_configured;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
@@ -550,6 +552,62 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP runtime replacement and publication must remain serialized"
+    )]
+    pub(crate) async fn refresh_mcp_server_now(
+        &self,
+        update: codex_protocol::protocol::McpServerUpdateConfig,
+        submit_id: String,
+    ) -> anyhow::Result<()> {
+        let server_name = update.server_name;
+        let configured_server = serde_json::from_value::<McpServerConfig>(update.server)
+            .with_context(|| format!("failed to parse MCP server update for `{server_name}`"))?;
+        let auth = self.services.auth_manager.auth().await;
+        let config = self.get_config().await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
+        let mut effective_servers = effective_mcp_servers_from_configured(
+            HashMap::from([(server_name.clone(), configured_server)]),
+            &mcp_config,
+            auth.as_ref(),
+        );
+        let server = effective_servers.remove(&server_name).ok_or_else(|| {
+            anyhow::anyhow!("MCP server update did not resolve server `{server_name}`")
+        })?;
+        let _guard = self.services.mcp_projection_lock.lock().await;
+        let current_runtime = self.services.latest_mcp_runtime();
+        let mut auth_entries = compute_auth_statuses(
+            std::iter::once((&server_name, &server)),
+            current_runtime.config().mcp_oauth_credentials_store_mode,
+            current_runtime.config().auth_keyring_backend_kind,
+            auth.as_ref(),
+            current_runtime.runtime_context(),
+        )
+        .await;
+        let current_manager = current_runtime.manager_arc();
+        let replacement_manager = Arc::new(
+            current_manager
+                .prepare_server_replacement(
+                    server_name.clone(),
+                    server,
+                    auth_entries.remove(&server_name),
+                    submit_id,
+                )
+                .await?,
+        );
+        self.services
+            .publish_replacement_mcp_manager(&current_runtime, Arc::clone(&replacement_manager));
+        // Publish first, then transfer cancellation ownership while both manager
+        // snapshots are still held here. Dropping an uncommitted replacement
+        // cancels only the client it prepared.
+        replacement_manager.take_cancellation_ownership_from(&current_manager);
+        drop(current_runtime);
+
+        tokio::spawn(current_manager.shutdown_server_after_readers_release(server_name));
+        Ok(())
     }
 
     fn available_selected_environment_ids(
