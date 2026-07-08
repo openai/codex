@@ -463,15 +463,22 @@ fn materialize_git_subdir_uses_sparse_checkout() {
     fs::write(repo.path().join("plugins/other/marker.txt"), "other").expect("write other marker");
     fs::write(repo.path().join("root.txt"), "root").expect("write root marker");
 
-    run_git(&["init"], Some(repo.path())).expect("init git repo");
+    let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+    run_git(&neutral_cwd, &["init"], Some(repo.path())).expect("init git repo");
     run_git(
+        &neutral_cwd,
         &["config", "user.email", "test@example.com"],
         Some(repo.path()),
     )
     .expect("configure git email");
-    run_git(&["config", "user.name", "Test User"], Some(repo.path())).expect("configure git name");
-    run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
-    run_git(&["commit", "-m", "init"], Some(repo.path())).expect("commit git repo");
+    run_git(
+        &neutral_cwd,
+        &["config", "user.name", "Test User"],
+        Some(repo.path()),
+    )
+    .expect("configure git name");
+    run_git(&neutral_cwd, &["add", "."], Some(repo.path())).expect("stage git repo");
+    run_git(&neutral_cwd, &["commit", "-m", "init"], Some(repo.path())).expect("commit git repo");
 
     let materialized = materialize_marketplace_plugin_source(
         codex_home.path(),
