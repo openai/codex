@@ -46,6 +46,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::RequestId;
@@ -245,6 +246,8 @@ enum CliCommand {
         #[arg(long, value_name = "REGION")]
         region: Option<String>,
     },
+    /// Log out of the current account and wait for the account update.
+    TestLogout,
     /// Fetch the current account rate limits from the Codex app-server.
     GetAccountRateLimits,
     /// List the available models from the Codex app-server.
@@ -448,6 +451,11 @@ pub async fn run() -> Result<()> {
                 TestLoginMode::ChatgptBrowser
             };
             test_login(&endpoint, &config_overrides, mode).await
+        }
+        CliCommand::TestLogout => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "test-logout")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            test_logout(&endpoint, &config_overrides).await
         }
         CliCommand::GetAccountRateLimits => {
             ensure_dynamic_tools_unused(&dynamic_tools, "get-account-rate-limits")?;
@@ -1253,6 +1261,27 @@ async fn get_account_rate_limits(endpoint: &Endpoint, config_overrides: &[String
     .await
 }
 
+async fn test_logout(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+    with_client("test-logout", endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
+
+        let response = client.logout_account()?;
+        println!("< account/logout response: {response:?}");
+
+        loop {
+            let notification = client.next_notification()?;
+            if let Ok(ServerNotification::AccountUpdated(account_updated)) =
+                ServerNotification::try_from(notification)
+            {
+                println!("< account/updated notification: {account_updated:?}");
+                return Ok(());
+            }
+        }
+    })
+    .await
+}
+
 async fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
     with_client("model-list", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
@@ -1807,6 +1836,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "account/rateLimits/read")
+    }
+
+    fn logout_account(&mut self) -> Result<LogoutAccountResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::LogoutAccount {
+            request_id: request_id.clone(),
+            params: None,
+        };
+
+        self.send_request(request, request_id, "account/logout")
     }
 
     fn model_list(&mut self, params: ModelListParams) -> Result<ModelListResponse> {
