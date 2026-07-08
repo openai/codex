@@ -61,6 +61,10 @@ pub(crate) fn tool_user_shell_type(
 }
 
 fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
+    if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+        return ToolMode::Direct;
+    }
+
     turn_context.model_info.tool_mode.unwrap_or_else(|| {
         if turn_context.config.features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly
