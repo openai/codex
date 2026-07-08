@@ -150,14 +150,13 @@ impl ChatWidget {
             ThreadItem::ImageView { id: _, path } => {
                 self.on_view_image_tool_call(path);
             }
-            ThreadItem::ImageGeneration {
-                id,
-                status,
-                revised_prompt,
-                saved_path,
-                ..
-            } => {
-                self.on_image_generation_end(id, status, revised_prompt, saved_path);
+            ThreadItem::ImageGeneration(item) => {
+                self.on_image_generation_end(
+                    item.id,
+                    item.status,
+                    item.revised_prompt,
+                    item.saved_path,
+                );
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if from_replay {

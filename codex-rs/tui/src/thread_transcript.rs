@@ -206,14 +206,17 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
             let path = path.render_for_ui();
             vec![format!("image: {path}").dim().into()]
         }
-        ThreadItem::ImageGeneration {
-            status, saved_path, ..
-        } => {
-            let saved = saved_path
+        ThreadItem::ImageGeneration(item) => {
+            let saved = item
+                .saved_path
                 .as_ref()
                 .map(|path| format!(" · {}", path.as_path().display()))
                 .unwrap_or_default();
-            vec![format!("image generation: {status}{saved}").dim().into()]
+            vec![
+                format!("image generation: {}{saved}", item.status)
+                    .dim()
+                    .into(),
+            ]
         }
         ThreadItem::EnteredReviewMode { review, .. } => {
             vec![vec!["review started: ".dim(), review.clone().into()].into()]

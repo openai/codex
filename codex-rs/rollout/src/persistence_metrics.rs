@@ -254,6 +254,7 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::WebSearch(_) => "web_search",
         TurnItem::ImageView(_) => "image_view",
         TurnItem::Sleep(_) => "sleep",
+        TurnItem::Extension(_) => "extension",
         TurnItem::ImageGeneration(_) => "image_generation",
         TurnItem::FileChange(_) => "file_change",
         TurnItem::McpToolCall(_) => "mcp_tool_call",

@@ -403,7 +403,7 @@ impl TurnToolCounts {
                 self.subagent_tool_call += 1;
             }
             ThreadItem::WebSearch { .. } => self.web_search += 1,
-            ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
+            ThreadItem::ImageGeneration(_) => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
             | ThreadItem::HookPrompt { .. }
             | ThreadItem::AgentMessage { .. }
@@ -1733,8 +1733,8 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::McpToolCall { id, .. }
         | ThreadItem::DynamicToolCall { id, .. }
         | ThreadItem::CollabAgentToolCall { id, .. }
-        | ThreadItem::WebSearch { id, .. }
-        | ThreadItem::ImageGeneration { id, .. } => Some(id),
+        | ThreadItem::WebSearch { id, .. } => Some(id),
+        ThreadItem::ImageGeneration(item) => Some(&item.id),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
         | ThreadItem::AgentMessage { .. }
@@ -2057,18 +2057,12 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             }))
         }
-        ThreadItem::ImageGeneration {
-            id,
-            status,
-            revised_prompt,
-            saved_path,
-            ..
-        } => {
-            let (terminal_status, failure_kind) = image_generation_outcome(status.as_str());
+        ThreadItem::ImageGeneration(item) => {
+            let (terminal_status, failure_kind) = image_generation_outcome(item.status.as_str());
             let base = tool_item_base(
                 thread_id,
                 turn_id,
-                id.clone(),
+                item.id.clone(),
                 "image_generation".to_string(),
                 ToolItemOutcome {
                     terminal_status,
@@ -2089,8 +2083,8 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                     event_type: "codex_image_generation_event",
                     event_params: CodexImageGenerationEventParams {
                         base,
-                        revised_prompt_present: revised_prompt.is_some(),
-                        saved_path_present: saved_path.is_some(),
+                        revised_prompt_present: item.revised_prompt.is_some(),
+                        saved_path_present: item.saved_path.is_some(),
                     },
                 },
             ))

@@ -7,6 +7,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -107,13 +108,13 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
     )
     .await??;
 
-    let ThreadItem::ImageGeneration {
+    let ThreadItem::ImageGeneration(ImageGenerationItem {
         status,
         revised_prompt,
         result,
         saved_path: Some(saved_path),
         ..
-    } = completed.item
+    }) = completed.item
     else {
         panic!("expected completed image generation item with saved path");
     };
@@ -205,13 +206,13 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
     .await??;
     assert_eq!(
         completed.item,
-        ThreadItem::ImageGeneration {
+        ThreadItem::ImageGeneration(ImageGenerationItem {
             id: call_id.to_string(),
             status: "failed".to_string(),
             revised_prompt: Some("paint a blue whale".to_string()),
             result: String::new(),
             saved_path: None,
-        }
+        })
     );
 
     timeout(
@@ -537,7 +538,7 @@ async fn wait_for_image_generation_completed(
                 .params
                 .context("item/completed notification should include params")?,
         )?;
-        if matches!(&completed.item, ThreadItem::ImageGeneration { .. }) {
+        if matches!(&completed.item, ThreadItem::ImageGeneration(_)) {
             return Ok(completed);
         }
     }

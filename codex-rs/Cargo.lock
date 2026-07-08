@@ -2109,6 +2109,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
+ "codex-extension-items",
  "codex-internal-extra-config",
  "codex-protocol",
  "codex-shell-command",
@@ -2644,6 +2645,7 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",
+ "codex-extension-items",
  "codex-features",
  "codex-feedback",
  "codex-file-system",
@@ -3017,6 +3019,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-extension-items"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "codex-external-agent-migration"
 version = "0.0.0"
 dependencies = [
@@ -3238,6 +3252,7 @@ dependencies = [
  "codex-core",
  "codex-exec-server",
  "codex-extension-api",
+ "codex-extension-items",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
@@ -3744,6 +3759,7 @@ dependencies = [
  "chrono",
  "codex-async-utils",
  "codex-execpolicy",
+ "codex-extension-items",
  "codex-network-proxy",
  "codex-utils-absolute-path",
  "codex-utils-image",
@@ -4102,6 +4118,7 @@ version = "0.0.0"
 dependencies = [
  "codex-code-mode",
  "codex-connectors",
+ "codex-extension-items",
  "codex-features",
  "codex-file-system",
  "codex-protocol",

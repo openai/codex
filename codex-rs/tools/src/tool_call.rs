@@ -1,11 +1,12 @@
 use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
+use codex_extension_items::ExtensionItem;
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
-use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::future::Future;
@@ -34,10 +35,20 @@ impl ConversationHistory {
 pub type TurnItemEmissionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// Visible turn items that an extension may publish into the host lifecycle.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ExtensionTurnItem {
     WebSearch(WebSearchItem),
-    ImageGeneration(ImageGenerationItem),
+    /// Canonical extension item plus compatibility events derived by its owner.
+    ///
+    /// Core intentionally does not inspect extension-owned payloads, so it
+    /// cannot derive their legacy fanout. It emits the canonical lifecycle
+    /// event first, then these extension-provided events. Core also skips
+    /// global turn-item contributors here so extensions cannot mutate items
+    /// owned by other extensions.
+    Extension {
+        item: ExtensionItem,
+        legacy_events: Vec<EventMsg>,
+    },
 }
 
 /// Host-provided capability for extension tools to emit visible turn items.

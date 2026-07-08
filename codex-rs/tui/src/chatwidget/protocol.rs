@@ -293,7 +293,7 @@ impl ChatWidget {
             ThreadItem::WebSearch { id, .. } => {
                 self.on_web_search_begin(id);
             }
-            ThreadItem::ImageGeneration { .. } => {
+            ThreadItem::ImageGeneration(_) => {
                 self.on_image_generation_begin();
             }
             ThreadItem::CollabAgentToolCall {

@@ -18,6 +18,7 @@ codex-api = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-extension-items = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-model-provider-info = { workspace = true }
