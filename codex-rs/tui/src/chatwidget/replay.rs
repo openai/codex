@@ -139,7 +139,9 @@ impl ChatWidget {
                 ..
             } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
-            ThreadItem::WebSearch { id, query, action } => {
+            ThreadItem::WebSearch {
+                id, query, action, ..
+            } => {
                 self.on_web_search_begin(id.clone());
                 self.on_web_search_end(
                     id,

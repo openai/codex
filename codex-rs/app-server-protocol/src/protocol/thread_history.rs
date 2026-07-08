@@ -22,6 +22,7 @@ use crate::protocol::v2::TurnItemsView;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
+use crate::protocol::v2::WebSearchResult;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
@@ -615,6 +616,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: String::new(),
             action: None,
+            results: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -624,6 +626,10 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: payload.query.clone(),
             action: Some(WebSearchAction::from(payload.action.clone())),
+            results: payload
+                .results
+                .clone()
+                .map(|results| results.into_iter().map(WebSearchResult::from).collect()),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1556,6 +1562,7 @@ mod tests {
     use codex_protocol::items::SleepItem as CoreSleepItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
+    use codex_protocol::items::WebSearchResult as CoreWebSearchResult;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::ImageDetail;
@@ -2443,6 +2450,11 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: Some(vec![CoreWebSearchResult {
+                    url: "https://example.com/codex".into(),
+                    title: Some("Codex".into()),
+                    snippet: Some("Codex documentation".into()),
+                }]),
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-1".into(),
@@ -2499,6 +2511,11 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 }),
+                results: Some(vec![WebSearchResult {
+                    url: "https://example.com/codex".into(),
+                    title: Some("Codex".into()),
+                    snippet: Some("Codex documentation".into()),
+                }]),
             }
         );
         assert_eq!(
@@ -3917,6 +3934,7 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: None,
             }),
         ));
 
@@ -3932,6 +3950,7 @@ mod tests {
                             query: Some("codex".into()),
                             queries: None,
                         }),
+                        results: None,
                     },
                 }],
                 changed_turns: Vec::new(),
@@ -4052,6 +4071,7 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: None,
             })),
         ]);
 
@@ -4067,6 +4087,7 @@ mod tests {
                             query: Some("codex".into()),
                             queries: None,
                         }),
+                        results: None,
                     },
                 }],
                 changed_turns: vec![ThreadHistoryTurnChange {

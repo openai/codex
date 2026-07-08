@@ -359,6 +359,7 @@ pub enum ThreadItem {
         id: String,
         query: String,
         action: Option<WebSearchAction>,
+        results: Option<Vec<WebSearchResult>>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -783,6 +784,25 @@ impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WebSearchResult {
+    pub url: String,
+    pub title: Option<String>,
+    pub snippet: Option<String>,
+}
+
+impl From<codex_protocol::items::WebSearchResult> for WebSearchResult {
+    fn from(value: codex_protocol::items::WebSearchResult) -> Self {
+        Self {
+            url: value.url,
+            title: value.title,
+            snippet: value.snippet,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", rename_all = "camelCase")]
@@ -922,6 +942,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
+                results: search
+                    .results
+                    .map(|results| results.into_iter().map(Into::into).collect()),
             },
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,

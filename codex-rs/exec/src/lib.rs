@@ -138,6 +138,7 @@ pub use exec_events::TurnFailedEvent;
 pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
+pub use exec_events::WebSearchResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;

@@ -296,6 +296,20 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub results: Option<Vec<WebSearchResult>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct WebSearchResult {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snippet: Option<String>,
 }
 
 /// An error notification.

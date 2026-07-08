@@ -54,6 +54,7 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
+use crate::exec_events::WebSearchResult;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -297,6 +298,7 @@ impl EventProcessorWithJsonOutput {
                 id: raw_id,
                 query,
                 action,
+                results,
             } => Some(ExecThreadItem {
                 id: make_id(),
                 details: ThreadItemDetails::WebSearch(WebSearchItem {
@@ -309,6 +311,16 @@ impl EventProcessorWithJsonOutput {
                         .unwrap_or(WebSearchAction::Other),
                         None => WebSearchAction::Other,
                     },
+                    results: results.map(|results| {
+                        results
+                            .into_iter()
+                            .map(|result| WebSearchResult {
+                                url: result.url,
+                                title: result.title,
+                                snippet: result.snippet,
+                            })
+                            .collect()
+                    }),
                 }),
             }),
             _ => None,
