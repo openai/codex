@@ -10,7 +10,10 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitReachedType;
+use codex_app_server_protocol::RateLimitResetCredit;
+use codex_app_server_protocol::RateLimitResetCreditStatus;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
+use codex_app_server_protocol::RateLimitResetType;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
@@ -39,8 +42,12 @@ const INTERNAL_ERROR_CODE: i64 = -32603;
 async fn get_account_rate_limits_requires_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_account_rate_limits_request().await?;
@@ -65,7 +72,11 @@ async fn get_account_rate_limits_requires_auth() -> Result<()> {
 async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key(&mut mcp, "sk-test-key").await?;
@@ -109,6 +120,16 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
     let secondary_reset_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-01T01:00:00Z")
         .expect("parse secondary reset timestamp")
         .timestamp();
+    let reset_credit_granted_at = chrono::DateTime::parse_from_rfc3339("2026-06-17T00:00:00Z")
+        .expect("parse reset credit grant timestamp")
+        .timestamp();
+    let reset_credit_expires_at = chrono::DateTime::parse_from_rfc3339("2026-07-17T00:00:00Z")
+        .expect("parse reset credit expiry timestamp")
+        .timestamp();
+    let second_reset_credit_granted_at =
+        chrono::DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")
+            .expect("parse second reset credit grant timestamp")
+            .timestamp();
     let response_body = json!({
         "plan_type": "pro",
         "rate_limit": {
@@ -170,9 +191,42 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/rate-limit-reset-credits"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "credits": [
+                {
+                    "id": "credit-1",
+                    "reset_type": "codex_rate_limits",
+                    "status": "available",
+                    "granted_at": "2026-06-17T00:00:00Z",
+                    "expires_at": "2026-07-17T00:00:00Z",
+                    "title": "Full reset (Weekly + 5 hr)",
+                    "description": "Ready to redeem"
+                },
+                {
+                    "id": "credit-2",
+                    "reset_type": "future_reset_type",
+                    "status": "future_status",
+                    "granted_at": "2026-06-18T00:00:00Z",
+                    "expires_at": null
+                }
+            ],
+            "available_count": 2,
+            "total_earned_count": 4
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_account_rate_limits_request().await?;
@@ -260,9 +314,98 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             .into_iter()
             .collect(),
         ),
-        rate_limit_reset_credits: Some(RateLimitResetCreditsSummary { available_count: 3 }),
+        rate_limit_reset_credits: Some(RateLimitResetCreditsSummary {
+            available_count: 2,
+            credits: Some(vec![
+                RateLimitResetCredit {
+                    id: "credit-1".to_string(),
+                    reset_type: RateLimitResetType::CodexRateLimits,
+                    status: RateLimitResetCreditStatus::Available,
+                    granted_at: reset_credit_granted_at,
+                    expires_at: Some(reset_credit_expires_at),
+                    title: Some("Full reset (Weekly + 5 hr)".to_string()),
+                    description: Some("Ready to redeem".to_string()),
+                },
+                RateLimitResetCredit {
+                    id: "credit-2".to_string(),
+                    reset_type: RateLimitResetType::Unknown,
+                    status: RateLimitResetCreditStatus::Unknown,
+                    granted_at: second_reset_credit_granted_at,
+                    expires_at: None,
+                    title: None,
+                    description: None,
+                },
+            ]),
+        }),
     };
     assert_eq!(received, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_rate_limits_preserves_count_when_reset_credit_details_fail() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    write_chatgpt_base_url(codex_home.path(), &server.uri())?;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 42,
+                    "limit_window_seconds": 3600,
+                    "reset_after_seconds": 120,
+                    "reset_at": 1735689720
+                }
+            },
+            "rate_limit_reset_credits": { "available_count": 3 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/rate-limit-reset-credits"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_get_account_rate_limits_request().await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountRateLimitsResponse = to_response(response)?;
+
+    assert_eq!(
+        received.rate_limit_reset_credits,
+        Some(RateLimitResetCreditsSummary {
+            available_count: 3,
+            credits: None,
+        })
+    );
 
     Ok(())
 }
@@ -271,8 +414,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
 async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -301,7 +448,11 @@ async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
 async fn send_add_credits_nudge_email_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key(&mut mcp, "sk-test-key").await?;
@@ -355,8 +506,12 @@ async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -399,8 +554,12 @@ async fn send_add_credits_nudge_email_maps_cooldown() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -443,8 +602,12 @@ async fn send_add_credits_nudge_email_surfaces_backend_failure() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

@@ -62,6 +62,7 @@ pub(crate) use legacy_unified_exec_process_limit_warning::LegacyUnifiedExecProce
 pub(crate) use model_switch_instructions::ModelSwitchInstructions;
 pub(crate) use multi_agent_mode_instructions::MultiAgentModeInstructions;
 pub(crate) use network_rule_saved::NetworkRuleSaved;
+pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;
 pub(crate) use personality_spec_instructions::PersonalitySpecInstructions;
 pub(crate) use plugin_instructions::PluginInstructions;

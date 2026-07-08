@@ -5,7 +5,10 @@ use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 
 pub(crate) fn render_apps_section(connectors: &[AppInfo]) -> Option<String> {
-    AppsInstructions::from_connectors(connectors).map(|instructions| instructions.render())
+    connectors
+        .iter()
+        .any(|connector| connector.is_accessible && connector.is_enabled)
+        .then(|| AppsInstructions.render())
 }
 
 #[cfg(test)]

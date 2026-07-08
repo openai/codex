@@ -561,7 +561,7 @@ impl ExecServerClient {
         &self,
         process_id: &ProcessId,
     ) -> Result<TerminateResponse, ExecServerError> {
-        self.call(
+        self.call_for_cleanup(
             EXEC_TERMINATE_METHOD,
             &TerminateParams {
                 process_id: process_id.clone(),
@@ -592,7 +592,7 @@ impl ExecServerClient {
         &self,
         params: FsCloseParams,
     ) -> Result<FsCloseResponse, ExecServerError> {
-        self.call(FS_CLOSE_METHOD, &params).await
+        self.call_for_cleanup(FS_CLOSE_METHOD, &params).await
     }
 
     pub async fn fs_write_file(
@@ -788,6 +788,15 @@ impl ExecServerClient {
     {
         map_rpc_call_result(rpc_client.call(method, params).await)
     }
+
+    async fn call_for_cleanup<P, T>(&self, method: &str, params: &P) -> Result<T, ExecServerError>
+    where
+        P: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
+        let rpc_client = self.inner.rpc_client().await?;
+        map_rpc_call_result(rpc_client.call_for_cleanup(method, params).await)
+    }
 }
 
 fn map_rpc_call_result<T>(result: Result<T, RpcCallError>) -> Result<T, ExecServerError> {
@@ -829,6 +838,9 @@ impl From<RpcCallError> for ExecServerError {
             },
             RpcCallError::TimedOut { method, timeout } => Self::Protocol(format!(
                 "timed out waiting for exec-server `{method}` response after {timeout:?}"
+            )),
+            RpcCallError::PendingRequestLimitExceeded { limit } => Self::Protocol(format!(
+                "exec-server has reached its limit of {limit} pending requests"
             )),
         }
     }
@@ -1394,7 +1406,16 @@ mod tests {
 
         assert_eq!(session.process_id(), &process_id);
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+        let expected_traceparent = expected_trace
+            .traceparent
+            .as_deref()
+            .expect("parent traceparent");
+        let traceparent = trace.traceparent.as_deref().expect("request traceparent");
+        let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
+        let parts = traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(parts[1], expected_parts[1]);
+        assert_ne!(parts[2], expected_parts[2]);
+        assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

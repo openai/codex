@@ -301,19 +301,30 @@ pub unsafe fn dacl_has_read_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) ->
     false
 }
 
+// Grant DELETE on each inheriting descendant instead of FILE_DELETE_CHILD on
+// its parent. A parent delete-child grant would bypass a direct deny-write ACE
+// on protected children such as `.git` or an explicit read-only subpath.
 const WRITE_ALLOW_MASK: u32 =
-    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
 unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     path: &Path,
     sids: &[*mut c_void],
     allow_mask: u32,
+    disallow_mask: u32,
     inheritance: u32,
 ) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, /*require_all_bits*/ true) {
+        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, /*require_all_bits*/ true)
+            && !dacl_mask_allows(
+                p_dacl,
+                &[*sid],
+                disallow_mask,
+                /*require_all_bits*/ false,
+            )
+        {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {
@@ -386,7 +397,13 @@ pub unsafe fn ensure_allow_mask_aces_with_inheritance(
     allow_mask: u32,
     inheritance: u32,
 ) -> Result<bool> {
-    ensure_allow_mask_aces_with_inheritance_impl(path, sids, allow_mask, inheritance)
+    ensure_allow_mask_aces_with_inheritance_impl(
+        path,
+        sids,
+        allow_mask,
+        /*disallow_mask*/ 0,
+        inheritance,
+    )
 }
 
 /// Ensure all provided SIDs have an allow ACE with the requested mask on the path.
@@ -413,7 +430,13 @@ pub unsafe fn ensure_allow_mask_aces(
 /// # Safety
 /// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
 pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
-    ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
+    ensure_allow_mask_aces_with_inheritance_impl(
+        path,
+        sids,
+        WRITE_ALLOW_MASK,
+        FILE_DELETE_CHILD,
+        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+    )
 }
 
 /// Adds an allow ACE granting read/write/execute to the given SID on the target path.

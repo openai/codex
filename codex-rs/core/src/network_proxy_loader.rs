@@ -2,9 +2,8 @@ use crate::config::find_codex_home;
 use crate::config::is_builtin_permission_profile_name;
 use crate::config::reject_unknown_builtin_permission_profile;
 use crate::config::resolve_permission_profile;
-use crate::exec_policy::ExecPolicyError;
 use crate::exec_policy::format_exec_policy_error_with_source;
-use crate::exec_policy::load_exec_policy;
+use crate::exec_policy::load_exec_policy_with_warning;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
@@ -64,13 +63,15 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let (exec_policy, warning) = match load_exec_policy(&config_layer_stack).await {
-        Ok(policy) => (policy, None),
-        Err(err @ ExecPolicyError::ParsePolicy { .. }) => {
-            (codex_execpolicy::Policy::empty(), Some(err))
-        }
-        Err(err) => return Err(err.into()),
-    };
+    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
+    let state = build_config_state_from_layers(&config_layer_stack).await?;
+    Ok((state, layer_mtimes))
+}
+
+async fn build_config_state_from_layers(
+    config_layer_stack: &ConfigLayerStack,
+) -> Result<ConfigState> {
+    let (exec_policy, warning) = load_exec_policy_with_warning(config_layer_stack).await?;
     if let Some(err) = warning.as_ref() {
         tracing::warn!(
             "failed to parse execpolicy while building network proxy state: {}",
@@ -78,12 +79,10 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         );
     }
 
-    let config = config_from_layers(&config_layer_stack, &exec_policy)?;
+    let config = config_from_layers(config_layer_stack, &exec_policy)?;
 
-    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
-    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
-    let state = build_config_state(config, constraints)?;
-    Ok((state, layer_mtimes))
+    let constraints = enforce_trusted_constraints(config_layer_stack, &config)?;
+    build_config_state(config, constraints)
 }
 
 fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {

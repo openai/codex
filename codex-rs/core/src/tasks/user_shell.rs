@@ -25,16 +25,15 @@ use crate::tools::runtimes::RuntimePathPrepends;
 use crate::tools::runtimes::apply_package_path_prepend;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::strip_managed_proxy_env;
-use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::items::CommandExecutionItem;
+use codex_protocol::items::CommandExecutionStatus;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecCommandBeginEvent;
-use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
-use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
@@ -181,18 +180,23 @@ pub(crate) async fn execute_user_shell_command(
 
     let parsed_cmd = parse_command(&display_command);
     session
-        .send_event(
+        .emit_turn_item_started(
             turn_context.as_ref(),
-            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: call_id.clone(),
+            &TurnItem::CommandExecution(CommandExecutionItem {
+                id: call_id.clone(),
                 process_id: None,
-                turn_id: turn_context.sub_id.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
                 cwd: cwd.clone().into(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
+                status: CommandExecutionStatus::InProgress,
+                stdout: None,
+                stderr: None,
+                aggregated_output: None,
+                exit_code: None,
+                duration: None,
+                formatted_output: None,
             }),
         )
         .await;
@@ -259,57 +263,53 @@ pub(crate) async fn execute_user_shell_command(
             )
             .await;
             session
-                .send_event(
+                .emit_turn_item_completed(
                     turn_context.as_ref(),
-                    EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                        call_id,
+                    TurnItem::CommandExecution(CommandExecutionItem {
+                        id: call_id,
                         process_id: None,
-                        turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone().into(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
-                        stdout: String::new(),
-                        stderr: aborted_message.clone(),
-                        aggregated_output: aborted_message.clone(),
-                        exit_code: -1,
-                        duration: Duration::ZERO,
-                        formatted_output: aborted_message,
-                        status: ExecCommandStatus::Failed,
+                        status: CommandExecutionStatus::Failed,
+                        stdout: Some(String::new()),
+                        stderr: Some(aborted_message.clone()),
+                        aggregated_output: Some(aborted_message.clone()),
+                        exit_code: Some(-1),
+                        duration: Some(Duration::ZERO),
+                        formatted_output: Some(aborted_message),
                     }),
                 )
                 .await;
         }
         Ok(Ok(output)) => {
             session
-                .send_event(
+                .emit_turn_item_completed(
                     turn_context.as_ref(),
-                    EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                        call_id: call_id.clone(),
+                    TurnItem::CommandExecution(CommandExecutionItem {
+                        id: call_id.clone(),
                         process_id: None,
-                        turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone().into(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
-                        stdout: output.stdout.text.clone(),
-                        stderr: output.stderr.text.clone(),
-                        aggregated_output: output.aggregated_output.text.clone(),
-                        exit_code: output.exit_code,
-                        duration: output.duration,
-                        formatted_output: format_exec_output_str(
+                        status: if output.exit_code == 0 {
+                            CommandExecutionStatus::Completed
+                        } else {
+                            CommandExecutionStatus::Failed
+                        },
+                        stdout: Some(output.stdout.text.clone()),
+                        stderr: Some(output.stderr.text.clone()),
+                        aggregated_output: Some(output.aggregated_output.text.clone()),
+                        exit_code: Some(output.exit_code),
+                        duration: Some(output.duration),
+                        formatted_output: Some(format_exec_output_str(
                             &output,
                             turn_context.model_info.truncation_policy.into(),
-                        ),
-                        status: if output.exit_code == 0 {
-                            ExecCommandStatus::Completed
-                        } else {
-                            ExecCommandStatus::Failed
-                        },
+                        )),
                     }),
                 )
                 .await;
@@ -329,28 +329,26 @@ pub(crate) async fn execute_user_shell_command(
                 timed_out: false,
             };
             session
-                .send_event(
+                .emit_turn_item_completed(
                     turn_context.as_ref(),
-                    EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                        call_id,
+                    TurnItem::CommandExecution(CommandExecutionItem {
+                        id: call_id,
                         process_id: None,
-                        turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
                         cwd: cwd.into(),
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
-                        stdout: exec_output.stdout.text.clone(),
-                        stderr: exec_output.stderr.text.clone(),
-                        aggregated_output: exec_output.aggregated_output.text.clone(),
-                        exit_code: exec_output.exit_code,
-                        duration: exec_output.duration,
-                        formatted_output: format_exec_output_str(
+                        status: CommandExecutionStatus::Failed,
+                        stdout: Some(exec_output.stdout.text.clone()),
+                        stderr: Some(exec_output.stderr.text.clone()),
+                        aggregated_output: Some(exec_output.aggregated_output.text.clone()),
+                        exit_code: Some(exec_output.exit_code),
+                        duration: Some(exec_output.duration),
+                        formatted_output: Some(format_exec_output_str(
                             &exec_output,
                             turn_context.model_info.truncation_policy.into(),
-                        ),
-                        status: ExecCommandStatus::Failed,
+                        )),
                     }),
                 )
                 .await;

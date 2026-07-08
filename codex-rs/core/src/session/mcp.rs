@@ -195,6 +195,11 @@ impl Session {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
 
+    pub(crate) fn mcp_elicitation_lifecycle(&self) -> codex_mcp::ElicitationLifecycle {
+        let elicitations = self.services.elicitations.clone();
+        codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -222,6 +227,7 @@ impl Session {
             };
         }
 
+        let _elicitation = self.services.elicitations.register();
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
@@ -377,6 +383,7 @@ impl Session {
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
+            Some(self.mcp_elicitation_lifecycle()),
             current_runtime.manager().elicitation_router(),
         )
         .await;

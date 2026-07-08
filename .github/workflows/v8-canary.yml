@@ -9,11 +9,6 @@ on:
   pull_request: {}
   workflow_dispatch:
 
-# Cargo's libgit2 transport has been flaky when fetching git dependencies with
-# nested submodules. Prefer the system git CLI for Cargo builds and smoke tests.
-env:
-  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-
 concurrency:
   group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
@@ -317,13 +312,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2022
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
-          - runner: windows-2022
+          - runner: windows-2025
             target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - id: setup_ci
+        uses: ./.github/actions/setup-ci
 
       - name: Configure git for upstream checkout
         shell: bash
@@ -367,17 +365,17 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
-            upstream-rusty-v8/target/sccache
-            upstream-rusty-v8/target/${{ matrix.target }}/release/gn_out
-          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}/${{ matrix.target }}/release/gn_out
+          key: rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
           restore-keys: |
-            rusty-v8-source-${{ matrix.target }}-sandbox-
+            rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-
 
       - name: Install and start sccache
         shell: pwsh
         env:
           SCCACHE_CACHE_SIZE: 256M
-          SCCACHE_DIR: ${{ github.workspace }}/upstream-rusty-v8/target/sccache
+          SCCACHE_DIR: ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
           SCCACHE_IDLE_TIMEOUT: 0
         run: |
           $version = "v0.8.2"
@@ -412,7 +410,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
-            --source-root upstream-rusty-v8 \
+            --target-dir "${CARGO_TARGET_DIR}" \
             --target "${TARGET}" \
             --output-dir "dist/${TARGET}" \
             --sandbox

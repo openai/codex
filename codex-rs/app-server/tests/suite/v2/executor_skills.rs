@@ -13,6 +13,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
+use core_test_support::skip_if_remote;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -23,6 +24,12 @@ const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
 
 #[tokio::test]
 async fn selected_executor_root_exposes_plugin_skill() -> Result<()> {
+    // TODO(anp): Remove after selected capability-root fixtures can be materialized in remote exec.
+    skip_if_remote!(
+        Ok(()),
+        "selected capability root fixture is only materialized on the host"
+    );
+
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,
@@ -81,11 +88,14 @@ stream_max_retries = 0
         ),
     )?;
 
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             selected_capability_roots: Some(vec![SelectedCapabilityRoot {
                 id: "demo-plugin@1".to_string(),

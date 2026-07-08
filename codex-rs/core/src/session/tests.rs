@@ -33,6 +33,8 @@ use codex_core_skills::HostSkillsSnapshot;
 use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
@@ -110,6 +112,8 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::HookPromptFragment;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -490,7 +494,9 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )
     .new_session()
 }
@@ -1038,6 +1044,22 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
         ) -> futures::future::BoxFuture<'a, ReviewDecision> {
             Box::pin(async { ReviewDecision::Approved })
+        }
+
+        fn approval_action(
+            &self,
+            _req: &(),
+            ctx: &crate::tools::sandboxing::ApprovalCtx<'_>,
+        ) -> std::io::Result<crate::tools::sandboxing::ApprovalAction> {
+            Ok(crate::tools::sandboxing::ApprovalAction::Shell {
+                id: ctx.call_id.to_string(),
+                command: Vec::new(),
+                #[allow(deprecated)]
+                cwd: ctx.turn.cwd.clone(),
+                sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: None,
+            })
         }
     }
 
@@ -1741,6 +1763,44 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
         session.clone_history().await.raw_items(),
         expected_items.as_slice()
     );
+}
+
+#[tokio::test]
+async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let response_item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with tests.",
+        "hook-run-1",
+    )])
+    .expect("hook prompt message");
+    let response_item_id = response_item.id().expect("hook prompt id").to_string();
+
+    session
+        .record_response_item_and_emit_turn_item(&turn_context, response_item)
+        .await;
+
+    let raw_response = rx.recv().await.expect("raw response item event");
+    assert!(matches!(raw_response.msg, EventMsg::RawResponseItem(_)));
+
+    let started = rx.recv().await.expect("started hook prompt event");
+    assert!(matches!(
+        started.msg,
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::HookPrompt(item),
+            ..
+        }) if item.id == response_item_id
+    ));
+
+    let completed = rx.recv().await.expect("completed hook prompt event");
+    assert!(matches!(
+        completed.msg,
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::HookPrompt(item),
+            ..
+        }) if item.id == response_item_id
+    ));
+
+    assert!(rx.try_recv().is_err(), "no extra events expected");
 }
 
 #[tokio::test]
@@ -5385,6 +5445,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
+        elicitations: crate::elicitation::ElicitationService::new(),
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
         analytics_events_client: AnalyticsEventsClient::new(
@@ -5444,7 +5505,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+            /*concurrent_reasoning_summaries_enabled*/
+            config
+                .features
+                .enabled(Feature::ConcurrentReasoningSummaries),
             /*attestation_provider*/ None,
+            config.http_client_factory(),
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
             codex_code_mode::InProcessCodeModeSessionProvider,
@@ -5495,7 +5561,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
-        out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
@@ -7511,6 +7576,7 @@ where
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
+        elicitations: crate::elicitation::ElicitationService::new(),
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
         analytics_events_client: AnalyticsEventsClient::new(
@@ -7570,7 +7636,12 @@ where
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+            /*concurrent_reasoning_summaries_enabled*/
+            config
+                .features
+                .enabled(Feature::ConcurrentReasoningSummaries),
             /*attestation_provider*/ None,
+            config.http_client_factory(),
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
             codex_code_mode::InProcessCodeModeSessionProvider,
@@ -7621,7 +7692,6 @@ where
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
-        out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
@@ -9012,18 +9082,13 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
  {
-    let (mut session, previous_context) = make_session_and_context().await;
-    let next_model = if previous_context.model_info.slug == "gpt-5.4" {
-        "gpt-5.2"
-    } else {
-        "gpt-5.4"
-    };
-    let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
-        .await;
-    let previous_context_item = previous_context.to_turn_context_item();
-    let previous_context = Arc::new(previous_context);
+    let (mut session, turn_context) = make_session_and_context().await;
+    let previous_context_item = turn_context.to_turn_context_item();
+    let previous_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
+    let mut turn_context = Arc::try_unwrap(previous_context)
+        .unwrap_or_else(|_| panic!("previous turn context should have no remaining references"));
+    turn_context.sub_id = format!("{}-next", turn_context.sub_id);
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));

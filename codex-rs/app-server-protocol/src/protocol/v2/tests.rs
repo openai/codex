@@ -19,7 +19,7 @@ use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
-use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::WebSearchItem as CoreWebSearchItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
@@ -2770,7 +2770,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         }
     );
 
-    let search_item = TurnItem::WebSearch(WebSearchItem {
+    let search_item = TurnItem::WebSearch(CoreWebSearchItem {
         id: "search-1".to_string(),
         query: "docs".to_string(),
         action: CoreWebSearchAction::Search {
@@ -2779,16 +2779,24 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         },
     });
 
+    let expected_search_item = WebSearchItem {
+        id: "search-1".to_string(),
+        query: "docs".to_string(),
+        action: Some(WebSearchAction::Search {
+            query: Some("docs".to_string()),
+            queries: None,
+        }),
+    };
+
     assert_eq!(
         ThreadItem::from(search_item),
-        ThreadItem::WebSearch {
-            id: "search-1".to_string(),
-            query: "docs".to_string(),
-            action: Some(WebSearchAction::Search {
-                query: Some("docs".to_string()),
-                queries: None,
-            }),
-        }
+        ThreadItem::WebSearch(expected_search_item.clone())
+    );
+    assert_eq!(
+        ThreadItem::from(TurnItem::Extension(
+            codex_extension_items::ExtensionItem::WebSearch(expected_search_item.clone()),
+        )),
+        ThreadItem::WebSearch(expected_search_item)
     );
 
     let image_view_item = TurnItem::ImageView(ImageViewItem {
@@ -3650,6 +3658,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     installed: false,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
+                    install_policy_source: Some(PluginInstallPolicySource::WorkspaceSetting),
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: PluginAvailability::Available,
                     interface: None,
@@ -3672,6 +3681,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     "installed": false,
                     "enabled": false,
                     "installPolicy": "AVAILABLE",
+                    "installPolicySource": "WORKSPACE_SETTING",
                     "authPolicy": "ON_USE",
                     "availability": "AVAILABLE",
                     "interface": null,
