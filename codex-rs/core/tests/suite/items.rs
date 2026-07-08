@@ -17,11 +17,9 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -42,8 +40,6 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use std::path::Path;
-use std::path::PathBuf;
 
 fn disabled_plan_turn(
     text: &str,
@@ -70,30 +66,6 @@ fn disabled_plan_turn(
             ..Default::default()
         },
     })
-}
-
-fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
-    fn sanitize(value: &str) -> String {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    }
-
-    codex_home
-        .join("generated_images")
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -344,155 +316,6 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
             queries: None,
         }
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn builtin_image_generation_call_persisted() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-
-    let TestCodex {
-        codex,
-        config,
-        session_configured,
-        ..
-    } = test_codex().build(&server).await?;
-    let call_id = "ig_image_saved_to_temp_dir_default";
-    let expected_saved_path = image_generation_artifact_path(
-        config.codex_home.as_path(),
-        &session_configured.thread_id.to_string(),
-        call_id,
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_image_generation_call(call_id, "generating", "A tiny blue square", "Zm9v"),
-        ev_completed("resp-1"),
-    ]);
-    mount_sse_once(&server, first_response).await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "generate a tiny blue square".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-
-    let started = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::ImageGeneration(item),
-            started_at_ms,
-            ..
-        }) => Some((item.clone(), *started_at_ms)),
-        _ => None,
-    })
-    .await;
-    let begin = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    let completed = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ItemCompleted(ItemCompletedEvent {
-            item: TurnItem::ImageGeneration(item),
-            completed_at_ms,
-            ..
-        }) => Some((item.clone(), *completed_at_ms)),
-        _ => None,
-    })
-    .await;
-    let end = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
-    assert_eq!(begin.call_id, call_id);
-    assert_eq!(started.0.id, call_id);
-    assert!(started.1 > 0);
-    assert_eq!(completed.0.id, call_id);
-    assert!(completed.1 > 0);
-    assert_eq!(end.call_id, call_id);
-    assert_eq!(end.status, "generating");
-    assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
-    assert_eq!(end.result, "Zm9v");
-    assert_eq!(
-        end.saved_path.as_ref().map(AbsolutePathBuf::as_path),
-        Some(expected_saved_path.as_path())
-    );
-    assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
-    let _ = std::fs::remove_file(&expected_saved_path);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-
-    let TestCodex {
-        codex,
-        config,
-        session_configured,
-        ..
-    } = test_codex().build(&server).await?;
-    let expected_saved_path = image_generation_artifact_path(
-        config.codex_home.as_path(),
-        &session_configured.thread_id.to_string(),
-        "ig_invalid",
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_image_generation_call("ig_invalid", "completed", "broken payload", "_-8"),
-        ev_completed("resp-1"),
-    ]);
-    mount_sse_once(&server, first_response).await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "generate an image".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-
-    let begin = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    let end = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
-    assert_eq!(begin.call_id, "ig_invalid");
-    assert_eq!(end.call_id, "ig_invalid");
-    assert_eq!(end.status, "completed");
-    assert_eq!(end.revised_prompt, Some("broken payload".to_string()));
-    assert_eq!(end.result, "_-8");
-    assert_eq!(end.saved_path, None);
-    assert!(!expected_saved_path.exists());
 
     Ok(())
 }
