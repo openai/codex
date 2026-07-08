@@ -573,6 +573,7 @@ mod tests {
     use super::ProcessId;
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
+    use codex_network_proxy::ManagedNetworkDomainPolicy;
     use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
@@ -598,6 +599,10 @@ mod tests {
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
+                domain_policy: Some(ManagedNetworkDomainPolicy {
+                    allowed_domains: vec!["**.example.com".to_string()],
+                    denied_domains: vec!["blocked.example.com".to_string()],
+                }),
             }),
         };
 
@@ -607,11 +612,30 @@ mod tests {
             serde_json::json!({
                 "loopbackPorts": [43123, 48081],
                 "allowLocalBinding": false,
+                "domainPolicy": {
+                    "allowedDomains": ["**.example.com"],
+                    "deniedDomains": ["blocked.example.com"],
+                },
             })
         );
         let round_trip: ExecParams =
             serde_json::from_value(serialized.clone()).expect("deserialize exec params");
         assert_eq!(round_trip, params);
+
+        let mut without_domain_policy = serialized.clone();
+        without_domain_policy["managedNetwork"]
+            .as_object_mut()
+            .expect("managed network object")
+            .remove("domainPolicy");
+        let legacy_context: ExecParams = serde_json::from_value(without_domain_policy)
+            .expect("deserialize legacy managed network context");
+        assert_eq!(
+            legacy_context
+                .managed_network
+                .expect("managed network context")
+                .domain_policy,
+            None
+        );
 
         serialized
             .as_object_mut()

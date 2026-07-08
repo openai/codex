@@ -232,6 +232,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
         allow_local_binding: false,
+        domain_policy: None,
     };
     let command = || SandboxCommand {
         program: "/bin/bash".into(),

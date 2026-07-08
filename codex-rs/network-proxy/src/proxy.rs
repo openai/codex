@@ -338,6 +338,26 @@ struct EnvironmentProxyAddrs {
     socks_addr: SocketAddr,
 }
 
+/// Domain policy snapshot supplied to an operating-system sandbox.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedNetworkDomainPolicy {
+    pub allowed_domains: Vec<String>,
+    pub denied_domains: Vec<String>,
+}
+
+fn managed_network_domain_policy(
+    config: &config::NetworkProxyConfig,
+) -> Option<ManagedNetworkDomainPolicy> {
+    config
+        .network
+        .allowed_domains()
+        .map(|allowed_domains| ManagedNetworkDomainPolicy {
+            allowed_domains,
+            denied_domains: config.network.denied_domains().unwrap_or_default(),
+        })
+}
+
 /// Portable managed-network facts needed by an operating-system sandbox.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -348,6 +368,9 @@ pub struct ManagedNetworkSandboxContext {
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
+    /// Domain policy to enforce when resolving names for the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_policy: Option<ManagedNetworkDomainPolicy>,
 }
 
 /// Environment-specific managed-network settings prepared for one command launch.
@@ -692,6 +715,7 @@ impl NetworkProxy {
         &self,
         mut env: HashMap<String, String>,
         addrs: EnvironmentProxyAddrs,
+        domain_policy: Option<ManagedNetworkDomainPolicy>,
     ) -> PreparedManagedNetwork {
         let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
@@ -727,6 +751,7 @@ impl NetworkProxy {
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
                 allow_local_binding: runtime_settings.allow_local_binding,
+                domain_policy,
             },
         }
     }
@@ -736,7 +761,7 @@ impl NetworkProxy {
         env: &mut HashMap<String, String>,
         addrs: EnvironmentProxyAddrs,
     ) {
-        let prepared = self.prepare_for_addrs(std::mem::take(env), addrs);
+        let prepared = self.prepare_for_addrs(std::mem::take(env), addrs, None);
         *env = prepared.env;
     }
 
@@ -788,7 +813,22 @@ impl NetworkProxy {
                 socks_addr: self.socks_addr,
             },
         };
-        Ok(self.prepare_for_addrs(env, addrs))
+        Ok(self.prepare_for_addrs(env, addrs, None))
+    }
+
+    /// Prepares a command using the latest reloaded domain policy.
+    ///
+    /// The returned policy is a launch-time snapshot, like the command's other
+    /// operating-system sandbox inputs.
+    pub async fn prepare_for_optional_environment_with_current_policy(
+        &self,
+        env: HashMap<String, String>,
+        environment_id: Option<&str>,
+    ) -> Result<PreparedManagedNetwork> {
+        let mut prepared = self.prepare_for_optional_environment(env, environment_id)?;
+        let config = self.state.current_cfg().await?;
+        prepared.sandbox_context.domain_policy = managed_network_domain_policy(&config);
+        Ok(prepared)
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
@@ -1170,15 +1210,20 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
+        let mut settings = NetworkProxySettings::default();
+        settings.set_allowed_domains(vec!["**.example.com".to_string()]);
+        settings.set_denied_domains(vec!["blocked.example.com".to_string()]);
+        let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = NetworkProxy::builder().state(state).build().await?;
         let handle = proxy.run().await?;
 
         let base_env = HashMap::from([("PRESERVED".to_string(), "value".to_string())]);
-        let local = proxy.prepare_for_optional_environment(base_env.clone(), Some("local"))?;
-        let remote = proxy.prepare_for_optional_environment(HashMap::new(), Some("remote"))?;
+        let local = proxy
+            .prepare_for_optional_environment_with_current_policy(base_env.clone(), Some("local"))
+            .await?;
+        let remote = proxy
+            .prepare_for_optional_environment_with_current_policy(HashMap::new(), Some("remote"))
+            .await?;
 
         assert_eq!(
             local.env.get("PRESERVED").map(String::as_str),
@@ -1216,12 +1261,29 @@ mod tests {
                 ManagedNetworkSandboxContext {
                     loopback_ports: expected_ports,
                     allow_local_binding: false,
+                    domain_policy: Some(ManagedNetworkDomainPolicy {
+                        allowed_domains: vec!["**.example.com".to_string()],
+                        denied_domains: vec!["blocked.example.com".to_string()],
+                    }),
                 }
             );
         }
         let mut legacy_env = base_env;
         proxy.apply_to_env_for_environment(&mut legacy_env, "local")?;
         assert_eq!(legacy_env, local.env);
+
+        proxy.add_denied_domain("newly-blocked.example.com").await?;
+        let updated = proxy
+            .prepare_for_optional_environment_with_current_policy(HashMap::new(), Some("local"))
+            .await?;
+        assert!(
+            updated
+                .sandbox_context
+                .domain_policy
+                .expect("managed domain policy")
+                .denied_domains
+                .contains(&"newly-blocked.example.com".to_string())
+        );
 
         handle.shutdown().await?;
         Ok(())

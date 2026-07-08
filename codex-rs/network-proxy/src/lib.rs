@@ -54,6 +54,7 @@ pub use proxy::Args;
 #[cfg(target_os = "macos")]
 pub use proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 pub use proxy::DEFAULT_NO_PROXY_VALUE;
+pub use proxy::ManagedNetworkDomainPolicy;
 pub use proxy::ManagedNetworkSandboxContext;
 pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;

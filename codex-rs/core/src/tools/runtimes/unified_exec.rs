@@ -326,10 +326,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let (env, managed_network_context) = match managed_network {
             Some(network) => {
                 let prepared = network
-                    .prepare_for_optional_environment(
+                    .prepare_for_optional_environment_with_current_policy(
                         env,
                         Some(&req.turn_environment.environment_id),
                     )
+                    .await
                     .map_err(|err| {
                         ToolError::Codex(CodexErr::Io(io::Error::other(format!(
                             "failed to prepare network proxy for environment `{}`: {err}",
