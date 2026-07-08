@@ -28,6 +28,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::process::wait_for_pid_file;
@@ -57,6 +58,7 @@ const SKILL_NAME: &str = "executor-demo:deploy";
 const SKILL_DESCRIPTION: &str = "Deploy through the selected executor.";
 const SKILL_BODY_MARKER: &str = "SELECTED_EXECUTOR_SKILL_BODY";
 const LOCAL_SKILL_BODY_MARKER: &str = "COLLIDING_LOCAL_SKILL_BODY";
+const NO_SELECTED_SKILLS_MESSAGE: &str = "No selected-environment skills are currently available.";
 const MCP_SERVER_NAME: &str = "executor_probe";
 const MCP_CALL_ID: &str = "selected-executor-mcp-call";
 const CONNECTOR_ID: &str = "calendar";
@@ -122,15 +124,27 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
                 responses::ev_completed("unchanged-step"),
             ]),
             responses::sse(vec![
-                responses::ev_response_created("resumed-step"),
-                responses::ev_assistant_message("resumed-message", "Ready after resume"),
-                responses::ev_completed("resumed-step"),
+                responses::ev_response_created("resumed-unavailable-step"),
+                responses::ev_assistant_message(
+                    "resumed-unavailable-message",
+                    "Unavailable after resume",
+                ),
+                responses::ev_completed("resumed-unavailable-step"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("reattached-step"),
+                responses::ev_assistant_message("reattached-message", "Ready after reattach"),
+                responses::ev_completed("reattached-step"),
             ]),
         ],
     )
     .await;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let thread_id = start_thread(
         &mut app_server,
@@ -172,10 +186,15 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await?;
     assert_eq!(first_mcp_pid, wait_for_pid_file(&fixture.pid_file).await?);
 
+    exec_server.kill().await?;
     drop(app_server);
     std::fs::remove_file(&fixture.pid_file)?;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let request_id = app_server
         .send_thread_resume_request(ThreadResumeParams {
@@ -190,12 +209,30 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response(response)?;
     assert_eq!(thread_id, thread.id);
+
+    run_turn(
+        &mut app_server,
+        &thread_id,
+        "Inspect capabilities while the selected executor is unavailable",
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+    let requests = response_mock.requests();
+    assert_eq!(5, requests.len());
+    assert_selected_plugin_tools_absent(&requests[4]);
+    assert!(
+        latest_selected_skill_update(&requests[4])
+            .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
+    );
+
+    exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+    add_environment(&mut app_server, &fixture.exec_server_url).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
         &mut app_server,
         &thread_id,
-        &format!("Use ${SKILL_NAME} after resuming the thread"),
+        &format!("Use ${SKILL_NAME} after reattaching the selected executor"),
         fixture.environment_cwd,
     )
     .await?;
@@ -203,13 +240,15 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     assert_ne!(first_mcp_pid, resumed_mcp_pid);
 
     let requests = response_mock.requests();
-    assert_eq!(5, requests.len());
+    assert_eq!(6, requests.len());
     for request in &requests[1..4] {
         assert_selected_skill_is_injected(request, /*expected_count*/ 1);
         assert_selected_plugin_tools(request);
+        assert_plugin_guidance_count(request, /*expected_count*/ 1);
     }
-    assert_selected_skill_is_injected(&requests[4], /*expected_count*/ 2);
-    assert_selected_plugin_tools(&requests[4]);
+    assert_plugin_guidance_count(&requests[4], /*expected_count*/ 1);
+    assert_selected_skill_is_injected(&requests[5], /*expected_count*/ 2);
+    assert_selected_plugin_tools(&requests[5]);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
@@ -302,7 +341,11 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
     )
     .await;
 
-    let mut app_server = TestAppServer::new(fixture.codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
     let thread_id = start_thread(
         &mut app_server,
@@ -370,7 +413,9 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
     assert_eq!(3, requests.len());
     assert_selected_skill_catalog_available(&requests[1]);
     assert_selected_plugin_tools(&requests[1]);
+    assert_plugin_guidance_count(&requests[1], /*expected_count*/ 1);
     assert_selected_plugin_tools(&requests[2]);
+    assert_plugin_guidance_count(&requests[2], /*expected_count*/ 1);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
@@ -508,6 +553,11 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
             .into_iter()
             .all(|text| !text.contains(SKILL_DESCRIPTION))
     );
+    assert_selected_plugin_tools_absent(request);
+    assert_plugin_guidance_count(request, /*expected_count*/ 0);
+}
+
+fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {
     assert!(
         request
             .tool_by_name(&format!("mcp__{MCP_SERVER_NAME}"), "echo")
@@ -520,6 +570,17 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
         connector["description"]
             .as_str()
             .is_some_and(|description| !description.contains(PLUGIN_DISPLAY_NAME))
+    );
+}
+
+fn assert_plugin_guidance_count(request: &ResponsesRequest, expected_count: usize) {
+    assert_eq!(
+        expected_count,
+        request
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG))
+            .count()
     );
 }
 
@@ -540,13 +601,17 @@ fn assert_selected_skill_is_injected(request: &ResponsesRequest, expected_count:
 }
 
 fn assert_selected_skill_catalog_available(request: &ResponsesRequest) {
-    let catalog_fragments = request
+    let catalog_fragment = latest_selected_skill_update(request)
+        .expect("selected skill catalog update should be model-visible");
+    assert!(catalog_fragment.contains(SKILL_DESCRIPTION));
+    assert!(catalog_fragment.contains("environment resource:"));
+}
+
+fn latest_selected_skill_update(request: &ResponsesRequest) -> Option<String> {
+    request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.contains(SKILL_DESCRIPTION))
-        .collect::<Vec<_>>();
-    assert_eq!(1, catalog_fragments.len());
-    assert!(catalog_fragments[0].contains("environment resource:"));
+        .rfind(|text| text.contains(SKILL_DESCRIPTION) || text.contains(NO_SELECTED_SKILLS_MESSAGE))
 }
 
 fn assert_selected_plugin_tools(request: &ResponsesRequest) {

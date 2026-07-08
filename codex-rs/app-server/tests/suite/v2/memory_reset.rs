@@ -36,7 +36,11 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
 
     let thread_id = seed_stage1_output(&state_db, codex_home.path()).await?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

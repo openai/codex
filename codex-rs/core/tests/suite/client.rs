@@ -364,6 +364,107 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<()> {
+    let function_call_id = "missing-output-call";
+    let thread_id = ThreadId::default();
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    parent_thread_id: None,
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: Some("fc_existing".to_string()),
+                name: "do_it".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: function_call_id.to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+    ];
+    let tmpdir = TempDir::new()?;
+    let session_path = tmpdir.path().join("normalized-call-output-item-id.jsonl");
+    let mut file = std::fs::File::create(&session_path)?;
+    for line in rollout {
+        writeln!(file, "{}", serde_json::to_string(&line)?)?;
+    }
+
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let first = builder
+        .resume(&server, Arc::clone(&codex_home), session_path.clone())
+        .await?;
+
+    first.submit_turn("first resume").await?;
+    first.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&first.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+    assert!(
+        !std::fs::read_to_string(&session_path)?.contains("\"type\":\"function_call_output\""),
+        "prompt-only repair should not be persisted to the rollout"
+    );
+
+    builder = builder.with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let second = builder.resume(&server, codex_home, session_path).await?;
+    second.submit_turn("second resume").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first_output = requests[0].function_call_output(function_call_id);
+    let first_output_id = first_output
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("reconstructed output should have an item ID")
+        .to_string();
+    let first_output_uuid = first_output_id
+        .strip_prefix("fco_")
+        .expect("synthetic output should use the Responses API prefix");
+    assert_eq!(
+        Uuid::parse_str(first_output_uuid)?.get_version(),
+        Some(uuid::Version::Sha1)
+    );
+    assert_eq!(
+        requests[1]
+            .function_call_output(function_call_id)
+            .get("id")
+            .and_then(serde_json::Value::as_str),
+        Some(first_output_id.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(
@@ -785,6 +886,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         status: None,
         call_id: "legacy-js-call".to_string(),
         name: "js_repl".to_string(),
+        namespace: None,
         input: "console.log('legacy image flow')".to_string(),
         internal_chat_message_metadata_passthrough: None,
     };
@@ -976,6 +1078,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 status: Some("completed".to_string()),
                 call_id: custom_call_id.to_string(),
                 name: "js_repl".to_string(),
+                namespace: None,
                 input: "console.log('image flow')".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             }),
@@ -1231,7 +1334,12 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+        /*concurrent_reasoning_summaries_enabled*/
+        config
+            .features
+            .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -2068,7 +2176,7 @@ async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
+async fn includes_configured_max_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -2080,7 +2188,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
-            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            config.model_reasoning_effort = Some(ReasoningEffort::Max);
         })
         .build(&server)
         .await?;
@@ -2109,7 +2217,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("medium")
+        Some("max")
     );
 
     Ok(())
@@ -2273,6 +2381,9 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2309,6 +2420,55 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("context")),
         None
     );
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("stream_options")
+            .and_then(|stream_options| stream_options.get("reasoning_summary_delivery"))
+            .and_then(|value| value.as_str()),
+        Some("sequential_cutoff")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_cutoff_is_omitted_for_non_openai_provider() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.name = "mock".to_string();
+            let _ = config
+                .features
+                .enable(Feature::ConcurrentReasoningSummaries);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
 }
@@ -2480,6 +2640,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary")),
         None
     );
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
 }
@@ -2845,7 +3006,9 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
+        config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -2912,6 +3075,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         status: Some("completed".into()),
         call_id: "custom-tool-call-id".into(),
         name: "custom_tool".into(),
+        namespace: None,
         input: "{}".into(),
         internal_chat_message_metadata_passthrough: None,
     });

@@ -83,50 +83,50 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -335,6 +335,11 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
             if [[ "${{ matrix.target }}" == *linux* ]]; then
               cp "target/${{ matrix.target }}/release/${binary}.sigstore" \
@@ -347,9 +352,13 @@ jobs:
             rm -rf "$bundle_root"
             mkdir -p "$bundle_root/codex-resources"
             cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
+            cp "$dest/codex-code-mode-host-${{ matrix.target }}" "$bundle_root/codex-code-mode-host"
             cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
-            chmod 0755 "$bundle_root/codex" "$bundle_root/codex-resources/bwrap"
-            tar -C "$bundle_root" -cf - codex codex-resources/bwrap |
+            chmod 0755 \
+              "$bundle_root/codex" \
+              "$bundle_root/codex-code-mode-host" \
+              "$bundle_root/codex-resources/bwrap"
+            tar -C "$bundle_root" -cf - codex codex-code-mode-host codex-resources/bwrap |
               zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
           fi
 
@@ -497,19 +506,19 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -564,6 +573,12 @@ jobs:
             zstd -d --stdout "$unsigned_path" >"$signed_path"
             chmod 0755 "$signed_path"
 
+            entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$entitlements" ]]; then
+              echo "Entitlements file $entitlements not found"
+              exit 1
+            fi
+
             .github/scripts/macos-signing/sign_macos_code.sh \
               --target "$signed_path" \
               --identity unused \
@@ -571,7 +586,7 @@ jobs:
               --identifier "$binary" \
               --options runtime \
               --timestamp true \
-              --entitlements .github/scripts/macos-signing/codex.entitlements.plist
+              --entitlements "$entitlements"
 
             mkdir -p "${report_dir}/${binary}"
             rcodesign print-signature-info "$signed_path" \
@@ -615,22 +630,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -707,6 +722,11 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
 
@@ -911,22 +931,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             verify_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             verify_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
 
     steps:
@@ -960,15 +980,29 @@ jobs:
 
           target="${{ matrix.target }}"
           packaged_dir="dist/${target}"
-          expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex.entitlements.plist"
+          case "$target" in
+            aarch64-apple-darwin) expected_arch="arm64" ;;
+            x86_64-apple-darwin) expected_arch="x86_64" ;;
+            *)
+              echo "Unexpected macOS target: $target"
+              exit 1
+              ;;
+          esac
 
           verify_signed_binary() {
             local path="$1"
-            local actual_entitlements normalized_actual normalized_expected
+            local binary="$2"
+            local actual_entitlements expected_entitlements normalized_actual normalized_expected
 
             chmod 0755 "$path"
+            lipo "$path" -verify_arch "$expected_arch"
             codesign --verify --strict --verbose=2 "$path"
 
+            expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$expected_entitlements" ]]; then
+              echo "Expected entitlements file $expected_entitlements not found"
+              exit 1
+            fi
             actual_entitlements="$(mktemp)"
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
@@ -981,17 +1015,23 @@ jobs:
 
           for binary in ${{ matrix.binaries }}; do
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
-            verify_signed_binary "$binary_path"
+            verify_signed_binary "$binary_path" "$binary"
+
+            # The app-server package contains the host, but its standalone archives
+            # are omitted above to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
 
             direct_archive_dir="${RUNNER_TEMP}/direct-archive-${binary}-${target}"
             rm -rf "$direct_archive_dir"
             mkdir -p "$direct_archive_dir"
             tar -xzf "${packaged_dir}/${binary}-${target}.tar.gz" -C "$direct_archive_dir"
-            verify_signed_binary "${direct_archive_dir}/${binary}-${target}"
+            verify_signed_binary "${direct_archive_dir}/${binary}-${target}" "$binary"
 
             direct_zstd_path="${RUNNER_TEMP}/${binary}-${target}-from-zstd"
             zstd -d --stdout "${packaged_dir}/${binary}-${target}.zst" >"$direct_zstd_path"
-            verify_signed_binary "$direct_zstd_path"
+            verify_signed_binary "$direct_zstd_path" "$binary"
           done
 
           case "${{ matrix.bundle }}" in
@@ -1013,7 +1053,8 @@ jobs:
           rm -rf "$package_dir"
           mkdir -p "$package_dir"
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
-          verify_signed_binary "${package_dir}/bin/${package_entrypoint}"
+          verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
+          verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
 
           if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
             exit 0
@@ -1039,7 +1080,7 @@ jobs:
           trap cleanup_mount EXIT
 
           for binary in ${{ matrix.binaries }}; do
-            verify_signed_binary "${mount_dir}/${binary}"
+            verify_signed_binary "${mount_dir}/${binary}" "$binary"
           done
 
           cleanup_mount

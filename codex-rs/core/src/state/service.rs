@@ -10,6 +10,7 @@ use crate::client::ModelClient;
 use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
 use crate::current_time::TimeProvider;
+use crate::elicitation::ElicitationService;
 use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
@@ -55,6 +56,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_projection_lock: Mutex<()>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
+    pub(crate) elicitations: ElicitationService,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) shell_zsh_path: Option<PathBuf>,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -107,18 +109,25 @@ impl SessionServices {
     pub(crate) async fn install_mcp_connection_manager(
         &self,
         config: Arc<McpConfig>,
+        plugins_available: bool,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        let runtime =
-            self.publish_mcp_runtime(config, runtime_context, available_environment_ids, manager);
+        let runtime = self.publish_mcp_runtime(
+            config,
+            plugins_available,
+            runtime_context,
+            available_environment_ids,
+            manager,
+        );
         runtime.manager().validate_required_servers().await
     }
 
     pub(crate) fn publish_mcp_runtime(
         &self,
         config: Arc<McpConfig>,
+        plugins_available: bool,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
         manager: McpConnectionManager,
@@ -129,6 +138,7 @@ impl SessionServices {
         self.mcp_connection_manager.store(Arc::clone(&manager));
         let runtime = Arc::new(McpRuntimeSnapshot::new(
             config,
+            plugins_available,
             manager,
             runtime_context,
             available_environment_ids,

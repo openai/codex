@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn next_reasoning_effort_uses_advertised_order_for_custom_levels() {
-        let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+        let custom_effort = ReasoningEffortConfig::Custom("future".to_string());
         let choices = vec![
             ReasoningEffortConfig::High,
             ReasoningEffortConfig::Low,

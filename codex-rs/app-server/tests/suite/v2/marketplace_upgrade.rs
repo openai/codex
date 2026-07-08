@@ -169,7 +169,11 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let debug_root = expected_installed_root(codex_home.path(), "debug")?;
@@ -223,7 +227,11 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let tools_root = expected_installed_root(codex_home.path(), "tools")?;
@@ -264,7 +272,11 @@ async fn marketplace_upgrade_returns_empty_roots_when_already_up_to_date() -> Re
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let first_response = send_marketplace_upgrade(&mut mcp, Some("debug")).await?;
     assert!(first_response.errors.is_empty());
@@ -292,7 +304,11 @@ async fn marketplace_upgrade_rejects_unknown_or_non_git_marketplace() -> Result<
         &configured_local_marketplace_update(&local_source.path().display().to_string()),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for marketplace_name in ["missing", "local-only"] {

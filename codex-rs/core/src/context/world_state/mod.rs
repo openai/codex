@@ -1,5 +1,7 @@
 mod agents_md;
+mod apps_instructions;
 mod environment;
+mod plugins_instructions;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
@@ -16,7 +18,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub(crate) use agents_md::AgentsMdState;
+pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use environment::EnvironmentsState;
+pub(crate) use plugins_instructions::PluginsInstructionsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;
@@ -62,11 +66,11 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
     }
 
     fn has_retained_fragment_matcher(&self) -> bool {
-        false
+        S::has_retained_fragment_matcher()
     }
 
-    fn matches_retained_fragment(&self, _role: &str, _text: &str) -> bool {
-        false
+    fn matches_retained_fragment(&self, role: &str, text: &str) -> bool {
+        S::matches_retained_fragment(role, text)
     }
 
     fn render_diff(
@@ -180,6 +184,16 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
     fn snapshot(&self) -> Self::Snapshot;
 
     fn matches_legacy_fragment(_role: &str, _text: &str) -> bool {
+        false
+    }
+
+    /// Whether retained history must still contain this section's rendered fragment.
+    fn has_retained_fragment_matcher() -> bool {
+        false
+    }
+
+    /// Recognizes this section's rendered fragment in retained model history.
+    fn matches_retained_fragment(_role: &str, _text: &str) -> bool {
         false
     }
 

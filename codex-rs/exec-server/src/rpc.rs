@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCErrorError;
@@ -21,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -36,6 +38,8 @@ pub(crate) enum RpcCallError {
     Json(serde_json::Error),
     /// The executor returned a JSON-RPC error response for this call.
     Server(JSONRPCErrorError),
+    /// The executor did not return a response before the caller's deadline.
+    TimedOut { method: String, timeout: Duration },
 }
 
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
@@ -45,6 +49,11 @@ type RequestRoute<S> = Box<
 >;
 type NotificationRoute<S> =
     Box<dyn Fn(Arc<S>, JSONRPCNotification) -> BoxFuture<Result<(), String>> + Send + Sync>;
+
+enum RpcCallTimeout {
+    None,
+    After(Duration),
+}
 
 #[derive(Debug)]
 pub(crate) enum RpcClientEvent {
@@ -333,7 +342,44 @@ impl RpcClient {
         drain_pending(&self.pending).await;
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            method,
+        )
+    )]
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
+    where
+        P: Serialize,
+        T: DeserializeOwned,
+    {
+        self.call_inner(method, params, RpcCallTimeout::None).await
+    }
+
+    pub(crate) async fn call_with_timeout<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        call_timeout: Duration,
+    ) -> Result<T, RpcCallError>
+    where
+        P: Serialize,
+        T: DeserializeOwned,
+    {
+        self.call_inner(method, params, RpcCallTimeout::After(call_timeout))
+            .await
+    }
+
+    async fn call_inner<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        call_timeout: RpcCallTimeout,
+    ) -> Result<T, RpcCallError>
     where
         P: Serialize,
         T: DeserializeOwned,
@@ -379,8 +425,20 @@ impl RpcClient {
         // still-pending requests. Awaiting this receiver preserves that order:
         // responses already read before EOF still win, and truly pending calls
         // are failed once the reader observes the disconnect.
-        let result: Result<Value, RpcCallError> =
-            response_rx.await.map_err(|_| RpcCallError::Closed)?;
+        let response = match call_timeout {
+            RpcCallTimeout::None => response_rx.await,
+            RpcCallTimeout::After(call_timeout) => match timeout(call_timeout, response_rx).await {
+                Ok(response) => response,
+                Err(_) => {
+                    self.pending.lock().await.remove(&request_id);
+                    return Err(RpcCallError::TimedOut {
+                        method: method.to_string(),
+                        timeout: call_timeout,
+                    });
+                }
+            },
+        };
+        let result: Result<Value, RpcCallError> = response.map_err(|_| RpcCallError::Closed)?;
         let response = match result {
             Ok(response) => response,
             Err(error) => return Err(error),
@@ -673,6 +731,40 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn rpc_client_timeout_removes_pending_request() {
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (server_writer, client_stdout) = tokio::io::duplex(4096);
+        let (release_server_tx, release_server_rx) = tokio::sync::oneshot::channel();
+        let connection =
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
+        let (client, _events_rx) = RpcClient::new(connection);
+
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let request = read_jsonrpc_line(&mut lines).await;
+            assert!(matches!(request, JSONRPCMessage::Request(_)));
+            let _server_writer = server_writer;
+            let _ = release_server_rx.await;
+        });
+
+        let call_timeout = Duration::from_millis(10);
+        let result = client
+            .call_with_timeout::<_, serde_json::Value>("slow", &serde_json::json!({}), call_timeout)
+            .await;
+        assert!(matches!(
+            result,
+            Err(super::RpcCallError::TimedOut { method, timeout })
+                if method == "slow" && timeout == call_timeout
+        ));
+        assert_eq!(client.pending_request_count().await, 0);
+
+        let _ = release_server_tx.send(());
+        if let Err(err) = server.await {
+            panic!("server task failed: {err}");
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn rpc_client_propagates_current_trace_context() {
         let span_exporter = InMemorySpanExporter::default();
@@ -721,6 +813,15 @@ mod tests {
             .expect("RPC response");
         assert_eq!(response, serde_json::json!({}));
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+        let expected_traceparent = expected_trace
+            .traceparent
+            .as_deref()
+            .expect("parent traceparent");
+        let traceparent = trace.traceparent.as_deref().expect("request traceparent");
+        let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
+        let parts = traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(parts[1], expected_parts[1]);
+        assert_ne!(parts[2], expected_parts[2]);
+        assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 }

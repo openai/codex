@@ -3,6 +3,7 @@
 mod analytics_server;
 mod auth_fixtures;
 mod config;
+mod json_logging;
 mod mock_model_server;
 mod models_cache;
 mod responses;
@@ -26,6 +27,7 @@ pub use core_test_support::test_absolute_path;
 pub use core_test_support::test_path_buf_with_windows;
 pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
+pub use json_logging::app_server_json_shutdown_event;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;
 pub use mock_model_server::create_mock_responses_server_sequence;
 pub use mock_model_server::create_mock_responses_server_sequence_unchecked;
@@ -47,6 +49,7 @@ use serde::de::DeserializeOwned;
 pub use test_app_server::DEFAULT_CLIENT_NAME;
 pub use test_app_server::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use test_app_server::TestAppServer;
+pub use test_app_server::TestAppServerBuilder;
 
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;

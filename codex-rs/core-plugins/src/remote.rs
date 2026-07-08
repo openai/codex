@@ -6,6 +6,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
@@ -148,9 +149,11 @@ pub enum RemoteMarketplaceSource {
 pub struct RemoteInstalledPlugin {
     pub marketplace_name: String,
     pub id: String,
+    pub version: Option<String>,
     pub name: String,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
+    pub install_policy_source: Option<PluginInstallPolicySource>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
@@ -161,12 +164,14 @@ pub struct RemoteInstalledPlugin {
 pub struct RemotePluginSummary {
     pub id: String,
     pub remote_plugin_id: String,
+    pub version: Option<String>,
     pub local_version: Option<String>,
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
     pub installed: bool,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
+    pub install_policy_source: Option<PluginInstallPolicySource>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
@@ -526,6 +531,26 @@ struct RemoteAppTemplateResponse {
     reason: Option<RemoteAppTemplateUnavailableReason>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+enum RemotePluginInstallPolicySource {
+    #[serde(rename = "WORKSPACE_SETTING")]
+    WorkspaceSetting,
+    #[serde(rename = "IMPLICIT_CANONICAL_APP")]
+    ImplicitCanonicalApp,
+    #[serde(other)]
+    Unknown,
+}
+
+impl RemotePluginInstallPolicySource {
+    fn into_protocol(self) -> Option<PluginInstallPolicySource> {
+        match self {
+            Self::WorkspaceSetting => Some(PluginInstallPolicySource::WorkspaceSetting),
+            Self::ImplicitCanonicalApp => Some(PluginInstallPolicySource::ImplicitCanonicalApp),
+            Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct RemotePluginDirectoryItem {
     id: String,
@@ -542,6 +567,7 @@ struct RemotePluginDirectoryItem {
     #[serde(default)]
     share_principals: Option<Vec<RemotePluginDirectorySharePrincipal>>,
     installation_policy: PluginInstallPolicy,
+    installation_policy_source: Option<RemotePluginInstallPolicySource>,
     authentication_policy: PluginAuthPolicy,
     #[serde(rename = "status", default)]
     availability: PluginAvailability,
@@ -1041,12 +1067,14 @@ pub fn group_remote_installed_plugins_by_marketplaces(
         let plugin_summary = RemotePluginSummary {
             id: plugin_id.as_key(),
             remote_plugin_id: plugin.id.clone(),
+            version: plugin.version.clone(),
             local_version: None,
             name: plugin.name.clone(),
             share_context: None,
             installed: true,
             enabled: plugin.enabled,
             install_policy: plugin.install_policy,
+            install_policy_source: plugin.install_policy_source,
             auth_policy: plugin.auth_policy,
             availability: plugin.availability,
             interface: plugin.interface.clone(),
@@ -1472,6 +1500,7 @@ fn build_remote_plugin_summary(
     Ok(RemotePluginSummary {
         id: plugin_id.as_key(),
         remote_plugin_id: plugin.id.clone(),
+        version: plugin.release.version.clone(),
         local_version: installed_plugin
             .and_then(|installed| installed.plugin.release.version.clone()),
         name: plugin.name.clone(),
@@ -1479,6 +1508,9 @@ fn build_remote_plugin_summary(
         installed: installed_plugin.is_some(),
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
         install_policy: plugin.installation_policy,
+        install_policy_source: plugin
+            .installation_policy_source
+            .and_then(RemotePluginInstallPolicySource::into_protocol),
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
@@ -1554,9 +1586,13 @@ fn remote_installed_plugin_to_cache_entry(
     Ok(RemoteInstalledPlugin {
         marketplace_name: remote_plugin_canonical_marketplace_name(plugin)?.to_string(),
         id: plugin.id.clone(),
+        version: plugin.release.version.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
         install_policy: plugin.installation_policy,
+        install_policy_source: plugin
+            .installation_policy_source
+            .and_then(RemotePluginInstallPolicySource::into_protocol),
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),

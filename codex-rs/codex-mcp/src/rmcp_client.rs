@@ -57,6 +57,7 @@ use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
 use codex_rmcp_client::ToolWithConnectorId;
+use codex_rmcp_client::is_authentication_required_error;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -67,7 +68,6 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
-use rmcp::transport::auth::AuthError;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -82,6 +82,7 @@ pub const OPENAI_FORM_CAPABILITY: &str = "openai/form";
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
+pub(crate) const CODEX_APPS_REFRESH_DURATION_METRIC: &str = "codex.apps.refresh.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -304,6 +305,7 @@ impl ManagedClientStartup {
             .unwrap_or_default();
         let cancel_token_for_fut = cancel_token;
         async move {
+            let refresh_start = is_codex_apps_mcp_server.then(Instant::now);
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
@@ -349,6 +351,15 @@ impl ManagedClientStartup {
                 Ok(result) => result,
                 Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
             };
+            if outcome.is_ok()
+                && let Some(refresh_start) = refresh_start
+            {
+                emit_duration(
+                    CODEX_APPS_REFRESH_DURATION_METRIC,
+                    refresh_start.elapsed(),
+                    &[("path", "legacy"), ("trigger", "initial")],
+                );
+            }
 
             startup_complete.store(true, Ordering::Release);
             outcome
@@ -552,16 +563,7 @@ impl StartupOutcomeError {
 
 impl From<anyhow::Error> for StartupOutcomeError {
     fn from(error: anyhow::Error) -> Self {
-        let is_authentication_required = error.chain().any(|source| {
-            source
-                .downcast_ref::<AuthError>()
-                .is_some_and(|auth_error| {
-                    matches!(
-                        auth_error,
-                        AuthError::AuthorizationRequired | AuthError::TokenExpired
-                    )
-                })
-        });
+        let is_authentication_required = is_authentication_required_error(&error);
         Self::Failed {
             error: error.to_string(),
             is_authentication_required,
@@ -573,10 +575,12 @@ impl From<anyhow::Error> for StartupOutcomeError {
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
     is_codex_apps_mcp_server: bool,
+    codex_apps_refresh_trigger: &'static str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
+    let fetch_start = Instant::now();
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
         .await?;
@@ -592,6 +596,19 @@ pub(crate) async fn list_tools_for_client_uncached(
             )
         })
         .collect();
+    if is_codex_apps_mcp_server {
+        emit_duration(
+            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+            fetch_start.elapsed(),
+            &[("trigger", codex_apps_refresh_trigger)],
+        );
+    } else {
+        emit_duration(
+            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+            fetch_start.elapsed(),
+            &[],
+        );
+    }
     Ok(tools)
 }
 
@@ -829,24 +846,19 @@ async fn start_server_task(
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
     let list_start = Instant::now();
-    let fetch_start = Instant::now();
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
     let tools = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
+        /*codex_apps_refresh_trigger*/ "initial",
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
     )
     .await
     .map_err(StartupOutcomeError::from)?;
-    emit_duration(
-        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-        fetch_start.elapsed(),
-        &[],
-    );
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
         (Some(cache_context), Some(fetch_ticket)) => {

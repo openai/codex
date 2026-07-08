@@ -41,6 +41,9 @@ use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
+use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT;
+use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT_REASON;
+use crate::websocket_pong_watchdog::WebSocketPongWatchdog;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
@@ -48,6 +51,27 @@ const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
 const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
 const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum RendezvousDisconnectReason {
+    PeerClose,
+    ReadError,
+    WriteError,
+    PongTimeout,
+    LocalShutdown,
+}
+
+impl RendezvousDisconnectReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PeerClose => "peer_close",
+            Self::ReadError => "read_error",
+            Self::WriteError => "write_error",
+            Self::PongTimeout => WEBSOCKET_PONG_TIMEOUT_REASON,
+            Self::LocalShutdown => "local_shutdown",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum RelayFrameBodyKind {
@@ -448,7 +472,8 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
     executor_registration_id: String,
     identity: NoiseChannelIdentity,
     validator: V,
-) where
+) -> RendezvousDisconnectReason
+where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
 {
@@ -461,6 +486,7 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let (closed_stream_tx, mut closed_stream_rx) =
         mpsc::channel::<ClosedNoiseVirtualStream>(MAX_ACTIVE_NOISE_RELAY_STREAMS);
+    let (pong_tx, mut pong_rx) = mpsc::channel(1);
     // Use a separate writer so this loop never waits on the channel it drains.
     let mut physical_writer_task = tokio::spawn(async move {
         let mut keepalive = tokio::time::interval_at(
@@ -468,19 +494,61 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
             WEBSOCKET_KEEPALIVE_INTERVAL,
         );
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut pong_watchdog = WebSocketPongWatchdog::new(WEBSOCKET_PONG_TIMEOUT);
+        let pong_deadline = tokio::time::sleep(WEBSOCKET_PONG_TIMEOUT);
+        tokio::pin!(pong_deadline);
         loop {
             let message = tokio::select! {
+                pong = pong_rx.recv() => {
+                    let Some(()) = pong else {
+                        break RendezvousDisconnectReason::LocalShutdown;
+                    };
+                    pong_watchdog.received_pong();
+                    continue;
+                }
+                _ = &mut pong_deadline, if pong_watchdog.deadline().is_some() => {
+                    match pong_rx.try_recv() {
+                        Ok(()) => {
+                            pong_watchdog.received_pong();
+                            continue;
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                            break RendezvousDisconnectReason::PongTimeout;
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            break RendezvousDisconnectReason::LocalShutdown;
+                        }
+                    }
+                }
+                _ = keepalive.tick(), if pong_watchdog.deadline().is_none() => {
+                    Message::Ping(Vec::new().into())
+                }
                 encoded = physical_outgoing_rx.recv() => {
                     let Some(encoded) = encoded else {
-                        break;
+                        break RendezvousDisconnectReason::LocalShutdown;
                     };
                     Message::Binary(encoded.into())
                 }
-                _ = keepalive.tick() => Message::Ping(Vec::new().into()),
             };
-            if let Err(error) = websocket_sink.send(message).await {
-                warn!("Noise multiplexed environment websocket write failed: {error}");
-                break;
+            let is_keepalive_ping = matches!(message, Message::Ping(_));
+            let write_deadline = pong_watchdog.write_deadline(tokio::time::Instant::now());
+            match tokio::time::timeout_at(write_deadline, websocket_sink.send(message)).await {
+                Ok(Ok(())) => {
+                    if is_keepalive_ping {
+                        pong_watchdog.ping_sent(tokio::time::Instant::now());
+                        if let Some(deadline) = pong_watchdog.deadline() {
+                            pong_deadline.as_mut().reset(deadline);
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    warn!("Noise multiplexed environment websocket write failed: {error}");
+                    break RendezvousDisconnectReason::WriteError;
+                }
+                Err(_) => {
+                    warn!("Noise multiplexed environment websocket write timed out");
+                    break RendezvousDisconnectReason::WriteError;
+                }
             }
         }
     });
@@ -489,13 +557,18 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
     let mut failed_handshakes = 0usize;
     let mut next_validation_id = 0u64;
+    let mut disconnect_reason = RendezvousDisconnectReason::LocalShutdown;
 
     loop {
         // Registry calls run separately so a slow check does not block the relay.
         let frame = tokio::select! {
             writer_result = &mut physical_writer_task => {
-                if let Err(error) = writer_result {
-                    warn!("Noise multiplexed environment websocket writer failed: {error}");
+                match writer_result {
+                    Ok(reason) => disconnect_reason = reason,
+                    Err(error) => {
+                        warn!("Noise multiplexed environment websocket writer failed: {error}");
+                        disconnect_reason = RendezvousDisconnectReason::LocalShutdown;
+                    }
                 }
                 break;
             }
@@ -621,14 +694,22 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                         continue;
                     }
                 },
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
+                Some(Ok(Message::Close(_))) | None => {
+                    disconnect_reason = RendezvousDisconnectReason::PeerClose;
+                    break;
+                }
+                Some(Ok(Message::Pong(_))) => {
+                    let _ = pong_tx.try_send(());
+                    continue;
+                }
+                Some(Ok(Message::Ping(_) | Message::Frame(_))) => continue,
                 Some(Ok(Message::Text(_))) => {
                     warn!("dropping non-binary Noise relay frame from harness");
                     continue;
                 }
                 Some(Err(error)) => {
                     debug!("Noise multiplexed environment websocket read failed: {error}");
+                    disconnect_reason = RendezvousDisconnectReason::ReadError;
                     break;
                 }
             }
@@ -802,6 +883,7 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
         physical_writer_task.abort();
         let _ = physical_writer_task.await;
     }
+    disconnect_reason
 }
 
 /// Charge one failed authenticated-channel attempt to this physical relay.

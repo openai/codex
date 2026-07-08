@@ -4,6 +4,7 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadHistoryMode;
 use super::ThreadItem;
 use super::ThreadSource;
 use super::Turn;
@@ -105,6 +106,10 @@ pub struct ThreadStartParams {
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    /// Persisted thread history contract to use for this new thread.
+    #[experimental("thread/start.historyMode")]
+    #[ts(optional = nullable)]
+    pub history_mode: Option<ThreadHistoryMode>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
     /// Optional client-supplied analytics source classification for this thread.
@@ -489,6 +494,13 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
+    /// Optional last turn id to fork through, inclusive.
+    ///
+    /// When specified, turns after `last_turn_id` are omitted from the fork.
+    /// The referenced turn cannot be in progress.
+    #[ts(optional = nullable)]
+    pub last_turn_id: Option<String>,
+
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]
@@ -673,7 +685,7 @@ pub struct ThreadIncrementElicitationParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadIncrementElicitationResponse {
     /// Current out-of-band elicitation count after the increment.
-    pub count: u64,
+    pub count: i64,
     /// Whether timeout accounting is paused after applying the increment.
     pub paused: bool,
 }
@@ -693,7 +705,7 @@ pub struct ThreadDecrementElicitationParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadDecrementElicitationResponse {
     /// Current out-of-band elicitation count after the decrement.
-    pub count: u64,
+    pub count: i64,
     /// Whether timeout accounting remains paused after applying the decrement.
     pub paused: bool,
 }

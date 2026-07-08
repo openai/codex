@@ -277,6 +277,9 @@ impl ModelProvider for ConfiguredModelProvider {
                     if auth_manager.refresh_failure_for_auth(&auth).is_some() {
                         return None;
                     }
+                    if matches!(auth, CodexAuth::Headers(_)) {
+                        return None;
+                    }
                     Some(auth)
                 })
                 .map(|auth| match &auth {
@@ -286,6 +289,7 @@ impl ModelProvider for ConfiguredModelProvider {
                     }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
+                    | CodexAuth::Headers(_)
                     | CodexAuth::AgentIdentity(_)
                     | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
@@ -659,7 +663,16 @@ mod tests {
             .map(|model| model.slug.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(model_ids, vec!["openai.gpt-5.5", "openai.gpt-5.4"]);
+        assert_eq!(
+            model_ids,
+            vec![
+                "openai.gpt-5.5",
+                "openai.gpt-5.4",
+                "openai.gpt-5.6-sol",
+                "openai.gpt-5.6-terra",
+                "openai.gpt-5.6-luna",
+            ]
+        );
 
         let default_model = manager
             .list_models(RefreshStrategy::Online)

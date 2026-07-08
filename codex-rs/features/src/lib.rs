@@ -190,7 +190,7 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     ComputerUse,
-    /// Temporary internal-only flag for PS-backed remote plugin catalog development.
+    /// Enable the PS-backed remote plugin catalog.
     RemotePlugin,
     /// Enable remote plugin sharing flows.
     PluginSharing,
@@ -204,6 +204,8 @@ pub enum Feature {
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
     ItemIds,
+    /// Request sequential cutoff reasoning summary delivery.
+    ConcurrentReasoningSummaries,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1145,8 +1147,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemotePlugin,
         key: "remote_plugin",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PluginSharing,
@@ -1181,6 +1183,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ItemIds,
         key: "item_ids",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ConcurrentReasoningSummaries,
+        key: "concurrent_reasoning_summaries",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1265,8 +1273,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AuthElicitation,
         key: "auth_elicitation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Personality,

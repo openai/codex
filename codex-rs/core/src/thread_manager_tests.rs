@@ -472,6 +472,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             config,
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
             )),
@@ -615,6 +616,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             config: config.clone(),
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -631,6 +633,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             config: config.clone(),
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -696,11 +699,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
-        selected_servers(&first_resolved),
+        selected_servers(&first_resolved.config),
         std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
     );
     assert_eq!(
-        selected_servers(&second_resolved),
+        selected_servers(&second_resolved.config),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
 }
@@ -739,6 +742,7 @@ async fn selected_capability_roots_round_trip_through_fork() {
                     git: None,
                 },
             )]),
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -810,6 +814,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             config: source_config,
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -1094,6 +1099,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             config: config.clone(),
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: Some(ThreadSource::User),
             dynamic_tools: Vec::new(),
