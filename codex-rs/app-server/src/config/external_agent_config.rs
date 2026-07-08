@@ -38,6 +38,7 @@ const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.d
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
 const EXTERNAL_AGENT_DIR: &str = ".claude";
 const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
+const EXTERNAL_AGENT_PROJECTS_CONFIG_FILE: &str = ".claude.json";
 const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 const EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
 
@@ -202,16 +203,83 @@ impl ExternalAgentConfigService {
         params: ExternalAgentConfigDetectOptions,
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
         let mut items = Vec::new();
-        for cwd in params.cwds.as_deref().unwrap_or(&[]) {
+        let sessions = if params.include_home {
+            detect_recent_sessions(&self.external_agent_home, &self.codex_home)?
+        } else {
+            Vec::new()
+        };
+        let mut project_cwds = params.cwds.unwrap_or_default();
+        if params.include_home {
+            let project_config_path = self
+                .external_agent_home
+                .parent()
+                .map(|parent| parent.join(EXTERNAL_AGENT_PROJECTS_CONFIG_FILE))
+                .unwrap_or_else(|| PathBuf::from(EXTERNAL_AGENT_PROJECTS_CONFIG_FILE));
+            match read_external_settings(&project_config_path) {
+                Ok(Some(settings)) => {
+                    if let Some(projects) = settings
+                        .as_object()
+                        .and_then(|settings| settings.get("projects"))
+                        .and_then(JsonValue::as_object)
+                    {
+                        for project_root in projects.keys().map(PathBuf::from) {
+                            if project_root.is_absolute() {
+                                project_cwds.push(project_root);
+                            } else {
+                                tracing::warn!(
+                                    project_root = %project_root.display(),
+                                    path = %project_config_path.display(),
+                                    "ignoring non-absolute external agent project root during import detection"
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        path = %project_config_path.display(),
+                        error = %err,
+                        "failed to read external agent project registry during import detection"
+                    );
+                }
+            }
+            project_cwds.extend(sessions.iter().map(|session| session.cwd.clone()));
+        }
+
+        let mut detected_repo_roots = HashSet::new();
+        for cwd in &project_cwds {
             let Some(repo_root) = find_repo_root(Some(cwd))? else {
                 continue;
             };
+            if !detected_repo_roots.insert(repo_root.clone()) {
+                continue;
+            }
             self.detect_migrations(Some(&repo_root), &mut items).await?;
         }
 
         if params.include_home {
             self.detect_migrations(/*repo_root*/ None, &mut items)
                 .await?;
+            if !sessions.is_empty() {
+                items.push(ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::Sessions,
+                    description: format!(
+                        "Migrate recent sessions from {}",
+                        self.external_agent_home.join("projects").display()
+                    ),
+                    cwd: None,
+                    details: Some(MigrationDetails {
+                        sessions,
+                        ..Default::default()
+                    }),
+                });
+                emit_migration_metric(
+                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                    ExternalAgentConfigMigrationItemType::Sessions,
+                    /*skills_count*/ None,
+                );
+            }
         }
 
         deduplicate_plugin_migration_items(&mut items);
@@ -731,29 +799,6 @@ impl ExternalAgentConfigService {
                         "skipping external agent plugin migration detection because config load failed"
                     );
                 }
-            }
-        }
-
-        if repo_root.is_none() {
-            let sessions = detect_recent_sessions(&self.external_agent_home, &self.codex_home)?;
-            if !sessions.is_empty() {
-                items.push(ExternalAgentConfigMigrationItem {
-                    item_type: ExternalAgentConfigMigrationItemType::Sessions,
-                    description: format!(
-                        "Migrate recent sessions from {}",
-                        self.external_agent_home.join("projects").display()
-                    ),
-                    cwd: None,
-                    details: Some(MigrationDetails {
-                        sessions,
-                        ..Default::default()
-                    }),
-                });
-                emit_migration_metric(
-                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                    ExternalAgentConfigMigrationItemType::Sessions,
-                    /*skills_count*/ None,
-                );
             }
         }
 
@@ -1453,7 +1498,8 @@ fn extract_plugin_migration_details(
                 plugin = %plugin_id.as_key(),
                 marketplace = %plugin_id.marketplace_name,
                 source_root = %source_root.display(),
-                "could not find marketplace source needed to reinstall enabled external agent plugin"
+                repo_root = ?repo_root,
+                "found enabled external agent plugin in config but could not find marketplace source needed to reinstall it during import"
             );
             continue;
         }

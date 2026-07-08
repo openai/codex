@@ -13,10 +13,13 @@ use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginsMigration;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
@@ -413,6 +416,101 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     assert_eq!(event_params["error_type"], "session_missing");
     assert!(event_params.get("raw_errors").is_none());
     assert!(event_params.get("message").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_agent_config_detect_discovers_repo_marketplace_from_project_registry()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source_home = external_agent_home(codex_home.path());
+    let repo_root = codex_home.path().join("repo");
+    let plugin_root = repo_root.join("plugins/build-cop");
+    std::fs::create_dir_all(&source_home)?;
+    std::fs::create_dir_all(repo_root.join(".git"))?;
+    std::fs::create_dir_all(repo_root.join(".claude-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        source_home.join("settings.json"),
+        r#"{
+  "enabledPlugins": {
+    "build-cop@treehouse": true
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(".claude.json"),
+        serde_json::json!({
+            "projects": {
+                repo_root.display().to_string(): {}
+            }
+        })
+        .to_string(),
+    )?;
+    std::fs::write(
+        repo_root.join(".claude-plugin/marketplace.json"),
+        r#"{
+  "name": "treehouse",
+  "plugins": [{
+    "name": "build-cop",
+    "source": {
+      "source": "local",
+      "path": "./plugins/build-cop"
+    }
+  }]
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"build-cop","version":"0.1.0"}"#,
+    )?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({ "includeHome": true })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigDetectResponse = to_response(response)?;
+    let plugin_items = response
+        .items
+        .into_iter()
+        .filter(|item| item.item_type == ExternalAgentConfigMigrationItemType::Plugins)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        plugin_items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate enabled plugins from {}",
+                repo_root.join(".claude/settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "treehouse".to_string(),
+                    plugin_names: vec!["build-cop".to_string()],
+                }],
+                ..Default::default()
+            }),
+        }]
+    );
 
     Ok(())
 }

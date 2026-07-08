@@ -222,6 +222,121 @@ async fn detect_home_lists_recent_sessions() {
 }
 
 #[tokio::test]
+async fn detect_home_discovers_repo_plugins_from_external_agent_project_registry() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    write_repo_marketplace_plugin(&repo_root, "treehouse", "build-cop");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "build-cop@treehouse": true
+          }
+        }"#,
+    )
+    .expect("write home settings");
+    fs::write(
+        root.path().join(EXTERNAL_AGENT_PROJECT_CONFIG_FILE),
+        serde_json::json!({
+            "projects": {
+                repo_root.display().to_string(): {}
+            }
+        })
+        .to_string(),
+    )
+    .expect("write external agent project registry");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    let plugin_items = items
+        .into_iter()
+        .filter(|item| item.item_type == ExternalAgentConfigMigrationItemType::Plugins)
+        .collect::<Vec<_>>();
+    assert_eq!(plugin_items.len(), 1);
+    assert_eq!(plugin_items[0].cwd.as_ref(), Some(&repo_root));
+    assert_eq!(
+        plugin_items[0]
+            .details
+            .as_ref()
+            .expect("plugin details")
+            .plugins,
+        vec![PluginsMigration {
+            marketplace_name: "treehouse".to_string(),
+            plugin_names: vec!["build-cop".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn detect_home_discovers_repo_plugins_from_recent_session_cwds() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let repo_root = root.path().join("repo");
+    let session_path = external_agent_home
+        .join("projects")
+        .join("repo")
+        .join("session.jsonl");
+    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::create_dir_all(session_path.parent().expect("session parent")).expect("create sessions");
+    write_repo_marketplace_plugin(&repo_root, "treehouse", "build-cop");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "build-cop@treehouse": true
+          }
+        }"#,
+    )
+    .expect("write home settings");
+    fs::write(
+        session_path,
+        serde_json::json!({
+            "type": "user",
+            "cwd": &repo_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
+    )
+    .expect("write session");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    let plugin_items = items
+        .into_iter()
+        .filter(|item| item.item_type == ExternalAgentConfigMigrationItemType::Plugins)
+        .collect::<Vec<_>>();
+    assert_eq!(plugin_items.len(), 1);
+    assert_eq!(plugin_items[0].cwd.as_ref(), Some(&repo_root));
+    assert_eq!(
+        plugin_items[0]
+            .details
+            .as_ref()
+            .expect("plugin details")
+            .plugins,
+        vec![PluginsMigration {
+            marketplace_name: "treehouse".to_string(),
+            plugin_names: vec!["build-cop".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
 async fn detect_repo_lists_agents_md_for_each_cwd() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
