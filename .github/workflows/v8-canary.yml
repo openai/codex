@@ -308,8 +308,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/upstream-rusty-v8/target
     strategy:
       fail-fast: false
       matrix:
@@ -322,7 +320,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: ./.github/actions/setup-ci
+      - id: setup_ci
+        uses: ./.github/actions/setup-ci
 
       - name: Configure git for upstream checkout
         shell: bash
@@ -366,8 +365,8 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
-            ${{ env.CARGO_TARGET_DIR }}/sccache
-            ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/gn_out
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}/${{ matrix.target }}/release/gn_out
           key: rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
           restore-keys: |
             rusty-v8-source-${{ matrix.target }}-${{ matrix.runner }}-sandbox-
@@ -376,7 +375,7 @@ jobs:
         shell: pwsh
         env:
           SCCACHE_CACHE_SIZE: 256M
-          SCCACHE_DIR: ${{ env.CARGO_TARGET_DIR }}/sccache
+          SCCACHE_DIR: ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
           SCCACHE_IDLE_TIMEOUT: 0
         run: |
           $version = "v0.8.2"
