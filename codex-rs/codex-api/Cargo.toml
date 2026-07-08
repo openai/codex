@@ -13,6 +13,7 @@ codex-client = { workspace = true }
 codex-http-client = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
+codex-websocket-client = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }

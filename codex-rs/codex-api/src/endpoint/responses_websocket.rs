@@ -11,8 +11,9 @@ use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
-use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
-use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+use codex_http_client::HttpClientFactory;
+use codex_websocket_client::WebSocketConnection;
+use codex_websocket_client::WebSocketConnector;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -25,14 +26,10 @@ use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -62,7 +59,7 @@ enum WsCommand {
 }
 
 impl WsStream {
-    fn new(inner: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
+    fn new(inner: WebSocketConnection) -> Self {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
 
@@ -334,6 +331,7 @@ impl ResponsesWebsocketClient {
     )]
     pub async fn connect(
         &self,
+        http_client_factory: &HttpClientFactory,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
@@ -349,7 +347,7 @@ impl ResponsesWebsocketClient {
         self.auth.add_auth_headers(&mut headers);
 
         let (stream, _status, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+            connect_websocket(ws_url, headers, http_client_factory, turn_state.clone()).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -369,6 +367,7 @@ impl ResponsesWebsocketClient {
     /// a usable connection from a policy rejection that closes right away.
     pub async fn probe_handshake(
         &self,
+        http_client_factory: &HttpClientFactory,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         immediate_close_timeout: Duration,
@@ -383,7 +382,13 @@ impl ResponsesWebsocketClient {
         self.auth.add_auth_headers(&mut headers);
 
         let (mut stream, status, reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url.clone(), headers, /*turn_state*/ None).await?;
+            connect_websocket(
+                ws_url.clone(),
+                headers,
+                http_client_factory,
+                /*turn_state*/ None,
+            )
+            .await?;
         let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
             .await
             .ok()
@@ -437,9 +442,9 @@ fn merge_request_headers(
 async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
+    http_client_factory: &HttpClientFactory,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
-    ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
     let mut request = url
@@ -448,20 +453,9 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    // Secure websocket traffic needs the same custom-CA policy as reqwest-based HTTPS traffic.
-    // If a Codex-specific CA bundle is configured, build an explicit rustls connector so this
-    // websocket path does not fall back to tungstenite's default native-roots-only behavior.
-    let connector = maybe_build_rustls_client_config_with_custom_ca()
-        .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
-        .map(tokio_tungstenite::Connector::Rustls);
-
-    let response = connect_async_tls_with_config(
-        request,
-        Some(websocket_config()),
-        false, // `false` means "do not disable Nagle", which is tungstenite's recommended default.
-        connector,
-    )
-    .await;
+    let connector = WebSocketConnector::new(http_client_factory)
+        .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
+    let response = connector.connect(request, websocket_config()).await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
