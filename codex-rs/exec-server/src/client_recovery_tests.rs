@@ -57,14 +57,44 @@ fn recovery_does_not_retry_other_registry_conflicts() {
     assert!(!is_retryable_recovery_error(&error));
 }
 
+#[test]
+fn process_event_reorder_rejects_large_sequence_gap() {
+    let state = SessionState::new(/*recoverable*/ true);
+
+    let error = state
+        .publish_ordered_event(ExecProcessEvent::Closed { seq: u64::MAX })
+        .expect_err("large process event sequence gap should be rejected");
+
+    assert!(error.contains("ahead"));
+}
+
+#[test]
+fn process_event_reorder_rejects_oversized_output() {
+    let state = SessionState::new(/*recoverable*/ true);
+
+    let error = state
+        .publish_ordered_event(ExecProcessEvent::Output(ProcessOutputChunk {
+            seq: 1,
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![0; super::super::MAX_PENDING_PROCESS_EVENT_BYTES + 1].into(),
+        }))
+        .expect_err("oversized pending process output should be rejected");
+
+    assert!(error.contains("bytes"));
+}
+
 #[tokio::test]
 async fn recovery_adds_sandbox_denial_to_pending_exit_event() {
     let state = SessionState::new(/*recoverable*/ true);
-    assert!(!state.publish_ordered_event(ExecProcessEvent::Exited {
-        seq: 2,
-        exit_code: 1,
-        sandbox_denied: None,
-    }));
+    assert!(
+        !state
+            .publish_ordered_event(ExecProcessEvent::Exited {
+                seq: 2,
+                exit_code: 1,
+                sandbox_denied: None,
+            })
+            .expect("pending exit should fit within reorder limits")
+    );
 
     state
         .recover_events(ReadResponse {

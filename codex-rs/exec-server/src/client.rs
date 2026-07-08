@@ -113,6 +113,9 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
+const MAX_PENDING_PROCESS_EVENTS: usize = 256;
+const MAX_PENDING_PROCESS_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_PROCESS_EVENT_SEQUENCE_GAP: u64 = 256;
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -173,6 +176,7 @@ struct OrderedSessionEvents {
     // different tasks and can reach the client out of order. Keep future events
     // here until all lower sequence numbers have been published.
     pending: BTreeMap<u64, ExecProcessEvent>,
+    pending_bytes: usize,
     failure: Option<String>,
 }
 
@@ -869,10 +873,10 @@ impl SessionState {
     /// `Closed` event. The caller uses that signal to remove the session route
     /// after the terminal event is visible to subscribers, rather than when a
     /// possibly-early closed notification first arrives.
-    fn publish_ordered_event(&self, event: ExecProcessEvent) -> bool {
+    fn publish_ordered_event(&self, event: ExecProcessEvent) -> Result<bool, String> {
         let Some(seq) = event.seq() else {
             self.events.publish(event);
-            return false;
+            return Ok(false);
         };
 
         let mut ordered_events = self
@@ -885,11 +889,11 @@ impl SessionState {
             || ordered_events.closed_published
             || seq <= ordered_events.last_published_seq
         {
-            return false;
+            return Ok(false);
         }
 
-        ordered_events.pending.entry(seq).or_insert(event);
-        self.publish_ready(&mut ordered_events)
+        ordered_events.insert_pending(event)?;
+        Ok(self.publish_ready(&mut ordered_events))
     }
 
     fn publish_ready(&self, ordered_events: &mut OrderedSessionEvents) -> bool {
@@ -899,6 +903,9 @@ impl SessionState {
             let Some(event) = ordered_events.pending.remove(&next_seq) else {
                 break;
             };
+            ordered_events.pending_bytes = ordered_events
+                .pending_bytes
+                .saturating_sub(pending_process_event_bytes(&event));
             ordered_events.last_published_seq = next_seq;
             ordered_events.exit_published |= matches!(&event, ExecProcessEvent::Exited { .. });
             let is_closed = matches!(&event, ExecProcessEvent::Closed { .. });
@@ -919,6 +926,7 @@ impl SessionState {
         }
         ordered_events.failure = Some(message.clone());
         ordered_events.pending.clear();
+        ordered_events.pending_bytes = 0;
         self.events.publish(ExecProcessEvent::Failed(message));
         drop(ordered_events);
         self.wake_tx
@@ -951,6 +959,65 @@ impl SessionState {
         self.next_write_id
             .fetch_add(1, Ordering::Relaxed)
             .to_string()
+    }
+}
+
+impl OrderedSessionEvents {
+    fn insert_pending(&mut self, event: ExecProcessEvent) -> Result<(), String> {
+        let Some(seq) = event.seq() else {
+            return Err("cannot reorder an unsequenced process event".to_string());
+        };
+        if self.pending.contains_key(&seq) {
+            return Ok(());
+        }
+
+        let next_seq = self.last_published_seq.saturating_add(1);
+        if seq.saturating_sub(next_seq) > MAX_PROCESS_EVENT_SEQUENCE_GAP {
+            return Err(format!(
+                "process event sequence {seq} is more than {MAX_PROCESS_EVENT_SEQUENCE_GAP} entries ahead of {next_seq}"
+            ));
+        }
+        if self.pending.len() >= MAX_PENDING_PROCESS_EVENTS {
+            return Err(format!(
+                "process event reorder buffer exceeds {MAX_PENDING_PROCESS_EVENTS} entries"
+            ));
+        }
+
+        let event_bytes = pending_process_event_bytes(&event);
+        let pending_bytes = self.pending_bytes.saturating_add(event_bytes);
+        if pending_bytes > MAX_PENDING_PROCESS_EVENT_BYTES {
+            return Err(format!(
+                "process event reorder buffer exceeds {MAX_PENDING_PROCESS_EVENT_BYTES} bytes"
+            ));
+        }
+
+        self.pending.insert(seq, event);
+        self.pending_bytes = pending_bytes;
+        Ok(())
+    }
+}
+
+fn pending_process_event_bytes(event: &ExecProcessEvent) -> usize {
+    match event {
+        ExecProcessEvent::Output(chunk) => chunk.chunk.0.len(),
+        ExecProcessEvent::Failed(message) => message.len(),
+        ExecProcessEvent::Exited { .. } | ExecProcessEvent::Closed { .. } => 0,
+    }
+}
+
+fn finish_process_event(
+    inner: &Inner,
+    process_id: &ProcessId,
+    session: &Arc<SessionState>,
+    result: Result<bool, String>,
+) {
+    match result {
+        Ok(true) => inner.remove_session_if(process_id, session),
+        Ok(false) => {}
+        Err(message) => {
+            session.set_failure(message);
+            inner.remove_session_if(process_id, session);
+        }
     }
 }
 
@@ -1149,46 +1216,46 @@ async fn handle_server_notification(
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
-                session.note_change(params.seq);
-                let published_closed =
+                let result =
                     session.publish_ordered_event(ExecProcessEvent::Output(ProcessOutputChunk {
                         seq: params.seq,
                         stream: params.stream,
                         chunk: params.chunk,
                     }));
-                if published_closed {
-                    inner.remove_session_if(&params.process_id, &session);
+                if result.is_ok() {
+                    session.note_change(params.seq);
                 }
+                finish_process_event(inner, &params.process_id, &session, result);
             }
         }
         EXEC_EXITED_METHOD => {
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
-                session.note_change(params.seq);
-                let published_closed = session.publish_ordered_event(ExecProcessEvent::Exited {
+                let result = session.publish_ordered_event(ExecProcessEvent::Exited {
                     seq: params.seq,
                     exit_code: params.exit_code,
                     sandbox_denied: params.sandbox_denied,
                 });
-                if published_closed {
-                    inner.remove_session_if(&params.process_id, &session);
+                if result.is_ok() {
+                    session.note_change(params.seq);
                 }
+                finish_process_event(inner, &params.process_id, &session, result);
             }
         }
         EXEC_CLOSED_METHOD => {
             let params: ExecClosedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
-                session.note_change(params.seq);
                 // Closed is terminal, but it can arrive before tail output or
                 // exited. Keep routing this process until the ordered publisher
                 // says Closed has actually been delivered.
-                let published_closed =
+                let result =
                     session.publish_ordered_event(ExecProcessEvent::Closed { seq: params.seq });
-                if published_closed {
-                    inner.remove_session_if(&params.process_id, &session);
+                if result.is_ok() {
+                    session.note_change(params.seq);
                 }
+                finish_process_event(inner, &params.process_id, &session, result);
             }
         }
         HTTP_REQUEST_BODY_DELTA_METHOD => {

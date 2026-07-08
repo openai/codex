@@ -81,9 +81,8 @@ impl SessionState {
             for chunk in chunks {
                 if chunk.seq > ordered_events.last_published_seq {
                     ordered_events
-                        .pending
-                        .entry(chunk.seq)
-                        .or_insert(ExecProcessEvent::Output(chunk));
+                        .insert_pending(ExecProcessEvent::Output(chunk))
+                        .map_err(ExecServerError::Protocol)?;
                 }
             }
             if closed {
@@ -96,8 +95,8 @@ impl SessionState {
                     }
                     None => {
                         ordered_events
-                            .pending
-                            .insert(target_seq, ExecProcessEvent::Closed { seq: target_seq });
+                            .insert_pending(ExecProcessEvent::Closed { seq: target_seq })
+                            .map_err(ExecServerError::Protocol)?;
                     }
                 }
             }
@@ -133,14 +132,13 @@ impl SessionState {
                         "recovering exited process did not include its exit code".to_string(),
                     )
                 })?;
-                ordered_events.pending.insert(
-                    seq,
-                    ExecProcessEvent::Exited {
+                ordered_events
+                    .insert_pending(ExecProcessEvent::Exited {
                         seq,
                         exit_code,
                         sandbox_denied: Some(sandbox_denied),
-                    },
-                );
+                    })
+                    .map_err(ExecServerError::Protocol)?;
             } else if missing_count != 0 {
                 return Err(recovery_gap_error(target_seq));
             }
