@@ -90,12 +90,6 @@ const MCP_UI_MODEL_VISIBILITY: &str = "model";
 // a slow optional server from holding the turn until its configured timeout.
 const OPTIONAL_MCP_TURN_STARTUP_GRACE: Duration = Duration::from_secs(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PendingOptionalToolListing {
-    WaitForStartup,
-    SkipAfterStartupGrace,
-}
-
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
 /// Tools without visibility metadata remain visible.
@@ -494,23 +488,51 @@ impl McpConnectionManager {
     }
 
     /// Returns all tools with model-visible names normalized.
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::WaitForStartup)
-            .await
+        let mut tools = Vec::new();
+        for (server_name, managed_client) in &self.clients {
+            managed_client.reconnect_failed_startup().await;
+            let has_cached_tools = managed_client.has_cached_tools();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tools,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tools,
+                    startup_complete
+                ))
+                .await
+            else {
+                continue;
+            };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
+            tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
+        }
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
     /// Returns tools available to a turn after giving uncached optional servers a short
     /// startup grace period.
-    pub async fn list_all_tools_for_turn(&self) -> Vec<ToolInfo> {
-        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::SkipAfterStartupGrace)
-            .await
-    }
-
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
-    async fn list_all_tools_with_pending_optional(
-        &self,
-        pending_optional: PendingOptionalToolListing,
-    ) -> Vec<ToolInfo> {
+    pub async fn list_all_tools_for_turn(&self) -> Vec<ToolInfo> {
         let tools: Vec<ToolInfo> =
             futures::future::join_all(self.clients.iter().map(|(server_name, managed_client)| {
                 let required = self.required_servers.binary_search(server_name).is_ok();
@@ -525,11 +547,7 @@ impl McpConnectionManager {
                         startup_complete,
                         "listing MCP server tools while building tool list"
                     );
-                    if pending_optional == PendingOptionalToolListing::SkipAfterStartupGrace
-                        && !required
-                        && !startup_complete
-                        && !has_cached_tools
-                    {
+                    if !required && !startup_complete && !has_cached_tools {
                         return match tokio::time::timeout(
                             OPTIONAL_MCP_TURN_STARTUP_GRACE,
                             managed_client.listed_tools(),

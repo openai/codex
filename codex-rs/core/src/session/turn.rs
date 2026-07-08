@@ -550,8 +550,14 @@ async fn build_skills_and_plugins(
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match step_context.mcp_tools().or_cancel(cancellation_token).await {
-            Ok(mcp_tools) => mcp_tools.to_vec(),
+        match step_context
+            .mcp
+            .manager_arc()
+            .list_all_tools_for_turn()
+            .or_cancel(cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
             Err(_) if turn_context.apps_enabled() => return None,
             Err(_) => Vec::new(),
         }
