@@ -42,19 +42,19 @@ async fn model_migration_prompt_only_shows_for_deprecated_models() {
     let seen = BTreeMap::new();
     assert!(should_show_model_migration_prompt(
         "gpt-5.2",
-        "gpt-5.4",
+        "gpt-5.5",
         &seen,
         &all_model_presets()
     ));
     assert!(should_show_model_migration_prompt(
-        "gpt-5.3-codex",
         "gpt-5.4",
+        "gpt-5.5",
         &seen,
         &all_model_presets()
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.3-codex",
-        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4",
         &seen,
         &all_model_presets()
     ));
@@ -342,13 +342,13 @@ async fn model_migration_prompt_shows_for_hidden_model() {
     let mut available_models = all_model_presets();
     let current = available_models
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.3-codex")
-        .expect("gpt-5.3-codex preset present");
+        .find(|preset| preset.model == "gpt-5.2")
+        .expect("gpt-5.2 preset present");
     current.show_in_picker = false;
     let current = current.clone();
     assert!(
         !current.show_in_picker,
-        "expected gpt-5.3-codex to be hidden from picker for this test"
+        "expected gpt-5.2 to be hidden from picker for this test"
     );
 
     let upgrade = current.upgrade.as_ref().expect("upgrade configured");

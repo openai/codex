@@ -36,7 +36,7 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })
-        .with_model("gpt-5.3-codex");
+        .with_model("gpt-5.2");
     let test = builder.build_with_websocket_server(&server).await?;
 
     test.submit_turn("non-lite turn").await?;
@@ -72,7 +72,7 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
         .expect("missing lite turn request")
         .body_json();
 
-    assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.3-codex"));
+    assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.2"));
     assert_eq!(lite_turn["model"].as_str(), Some("gpt-5.4"));
     assert!(
         non_lite_turn

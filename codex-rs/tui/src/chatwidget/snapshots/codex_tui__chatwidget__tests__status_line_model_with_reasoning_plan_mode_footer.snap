@@ -6,4 +6,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.3-codex medium                          Plan mode (shift+tab to cycle)  "
+"  gpt-5.2 medium                                Plan mode (shift+tab to cycle)  "

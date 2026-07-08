@@ -548,7 +548,7 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 "spawn_agent",
                 function_payload(json!({
                     "message": "inspect this repo",
-                    "model": "gpt-5.3-codex",
+                    "model": "gpt-5.4-mini",
                     "service_tier": ServiceTier::Fast.request_value()
                 })),
             ))
@@ -559,7 +559,7 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
         assert_eq!(
             err,
             FunctionCallError::RespondToModel(
-                "Service tier `priority` is not supported for model `gpt-5.3-codex`. Supported service tiers: none"
+                "Service tier `priority` is not supported for model `gpt-5.4-mini`. Supported service tiers: none"
                     .to_string()
             )
         );
@@ -637,7 +637,7 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
                 "spawn_agent",
                 function_payload(json!({
                     "message": "inspect this repo",
-                    "model": "gpt-5.3-codex"
+                    "model": "gpt-5.4-mini"
                 })),
             ))
             .await

@@ -1354,7 +1354,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
 
 #[tokio::test]
 async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
@@ -1368,7 +1368,7 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        plan_messages.contains("Model changed to gpt-5.2 medium for Plan mode."),
         "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
     );
 }
@@ -1614,10 +1614,10 @@ async fn collab_mode_applies_default_preset() {
 
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
-    chat.set_model("gpt-5.3-codex");
+    chat.set_model("gpt-5.4");
     chat.set_personality(Personality::Friendly);
 
     chat.bottom_pane
