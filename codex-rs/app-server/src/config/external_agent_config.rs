@@ -1,3 +1,5 @@
+mod cursor;
+
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -8,11 +10,14 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
+use codex_external_agent_migration::build_mcp_config_from_cursor;
 use codex_external_agent_migration::build_mcp_config_from_external;
 use codex_external_agent_migration::count_missing_commands;
 use codex_external_agent_migration::count_missing_subagents;
 use codex_external_agent_migration::hook_migration_event_names;
 use codex_external_agent_migration::import_commands;
+use codex_external_agent_migration::import_cursor_commands;
+use codex_external_agent_migration::import_cursor_subagents;
 use codex_external_agent_migration::import_hooks;
 use codex_external_agent_migration::import_subagents;
 use codex_external_agent_migration::missing_command_names;
@@ -36,8 +41,34 @@ const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.d
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
 const EXTERNAL_AGENT_DIR: &str = ".claude";
 const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
+const CURSOR_AGENT_DIR: &str = ".cursor";
+const CURSOR_LEGACY_RULES_FILE: &str = ".cursorrules";
 const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 const EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ExternalAgentSource {
+    #[default]
+    ClaudeCode,
+    Cursor,
+}
+
+impl ExternalAgentSource {
+    fn from_api_source(source: Option<&str>) -> Self {
+        if source.is_some_and(|source| source.eq_ignore_ascii_case("cursor")) {
+            Self::Cursor
+        } else {
+            Self::ClaudeCode
+        }
+    }
+
+    fn config_dir(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => EXTERNAL_AGENT_DIR,
+            Self::Cursor => CURSOR_AGENT_DIR,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalAgentConfigDetectOptions {
@@ -176,15 +207,28 @@ pub(crate) struct ExternalAgentConfigMigrationItem {
 pub(crate) struct ExternalAgentConfigService {
     codex_home: PathBuf,
     external_agent_home: PathBuf,
+    source: ExternalAgentSource,
 }
 
 impl ExternalAgentConfigService {
     pub(crate) fn new(codex_home: PathBuf) -> Self {
-        let external_agent_home = default_external_agent_home();
+        Self::new_for_source(codex_home, ExternalAgentSource::ClaudeCode)
+    }
+
+    fn new_for_source(codex_home: PathBuf, source: ExternalAgentSource) -> Self {
+        let external_agent_home = default_external_agent_home(source);
         Self {
             codex_home,
             external_agent_home,
+            source,
         }
+    }
+
+    pub(crate) fn with_api_source(&self, source: Option<&str>) -> Self {
+        Self::new_for_source(
+            self.codex_home.clone(),
+            ExternalAgentSource::from_api_source(source),
+        )
     }
 
     #[cfg(test)]
@@ -192,6 +236,7 @@ impl ExternalAgentConfigService {
         Self {
             codex_home,
             external_agent_home,
+            source: ExternalAgentSource::ClaudeCode,
         }
     }
 
@@ -219,6 +264,9 @@ impl ExternalAgentConfigService {
         &self,
         path: &Path,
     ) -> io::Result<Option<PathBuf>> {
+        if self.source != ExternalAgentSource::ClaudeCode {
+            return Ok(None);
+        }
         if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
             return Ok(None);
         }
@@ -444,11 +492,12 @@ impl ExternalAgentConfigService {
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
         let cwd = repo_root.map(Path::to_path_buf);
-        let source_settings = repo_root.map_or_else(
-            || self.external_agent_home.join("settings.json"),
-            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
-        );
-        let settings = effective_external_settings(&source_settings)?;
+        let source_settings = self.source_settings(repo_root);
+        let settings = if self.source == ExternalAgentSource::ClaudeCode {
+            effective_external_settings(&source_settings)?
+        } else {
+            None
+        };
         let target_config = repo_root.map_or_else(
             || self.codex_home.join("config.toml"),
             |repo_root| repo_root.join(".codex").join("config.toml"),
@@ -489,13 +538,7 @@ impl ExternalAgentConfigService {
             }
         }
 
-        let source_root = self.source_root(repo_root);
-        let mcp_settings = self.mcp_settings(repo_root, settings.clone())?;
-        let migrated_mcp = build_mcp_config_from_external(
-            source_root.as_path(),
-            Some(self.external_agent_home.as_path()),
-            mcp_settings.as_ref(),
-        )?;
+        let migrated_mcp = self.build_mcp_config(repo_root, settings.clone())?;
         let mut mcp_server_names = migrated_mcp_server_names(&migrated_mcp);
         if !is_empty_toml_table(&migrated_mcp) {
             if target_config.exists() {
@@ -515,7 +558,7 @@ impl ExternalAgentConfigService {
                     item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
                     description: format!(
                         "Migrate MCP servers from {} into {}",
-                        source_root.display(),
+                        self.mcp_source_path(repo_root).display(),
                         target_config.display()
                     ),
                     cwd: cwd.clone(),
@@ -532,16 +575,16 @@ impl ExternalAgentConfigService {
             }
         }
 
-        let source_external_agent_dir = repo_root.map_or_else(
-            || self.external_agent_home.clone(),
-            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR),
-        );
+        let source_external_agent_dir = self.source_config_dir(repo_root);
         let target_hooks = repo_root.map_or_else(
             || self.codex_home.join("hooks.json"),
             |repo_root| repo_root.join(".codex").join("hooks.json"),
         );
-        let hook_event_names =
-            hook_migration_event_names(source_external_agent_dir.as_path(), &target_hooks)?;
+        let hook_event_names = if self.source == ExternalAgentSource::ClaudeCode {
+            hook_migration_event_names(source_external_agent_dir.as_path(), &target_hooks)?
+        } else {
+            Vec::new()
+        };
         if !hook_event_names.is_empty() && is_missing_or_empty_text_file(&target_hooks)? {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Hooks,
@@ -565,7 +608,7 @@ impl ExternalAgentConfigService {
 
         let source_skills = repo_root.map_or_else(
             || self.external_agent_home.join("skills"),
-            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
+            |repo_root| repo_root.join(self.source.config_dir()).join("skills"),
         );
         let target_skills = repo_root.map_or_else(
             || self.home_target_skills_dir(),
@@ -651,23 +694,20 @@ impl ExternalAgentConfigService {
         }
 
         let source_agents_md = if let Some(repo_root) = repo_root {
-            find_repo_agents_md_source(repo_root)?
+            self.repo_agents_md_sources(repo_root)?
         } else {
-            let path = self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD);
-            is_non_empty_text_file(&path)?.then_some(path)
+            self.home_agents_md_sources()?
         };
         let target_agents_md = repo_root.map_or_else(
             || self.codex_home.join("AGENTS.md"),
             |repo_root| repo_root.join("AGENTS.md"),
         );
-        if let Some(source_agents_md) = source_agents_md
-            && is_missing_or_empty_text_file(&target_agents_md)?
-        {
+        if !source_agents_md.is_empty() && is_missing_or_empty_text_file(&target_agents_md)? {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
                     "Migrate {} to {}",
-                    source_agents_md.display(),
+                    display_source_paths(&source_agents_md),
                     target_agents_md.display()
                 ),
                 cwd: cwd.clone(),
@@ -680,7 +720,9 @@ impl ExternalAgentConfigService {
             );
         }
 
-        if let Some(settings) = settings.as_ref() {
+        if self.source == ExternalAgentSource::ClaudeCode
+            && let Some(settings) = settings.as_ref()
+        {
             match ConfigBuilder::default()
                 .codex_home(self.codex_home.clone())
                 .fallback_cwd(Some(self.codex_home.clone()))
@@ -728,7 +770,7 @@ impl ExternalAgentConfigService {
             }
         }
 
-        if repo_root.is_none() {
+        if repo_root.is_none() && self.source == ExternalAgentSource::ClaudeCode {
             let sessions = detect_recent_sessions(&self.external_agent_home, &self.codex_home)?;
             if !sessions.is_empty() {
                 items.push(ExternalAgentConfigMigrationItem {
@@ -759,6 +801,61 @@ impl ExternalAgentConfigService {
             .parent()
             .map(|parent| parent.join(".agents").join("skills"))
             .unwrap_or_else(|| PathBuf::from(".agents").join("skills"))
+    }
+
+    fn source_config_dir(&self, repo_root: Option<&Path>) -> PathBuf {
+        repo_root.map_or_else(
+            || self.external_agent_home.clone(),
+            |repo_root| repo_root.join(self.source.config_dir()),
+        )
+    }
+
+    fn source_settings(&self, repo_root: Option<&Path>) -> PathBuf {
+        self.source_config_dir(repo_root).join("settings.json")
+    }
+
+    fn mcp_source_path(&self, repo_root: Option<&Path>) -> PathBuf {
+        match self.source {
+            ExternalAgentSource::ClaudeCode => self.source_root(repo_root),
+            ExternalAgentSource::Cursor => self.source_config_dir(repo_root).join("mcp.json"),
+        }
+    }
+
+    fn build_mcp_config(
+        &self,
+        repo_root: Option<&Path>,
+        settings: Option<JsonValue>,
+    ) -> io::Result<TomlValue> {
+        match self.source {
+            ExternalAgentSource::ClaudeCode => build_mcp_config_from_external(
+                self.source_root(repo_root).as_path(),
+                Some(self.external_agent_home.as_path()),
+                settings.as_ref(),
+            ),
+            ExternalAgentSource::Cursor => {
+                build_mcp_config_from_cursor(self.source_config_dir(repo_root).as_path())
+            }
+        }
+    }
+
+    fn repo_agents_md_sources(&self, repo_root: &Path) -> io::Result<Vec<PathBuf>> {
+        match self.source {
+            ExternalAgentSource::ClaudeCode => {
+                Ok(find_repo_agents_md_source(repo_root)?.into_iter().collect())
+            }
+            ExternalAgentSource::Cursor => cursor::rule_sources(repo_root),
+        }
+    }
+
+    fn home_agents_md_sources(&self) -> io::Result<Vec<PathBuf>> {
+        if self.source != ExternalAgentSource::ClaudeCode {
+            return Ok(Vec::new());
+        }
+        let path = self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD);
+        Ok(is_non_empty_text_file(&path)?
+            .then_some(path)
+            .into_iter()
+            .collect())
     }
 
     fn mcp_settings(
@@ -830,10 +927,7 @@ impl ExternalAgentConfigService {
         cwd: Option<&Path>,
         details: MigrationDetails,
     ) -> io::Result<(Option<MigrationDetails>, Option<MigrationDetails>)> {
-        let source_settings = cwd.map_or_else(
-            || self.external_agent_home.join("settings.json"),
-            |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
-        );
+        let source_settings = self.source_settings(cwd);
         let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
         let import_sources = effective_external_settings(&source_settings)?
             .map(|settings| collect_marketplace_import_sources(&settings, source_root))
@@ -901,10 +995,7 @@ impl ExternalAgentConfigService {
                 .iter()
                 .map(|plugin_name| format!("{plugin_name}@{marketplace_name}"))
                 .collect::<Vec<_>>();
-            let source_settings = cwd.map_or_else(
-                || self.external_agent_home.join("settings.json"),
-                |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
-            );
+            let source_settings = self.source_settings(cwd);
             let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
             let import_source =
                 effective_external_settings(&source_settings)?.and_then(|settings| {
@@ -1024,6 +1115,9 @@ impl ExternalAgentConfigService {
     }
 
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<Option<(String, String)>> {
+        if self.source != ExternalAgentSource::ClaudeCode {
+            return Ok(None);
+        }
         let repo_root = find_repo_root(cwd)?;
         let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
             (
@@ -1082,7 +1176,7 @@ impl ExternalAgentConfigService {
         let repo_root = find_repo_root(cwd)?;
         let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
             (
-                repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
+                self.source_settings(Some(repo_root)),
                 repo_root.join(".codex").join("config.toml"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -1093,15 +1187,15 @@ impl ExternalAgentConfigService {
                 self.codex_home.join("config.toml"),
             )
         };
-        let settings = self.mcp_settings(
-            repo_root.as_deref(),
-            effective_external_settings(&source_settings)?,
-        )?;
-        let migrated = build_mcp_config_from_external(
-            self.source_root(repo_root.as_deref()).as_path(),
-            Some(self.external_agent_home.as_path()),
-            settings.as_ref(),
-        )?;
+        let settings = if self.source == ExternalAgentSource::ClaudeCode {
+            self.mcp_settings(
+                repo_root.as_deref(),
+                effective_external_settings(&source_settings)?,
+            )?
+        } else {
+            None
+        };
+        let migrated = self.build_mcp_config(repo_root.as_deref(), settings)?;
         if is_empty_toml_table(&migrated) {
             return Ok(Vec::new());
         }
@@ -1133,7 +1227,7 @@ impl ExternalAgentConfigService {
     fn import_subagents(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
         let (source_agents, target_agents) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
-                repo_root.join(EXTERNAL_AGENT_DIR).join("agents"),
+                repo_root.join(self.source.config_dir()).join("agents"),
                 repo_root.join(".codex").join("agents"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -1145,14 +1239,20 @@ impl ExternalAgentConfigService {
             )
         };
 
-        import_subagents(&source_agents, &target_agents)
+        match self.source {
+            ExternalAgentSource::ClaudeCode => import_subagents(&source_agents, &target_agents),
+            ExternalAgentSource::Cursor => import_cursor_subagents(&source_agents, &target_agents),
+        }
     }
 
     fn import_hooks(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
+        if self.source != ExternalAgentSource::ClaudeCode {
+            return Ok(Vec::new());
+        }
         let (source_external_agent_dir, target_hooks) =
             if let Some(repo_root) = find_repo_root(cwd)? {
                 (
-                    repo_root.join(EXTERNAL_AGENT_DIR),
+                    repo_root.join(self.source.config_dir()),
                     repo_root.join(".codex").join("hooks.json"),
                 )
             } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -1175,7 +1275,7 @@ impl ExternalAgentConfigService {
     fn import_commands(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
         let (source_commands, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
-                repo_root.join(EXTERNAL_AGENT_DIR).join("commands"),
+                repo_root.join(self.source.config_dir()).join("commands"),
                 repo_root.join(".agents").join("skills"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -1187,13 +1287,16 @@ impl ExternalAgentConfigService {
             )
         };
 
-        import_commands(&source_commands, &target_skills)
+        match self.source {
+            ExternalAgentSource::ClaudeCode => import_commands(&source_commands, &target_skills),
+            ExternalAgentSource::Cursor => import_cursor_commands(&source_commands, &target_skills),
+        }
     }
 
     fn import_skills(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
         let (source_skills, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
-                repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
+                repo_root.join(self.source.config_dir()).join("skills"),
                 repo_root.join(".agents").join("skills"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -1223,7 +1326,7 @@ impl ExternalAgentConfigService {
                 continue;
             }
 
-            copy_dir_recursive(&entry.path(), &target)?;
+            copy_dir_recursive(&entry.path(), &target, self.source)?;
             copied_names.push(entry.file_name().to_string_lossy().to_string());
         }
 
@@ -1232,21 +1335,21 @@ impl ExternalAgentConfigService {
 
     fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<Option<(String, String)>> {
         let (source_agents_md, target_agents_md) = if let Some(repo_root) = find_repo_root(cwd)? {
-            let Some(source_agents_md) = find_repo_agents_md_source(&repo_root)? else {
+            let source_agents_md = self.repo_agents_md_sources(&repo_root)?;
+            if source_agents_md.is_empty() {
                 return Ok(None);
-            };
+            }
             (source_agents_md, repo_root.join("AGENTS.md"))
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(None);
         } else {
-            (
-                self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD),
-                self.codex_home.join("AGENTS.md"),
-            )
+            let source_agents_md = self.home_agents_md_sources()?;
+            if source_agents_md.is_empty() {
+                return Ok(None);
+            }
+            (source_agents_md, self.codex_home.join("AGENTS.md"))
         };
-        if !is_non_empty_text_file(&source_agents_md)?
-            || !is_missing_or_empty_text_file(&target_agents_md)?
-        {
+        if !is_missing_or_empty_text_file(&target_agents_md)? {
             return Ok(None);
         }
 
@@ -1255,20 +1358,25 @@ impl ExternalAgentConfigService {
         };
         fs::create_dir_all(target_parent)?;
 
-        rewrite_and_copy_text_file(&source_agents_md, &target_agents_md)?;
+        let source_contents = source_agents_md
+            .iter()
+            .map(|source| read_agents_md_source(source, self.source))
+            .collect::<io::Result<Vec<_>>>()?
+            .join("\n\n");
+        fs::write(&target_agents_md, source_contents)?;
         Ok(Some((
-            source_agents_md.display().to_string(),
+            display_source_paths(&source_agents_md),
             target_agents_md.display().to_string(),
         )))
     }
 }
 
-fn default_external_agent_home() -> PathBuf {
+fn default_external_agent_home(source: ExternalAgentSource) -> PathBuf {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        return PathBuf::from(home).join(EXTERNAL_AGENT_DIR);
+        return PathBuf::from(home).join(source.config_dir());
     }
 
-    PathBuf::from(EXTERNAL_AGENT_DIR)
+    PathBuf::from(source.config_dir())
 }
 
 fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
@@ -1620,7 +1728,31 @@ fn find_repo_agents_md_source(repo_root: &Path) -> io::Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
+fn read_agents_md_source(path: &Path, source: ExternalAgentSource) -> io::Result<String> {
+    let contents = fs::read_to_string(path)?;
+    let contents = if source == ExternalAgentSource::Cursor
+        && path.extension().and_then(|extension| extension.to_str()) == Some("mdc")
+    {
+        cursor::strip_markdown_frontmatter(&contents)
+    } else {
+        &contents
+    };
+    Ok(rewrite_external_agent_terms(contents, source))
+}
+
+fn display_source_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn copy_dir_recursive(
+    source: &Path,
+    target: &Path,
+    source_agent: ExternalAgentSource,
+) -> io::Result<()> {
     fs::create_dir_all(target)?;
 
     for entry in fs::read_dir(source)? {
@@ -1630,13 +1762,13 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
+            copy_dir_recursive(&source_path, &target_path, source_agent)?;
             continue;
         }
 
         if file_type.is_file() {
             if is_skill_md(&source_path) {
-                rewrite_and_copy_text_file(&source_path, &target_path)?;
+                rewrite_and_copy_text_file(&source_path, &target_path, source_agent)?;
             } else {
                 fs::copy(source_path, target_path)?;
             }
@@ -1652,25 +1784,36 @@ fn is_skill_md(path: &Path) -> bool {
         .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
 }
 
-fn rewrite_and_copy_text_file(source: &Path, target: &Path) -> io::Result<()> {
+fn rewrite_and_copy_text_file(
+    source: &Path,
+    target: &Path,
+    source_agent: ExternalAgentSource,
+) -> io::Result<()> {
     let source_contents = fs::read_to_string(source)?;
-    let rewritten = rewrite_external_agent_terms(&source_contents);
+    let rewritten = rewrite_external_agent_terms(&source_contents, source_agent);
     fs::write(target, rewritten)
 }
 
-fn rewrite_external_agent_terms(content: &str) -> String {
-    let mut rewritten = replace_case_insensitive_with_boundaries(
-        content,
-        &EXTERNAL_AGENT_CONFIG_MD.to_ascii_lowercase(),
-        "AGENTS.md",
-    );
-    for from in [
-        "claude code",
-        "claude-code",
-        "claude_code",
-        "claudecode",
-        "claude",
-    ] {
+fn rewrite_external_agent_terms(content: &str, source: ExternalAgentSource) -> String {
+    let (doc_file_name, term_variants): (&str, &[&str]) = match source {
+        ExternalAgentSource::ClaudeCode => (
+            EXTERNAL_AGENT_CONFIG_MD,
+            &[
+                "claude code",
+                "claude-code",
+                "claude_code",
+                "claudecode",
+                "claude",
+            ],
+        ),
+        ExternalAgentSource::Cursor => (
+            CURSOR_LEGACY_RULES_FILE,
+            &["cursor agent", "cursor-agent", "cursor"],
+        ),
+    };
+    let mut rewritten =
+        replace_case_insensitive_with_boundaries(content, doc_file_name, "AGENTS.md");
+    for from in term_variants {
         rewritten = replace_case_insensitive_with_boundaries(&rewritten, from, "Codex");
     }
     rewritten

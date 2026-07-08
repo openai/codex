@@ -19,6 +19,12 @@ const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
 
+#[derive(Clone, Copy)]
+enum SourceAgent {
+    ClaudeCode,
+    Cursor,
+}
+
 #[derive(Debug)]
 struct ParsedDocument {
     frontmatter: BTreeMap<String, FrontmatterValue>,
@@ -46,6 +52,26 @@ pub fn build_mcp_config_from_external(
     settings: Option<&JsonValue>,
 ) -> io::Result<TomlValue> {
     let mcp_servers = read_external_mcp_servers(source_root, external_agent_home)?;
+    build_mcp_config(mcp_servers, settings)
+}
+
+pub fn build_mcp_config_from_cursor(cursor_dir: &Path) -> io::Result<TomlValue> {
+    let source_file = cursor_dir.join("mcp.json");
+    if !source_file.is_file() {
+        return Ok(TomlValue::Table(Default::default()));
+    }
+    let raw = fs::read_to_string(&source_file)?;
+    let parsed: JsonValue = serde_json::from_str(&raw)
+        .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
+    let mut mcp_servers = BTreeMap::new();
+    append_mcp_servers_from_value(&parsed, &mut mcp_servers, McpServerMerge::Overwrite);
+    build_mcp_config(mcp_servers, /*settings*/ None)
+}
+
+fn build_mcp_config(
+    mcp_servers: BTreeMap<String, JsonValue>,
+    settings: Option<&JsonValue>,
+) -> io::Result<TomlValue> {
     if mcp_servers.is_empty() {
         return Ok(TomlValue::Table(Default::default()));
     }
@@ -155,6 +181,21 @@ pub fn missing_subagent_names(
 }
 
 pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<Vec<String>> {
+    import_subagents_for_source(source_agents, target_agents, SourceAgent::ClaudeCode)
+}
+
+pub fn import_cursor_subagents(
+    source_agents: &Path,
+    target_agents: &Path,
+) -> io::Result<Vec<String>> {
+    import_subagents_for_source(source_agents, target_agents, SourceAgent::Cursor)
+}
+
+fn import_subagents_for_source(
+    source_agents: &Path,
+    target_agents: &Path,
+    source: SourceAgent,
+) -> io::Result<Vec<String>> {
     if !source_agents.is_dir() {
         return Ok(Vec::new());
     }
@@ -172,7 +213,10 @@ pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Resul
         let Some(metadata) = agent_metadata(&document) else {
             continue;
         };
-        fs::write(&target, render_agent_toml(&document.body, &metadata)?)?;
+        fs::write(
+            &target,
+            render_agent_toml(&document.body, &metadata, source)?,
+        )?;
         imported.push(metadata.name);
     }
 
@@ -195,6 +239,21 @@ pub fn missing_command_names(
 }
 
 pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<Vec<String>> {
+    import_commands_for_source(source_commands, target_skills, SourceAgent::ClaudeCode)
+}
+
+pub fn import_cursor_commands(
+    source_commands: &Path,
+    target_skills: &Path,
+) -> io::Result<Vec<String>> {
+    import_commands_for_source(source_commands, target_skills, SourceAgent::Cursor)
+}
+
+fn import_commands_for_source(
+    source_commands: &Path,
+    target_skills: &Path,
+    source: SourceAgent,
+) -> io::Result<Vec<String>> {
     if !source_commands.is_dir() {
         return Ok(Vec::new());
     }
@@ -214,7 +273,7 @@ pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Resu
         };
         fs::write(
             target_dir.join("SKILL.md"),
-            render_command_skill(&document.body, &name, &description, &source_name),
+            render_command_skill(&document.body, &name, &description, &source_name, source),
         )?;
         imported.push(name);
     }
@@ -627,7 +686,10 @@ fn append_convertible_hook_groups(
                     {
                         command_payload.insert(
                             "statusMessage".to_string(),
-                            JsonValue::String(rewrite_external_agent_terms(status_message)),
+                            JsonValue::String(rewrite_external_agent_terms(
+                                status_message,
+                                SourceAgent::ClaudeCode,
+                            )),
                         );
                     }
                     hook_commands.push(JsonValue::Object(command_payload));
@@ -1069,12 +1131,16 @@ fn agent_metadata(document: &ParsedDocument) -> Option<AgentMetadata> {
     })
 }
 
-fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String> {
+fn render_agent_toml(
+    body: &str,
+    metadata: &AgentMetadata,
+    source: SourceAgent,
+) -> io::Result<String> {
     let mut document = toml::map::Map::new();
     document.insert("name".to_string(), TomlValue::String(metadata.name.clone()));
     document.insert(
         "description".to_string(),
-        TomlValue::String(rewrite_external_agent_terms(&metadata.description)),
+        TomlValue::String(rewrite_external_agent_terms(&metadata.description, source)),
     );
     if let Some(effort) = metadata.effort.as_ref()
         && let Some(effort) = map_agent_reasoning_effort(effort)
@@ -1096,7 +1162,7 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
     }
     document.insert(
         "developer_instructions".to_string(),
-        TomlValue::String(render_agent_body(body)),
+        TomlValue::String(render_agent_body(body, source)),
     );
 
     let serialized = toml::to_string_pretty(&TomlValue::Table(document))
@@ -1104,8 +1170,8 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
     Ok(format!("{}\n", serialized.trim_end()))
 }
 
-fn render_agent_body(body: &str) -> String {
-    let body = rewrite_external_agent_terms(body.trim());
+fn render_agent_body(body: &str, source: SourceAgent) -> String {
+    let body = rewrite_external_agent_terms(body.trim(), source);
     if body.is_empty() {
         "No subagent instructions were found.".to_string()
     } else {
@@ -1160,8 +1226,14 @@ fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
         .join("-")
 }
 
-fn render_command_skill(body: &str, name: &str, description: &str, source_name: &str) -> String {
-    let body = rewrite_external_agent_terms(body.trim());
+fn render_command_skill(
+    body: &str,
+    name: &str,
+    description: &str,
+    source_name: &str,
+    source: SourceAgent,
+) -> String {
+    let body = rewrite_external_agent_terms(body.trim(), source);
     let template_body = if body.is_empty() {
         "No command template body was found.".to_string()
     } else {
@@ -1170,7 +1242,7 @@ fn render_command_skill(body: &str, name: &str, description: &str, source_name: 
     format!(
         "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n",
         yaml_string(name),
-        yaml_string(&rewrite_external_agent_terms(description)),
+        yaml_string(&rewrite_external_agent_terms(description, source)),
     )
 }
 
@@ -1291,14 +1363,24 @@ fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
     Ok(fs::read_to_string(path)?.trim().is_empty())
 }
 
-fn rewrite_external_agent_terms(content: &str) -> String {
-    let mut rewritten = replace_case_insensitive_with_boundaries(
-        content,
-        &external_agent_doc_file_name(),
-        "AGENTS.md",
-    );
-    for from in external_agent_term_variants() {
-        rewritten = replace_case_insensitive_with_boundaries(&rewritten, &from, "Codex");
+fn rewrite_external_agent_terms(content: &str, source: SourceAgent) -> String {
+    let (doc_file_name, term_variants): (&str, &[&str]) = match source {
+        SourceAgent::ClaudeCode => (
+            "CLAUDE.md",
+            &[
+                "claude code",
+                "claude-code",
+                "claude_code",
+                "claudecode",
+                "claude",
+            ],
+        ),
+        SourceAgent::Cursor => (".cursorrules", &["cursor agent", "cursor-agent", "cursor"]),
+    };
+    let mut rewritten =
+        replace_case_insensitive_with_boundaries(content, doc_file_name, "AGENTS.md");
+    for from in term_variants {
+        rewritten = replace_case_insensitive_with_boundaries(&rewritten, from, "Codex");
     }
     rewritten
 }
@@ -1363,20 +1445,6 @@ fn external_agent_project_dir_env_var() -> String {
         "{}_PROJECT_DIR",
         SOURCE_EXTERNAL_AGENT_NAME.to_ascii_uppercase()
     )
-}
-
-fn external_agent_doc_file_name() -> String {
-    format!("{SOURCE_EXTERNAL_AGENT_NAME}.md")
-}
-
-fn external_agent_term_variants() -> [String; 5] {
-    [
-        format!("{SOURCE_EXTERNAL_AGENT_NAME} code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}-code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}_code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}code"),
-        SOURCE_EXTERNAL_AGENT_NAME.to_string(),
-    ]
 }
 
 #[cfg(test)]
@@ -1738,6 +1806,7 @@ command = "enabled-server"
             "source-command-review",
             &description,
             "review",
+            SourceAgent::ClaudeCode,
         );
         let rendered_document = parse_document_content(&rendered);
         assert_eq!(
@@ -1817,9 +1886,11 @@ command = "enabled-server"
             "---\nname: reviewer\ndescription: Review code\nmodel: source-opus\neffort: max\n---\nReview carefully.\n",
         );
         let metadata = agent_metadata(&document).expect("metadata");
-        let rendered: TomlValue =
-            toml::from_str(&render_agent_toml(&document.body, &metadata).expect("render agent"))
-                .expect("parse rendered agent");
+        let rendered: TomlValue = toml::from_str(
+            &render_agent_toml(&document.body, &metadata, SourceAgent::ClaudeCode)
+                .expect("render agent"),
+        )
+        .expect("parse rendered agent");
         let expected: TomlValue = toml::from_str(
             r#"
 name = "reviewer"

@@ -52,6 +52,133 @@ fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String
 }
 
 #[tokio::test]
+async fn external_agent_config_imports_cursor_repo_artifacts() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project_root = codex_home.path().join("repo");
+    let cursor_dir = project_root.join(".cursor");
+    std::fs::create_dir_all(project_root.join(".git"))?;
+    std::fs::create_dir_all(cursor_dir.join("skills/release"))?;
+    std::fs::create_dir_all(cursor_dir.join("commands"))?;
+    std::fs::create_dir_all(cursor_dir.join("agents"))?;
+    std::fs::create_dir_all(cursor_dir.join("rules"))?;
+    std::fs::write(
+        cursor_dir.join("mcp.json"),
+        r#"{"mcpServers":{"docs":{"command":"docs-server","args":["--stdio"]}}}"#,
+    )?;
+    std::fs::write(
+        cursor_dir.join("skills/release/SKILL.md"),
+        "---\nname: release\ndescription: Release with Cursor\n---\n\nUse Cursor to release.\n",
+    )?;
+    std::fs::write(
+        cursor_dir.join("commands/review.md"),
+        "---\ndescription: Review with Cursor\n---\nReview the change in Cursor.\n",
+    )?;
+    std::fs::write(
+        cursor_dir.join("agents/researcher.md"),
+        "---\nname: researcher\ndescription: Cursor research agent\n---\nResearch with Cursor.\n",
+    )?;
+    std::fs::write(
+        project_root.join(".cursorrules"),
+        "Use Cursor for repository work.\n",
+    )?;
+    std::fs::write(
+        cursor_dir.join("rules/always.mdc"),
+        "---\ndescription: Always apply\nalwaysApply: true\n---\nRun checks in Cursor.\n",
+    )?;
+    std::fs::write(
+        cursor_dir.join("rules/scoped.mdc"),
+        "---\ndescription: TypeScript only\nglobs: '*.ts'\nalwaysApply: false\n---\nUse TypeScript.\n",
+    )?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
+            .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({
+                "includeHome": false,
+                "cwds": [&project_root],
+                "source": "cursor"
+            })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
+    assert_eq!(
+        detected
+            .items
+            .iter()
+            .map(|item| item.item_type)
+            .collect::<Vec<_>>(),
+        vec![
+            ExternalAgentConfigMigrationItemType::McpServerConfig,
+            ExternalAgentConfigMigrationItemType::Skills,
+            ExternalAgentConfigMigrationItemType::Commands,
+            ExternalAgentConfigMigrationItemType::Subagents,
+            ExternalAgentConfigMigrationItemType::AgentsMd,
+        ]
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": detected.items,
+                "source": "cursor"
+            })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportResponse = to_response(response)?;
+    let import_id = assert_import_response(response);
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
+    assert!(
+        completed
+            .item_type_results
+            .iter()
+            .all(|result| result.failures.is_empty())
+    );
+
+    let config = std::fs::read_to_string(project_root.join(".codex/config.toml"))?;
+    assert!(config.contains("[mcp_servers.docs]"));
+    assert!(config.contains("command = \"docs-server\""));
+    let skill = std::fs::read_to_string(project_root.join(".agents/skills/release/SKILL.md"))?;
+    assert!(skill.contains("Release with Codex"));
+    let command = std::fs::read_to_string(
+        project_root.join(".agents/skills/source-command-review/SKILL.md"),
+    )?;
+    assert!(command.contains("Review with Codex"));
+    let subagent = std::fs::read_to_string(project_root.join(".codex/agents/researcher.toml"))?;
+    assert!(subagent.contains("Codex research agent"));
+    let agents_md = std::fs::read_to_string(project_root.join("AGENTS.md"))?;
+    assert!(agents_md.contains("Use Codex for repository work."));
+    assert!(agents_md.contains("Run checks in Codex."));
+    assert!(!agents_md.contains("Use TypeScript."));
+    assert!(!agents_md.contains("alwaysApply"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
 -> Result<()> {
     let codex_home = TempDir::new()?;
