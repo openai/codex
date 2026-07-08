@@ -6,10 +6,13 @@ use codex_core::context::ApprovalPromptContext;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::PermissionsInstructions;
 use codex_core::load_exec_policy;
+use codex_login::CodexAuth;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -17,11 +20,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -29,6 +34,7 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use tempfile::TempDir;
+use wiremock::MockServer;
 
 fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -44,6 +50,8 @@ fn model_with_approval_messages(
     on_request_auto_review: &str,
 ) -> codex_protocol::openai_models::ModelInfo {
     let mut model = model_info_from_slug(slug);
+    model.visibility = ModelVisibility::List;
+    model.used_fallback_model_metadata = false;
     model.model_messages = Some(ModelMessages {
         instructions_template: None,
         instructions_variables: None,
@@ -157,6 +165,132 @@ async fn model_change_appends_new_catalog_approval_message() -> Result<()> {
         permissions
             .last()
             .is_some_and(|text| text.contains("model B approvals"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewer_change_appends_matching_catalog_approval_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+    let model_slug = "catalog-approvals-reviewer-model";
+    let model = model_with_approval_messages(
+        model_slug,
+        "catalog user approval instructions",
+        "catalog auto-review approval instructions",
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+    submit_text_turn(&test, "first").await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            ..Default::default()
+        },
+    )
+    .await?;
+    submit_text_turn(&test, "second").await?;
+
+    let permissions = permissions_texts(&req2.single_request());
+    assert_eq!(permissions.len(), 2);
+    assert!(
+        permissions
+            .last()
+            .is_some_and(|text| text.contains("catalog auto-review approval instructions"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_model_catalog_message_change_appends_new_permissions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const ETAG_1: &str = "\"permissions-models-etag-1\"";
+    const ETAG_2: &str = "\"permissions-models-etag-2\"";
+
+    let server = MockServer::start().await;
+    let model_slug = "catalog-approvals-refresh-model";
+    let first_model = model_with_approval_messages(
+        model_slug,
+        "catalog user approvals v1",
+        "catalog auto approvals",
+    );
+    let second_model = model_with_approval_messages(
+        model_slug,
+        "catalog user approvals v2",
+        "catalog auto approvals",
+    );
+    let _spawn_models_mock = responses::mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![first_model],
+        },
+        ETAG_1,
+    )
+    .await;
+    let refresh_models_mock = responses::mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![second_model],
+        },
+        ETAG_2,
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(model_slug)
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.model_provider.request_max_retries = Some(0);
+        });
+    let test = builder.build(&server).await?;
+
+    let _req1 = responses::mount_response_once(
+        &server,
+        sse_response(sse(vec![
+            ev_response_created("resp-1"),
+            ev_completed("resp-1"),
+        ]))
+        .insert_header("X-Models-Etag", ETAG_2),
+    )
+    .await;
+    submit_text_turn(&test, "first").await?;
+    assert_eq!(refresh_models_mock.requests().len(), 1);
+
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+    submit_text_turn(&test, "second").await?;
+
+    let permissions = permissions_texts(&req2.single_request());
+    assert_eq!(permissions.len(), 2);
+    assert!(
+        permissions
+            .last()
+            .is_some_and(|text| text.contains("catalog user approvals v2"))
     );
     Ok(())
 }

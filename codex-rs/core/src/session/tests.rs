@@ -9045,6 +9045,13 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     let previous_context_item = turn_context.to_turn_context_item();
     let previous_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
+    let initial_context = session
+        .build_initial_context_with_world_state(previous_context.as_ref(), &world_state)
+        .await;
+    session
+        .record_conversation_items(previous_context.as_ref(), &initial_context)
+        .await;
+    let expected_history = session.clone_history().await.raw_items().to_vec();
     let mut turn_context = Arc::try_unwrap(previous_context)
         .unwrap_or_else(|_| panic!("previous turn context should have no remaining references"));
     turn_context.sub_id = format!("{}-next", turn_context.sub_id);
@@ -9070,7 +9077,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
-        Vec::new()
+        expected_history
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)

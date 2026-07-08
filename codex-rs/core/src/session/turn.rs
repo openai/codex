@@ -346,6 +346,8 @@ pub(crate) async fn run_turn(
                 if needs_follow_up
                     && (sess.take_new_context_window_request().await || token_limit_reached)
                 {
+                    // TODO(sayan): Decide whether restoring newly approved command prefixes after
+                    // same-turn compaction with deferred executors disabled is worth supporting.
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),

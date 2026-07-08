@@ -62,6 +62,20 @@ fn assert_eq_without_metadata(left: serde_json::Value, right: serde_json::Value)
     );
 }
 
+fn assert_permissions_message(message: &serde_json::Value) {
+    assert_eq!(message["role"].as_str(), Some("developer"));
+    assert!(
+        message["content"]
+            .as_array()
+            .is_some_and(|content| content.iter().any(|item| {
+                item["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("<permissions instructions>"))
+            })),
+        "expected permissions update: {message:?}"
+    );
+}
+
 fn assert_default_env_context(text: &str, cwd: &str) {
     assert_env_context_fragment(text);
     assert!(
@@ -660,16 +674,10 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     let permissions_texts: Vec<&str> = input
         .iter()
-        .filter_map(|msg| {
-            let role = msg["role"].as_str()?;
-            if role != "developer" {
-                return None;
-            }
-            msg["content"]
-                .as_array()
-                .and_then(|content| content.first())
-                .and_then(|item| item["text"].as_str())
-        })
+        .filter(|msg| msg["role"].as_str() == Some("developer"))
+        .filter_map(|msg| msg["content"].as_array())
+        .flatten()
+        .filter_map(|item| item["text"].as_str())
         .collect();
     assert!(
         permissions_texts.iter().any(|text| {
@@ -812,7 +820,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         }),
         "expected model switch section after model override: {expected_settings_update_msg:?}"
     );
-    let expected_env_msg_2 = body2["input"][body1_input.len() + 1].clone();
+    let expected_permissions_update_msg = body2["input"][body1_input.len() + 1].clone();
+    assert_permissions_message(&expected_permissions_update_msg);
+    let expected_env_msg_2 = body2["input"][body1_input.len() + 2].clone();
     assert_eq!(expected_env_msg_2["role"].as_str(), Some("user"));
     let env_text = expected_env_msg_2["content"][0]["text"]
         .as_str()
@@ -821,6 +831,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     assert_default_env_context(env_text, &expected_cwd);
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_settings_update_msg);
+    expected_body2.push(expected_permissions_update_msg);
     expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_user_message_2);
     assert_eq_without_metadata(
@@ -1112,7 +1123,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         }),
         "expected model switch section after model override: {expected_settings_update_msg:?}"
     );
-    let expected_env_update_msg = body2["input"][body1_input.len() + 1].clone();
+    let expected_permissions_update_msg = body2["input"][body1_input.len() + 1].clone();
+    assert_permissions_message(&expected_permissions_update_msg);
+    let expected_env_update_msg = body2["input"][body1_input.len() + 2].clone();
     assert_eq!(expected_env_update_msg["role"].as_str(), Some("user"));
     let expected_env_update_text = expected_env_update_msg["content"][0]["text"]
         .as_str()
@@ -1130,6 +1143,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_contextual_user_msg_1,
         expected_user_message_1,
         expected_settings_update_msg,
+        expected_permissions_update_msg,
         expected_env_update_msg,
         expected_user_message_2,
     ]);

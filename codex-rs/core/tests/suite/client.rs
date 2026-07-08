@@ -1649,12 +1649,9 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
-        .as_str()
-        .expect("invalid permissions message content");
     assert!(
-        permissions_text.contains("`sandbox_mode`"),
-        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+        message_input_text_contains(&request, "developer", "`sandbox_mode`"),
+        "expected a permissions message to mention sandbox_mode"
     );
 
     assert_message_role(&request_body["input"][1], "user");
@@ -2881,10 +2878,6 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
-        .as_str()
-        .expect("invalid permissions message content");
-
     assert!(
         !request_body["instructions"]
             .as_str()
@@ -2893,8 +2886,8 @@ async fn includes_developer_instructions_message_in_request() {
     );
     assert_message_role(&request_body["input"][0], "developer");
     assert!(
-        permissions_text.contains("`sandbox_mode`"),
-        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+        message_input_text_contains(&request, "developer", "`sandbox_mode`"),
+        "expected a permissions message to mention sandbox_mode"
     );
 
     let developer_messages: Vec<&serde_json::Value> = request_body["input"]

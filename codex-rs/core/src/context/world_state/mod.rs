@@ -1,6 +1,7 @@
 mod agents_md;
 mod apps_instructions;
 mod environment;
+mod permissions;
 mod plugins_instructions;
 
 use crate::context::ContextualUserFragment;
@@ -20,6 +21,7 @@ use std::fmt;
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use environment::EnvironmentsState;
+pub(crate) use permissions::PermissionsState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 
 trait ErasedWorldStateSection: Send + Sync {

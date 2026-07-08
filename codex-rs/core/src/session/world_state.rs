@@ -4,6 +4,7 @@ use crate::connectors;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
@@ -29,6 +30,11 @@ impl Session {
         };
 
         let mut world_state = WorldState::default();
+        let exec_policy = self.services.exec_policy.current();
+        world_state.add_section(PermissionsState::from_turn_context(
+            turn_context,
+            exec_policy.as_ref(),
+        ));
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
         if turn_context.config.include_environment_context {
             world_state.add_section(

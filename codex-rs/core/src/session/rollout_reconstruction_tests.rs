@@ -137,12 +137,19 @@ async fn record_initial_history_restores_world_state_baseline() {
     let (session, turn_context) = make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
-    let rollout_items = completed_user_turn_rollout(
-        turn_context.to_turn_context_item(),
-        vec![RolloutItem::WorldState(WorldStateItem::full(
-            world_state.snapshot().into_value(),
-        ))],
-    );
+    let initial_context = session
+        .build_initial_context_with_world_state(turn_context.as_ref(), &world_state)
+        .await;
+    let mut persisted_items = initial_context
+        .iter()
+        .cloned()
+        .map(RolloutItem::ResponseItem)
+        .collect::<Vec<_>>();
+    persisted_items.push(RolloutItem::WorldState(WorldStateItem::full(
+        world_state.snapshot().into_value(),
+    )));
+    let rollout_items =
+        completed_user_turn_rollout(turn_context.to_turn_context_item(), persisted_items);
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -156,7 +163,7 @@ async fn record_initial_history_restores_world_state_baseline() {
         .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
 
-    assert_eq!(session.clone_history().await.raw_items(), &[]);
+    assert_eq!(session.clone_history().await.raw_items(), &initial_context);
 }
 
 #[tokio::test]
