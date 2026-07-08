@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -9,7 +8,6 @@ use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadCatalogChange;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
@@ -17,40 +15,41 @@ use tracing::warn;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::request_processors::thread_from_stored_thread;
+use crate::thread_state::ThreadStateManager;
 
 #[derive(Clone)]
 pub(crate) struct ThreadCatalogSubscriptions {
-    connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    thread_state_manager: ThreadStateManager,
 }
 
 impl ThreadCatalogSubscriptions {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         thread_store: Arc<dyn ThreadStore>,
+        thread_state_manager: ThreadStateManager,
         catalog_state_permit: Arc<Semaphore>,
         fallback_provider: String,
         fallback_cwd: AbsolutePathBuf,
     ) -> Self {
-        let connection_ids = Arc::new(Mutex::new(HashSet::new()));
         let changes = thread_store.subscribe_catalog_changes();
         tokio::spawn(run_catalog_listener(
             changes,
             Arc::downgrade(&thread_store),
             Arc::clone(&outgoing),
-            Arc::clone(&connection_ids),
+            thread_state_manager.clone(),
             catalog_state_permit,
             fallback_provider,
             fallback_cwd,
         ));
-        Self { connection_ids }
+        Self {
+            thread_state_manager,
+        }
     }
 
     pub(crate) async fn subscribe(&self, connection_id: ConnectionId) {
-        self.connection_ids.lock().await.insert(connection_id);
-    }
-
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
-        self.connection_ids.lock().await.remove(&connection_id);
+        self.thread_state_manager
+            .subscribe_catalog(connection_id)
+            .await;
     }
 }
 
@@ -58,7 +57,7 @@ async fn run_catalog_listener(
     mut changes: tokio::sync::broadcast::Receiver<ThreadCatalogChange>,
     thread_store: Weak<dyn ThreadStore>,
     outgoing: Arc<OutgoingMessageSender>,
-    connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    thread_state_manager: ThreadStateManager,
     catalog_state_permit: Arc<Semaphore>,
     fallback_provider: String,
     fallback_cwd: AbsolutePathBuf,
@@ -72,12 +71,7 @@ async fn run_catalog_listener(
             }
             Err(RecvError::Closed) => break,
         };
-        let connection_ids = connection_ids
-            .lock()
-            .await
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+        let connection_ids = thread_state_manager.catalog_subscribers().await;
         if connection_ids.is_empty() {
             continue;
         }

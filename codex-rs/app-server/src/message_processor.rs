@@ -255,6 +255,7 @@ impl MessageProcessor {
         let thread_catalog_subscriptions = ThreadCatalogSubscriptions::new(
             outgoing.clone(),
             Arc::clone(&thread_store),
+            thread_state_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             config.model_provider_id.clone(),
             config.cwd.clone(),
@@ -729,9 +730,6 @@ impl MessageProcessor {
             .connection_closed(connection_id)
             .await;
         self.thread_processor.connection_closed(connection_id).await;
-        self.thread_catalog_subscriptions
-            .connection_closed(connection_id)
-            .await;
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {

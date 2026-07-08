@@ -278,6 +278,7 @@ impl ThreadEntry {
 #[derive(Default)]
 struct ThreadStateManagerInner {
     live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
+    catalog_subscribers: HashSet<ConnectionId>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -311,6 +312,23 @@ impl ThreadStateManager {
             .await
             .live_connections
             .insert(connection_id, capabilities);
+    }
+
+    pub(crate) async fn subscribe_catalog(&self, connection_id: ConnectionId) {
+        let mut state = self.state.lock().await;
+        if state.live_connections.contains_key(&connection_id) {
+            state.catalog_subscribers.insert(connection_id);
+        }
+    }
+
+    pub(crate) async fn catalog_subscribers(&self) -> Vec<ConnectionId> {
+        self.state
+            .lock()
+            .await
+            .catalog_subscribers
+            .iter()
+            .copied()
+            .collect()
     }
 
     pub(crate) async fn first_attestation_capable_connection_for_thread(
@@ -543,6 +561,7 @@ impl ThreadStateManager {
         {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
+            state.catalog_subscribers.remove(&connection_id);
             let thread_ids = state
                 .thread_ids_by_connection
                 .remove(&connection_id)
