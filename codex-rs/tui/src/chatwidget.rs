@@ -558,6 +558,8 @@ pub(crate) struct ChatWidget {
     completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
     next_token_activity_request_id: u64,
     pending_rate_limit_reset_request_id: Option<u64>,
+    pending_rate_limit_reset_idempotency_key: Option<String>,
+    rate_limit_reset_picker_request_id: Option<u64>,
     pending_rate_limit_reset_hint_request_id: Option<u64>,
     pending_usage_menu_rate_limit_request_id: Option<u64>,
     pending_rate_limit_reset_hint: Option<PlainHistoryCell>,

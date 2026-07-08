@@ -936,17 +936,38 @@ impl App {
                     RateLimitRefreshOrigin::ResetPicker { request_id },
                 );
             }
+            AppEvent::OpenRateLimitResetConfirmation {
+                picker_request_id,
+                confirmation_gate,
+                credit_id,
+                reset_title,
+                reset_detail,
+                reset_description,
+            } => {
+                self.chat_widget.show_rate_limit_reset_confirmation(
+                    picker_request_id,
+                    confirmation_gate,
+                    credit_id,
+                    reset_title,
+                    reset_detail,
+                    reset_description,
+                );
+            }
             AppEvent::ConsumeRateLimitResetCredit {
                 idempotency_key,
                 credit_id,
             } => {
-                let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
-                self.consume_rate_limit_reset_credit(
-                    app_server,
-                    request_id,
-                    idempotency_key,
-                    credit_id,
-                );
+                if let Some(request_id) = self
+                    .chat_widget
+                    .start_rate_limit_reset_consumption(&idempotency_key)
+                {
+                    self.consume_rate_limit_reset_credit(
+                        app_server,
+                        request_id,
+                        idempotency_key,
+                        credit_id,
+                    );
+                }
             }
             AppEvent::RateLimitResetCreditConsumed {
                 request_id,
