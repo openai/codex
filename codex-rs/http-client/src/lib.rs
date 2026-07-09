@@ -5,6 +5,7 @@ mod default_client;
 mod error;
 mod outbound_proxy;
 mod request;
+mod route_aware_client_pool;
 mod transport;
 
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
@@ -36,6 +37,8 @@ pub use crate::request::Request;
 pub use crate::request::RequestBody;
 pub use crate::request::RequestCompression;
 pub use crate::request::Response;
+pub use crate::route_aware_client_pool::RouteAwareClientPool;
+pub use crate::route_aware_client_pool::RouteAwareClientPoolError;
 pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
