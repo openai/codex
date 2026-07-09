@@ -176,7 +176,12 @@ HTTP_PROXY = {http_proxy}
         }))?,
     )?;
 
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        // This suite owns environments.toml to exercise explicit executor selection.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let selected_thread = start_thread(

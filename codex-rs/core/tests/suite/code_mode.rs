@@ -43,6 +43,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -190,10 +191,19 @@ async fn run_code_mode_turn_with_model_and_config(
     model: &'static str,
     configure: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<(TestCodex, ResponseMock)> {
-    let mut builder = test_codex().with_model(model).with_config(move |config| {
+    let builder = test_codex().with_model(model).with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
         configure(config);
     });
+    run_code_mode_turn_with_builder(server, prompt, code, builder).await
+}
+
+async fn run_code_mode_turn_with_builder(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    mut builder: TestCodexBuilder,
+) -> Result<(TestCodex, ResponseMock)> {
     let test = builder.build(server).await?;
 
     responses::mount_sse_once(
@@ -224,14 +234,18 @@ async fn missing_process_host_returns_a_tool_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, follow_up_mock) =
-        run_code_mode_turn_with_config(&server, "Run code mode", "text('unreachable')", |config| {
+    let builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program("codex-code-mode-host-does-not-exist".into())
+        .with_config(|config| {
             config
                 .features
-                .enable(Feature::CodeModeHost)
-                .expect("code mode host should be enabled");
-        })
-        .await?;
+                .enable(Feature::CodeMode)
+                .expect("code mode should be enabled");
+        });
+    let (_test, follow_up_mock) =
+        run_code_mode_turn_with_builder(&server, "Run code mode", "text('unreachable')", builder)
+            .await?;
 
     let output = follow_up_mock
         .single_request()
@@ -521,6 +535,76 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
     Ok(())
 }
 
+#[tokio::test]
+async fn code_mode_exec_holds_captured_result_during_elicitation() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build(&server).await?;
+
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", "text('captured');"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    assert_eq!(
+        test.codex.increment_out_of_band_elicitation_count().await?,
+        1
+    );
+    assert_eq!(
+        test.codex.increment_out_of_band_elicitation_count().await?,
+        2
+    );
+    let release_elicitation = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while first_mock.requests().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("initial response request should arrive");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            second_mock.requests().is_empty(),
+            "captured exec result should not return during an elicitation"
+        );
+        assert_eq!(
+            test.codex.decrement_out_of_band_elicitation_count().await?,
+            1
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            second_mock.requests().is_empty(),
+            "captured exec result should wait for every elicitation"
+        );
+        assert_eq!(
+            test.codex.decrement_out_of_band_elicitation_count().await?,
+            0
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+
+    tokio::try_join!(test.submit_turn("run code mode"), release_elicitation)?;
+    second_mock.single_request();
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -636,8 +720,7 @@ if (!tool) {
             "exec".to_string(),
             "wait".to_string(),
             "request_user_input".to_string(),
-            "web_search".to_string(),
-            "image_generation".to_string()
+            "web_search".to_string()
         ]
     );
 
@@ -2796,7 +2879,7 @@ async fn code_mode_resizes_explicit_original_image() -> Result<()> {
         &server,
         "use exec to return a large original-detail image",
         &code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
         |_| {},
     )
     .await?;
@@ -2866,7 +2949,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
+        .with_model("gpt-5.4")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
         });
@@ -2960,7 +3043,7 @@ image(imageItem);
         &server,
         "use exec to call the rmcp image scenario tool and emit its image output",
         code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
     )
     .await?;
 

@@ -699,11 +699,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
-        selected_servers(&first_resolved),
+        selected_servers(&first_resolved.config),
         std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
     );
     assert_eq!(
-        selected_servers(&second_resolved),
+        selected_servers(&second_resolved.config),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
 }
@@ -1336,7 +1336,12 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*external_time_provider*/ None,
     );
 
-    let _ = manager.list_models(RefreshStrategy::Online).await;
+    let _ = manager
+        .list_models(
+            RefreshStrategy::Online,
+            crate::test_support::default_http_client_factory(),
+        )
+        .await;
     assert_eq!(models_mock.requests().len(), 1);
 }
 

@@ -11,8 +11,9 @@ use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
-use codex_client::maybe_build_rustls_client_config_with_custom_ca;
-use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+use codex_http_client::HttpClientFactory;
+use codex_websocket_client::WebSocketConnection;
+use codex_websocket_client::WebSocketConnector;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -25,14 +26,10 @@ use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -62,7 +59,7 @@ enum WsCommand {
 }
 
 impl WsStream {
-    fn new(inner: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
+    fn new(inner: WebSocketConnection) -> Self {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
 
@@ -334,6 +331,7 @@ impl ResponsesWebsocketClient {
     )]
     pub async fn connect(
         &self,
+        http_client_factory: &HttpClientFactory,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
@@ -349,7 +347,7 @@ impl ResponsesWebsocketClient {
         self.auth.add_auth_headers(&mut headers);
 
         let (stream, _status, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+            connect_websocket(ws_url, headers, http_client_factory, turn_state.clone()).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -369,6 +367,7 @@ impl ResponsesWebsocketClient {
     /// a usable connection from a policy rejection that closes right away.
     pub async fn probe_handshake(
         &self,
+        http_client_factory: &HttpClientFactory,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         immediate_close_timeout: Duration,
@@ -383,7 +382,13 @@ impl ResponsesWebsocketClient {
         self.auth.add_auth_headers(&mut headers);
 
         let (mut stream, status, reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url.clone(), headers, /*turn_state*/ None).await?;
+            connect_websocket(
+                ws_url.clone(),
+                headers,
+                http_client_factory,
+                /*turn_state*/ None,
+            )
+            .await?;
         let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
             .await
             .ok()
@@ -437,9 +442,9 @@ fn merge_request_headers(
 async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
+    http_client_factory: &HttpClientFactory,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
-    ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
     let mut request = url
@@ -448,20 +453,9 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    // Secure websocket traffic needs the same custom-CA policy as reqwest-based HTTPS traffic.
-    // If a Codex-specific CA bundle is configured, build an explicit rustls connector so this
-    // websocket path does not fall back to tungstenite's default native-roots-only behavior.
-    let connector = maybe_build_rustls_client_config_with_custom_ca()
-        .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
-        .map(tokio_tungstenite::Connector::Rustls);
-
-    let response = connect_async_tls_with_config(
-        request,
-        Some(websocket_config()),
-        false, // `false` means "do not disable Nagle", which is tungstenite's recommended default.
-        connector,
-    )
-    .await;
+    let connector = WebSocketConnector::new(http_client_factory)
+        .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
+    let response = connector.connect(request, websocket_config()).await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
@@ -689,17 +683,10 @@ async fn run_websocket_response_stream(
                 {
                     let _ = turn_state.set(response_turn_state);
                 }
-                if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
-                    && let Some(treatment) =
-                        treatment_from_headers(&json_headers_to_http_headers(headers))
-                {
-                    safety_buffering_treatment = treatment;
-                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
-                let safety_buffering = event
-                    .safety_buffering()
-                    .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
+                let safety_buffering =
+                    safety_buffering_for_event(&event, &mut safety_buffering_treatment);
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -774,6 +761,19 @@ async fn run_websocket_response_stream(
     Ok(())
 }
 
+fn safety_buffering_for_event(
+    event: &ResponsesStreamEvent,
+    treatment: &mut SafetyBufferingTreatment,
+) -> Option<crate::common::SafetyBuffering> {
+    if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
+        && let Some(updated_treatment) =
+            treatment_from_headers(&json_headers_to_http_headers(headers))
+    {
+        *treatment = updated_treatment;
+    }
+    event.safety_buffering(treatment)
+}
+
 async fn send_websocket_request(
     ws_stream: &WsStream,
     request_text: String,
@@ -845,6 +845,7 @@ mod tests {
             reasoning: None,
             store: false,
             stream: true,
+            stream_options: None,
             include: vec!["reasoning.encrypted_content".to_string()],
             service_tier: Some("priority".to_string()),
             prompt_cache_key: Some("cache-key".to_string()),
@@ -1037,6 +1038,77 @@ mod tests {
         assert_eq!(
             merged.get("x-default-only"),
             Some(&HeaderValue::from_static("default-only"))
+        );
+    }
+
+    #[test]
+    fn websocket_safety_buffering_uses_event_before_header_fallback() {
+        let metadata: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "x-codex-safety-buffering-enabled": "true",
+                "x-codex-safety-buffering-faster-model": "gpt-fast-header"
+            }
+        }))
+        .expect("deserialize treatment metadata");
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "retry_model": "gpt-fast-wire"
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = SafetyBufferingTreatment::default();
+
+        assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
+        let buffering = safety_buffering_for_event(&event, &mut treatment)
+            .expect("expected safety buffering payload");
+
+        assert_eq!(
+            buffering,
+            crate::common::SafetyBuffering {
+                use_cases: vec!["cyber".to_string()],
+                reasons: vec!["user_risk".to_string()],
+                show_buffering_ui: true,
+                faster_model: Some("gpt-fast-wire".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn websocket_safety_buffering_event_controls_visibility_when_header_disables_it() {
+        let metadata: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "x-codex-safety-buffering-enabled": "false",
+                "x-codex-safety-buffering-faster-model": "gpt-fast-header"
+            }
+        }))
+        .expect("deserialize treatment metadata");
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = SafetyBufferingTreatment::default();
+
+        assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
+        let buffering = safety_buffering_for_event(&event, &mut treatment)
+            .expect("expected safety buffering payload");
+
+        assert_eq!(
+            buffering,
+            crate::common::SafetyBuffering {
+                use_cases: vec!["cyber".to_string()],
+                reasons: vec!["user_risk".to_string()],
+                show_buffering_ui: true,
+                faster_model: Some("gpt-fast-header".to_string()),
+            }
         );
     }
 }

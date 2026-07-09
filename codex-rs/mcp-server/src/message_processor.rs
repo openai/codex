@@ -6,7 +6,7 @@ use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
@@ -66,12 +66,18 @@ impl MessageProcessor {
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
+        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+        codex_image_generation_extension::install(
+            &mut extensions,
+            auth_manager.clone(),
+            |config: &Config| Some(config.codex_home.clone()),
+        );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
-            empty_extension_registry(),
+            Arc::new(extensions.build()),
             user_instructions_provider,
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),

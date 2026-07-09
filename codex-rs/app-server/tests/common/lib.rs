@@ -4,10 +4,12 @@ mod analytics_server;
 mod auth_fixtures;
 mod config;
 mod json_logging;
+mod local_websocket_exec_server;
 mod mock_model_server;
 mod models_cache;
 mod responses;
 mod rollout;
+mod rpc_delay;
 mod test_app_server;
 
 pub use analytics_server::start_analytics_events_server;
@@ -49,6 +51,7 @@ use serde::de::DeserializeOwned;
 pub use test_app_server::DEFAULT_CLIENT_NAME;
 pub use test_app_server::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use test_app_server::TestAppServer;
+pub use test_app_server::TestAppServerBuilder;
 
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;

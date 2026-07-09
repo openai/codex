@@ -1,11 +1,15 @@
 use super::session::Session;
 use super::step_context::StepContext;
+use crate::connectors;
 use crate::context::world_state::AgentsMdState;
+use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
 
 impl Session {
+    #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]
     pub(crate) async fn build_world_state_for_step(
         &self,
         step_context: &StepContext,
@@ -35,6 +39,22 @@ impl Session {
                 .with_subagents(environment_subagents),
             );
         }
+        let apps_available =
+            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+                let tools = step_context.mcp_tools().await;
+                connectors::with_app_enabled_state(
+                    connectors::accessible_connectors_from_mcp_tools(tools),
+                    &turn_context.config,
+                )
+                .into_iter()
+                .any(|connector| connector.is_accessible && connector.is_enabled)
+            } else {
+                false
+            };
+        world_state.add_section(AppsInstructionsState::new(apps_available));
+        world_state.add_section(PluginsInstructionsState::new(
+            step_context.mcp.plugins_available(),
+        ));
         let environments = step_context.environments.to_selections();
         let ready_selected_capability_roots = step_context
             .selected_capability_roots

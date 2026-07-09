@@ -1,7 +1,7 @@
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
-use codex_core::review_format::render_review_output_text;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -16,6 +16,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::responses;
@@ -29,14 +30,14 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use wiremock::MockServer;
 
-/// Verify that submitting `Op::Review` spawns a child task and emits
-/// EnteredReviewMode -> ExitedReviewMode(None) -> TurnComplete
-/// in that order when the model returns a structured review JSON payload.
+/// Verify that submitting `Op::Review` emits review item lifecycle,
+/// legacy review events, and TurnComplete when the model returns a structured review payload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_op_emits_lifecycle_and_review_output() {
     // Skip under Codex sandbox network restrictions.
@@ -83,13 +84,82 @@ async fn review_op_emits_lifecycle_and_review_output() {
         .await
         .unwrap();
 
-    // Verify lifecycle: Entered -> Exited(Some(review)) -> TurnComplete.
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    // Item lifecycle events are emitted first, then the legacy review event is fanned out
+    // with the same stable IDs for compatibility consumers.
+    let entered_started = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemStarted(event)
+                if matches!(event.item, TurnItem::EnteredReviewMode(_))
+        )
+    })
+    .await;
+    let (review_turn_id, entered_item_id) = match entered_started {
+        EventMsg::ItemStarted(event) => (event.turn_id, event.item.id()),
+        other => panic!("expected entered review item start, got {other:?}"),
+    };
+    let entered_completed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemCompleted(event)
+                if matches!(event.item, TurnItem::EnteredReviewMode(_))
+        )
+    })
+    .await;
+    match entered_completed {
+        EventMsg::ItemCompleted(event) => {
+            assert_eq!(event.turn_id, review_turn_id);
+            assert_eq!(event.item.id(), entered_item_id);
+        }
+        other => panic!("expected entered review item completion, got {other:?}"),
+    }
+    let entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    match entered {
+        EventMsg::EnteredReviewMode(event) => {
+            assert_eq!(event.turn_id.as_deref(), Some(review_turn_id.as_str()));
+            assert_eq!(event.item_id.as_deref(), Some(entered_item_id.as_str()));
+        }
+        other => panic!("expected EnteredReviewMode(..), got {other:?}"),
+    }
+
+    let exited_started = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemStarted(event)
+                if matches!(event.item, TurnItem::ExitedReviewMode(_))
+        )
+    })
+    .await;
+    let exited_item_id = match exited_started {
+        EventMsg::ItemStarted(event) => {
+            assert_eq!(event.turn_id, review_turn_id);
+            event.item.id()
+        }
+        other => panic!("expected exited review item start, got {other:?}"),
+    };
+    let exited_completed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemCompleted(event)
+                if matches!(event.item, TurnItem::ExitedReviewMode(_))
+        )
+    })
+    .await;
+    match exited_completed {
+        EventMsg::ItemCompleted(event) => {
+            assert_eq!(event.turn_id, review_turn_id);
+            assert_eq!(event.item.id(), exited_item_id);
+        }
+        other => panic!("expected exited review item completion, got {other:?}"),
+    }
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
-        EventMsg::ExitedReviewMode(ev) => ev
-            .review_output
-            .expect("expected ExitedReviewMode with Some(review_output)"),
+        EventMsg::ExitedReviewMode(ev) => {
+            assert_eq!(ev.turn_id.as_deref(), Some(review_turn_id.as_str()));
+            assert_eq!(ev.item_id.as_deref(), Some(exited_item_id.as_str()));
+            ev.review_output
+                .expect("expected ExitedReviewMode with Some(review_output)")
+        }
         other => panic!("expected ExitedReviewMode(..), got {other:?}"),
     };
 
@@ -195,6 +265,95 @@ async fn review_op_emits_lifecycle_and_review_output() {
         !saw_assistant_xml,
         "assistant review output contains user_action markup"
     );
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_review_does_not_forward_delegate_mcp_startup() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = responses::mount_response_once(
+        &server,
+        responses::sse_response(responses::sse(vec![responses::ev_response_created(
+            "resp-1",
+        )]))
+        .set_delay(Duration::from_secs(30)),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+
+    // Consume the parent session's own empty startup round before starting the review.
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Cancel this review".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match codex.next_event().await.expect("review event").msg {
+                event @ (EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_)) => {
+                    panic!("review forwarded delegate MCP startup: {event:?}")
+                }
+                EventMsg::EnteredReviewMode(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for review entry");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while request_log.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("review request did not reach the server");
+
+    codex.submit(Op::Interrupt).await.unwrap();
+
+    let mut exited_review = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match codex
+                .next_event()
+                .await
+                .expect("review cancellation event")
+                .msg
+            {
+                event @ (EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_)) => {
+                    panic!("cancelled review forwarded delegate MCP startup: {event:?}")
+                }
+                EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output, .. }) => {
+                    assert_eq!(review_output, None);
+                    exited_review = true;
+                }
+                EventMsg::TurnAborted(_) if exited_review => break,
+                EventMsg::TurnAborted(_) => panic!("review turn aborted before review mode exited"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for review cancellation");
+
+    assert_eq!(request_log.requests().len(), 1);
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -422,7 +581,8 @@ async fn review_uses_custom_review_model_from_config() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })
@@ -471,7 +631,8 @@ async fn review_uses_session_model_when_review_model_unset() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })
@@ -587,7 +748,8 @@ async fn review_input_isolated_from_parent_history() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })
@@ -698,7 +860,8 @@ async fn review_history_surfaces_in_parent_session() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: Some(_)
+                review_output: Some(_),
+                ..
             })
         )
     })

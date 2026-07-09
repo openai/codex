@@ -339,7 +339,9 @@ pub async fn read_mcp_resource(
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance(config),
         auth,
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
     )
     .await;
@@ -416,7 +418,9 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance,
         auth,
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
     )
     .await;

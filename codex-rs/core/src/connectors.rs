@@ -80,19 +80,6 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     )
 }
 
-pub(crate) async fn list_accessible_and_enabled_connectors_from_manager(
-    mcp_connection_manager: &McpConnectionManager,
-    config: &Config,
-) -> Vec<AppInfo> {
-    with_app_enabled_state(
-        accessible_connectors_from_mcp_tools(&mcp_connection_manager.list_all_tools().await),
-        config,
-    )
-    .into_iter()
-    .filter(|connector| connector.is_accessible && connector.is_enabled)
-    .collect()
-}
-
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
@@ -261,6 +248,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     drop(rx_event);
 
     let cancel_token = CancellationToken::new();
+    let codex_apps_auth_manager =
+        codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
+            .then(|| Arc::clone(&auth_manager));
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -282,7 +272,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         auth.as_ref(),
+        codex_apps_auth_manager,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;

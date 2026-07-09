@@ -8,6 +8,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
@@ -61,7 +62,7 @@ use tempfile::TempDir;
 use tracing::Instrument;
 use tracing_test::traced_test;
 
-const MODEL: &str = "gpt-5.3-codex";
+const MODEL: &str = "gpt-5.4";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -102,6 +103,7 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    outbound_proxy_policy: OutboundProxyPolicy,
     session_id: SessionId,
     thread_id: ThreadId,
     model_info: ModelInfo,
@@ -219,6 +221,38 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_with_system_proxy_feature() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_provider_options(
+        websocket_provider(&server),
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[Feature::RespectSystemProxy],
+    )
+    .await;
+    assert_eq!(
+        harness.outbound_proxy_policy,
+        OutboundProxyPolicy::RespectSystemProxy
+    );
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -386,7 +420,15 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
+    let mut provider = websocket_provider(&server);
+    provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
+    let harness = websocket_harness_with_provider_options(
+        provider,
+        /*runtime_metrics_enabled*/ true,
+        /*concurrent_reasoning_summaries_enabled*/ true,
+        /*enabled_features*/ &[],
+    )
+    .await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
@@ -422,6 +464,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
+    assert_eq!(
+        warmup["stream_options"]["reasoning_summary_delivery"].as_str(),
+        Some("sequential_cutoff")
+    );
     assert_eq!(warmup["tools"], serde_json::json!([]));
     let warmup_turn_metadata: serde_json::Value = serde_json::from_str(
         warmup["client_metadata"]["x-codex-turn-metadata"]
@@ -436,6 +482,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(follow_up["type"].as_str(), Some("response.create"));
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
+    assert_eq!(
+        follow_up["stream_options"]["reasoning_summary_delivery"].as_str(),
+        Some("sequential_cutoff")
+    );
 
     server.shutdown().await;
 }
@@ -990,8 +1040,13 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     // use OpenAI provider to check metadata logic
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
-    let harness =
-        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ false).await;
+    let harness = websocket_harness_with_provider_options(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await;
 
     // Turn one: initiate
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
@@ -2195,13 +2250,20 @@ async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_provider_options(websocket_provider(server), runtime_metrics_enabled)
-        .await
+    websocket_harness_with_provider_options(
+        websocket_provider(server),
+        runtime_metrics_enabled,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await
 }
 
 async fn websocket_harness_with_provider_options(
     provider: ModelProviderInfo,
     runtime_metrics_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
+    enabled_features: &[Feature],
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -2212,6 +2274,21 @@ async fn websocket_harness_with_provider_options(
             .enable(Feature::RuntimeMetrics)
             .expect("test config should allow feature update");
     }
+    if concurrent_reasoning_summaries_enabled {
+        config
+            .features
+            .enable(Feature::ConcurrentReasoningSummaries)
+            .expect("test config should allow feature update");
+    }
+    for feature in enabled_features {
+        config
+            .features
+            .enable(*feature)
+            .expect("test config should allow feature update");
+    }
+    config.respect_system_proxy = config.features.enabled(Feature::RespectSystemProxy);
+    let http_client_factory = config.http_client_factory();
+    let outbound_proxy_policy = http_client_factory.outbound_proxy_policy();
     let config = Arc::new(config);
     let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     let thread_id = ThreadId::new();
@@ -2251,12 +2328,18 @@ async fn websocket_harness_with_provider_options(
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+        /*concurrent_reasoning_summaries_enabled*/
+        config
+            .features
+            .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
+        http_client_factory,
     );
 
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        outbound_proxy_policy,
         session_id,
         thread_id,
         model_info,

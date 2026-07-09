@@ -12,6 +12,7 @@ codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-features = { workspace = true }
 codex-file-system = { workspace = true }
+codex-extension-items = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }

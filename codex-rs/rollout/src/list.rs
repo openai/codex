@@ -22,12 +22,13 @@ use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
-use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::user_message_preview;
 use serde_json::Value;
 
 /// Returned page of thread (thread) summaries.
@@ -1184,12 +1185,19 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             }
             RolloutItem::EventMsg(ev) => {
                 if let Some(preview) = event_msg_preview(&ev) {
+                    // Legacy rollouts persist UserMessage while paginated rollouts persist
+                    // ItemCompleted(UserMessage), so summaries must recognize both formats.
+                    let is_user_message = match &ev {
+                        EventMsg::UserMessage(_) => true,
+                        EventMsg::ItemCompleted(event) => {
+                            matches!(event.item, TurnItem::UserMessage(_))
+                        }
+                        _ => false,
+                    };
                     if summary.preview.is_none() {
                         summary.preview = Some(preview.clone());
                     }
-                    if let EventMsg::UserMessage(_) = ev
-                        && summary.first_user_message.is_none()
-                    {
+                    if is_user_message && summary.first_user_message.is_none() {
                         summary.first_user_message = Some(preview);
                     }
                 }
@@ -1250,30 +1258,15 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
     Ok(head)
 }
 
-fn strip_user_message_prefix(text: &str) -> &str {
-    match text.find(USER_MESSAGE_BEGIN) {
-        Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
-        None => text.trim(),
-    }
-}
-
 fn event_msg_preview(event: &EventMsg) -> Option<String> {
     match event {
-        EventMsg::UserMessage(user) => {
-            let message = strip_user_message_prefix(user.message.as_str());
-            if !message.is_empty() {
-                return Some(message.to_string());
+        EventMsg::UserMessage(user) => user_message_preview(user),
+        EventMsg::ItemCompleted(event) => match &event.item {
+            TurnItem::UserMessage(user) => {
+                user_message_preview(&user.as_legacy_user_message_event())
             }
-            if user
-                .images
-                .as_ref()
-                .is_some_and(|images| !images.is_empty())
-                || !user.local_images.is_empty()
-            {
-                return Some("[Image]".to_string());
-            }
-            None
-        }
+            _ => None,
+        },
         EventMsg::ThreadGoalUpdated(event) => {
             let objective = event.goal.objective.trim();
             (!objective.is_empty()).then(|| objective.to_string())

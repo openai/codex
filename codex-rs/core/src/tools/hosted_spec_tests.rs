@@ -8,16 +8,6 @@ use codex_tools::ResponsesApiWebSearchUserLocation;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn image_generation_tool_matches_expected_spec() {
-    assert_eq!(
-        create_image_generation_tool("png"),
-        ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
-        }
-    );
-}
-
-#[test]
 fn web_search_tool_preserves_configured_options() {
     assert_eq!(
         create_web_search_tool(WebSearchToolOptions {
@@ -39,7 +29,7 @@ fn web_search_tool_preserves_configured_options() {
         }),
         Some(ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: None,
+            indexed_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),

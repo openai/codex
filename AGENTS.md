@@ -253,7 +253,7 @@ Use `just bench-smoke` to dry-run the benchmark for a single iteration to ensure
 
 - Tests should exercise app-server's public JSON-RPC API.
 - Use similar server mocking as for core integration tests.
-- Use `TestAppServer::new_with_auto_env()` and `TestAppServer::send_thread_start_request_with_auto_env()`
+- Use `TestAppServer::builder().build()` and `TestAppServer::send_thread_start_request_with_auto_env()`
   by default to ensure that new tests work with foreign app/exec OSes. See `$remote-tests` for
   details.
 

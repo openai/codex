@@ -1,5 +1,6 @@
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
+use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 
 mod rate_limit_resets;
@@ -9,9 +10,11 @@ const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 const ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT: Duration =
     Duration::from_millis(/*millis*/ 1000);
-// The override is intentionally available only in debug builds, matching the login path below.
+// Login overrides are intentionally available only in debug builds.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
+#[cfg(debug_assertions)]
+const LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 
 enum ActiveLogin {
     Browser {
@@ -253,9 +256,25 @@ impl AccountRequestProcessor {
                     .await;
             }
             LoginAccountParams::Chatgpt {
+                app_brand,
                 codex_streamlined_login,
+                use_hosted_login_success_page,
             } => {
-                self.login_chatgpt_v2(request_id, codex_streamlined_login)
+                let login_success_page = if use_hosted_login_success_page {
+                    let app_brand = match app_brand.unwrap_or_default() {
+                        LoginAppBrand::Codex => LoginSuccessPageBrand::Codex,
+                        LoginAppBrand::Chatgpt => LoginSuccessPageBrand::Chatgpt,
+                    };
+                    LoginSuccessPage::Hosted {
+                        url: CODEX_OPEN_APP_URL.parse().map_err(|err| {
+                            internal_error(format!("invalid Codex open app URL: {err}"))
+                        })?,
+                        app_brand,
+                    }
+                } else {
+                    LoginSuccessPage::default()
+                };
+                self.login_chatgpt_v2(request_id, codex_streamlined_login, login_success_page)
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
@@ -341,6 +360,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
+        login_success_page: LoginSuccessPage,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -357,6 +377,7 @@ impl AccountRequestProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
+            login_success_page,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
@@ -373,6 +394,14 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
+            }
+            if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
+                && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
+                && !open_app_url.trim().is_empty()
+            {
+                *url = open_app_url
+                    .parse()
+                    .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
             }
             opts
         };
@@ -393,16 +422,22 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
+        login_success_page: LoginSuccessPage,
     ) {
-        let result = self.login_chatgpt_response(codex_streamlined_login).await;
+        let result = self
+            .login_chatgpt_response(codex_streamlined_login, login_success_page)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_response(
         &self,
         codex_streamlined_login: bool,
+        login_success_page: LoginSuccessPage,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        let opts = self
+            .login_chatgpt_common(codex_streamlined_login, login_success_page)
+            .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -474,7 +509,10 @@ impl AccountRequestProcessor {
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
-            .login_chatgpt_common(/*codex_streamlined_login*/ false)
+            .login_chatgpt_common(
+                /*codex_streamlined_login*/ false,
+                LoginSuccessPage::default(),
+            )
             .await?;
         let device_code = request_device_code(&opts)
             .await
@@ -617,14 +655,19 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+        let auth = CodexAuth::from_external_chatgpt_tokens(
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.auth_manager.reload().await;
+        self.auth_manager
+            .set_external_auth(Arc::new(ExternalAuthBridge::new(
+                Arc::clone(&self.outgoing),
+                auth,
+            )))
+            .await
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
@@ -812,7 +855,9 @@ impl AccountRequestProcessor {
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
-                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
+                        CodexAuth::Headers(_)
+                            | CodexAuth::AgentIdentity(_)
+                            | CodexAuth::PersonalAccessToken(_)
                     ) || include_token
                         && permanent_refresh_failure
                     {
@@ -891,9 +936,11 @@ impl AccountRequestProcessor {
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
-        let response = client
-            .get_rate_limits_with_reset_credits()
-            .await
+        let (response, detailed_rate_limit_reset_credits) = tokio::join!(
+            client.get_rate_limits_with_reset_credits(),
+            Self::detailed_rate_limit_reset_credits(&client),
+        );
+        let response = response
             .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if response.rate_limits.is_empty() {
             return Err(internal_error(
@@ -920,6 +967,15 @@ impl AccountRequestProcessor {
             .cloned()
             .unwrap_or_else(|| response.rate_limits[0].clone());
 
+        let rate_limit_reset_credits = detailed_rate_limit_reset_credits.or_else(|| {
+            response
+                .rate_limit_reset_credits
+                .map(|summary| RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                    credits: None,
+                })
+        });
+
         Ok(GetAccountRateLimitsResponse {
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
@@ -928,11 +984,7 @@ impl AccountRequestProcessor {
                     .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
                     .collect(),
             ),
-            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
-                RateLimitResetCreditsSummary {
-                    available_count: summary.available_count,
-                }
-            }),
+            rate_limit_reset_credits,
         })
     }
 

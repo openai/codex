@@ -128,14 +128,26 @@ pub struct TestEnv {
 
 impl TestEnv {
     pub async fn local() -> Result<Self> {
+        Self::local_with_exec_server_url(/*exec_server_url*/ None).await
+    }
+
+    /// Builds a host-local test environment, optionally using the provided
+    /// exec-server URL instead of the normal implicit local executor.
+    pub async fn local_with_exec_server_url(exec_server_url: Option<String>) -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
+        let selection = match exec_server_url {
+            Some(_) => TurnEnvironmentSelection {
+                environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+            },
+            None => local(cwd.clone()),
+        };
         let environment =
-            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
-        let selection = local(cwd.clone());
+            codex_exec_server::Environment::create_for_tests(exec_server_url.clone())?;
         Ok(Self {
             environment,
-            exec_server_url: None,
+            exec_server_url,
             cwd,
             selection,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
@@ -290,6 +302,7 @@ pub struct TestCodexBuilder {
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
+    code_mode_host_program: Option<PathBuf>,
 }
 
 impl TestCodexBuilder {
@@ -393,6 +406,11 @@ impl TestCodexBuilder {
 
     pub fn with_external_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
         self.external_time_provider = Some(provider);
+        self
+    }
+
+    pub fn with_code_mode_host_program(mut self, host_program: PathBuf) -> Self {
+        self.code_mode_host_program = Some(host_program);
         self
     }
 
@@ -613,6 +631,20 @@ impl TestCodexBuilder {
             /*attestation_provider*/ None,
             /*external_time_provider*/ self.external_time_provider.clone(),
         );
+        let code_mode_host_program = self
+            .code_mode_host_program
+            .take()
+            .or_else(|| codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").ok());
+        let thread_manager = if config.features.enabled(Feature::CodeModeHost)
+            && let Some(code_mode_host_program) = code_mode_host_program
+        {
+            codex_core::test_support::with_code_mode_host_program(
+                thread_manager,
+                code_mode_host_program,
+            )
+        } else {
+            thread_manager
+        };
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 
@@ -708,6 +740,9 @@ impl TestCodexBuilder {
         } else {
             load_default_config_for_test(home).await
         };
+        // Keep generic tests stable when the bundled catalog default changes. Tests that need a
+        // specific model can still override this with a config mutator.
+        config.model = Some("gpt-5.5".to_string());
         config.cwd = cwd_override;
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
@@ -1219,6 +1254,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
         external_time_provider: None,
+        code_mode_host_program: None,
     }
 }
 

@@ -398,21 +398,45 @@ fn approval_not_required_when_read_only_and_other_hints_are_absent() {
 }
 
 #[test]
-fn prompt_mode_does_not_allow_persistent_remember() {
+fn writes_mode_requires_approval_for_non_read_only_tools() {
+    let annotations = annotations(Some(false), Some(false), Some(false));
     assert_eq!(
-        normalize_approval_decision_for_mode(
-            McpToolApprovalDecision::AcceptForSession,
-            AppToolApproval::Prompt,
-        ),
-        McpToolApprovalDecision::Accept
+        requires_mcp_tool_approval_for_mode(Some(&annotations), AppToolApproval::Writes),
+        true
     );
     assert_eq!(
-        normalize_approval_decision_for_mode(
-            McpToolApprovalDecision::AcceptAndRemember,
-            AppToolApproval::Prompt,
-        ),
-        McpToolApprovalDecision::Accept
+        requires_mcp_tool_approval_for_mode(/*annotations*/ None, AppToolApproval::Writes),
+        true
     );
+}
+
+#[test]
+fn writes_mode_does_not_require_approval_for_read_only_tools() {
+    let annotations = annotations(Some(true), Some(true), Some(true));
+    assert_eq!(
+        requires_mcp_tool_approval_for_mode(Some(&annotations), AppToolApproval::Writes),
+        false
+    );
+}
+
+#[test]
+fn prompting_modes_do_not_allow_persistent_remember() {
+    for approval_mode in [AppToolApproval::Prompt, AppToolApproval::Writes] {
+        assert_eq!(
+            normalize_approval_decision_for_mode(
+                McpToolApprovalDecision::AcceptForSession,
+                approval_mode,
+            ),
+            McpToolApprovalDecision::Accept
+        );
+        assert_eq!(
+            normalize_approval_decision_for_mode(
+                McpToolApprovalDecision::AcceptAndRemember,
+                approval_mode,
+            ),
+            McpToolApprovalDecision::Accept
+        );
+    }
 }
 
 #[tokio::test]
@@ -1438,7 +1462,9 @@ async fn host_owned_codex_apps_manager(
         /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;
@@ -1447,7 +1473,11 @@ async fn host_owned_codex_apps_manager(
 
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
-    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let mut features = Features::with_defaults();
+    features.disable(Feature::AuthElicitation);
+    let mutable_turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    Arc::make_mut(&mut mutable_turn_context.config).features = ManagedFeatures::from(features);
     let manager = host_owned_codex_apps_manager(&session, &turn_context).await;
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
@@ -1560,16 +1590,10 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
 }
 
 #[tokio::test]
-async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+async fn codex_apps_auth_elicitation_enabled_by_default_requests_elicitation() {
+    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
     let manager = host_owned_codex_apps_manager(&session, &turn_context).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    {
-        let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-        Arc::make_mut(&mut turn_context.config).features = ManagedFeatures::from(features);
-    }
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 

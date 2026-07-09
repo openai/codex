@@ -29,6 +29,7 @@ use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -53,7 +54,7 @@ fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSum
         timestamp: Some(CREATED_AT_RFC3339.to_string()),
         updated_at: Some(UPDATED_AT_RFC3339.to_string()),
         model_provider: MODEL_PROVIDER.to_string(),
-        cwd: PathBuf::from("/"),
+        cwd: test_path_buf("/"),
         cli_version: "0.0.0".to_string(),
         source: SessionSource::Cli,
         git_info: None,
@@ -92,7 +93,11 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
         ))?,
     );
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -217,7 +222,11 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
     let expected = expected_summary(thread_id, normalized_canonical_path(rollout_path)?);
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

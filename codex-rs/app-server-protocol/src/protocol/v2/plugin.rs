@@ -569,6 +569,17 @@ pub enum PluginInstallPolicy {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
+pub enum PluginInstallPolicySource {
+    #[serde(rename = "WORKSPACE_SETTING")]
+    #[ts(rename = "WORKSPACE_SETTING")]
+    WorkspaceSetting,
+    #[serde(rename = "IMPLICIT_CANONICAL_APP")]
+    #[ts(rename = "IMPLICIT_CANONICAL_APP")]
+    ImplicitCanonicalApp,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
 pub enum PluginAuthPolicy {
     #[serde(rename = "ON_INSTALL")]
     #[ts(rename = "ON_INSTALL")]
@@ -600,6 +611,9 @@ pub struct PluginSummary {
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
+    /// Version advertised by the remote marketplace backend when available.
+    #[serde(default)]
+    pub version: Option<String>,
     /// Version of the locally materialized plugin package when available.
     #[serde(default)]
     pub local_version: Option<String>,
@@ -610,6 +624,7 @@ pub struct PluginSummary {
     pub installed: bool,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
+    pub install_policy_source: Option<PluginInstallPolicySource>,
     pub auth_policy: PluginAuthPolicy,
     /// Availability state for installing and using the plugin.
     #[serde(default)]

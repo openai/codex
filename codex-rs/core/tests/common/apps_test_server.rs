@@ -26,6 +26,8 @@ const DISCOVERABLE_CALENDAR_ID: &str = "connector_2128aebfecb84f64a069897515042a
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
 const CODEX_APPS_META_KEY: &str = "_codex_apps";
+const CODEX_APPS_MCP_PATH_REGEX: &str = "^/api/codex/apps/?$";
+const HOSTED_PLUGIN_RUNTIME_MCP_PATH_REGEX: &str = "^/api/codex/ps/mcp/?$";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
 const SERVER_VERSION: &str = "1.0.0";
@@ -108,6 +110,24 @@ impl AppsTestServer {
         })
     }
 
+    pub async fn mount_hosted_plugin_runtime_searchable(server: &MockServer) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc_at_path(
+            server,
+            HOSTED_PLUGIN_RUNTIME_MCP_PATH_REGEX,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ true,
+            /*include_app_only_tool*/ false,
+            AppsTestToolsListBehavior::AlwaysAvailable,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
     pub async fn mount_with_connector_name(
         server: &MockServer,
         connector_name: &str,
@@ -159,6 +179,7 @@ impl AppsTestServer {
         };
         mount_streamable_http_json_rpc_with_startup_control(
             server,
+            CODEX_APPS_MCP_PATH_REGEX,
             CONNECTOR_NAME.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
@@ -359,8 +380,30 @@ async fn mount_streamable_http_json_rpc(
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
 ) {
+    mount_streamable_http_json_rpc_at_path(
+        server,
+        CODEX_APPS_MCP_PATH_REGEX,
+        connector_name,
+        connector_description,
+        searchable,
+        include_app_only_tool,
+        tools_list_behavior,
+    )
+    .await;
+}
+
+async fn mount_streamable_http_json_rpc_at_path(
+    server: &MockServer,
+    mcp_path_regex: &str,
+    connector_name: String,
+    connector_description: String,
+    searchable: bool,
+    include_app_only_tool: bool,
+    tools_list_behavior: AppsTestToolsListBehavior,
+) {
     mount_streamable_http_json_rpc_with_startup_control(
         server,
+        mcp_path_regex,
         connector_name,
         connector_description,
         searchable,
@@ -375,6 +418,7 @@ async fn mount_streamable_http_json_rpc(
 #[allow(clippy::too_many_arguments)]
 async fn mount_streamable_http_json_rpc_with_startup_control(
     server: &MockServer,
+    mcp_path_regex: &str,
     connector_name: String,
     connector_description: String,
     searchable: bool,
@@ -384,7 +428,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
 ) {
     Mock::given(method("POST"))
-        .and(path_regex("^/api/codex/apps/?$"))
+        .and(path_regex(mcp_path_regex))
         .respond_with(CodexAppsJsonRpcResponder {
             connector_name,
             connector_description,
@@ -553,9 +597,13 @@ impl Respond for CodexAppsJsonRpcResponder {
                                             "type": "object",
                                             "description": "Document file payload.",
                                             "properties": {
-                                                "file_id": { "type": "string" }
+                                                "download_url": { "type": "string" },
+                                                "file_id": { "type": "string" },
+                                                "mime_type": { "type": "string" },
+                                                "file_name": { "type": "string" }
                                             },
-                                            "required": ["file_id"]
+                                            "required": ["download_url", "file_id"],
+                                            "additionalProperties": false
                                         }
                                     },
                                     "required": ["file"],

@@ -104,6 +104,11 @@ pub enum ResponseEvent {
         delta: String,
         summary_index: i64,
     },
+    ReasoningSummaryDone {
+        item_id: String,
+        text: String,
+        summary_index: i64,
+    },
     ReasoningContentDelta {
         delta: String,
         content_index: i64,
@@ -121,21 +126,12 @@ pub struct SafetyBuffering {
     pub reasons: Vec<String>,
     #[serde(skip)]
     pub show_buffering_ui: bool,
-    #[serde(skip)]
+    #[serde(rename = "retry_model")]
     pub faster_model: Option<String>,
-}
-
-impl SafetyBuffering {
-    pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
-        self.show_buffering_ui = treatment.show_buffering_ui;
-        self.faster_model.clone_from(&treatment.faster_model);
-        self
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SafetyBufferingTreatment {
-    pub show_buffering_ui: bool,
     pub faster_model: Option<String>,
 }
 
@@ -155,6 +151,17 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ReasoningContext>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummaryDelivery {
+    SequentialCutoff,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct StreamOptions {
+    pub reasoning_summary_delivery: ReasoningSummaryDelivery,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
@@ -218,6 +225,8 @@ pub struct ResponsesApiRequest {
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
@@ -242,6 +251,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             reasoning: request.reasoning.clone(),
             store: request.store,
             stream: request.stream,
+            stream_options: request.stream_options.clone(),
             include: request.include.clone(),
             service_tier: request.service_tier.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
@@ -267,6 +277,8 @@ pub struct ResponseCreateWsRequest {
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,

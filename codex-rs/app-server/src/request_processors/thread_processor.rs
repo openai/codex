@@ -164,6 +164,34 @@ fn merge_persisted_resume_metadata(
     }
 }
 
+fn merge_persisted_approvals_reviewer(
+    thread_history: &InitialHistory,
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &mut ConfigOverrides,
+) {
+    if typesafe_overrides.approvals_reviewer.is_some()
+        || request_overrides.is_some_and(|overrides| overrides.contains_key("approvals_reviewer"))
+    {
+        return;
+    }
+
+    let InitialHistory::Resumed(resumed_history) = thread_history else {
+        return;
+    };
+    typesafe_overrides.approvals_reviewer =
+        resumed_history
+            .history
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                    Some(event.thread_settings.approvals_reviewer)
+                }
+                _ => None,
+            });
+}
+
 fn normalize_thread_list_cwd_filters(
     cwd: Option<ThreadListCwdFilter>,
 ) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
@@ -364,6 +392,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) log_db: Option<LogDbLayer>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
+    pub(super) initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
 
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
@@ -395,6 +424,7 @@ impl ThreadRequestProcessor {
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
         skills_watcher: Arc<SkillsWatcher>,
+        initial_config_warnings: Vec<ConfigWarningNotification>,
     ) -> Self {
         Self {
             auth_manager,
@@ -413,6 +443,7 @@ impl ThreadRequestProcessor {
             log_db,
             background_tasks: TaskTracker::new(),
             skills_watcher,
+            initial_config_warnings: Arc::new(initial_config_warnings),
         }
     }
 
@@ -968,6 +999,7 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let initial_config_warnings = Arc::clone(&self.initial_config_warnings);
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
@@ -990,6 +1022,7 @@ impl ThreadRequestProcessor {
                 allow_provider_model_fallback,
                 experimental_raw_events,
                 request_trace,
+                initial_config_warnings,
             )
             .await
             {
@@ -1066,6 +1099,7 @@ impl ThreadRequestProcessor {
         allow_provider_model_fallback: bool,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
+        initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
@@ -1137,6 +1171,21 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
+        }
+
+        if let Ok(Some(err)) =
+            codex_core::check_execpolicy_for_warnings(&config.config_layer_stack).await
+        {
+            let notification = crate::exec_policy_config_warning(&err);
+            if !initial_config_warnings.contains(&notification) {
+                listener_task_context
+                    .outgoing
+                    .send_server_notification_to_connections(
+                        &[request_id.connection_id],
+                        ServerNotification::ConfigWarning(notification),
+                    )
+                    .await;
+            }
         }
 
         let environments = environments.unwrap_or_else(|| {
@@ -2290,7 +2339,7 @@ impl ThreadRequestProcessor {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
-                    thread.turns = build_api_turns_from_rollout_items(&history.items);
+                    thread.turns = build_legacy_api_turns_from_rollout_items(&history.items);
                 }
                 Ok(Some(thread))
             }
@@ -2359,7 +2408,7 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_api_turns_from_rollout_items(&history.items);
+            thread.turns = build_legacy_api_turns_from_rollout_items(&history.items);
         }
 
         Ok(())
@@ -2936,6 +2985,11 @@ impl ThreadRequestProcessor {
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
     ) -> Option<ThreadMetadata> {
+        merge_persisted_approvals_reviewer(
+            thread_history,
+            request_overrides.as_ref(),
+            typesafe_overrides,
+        );
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
@@ -4053,7 +4107,7 @@ fn reconstruct_thread_turns_for_turns_list(
         || active_turn
             .as_ref()
             .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
-    let mut turns = build_api_turns_from_rollout_items(items);
+    let mut turns = build_legacy_api_turns_from_rollout_items(items);
     normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn);
@@ -4426,10 +4480,7 @@ fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
             },
             _ => None,
         })
-        .map(|preview| match preview.find(USER_MESSAGE_BEGIN) {
-            Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string(),
-            None => preview,
-        })
+        .map(|preview| strip_user_message_prefix(preview.as_str()).to_string())
         .unwrap_or_default()
 }
 

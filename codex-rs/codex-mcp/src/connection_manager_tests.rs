@@ -2,6 +2,7 @@ use super::*;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheContext;
 use crate::declared_openai_file_input_param_names;
+use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::elicitation_is_rejected_by_policy;
@@ -323,6 +324,7 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
         AskForApproval::Never,
         PermissionProfile::Disabled,
         /*reviewer*/ None,
+        /*lifecycle*/ None,
         ElicitationRequestRouter::default(),
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
@@ -359,6 +361,7 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
         AskForApproval::Never,
         PermissionProfile::Disabled,
         /*reviewer*/ None,
+        /*lifecycle*/ None,
         ElicitationRequestRouter::default(),
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
@@ -395,17 +398,35 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
 
 #[tokio::test]
 async fn shared_elicitation_router_targets_the_exact_pending_request() {
+    struct Registration(Arc<AtomicUsize>);
+
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     let router = ElicitationRequestRouter::default();
+    let outstanding = Arc::new(AtomicUsize::new(0));
+    let lifecycle = ElicitationLifecycle::new({
+        let outstanding = outstanding.clone();
+        move || {
+            outstanding.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Registration(outstanding.clone())
+        }
+    });
     let manager_a = ElicitationRequestManager::new(
         AskForApproval::OnRequest,
         PermissionProfile::default(),
         /*reviewer*/ None,
+        Some(lifecycle.clone()),
         router.clone(),
     );
     let manager_b = ElicitationRequestManager::new(
         AskForApproval::OnRequest,
         PermissionProfile::default(),
         /*reviewer*/ None,
+        Some(lifecycle),
         router,
     );
     let (tx_event, rx_event) = async_channel::bounded(2);
@@ -435,6 +456,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
     else {
         panic!("expected elicitation request");
     };
+    assert_eq!(outstanding.load(std::sync::atomic::Ordering::SeqCst), 2);
     let (
         codex_protocol::mcp::RequestId::String(request_a_id),
         codex_protocol::mcp::RequestId::String(request_b_id),
@@ -485,6 +507,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
             .expect("request B response"),
         response_b
     );
+    assert_eq!(outstanding.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1538,7 +1561,9 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         /*auth*/ None,
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
         ElicitationRequestRouter::default(),
     )
     .await;

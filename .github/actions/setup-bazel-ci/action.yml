@@ -1,13 +1,9 @@
 name: setup-bazel-ci
-description: Prepare a Bazel CI runner with shared caches and optional test prerequisites.
+description: Prepare a Bazel CI runner with shared caches.
 inputs:
   target:
     description: Target triple used for cache namespacing.
     required: true
-  install-test-prereqs:
-    description: Install DotSlash for Bazel-backed test jobs.
-    required: false
-    default: "false"
 outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
@@ -16,21 +12,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # Some integration tests rely on DotSlash being installed.
-    # See https://github.com/openai/codex/pull/7617.
-    - name: Install DotSlash
-      if: inputs.install-test-prereqs == 'true'
-      uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-
-    - name: Make DotSlash available in PATH (Unix)
-      if: inputs.install-test-prereqs == 'true' && runner.os != 'Windows'
-      shell: bash
-      run: cp "$(which dotslash)" /usr/local/bin
-
-    - name: Make DotSlash available in PATH (Windows)
-      if: inputs.install-test-prereqs == 'true' && runner.os == 'Windows'
-      shell: pwsh
-      run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
+    - id: setup_ci
+      uses: ./.github/actions/setup-ci
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
@@ -38,30 +21,15 @@ runs:
       # and Windows can use the runner's standalone Bazel, ignoring .bazelversion.
       with:
         bazelisk-version: 1.28.1
+        # setup-bazel writes an explicit output_base, which otherwise overrides
+        # BAZEL_OUTPUT_USER_ROOT and leaves Bazel's I/O-heavy trees on C:.
+        output-base: ${{ steps.setup_ci.outputs.bazel-output-base }}
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
       shell: pwsh
       run: |
-        # Keep the repository cache under HOME on all runners. Windows `D:\a`
-        # cache paths match `.bazelrc`, but `actions/cache/restore` currently
-        # returns HTTP 400 for that path in the Windows clippy job.
-        $repositoryCachePath = Join-Path $HOME '.cache/bazel-repo-cache'
-        "repository-cache-path=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        "BAZEL_REPOSITORY_CACHE=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-    - name: Configure Bazel output root (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        # Use the shortest available drive to reduce argv/path length issues,
-        # but avoid the drive root because some Windows test launchers mis-handle
-        # MANIFEST paths there.
-        $hasDDrive = Test-Path 'D:\'
-        $bazelOutputUserRoot = if ($hasDDrive) { 'D:\b' } else { 'C:\b' }
-        $repoContentsCache = Join-Path $env:RUNNER_TEMP "bazel-repo-contents-cache-$env:GITHUB_RUN_ID-$env:GITHUB_JOB"
-        "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "BAZEL_REPO_CONTENTS_CACHE=$repoContentsCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "repository-cache-path=$env:BAZEL_REPOSITORY_CACHE" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
     - name: Expose MSVC SDK environment (Windows)
       if: runner.os == 'Windows'
@@ -124,8 +92,3 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: ./.github/scripts/compute-bazel-windows-path.ps1
-
-    - name: Enable Git long paths (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: git config --global core.longpaths true
