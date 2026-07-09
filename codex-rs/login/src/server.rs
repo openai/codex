@@ -27,7 +27,7 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
-use crate::default_client::build_raw_auth_reqwest_client;
+use crate::default_client::create_raw_auth_client;
 use crate::default_client::originator;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::pkce::PkceCodes;
@@ -798,7 +798,7 @@ pub(crate) async fn exchange_code_for_tokens(
 
     // The route selected for the issuer is reused for token exchange; the token endpoint path is
     // not resolved separately.
-    let client = build_raw_auth_reqwest_client(issuer.trim_end_matches('/'), auth_route_config)?;
+    let client = create_raw_auth_client(issuer.trim_end_matches('/'), auth_route_config)?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     info!(
         issuer = %sanitize_url_for_logging(issuer),
@@ -1120,7 +1120,7 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let client = build_raw_auth_reqwest_client(&token_endpoint, auth_route_config)?;
+    let client = create_raw_auth_client(&token_endpoint, auth_route_config)?;
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")

@@ -1,4 +1,5 @@
-use reqwest::StatusCode;
+use codex_http_client::HttpClient;
+use http::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Deserializer;
@@ -6,7 +7,7 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::default_client::build_raw_auth_reqwest_client;
+use crate::default_client::create_raw_auth_client;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
 use std::io;
@@ -60,7 +61,7 @@ struct CodeSuccessResp {
 
 /// Request the user code and polling interval.
 async fn request_user_code(
-    client: &reqwest::Client,
+    client: &HttpClient,
     auth_base_url: &str,
     client_id: &str,
 ) -> std::io::Result<UserCodeResp> {
@@ -97,7 +98,7 @@ async fn request_user_code(
 
 /// Poll token endpoint until a code is issued or timeout occurs.
 async fn poll_for_token(
-    client: &reqwest::Client,
+    client: &HttpClient,
     auth_base_url: &str,
     device_auth_id: &str,
     user_code: &str,
@@ -165,7 +166,7 @@ pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<Device
     let base_url = opts.issuer.trim_end_matches('/');
     // The route selected for the issuer is reused for all device-auth endpoint paths; the endpoint
     // paths are not resolved separately.
-    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
+    let client = create_raw_auth_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
@@ -182,7 +183,7 @@ pub async fn complete_device_code_login(
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
-    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
+    let client = create_raw_auth_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
 
     let code_resp = poll_for_token(
