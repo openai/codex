@@ -5,6 +5,7 @@ use tracing_subscriber::prelude::*;
 use super::current_trace_context_headers;
 
 #[test]
+#[serial_test::serial(exec_server_tracing)]
 fn creates_traceparent_header_from_current_span() {
     let provider = SdkTracerProvider::builder().build();
     let tracer = provider.tracer("exec-server-test");

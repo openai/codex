@@ -363,23 +363,19 @@ impl RpcClient {
         })
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.request",
-        level = "info",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = method,
-            method,
-        )
-    )]
+    fn allocate_request_id(&self) -> RequestId {
+        RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst))
+    }
+
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
     where
         P: Serialize,
         T: DeserializeOwned,
     {
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        let request_id = self.allocate_request_id();
+        self.call_inner(request_id, method, params, RpcCallTimeout::None)
+            .await
     }
 
     pub(crate) async fn call_with_timeout<P, T>(
@@ -393,20 +389,16 @@ impl RpcClient {
         T: DeserializeOwned,
     {
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::After(call_timeout))
-            .await
+        let request_id = self.allocate_request_id();
+        self.call_inner(
+            request_id,
+            method,
+            params,
+            RpcCallTimeout::After(call_timeout),
+        )
+        .await
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.request",
-        level = "info",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = method,
-            method,
-        )
-    )]
     pub(crate) async fn call_for_cleanup<P, T>(
         &self,
         method: &str,
@@ -426,11 +418,27 @@ impl RpcClient {
                 }
             },
         };
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        let request_id = self.allocate_request_id();
+        self.call_inner(request_id, method, params, RpcCallTimeout::None)
+            .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = %request_id,
+            method,
+        )
+    )]
     async fn call_inner<P, T>(
         &self,
+        request_id: RequestId,
         method: &str,
         params: &P,
         call_timeout: RpcCallTimeout,
@@ -439,7 +447,6 @@ impl RpcClient {
         P: Serialize,
         T: DeserializeOwned,
     {
-        let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
@@ -967,6 +974,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(exec_server_tracing)]
     async fn rpc_client_propagates_current_trace_context() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()

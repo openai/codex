@@ -1310,6 +1310,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(exec_server_tracing)]
     async fn process_start_propagates_caller_trace_context_across_background_task() {
         let (client_stdin, server_reader) = duplex(1 << 20);
         let (mut server_writer, client_stdout) = duplex(1 << 20);
@@ -1360,6 +1361,15 @@ mod tests {
             trace
         });
 
+        let tracer_provider = SdkTracerProvider::builder().build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
         let client = ExecServerClient::connect(
             JsonRpcConnection::from_stdio(
                 client_stdout,
@@ -1371,14 +1381,6 @@ mod tests {
         .await
         .expect("client should connect");
 
-        let tracer_provider = SdkTracerProvider::builder().build();
-        let tracer = tracer_provider.tracer("exec-server-test");
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_opentelemetry::layer()
-                .with_tracer(tracer)
-                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-        );
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
         tracing::callsite::rebuild_interest_cache();
         let parent_span = tracing::info_span!("process-start-parent");
         let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)

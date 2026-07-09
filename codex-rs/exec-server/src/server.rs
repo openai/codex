@@ -47,6 +47,7 @@ mod tests {
     use crate::ExecServerTelemetry;
 
     #[tokio::test]
+    #[serial_test::serial(exec_server_tracing)]
     async fn telemetry_entrypoint_emits_root_span() {
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()

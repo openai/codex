@@ -52,7 +52,7 @@ pub(crate) enum ConnectionTransport {
 }
 
 impl ConnectionTransport {
-    fn metric_tag(self) -> &'static str {
+    pub(crate) fn metric_tag(self) -> &'static str {
         match self {
             Self::Relay => "relay",
             Self::Stdio => "stdio",
