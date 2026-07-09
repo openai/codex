@@ -295,16 +295,13 @@ fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     with_chatgpt_cloudflare_cookie_store(builder)
 }
 
-/// Builds a raw reqwest client for an auth endpoint without Codex default headers.
-pub(crate) fn build_raw_auth_reqwest_client(
+/// Builds an HTTP client for an auth endpoint without Codex default headers.
+pub(crate) fn create_raw_auth_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
-) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    auth_http_client_factory(auth_route_config).build_reqwest_client(
-        reqwest::Client::builder(),
-        endpoint,
-        ClientRouteClass::Auth,
-    )
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+    auth_http_client_factory(auth_route_config)
+        .build_client_without_request_logging(endpoint, ClientRouteClass::Auth)
 }
 
 /// Builds the default Codex reqwest client for an auth endpoint.

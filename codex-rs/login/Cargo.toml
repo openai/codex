@@ -20,6 +20,7 @@ codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
+http = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
@@ -50,6 +51,7 @@ pretty_assertions = { workspace = true }
 regex-lite = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
 
 [lib]

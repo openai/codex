@@ -155,6 +155,9 @@ fn derive_revoke_token_endpoint(refresh_endpoint: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::ClientRouteClass;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use core_test_support::skip_if_no_network;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -181,8 +184,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = HttpClient::new(reqwest::Client::new());
         let endpoint = format!("{}/oauth/revoke", server.uri());
+        let client = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .build_client(&endpoint, ClientRouteClass::Auth)
+            .expect("test HTTP client should build");
         let error = revoke_oauth_token(
             &client,
             endpoint.as_str(),
