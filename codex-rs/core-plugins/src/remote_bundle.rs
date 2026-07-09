@@ -1,18 +1,19 @@
 use crate::plugin_bundle_archive::PluginBundleUnpackError;
 use crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use crate::remote::RemotePluginServiceConfig;
 use crate::store::PluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::store::error_context_sub_error_type;
 use crate::store::validate_plugin_version_segment;
-use codex_login::default_client::build_reqwest_client;
+use codex_http_client::HttpResponse;
+use codex_http_client::RouteAwareClientPoolError;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
-use reqwest::Response;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
@@ -83,11 +84,18 @@ pub enum RemotePluginBundleInstallError {
         source: PluginIdError,
     },
 
+    #[error("failed to build HTTP client for remote plugin bundle download from {url}: {source}")]
+    HttpClient {
+        url: String,
+        #[source]
+        source: RouteAwareClientPoolError,
+    },
+
     #[error("failed to send remote plugin bundle download request to {url}: {source}")]
     DownloadRequest {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: codex_http_client::HttpError,
     },
 
     #[error("remote plugin bundle download from {url} failed with status {status}: {body}")]
@@ -101,7 +109,7 @@ pub enum RemotePluginBundleInstallError {
     DownloadBody {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: codex_http_client::HttpError,
     },
 
     #[error("remote plugin bundle download from {url} exceeded maximum size of {max_bytes} bytes")]
@@ -144,6 +152,7 @@ impl RemotePluginBundleInstallError {
             | Self::InvalidBundleDownloadUrl { .. }
             | Self::UnsupportedBundleDownloadUrlScheme { .. }
             | Self::InvalidPluginId { .. }
+            | Self::HttpClient { .. }
             | Self::DownloadRequest { .. }
             | Self::DownloadStatus { .. }
             | Self::DownloadBody { .. }
@@ -247,10 +256,12 @@ fn is_loopback_url(url: &Url) -> bool {
 }
 
 pub async fn download_and_install_remote_plugin_bundle(
+    config: &RemotePluginServiceConfig,
     codex_home: PathBuf,
     bundle: ValidatedRemotePluginBundle,
 ) -> Result<PluginInstallResult, RemotePluginBundleInstallError> {
     let bundle_bytes = download_remote_plugin_bundle_with_limit(
+        config,
         &bundle.bundle_download_url,
         /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_MAX_DOWNLOAD_BYTES,
     )
@@ -267,10 +278,12 @@ pub async fn download_and_install_remote_plugin_bundle(
 }
 
 pub(crate) async fn download_and_extract_remote_plugin_bundle_to_path(
+    config: &RemotePluginServiceConfig,
     bundle: ValidatedRemotePluginBundle,
     destination: AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, RemotePluginBundleInstallError> {
     let bundle_bytes = download_remote_plugin_bundle_with_limit(
+        config,
         &bundle.bundle_download_url,
         /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_MAX_DOWNLOAD_BYTES,
     )
@@ -287,10 +300,17 @@ pub(crate) async fn download_and_extract_remote_plugin_bundle_to_path(
 }
 
 async fn download_remote_plugin_bundle_with_limit(
+    config: &RemotePluginServiceConfig,
     bundle_download_url: &str,
     max_bytes: u64,
 ) -> Result<Vec<u8>, RemotePluginBundleInstallError> {
-    let client = build_reqwest_client();
+    let client = config
+        .http_client_for_url(bundle_download_url)
+        .await
+        .map_err(|source| RemotePluginBundleInstallError::HttpClient {
+            url: bundle_download_url.to_string(),
+            source,
+        })?;
     let response = client
         .get(bundle_download_url)
         .timeout(REMOTE_PLUGIN_BUNDLE_DOWNLOAD_TIMEOUT)
@@ -354,7 +374,7 @@ async fn download_remote_plugin_bundle_with_limit(
 }
 
 async fn read_response_body_with_limit(
-    mut response: Response,
+    mut response: HttpResponse,
     url: &str,
     max_bytes: u64,
 ) -> Result<Vec<u8>, RemotePluginBundleInstallError> {
