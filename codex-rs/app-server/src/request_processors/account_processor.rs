@@ -293,6 +293,9 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            LoginAccountParams::AmazonBedrock { .. } => {
+                return Err(invalid_request("Amazon Bedrock login is not implemented"));
+            }
         }
         Ok(())
     }
