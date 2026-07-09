@@ -41,7 +41,6 @@ use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
-use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
@@ -382,7 +381,7 @@ async fn handle_approved_mcp_tool_call(
         sess,
         turn_context,
         arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_input_optional_fields.as_ref()),
     )
     .await;
     let tool_input = match &rewrite {
@@ -1019,7 +1018,7 @@ pub(crate) struct McpToolApprovalMetadata {
     mcp_app_resource_uri: Option<String>,
     template_id: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
-    openai_file_input_params: Option<Vec<String>>,
+    openai_file_input_optional_fields: Option<HashMap<String, Vec<String>>>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
@@ -1558,19 +1557,19 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .map(str::to_string),
         codex_apps_meta,
         // Disallow custom MCPs from uploading files via fileParams.
-        openai_file_input_params: openai_file_input_params_for_server(
+        openai_file_input_optional_fields: openai_file_input_optional_fields_for_server(
             server,
-            tool_info.tool.meta.as_deref(),
+            &tool_info.openai_file_input_optional_fields,
         ),
     })
 }
 
-fn openai_file_input_params_for_server(
+fn openai_file_input_optional_fields_for_server(
     server: &str,
-    meta: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Option<Vec<String>> {
+    openai_file_input_optional_fields: &HashMap<String, Vec<String>>,
+) -> Option<HashMap<String, Vec<String>>> {
     (server == CODEX_APPS_MCP_SERVER_NAME)
-        .then_some(declared_openai_file_input_param_names(meta))
+        .then(|| openai_file_input_optional_fields.clone())
         .filter(|params| !params.is_empty())
 }
 

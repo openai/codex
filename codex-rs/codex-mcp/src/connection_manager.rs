@@ -14,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
+use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
@@ -36,7 +37,6 @@ use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
-use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -599,7 +599,7 @@ impl McpConnectionManager {
         let tools = filter_tools(tools, &managed_client.tool_filter)
             .into_iter()
             .map(|mut tool| {
-                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                prepare_openai_file_params_for_model(&mut tool);
                 self.with_server_metadata(tool)
             });
         let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);

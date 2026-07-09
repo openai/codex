@@ -18,14 +18,15 @@ use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
     turn_context: &TurnContext,
     arguments_value: Option<JsonValue>,
-    openai_file_input_params: Option<&[String]>,
+    openai_file_input_optional_fields: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<Option<JsonValue>, String> {
-    let Some(openai_file_input_params) = openai_file_input_params else {
+    let Some(openai_file_input_optional_fields) = openai_file_input_optional_fields else {
         return Ok(arguments_value);
     };
 
@@ -38,13 +39,18 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     let auth = sess.services.auth_manager.auth().await;
     let mut rewritten_arguments = arguments.clone();
 
-    for field_name in openai_file_input_params {
+    for (field_name, optional_fields) in openai_file_input_optional_fields {
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
+        let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            turn_context,
+            auth.as_ref(),
+            field_name,
+            optional_fields,
+            value,
+        )
+        .await?
         else {
             continue;
         };
@@ -62,6 +68,7 @@ async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
+    optional_fields: &[String],
     value: &JsonValue,
 ) -> Result<Option<JsonValue>, String> {
     match value {
@@ -71,6 +78,7 @@ async fn rewrite_argument_value_for_openai_files(
                 auth,
                 field_name,
                 /*index*/ None,
+                optional_fields,
                 file_path,
             )
             .await?;
@@ -87,6 +95,7 @@ async fn rewrite_argument_value_for_openai_files(
                     auth,
                     field_name,
                     Some(index),
+                    optional_fields,
                     file_path,
                 )
                 .await?;
@@ -103,6 +112,7 @@ async fn build_uploaded_argument_value(
     auth: Option<&CodexAuth>,
     field_name: &str,
     index: Option<usize>,
+    optional_fields: &[String],
     file_path: &str,
 ) -> Result<JsonValue, String> {
     let contextualize_error = |error: String| match index {
@@ -170,12 +180,29 @@ async fn build_uploaded_argument_value(
     )
     .await
     .map_err(|error| contextualize_error(error.to_string()))?;
-    Ok(serde_json::json!({
-        "download_url": uploaded.download_url,
-        "file_id": uploaded.file_id,
-        "mime_type": uploaded.mime_type,
-        "file_name": uploaded.file_name,
-    }))
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "download_url".to_string(),
+        JsonValue::String(uploaded.download_url),
+    );
+    payload.insert("file_id".to_string(), JsonValue::String(uploaded.file_id));
+    if optional_fields
+        .iter()
+        .any(|optional_field| optional_field == "mime_type")
+        && let Some(mime_type) = uploaded.mime_type
+    {
+        payload.insert("mime_type".to_string(), JsonValue::String(mime_type));
+    }
+    if optional_fields
+        .iter()
+        .any(|optional_field| optional_field == "file_name")
+    {
+        payload.insert(
+            "file_name".to_string(),
+            JsonValue::String(uploaded.file_name),
+        );
+    }
+    Ok(JsonValue::Object(payload))
 }
 
 #[cfg(test)]
@@ -217,7 +244,7 @@ mod tests {
             &session,
             &Arc::new(turn_context),
             arguments.clone(),
-            /*openai_file_input_params*/ None,
+            /*openai_file_input_optional_fields*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -226,7 +253,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_uploaded_argument_value_uploads_environment_file() {
+    async fn build_uploaded_argument_value_includes_schema_declared_optional_fields() {
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;
@@ -288,6 +315,7 @@ mod tests {
             Some(&auth),
             "file",
             /*index*/ None,
+            &["mime_type".to_string(), "file_name".to_string()],
             "file_report.csv",
         )
         .await
@@ -320,6 +348,7 @@ mod tests {
             Some(&auth),
             "file",
             /*index*/ None,
+            &[],
             "oversized.bin",
         )
         .await
@@ -330,7 +359,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rewrite_argument_value_for_openai_files_rewrites_scalar_path() {
+    async fn rewrite_argument_value_for_openai_files_omits_undeclared_optional_fields() {
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;
@@ -390,6 +419,7 @@ mod tests {
             &turn_context,
             Some(&auth),
             "file",
+            &[],
             &serde_json::json!("file_report.csv"),
         )
         .await
@@ -400,8 +430,6 @@ mod tests {
             Some(serde_json::json!({
                 "download_url": format!("{}/download/file_123", server.uri()),
                 "file_id": "file_123",
-                "mime_type": "text/csv",
-                "file_name": "file_report.csv",
             }))
         );
     }
@@ -502,6 +530,7 @@ mod tests {
             &turn_context,
             Some(&auth),
             "files",
+            &[],
             &serde_json::json!(["one.csv", "two.csv"]),
         )
         .await
@@ -513,14 +542,10 @@ mod tests {
                 {
                     "download_url": format!("{}/download/file_1", server.uri()),
                     "file_id": "file_1",
-                    "mime_type": "text/csv",
-                    "file_name": "one.csv",
                 },
                 {
                     "download_url": format!("{}/download/file_2", server.uri()),
                     "file_id": "file_2",
-                    "mime_type": "text/csv",
-                    "file_name": "two.csv",
                 }
             ]))
         );
@@ -538,7 +563,7 @@ mod tests {
             Some(serde_json::json!({
                 "file": "/definitely/missing/file.csv",
             })),
-            Some(&["file".to_string()]),
+            Some(&HashMap::from([("file".to_string(), Vec::new())])),
         )
         .await
         .expect_err("missing file should fail");
