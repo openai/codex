@@ -1594,6 +1594,15 @@ respect_system_proxy = true
         config.http_client_factory().outbound_proxy_policy(),
         codex_http_client::OutboundProxyPolicy::RespectSystemProxy
     );
+    assert_eq!(
+        config.plugins_config_input().remote_plugin_service_config(),
+        codex_core_plugins::remote::RemotePluginServiceConfig::new(
+            config.chatgpt_base_url,
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::RespectSystemProxy,
+            ),
+        )
+    );
     Ok(())
 }
 
