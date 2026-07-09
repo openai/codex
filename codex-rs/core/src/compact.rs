@@ -15,6 +15,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
@@ -238,6 +239,7 @@ async fn run_compact_task_inner_impl(
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut client_session = sess.services.model_client.new_session();
+    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
     // request tracking)
     // survives retries within this compact turn.
@@ -261,7 +263,7 @@ async fn run_compact_task_inner_impl(
         };
         let attempt_result = drain_to_completed(
             &sess,
-            turn_context.as_ref(),
+            step_context.as_ref(),
             &mut client_session,
             &responses_metadata,
             &prompt,
@@ -660,17 +662,18 @@ fn build_compacted_history_with_limit(
 
 async fn drain_to_completed(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     prompt: &Prompt,
 ) -> CodexResult<()> {
+    let turn_context = step_context.turn.as_ref();
     let mut stream = client_session
         .stream(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort.clone(),
+            step_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,

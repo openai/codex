@@ -4518,7 +4518,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort.clone();
+    expected.model_reasoning_effort = turn.config.model_reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]
@@ -4553,7 +4553,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.base_instructions = None;
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort.clone();
+    expected.model_reasoning_effort = turn.config.model_reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]

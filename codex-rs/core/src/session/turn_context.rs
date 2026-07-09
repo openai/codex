@@ -108,7 +108,6 @@ pub struct TurnContext {
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
-    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -171,7 +170,8 @@ impl TurnContext {
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if self.model_info.supports_reasoning_summaries {
-            self.reasoning_effort
+            self.config
+                .model_reasoning_effort
                 .clone()
                 .or_else(|| self.model_info.default_reasoning_level.clone())
         } else {
@@ -220,22 +220,22 @@ impl TurnContext {
             .iter()
             .map(|preset| preset.effort.clone())
             .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort.clone()
-        {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
+        let reasoning_effort =
+            if let Some(current_reasoning_effort) = self.config.model_reasoning_effort.clone() {
+                if supported_reasoning_levels.contains(&current_reasoning_effort) {
+                    Some(current_reasoning_effort)
+                } else {
+                    supported_reasoning_levels
+                        .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                        .cloned()
+                        .or_else(|| model_info.default_reasoning_level.clone())
+                }
             } else {
                 supported_reasoning_levels
                     .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
                     .cloned()
                     .or_else(|| model_info.default_reasoning_level.clone())
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .cloned()
-                .or_else(|| model_info.default_reasoning_level.clone())
-        };
+            };
         config.model_reasoning_effort = reasoning_effort.clone();
 
         let collaboration_mode = self.collaboration_mode.with_updates(
@@ -259,7 +259,6 @@ impl TurnContext {
                 .clone()
                 .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
-            reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
@@ -372,7 +371,7 @@ impl TurnContext {
             multi_agent_version: Some(self.multi_agent_version),
             multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
             realtime_active: Some(self.realtime_active),
-            effort: self.reasoning_effort.clone(),
+            effort: self.config.model_reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
     }
@@ -485,7 +484,6 @@ impl Session {
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
     ) -> TurnContext {
-        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
@@ -537,7 +535,6 @@ impl Session {
             model_info,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
-            reasoning_effort,
             reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,

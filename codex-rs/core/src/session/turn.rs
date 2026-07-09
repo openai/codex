@@ -777,7 +777,7 @@ async fn track_turn_resolved_config_analytics(
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
-            reasoning_effort: turn_context.reasoning_effort.clone(),
+            reasoning_effort: turn_context.config.model_reasoning_effort.clone(),
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
                 .config
@@ -1157,7 +1157,7 @@ async fn run_sampling_request(
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
+            Arc::clone(&step_context),
             Arc::clone(&turn_store),
             client_session,
             responses_metadata,
@@ -1920,14 +1920,14 @@ async fn drain_in_flight(
 #[instrument(level = "trace",
     skip_all,
     fields(
-        turn_id = %turn_context.sub_id,
-        model = %turn_context.model_info.slug
+        turn_id = %step_context.turn.sub_id,
+        model = %step_context.turn.model_info.slug
     )
 )]
 async fn try_run_sampling_request(
     tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
@@ -1935,11 +1935,12 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    let turn_context = &step_context.turn;
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
         sandbox_policy = &turn_context.sandbox_policy(),
-        effort = turn_context.reasoning_effort,
+        effort = step_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
@@ -1959,7 +1960,7 @@ async fn try_run_sampling_request(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort.clone(),
+            step_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,
@@ -1979,7 +1980,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
-    let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
+    let reasoning_effort = step_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));

@@ -196,6 +196,7 @@ impl StepContext {
         let environments = turn.environments.clone();
         Arc::new(Self::new(
             Arc::clone(&turn),
+            turn.config.model_reasoning_effort.clone(),
             environments,
             Vec::new(),
             crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
@@ -3093,7 +3094,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        effort: turn_context.config.model_reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let turn_id = previous_context_item
@@ -3969,7 +3970,8 @@ async fn includes_timed_out_message() {
 #[tokio::test]
 async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
-    turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
+    Arc::make_mut(&mut turn_context.config).model_reasoning_effort =
+        Some(ReasoningEffortConfig::Minimal);
     let updated = turn_context
         .with_model("gpt-5.4".to_string(), &session.services.models_manager)
         .await;
@@ -3985,10 +3987,6 @@ async fn turn_context_with_model_updates_model_fields() {
     assert_eq!(updated.config.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(updated.collaboration_mode.model(), "gpt-5.4");
     assert_eq!(updated.model_info, expected_model_info);
-    assert_eq!(
-        updated.reasoning_effort,
-        Some(ReasoningEffortConfig::Medium)
-    );
     assert_eq!(
         updated.collaboration_mode.reasoning_effort(),
         Some(ReasoningEffortConfig::Medium)

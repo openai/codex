@@ -686,6 +686,7 @@ async fn environment_tools_follow_the_step_context() {
     let turn = Arc::new(turn);
     let step_context = Arc::new(StepContext::new(
         Arc::clone(&turn),
+        turn.config.model_reasoning_effort.clone(),
         environments,
         Vec::new(),
         crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),

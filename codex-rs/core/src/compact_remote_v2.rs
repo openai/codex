@@ -329,11 +329,12 @@ struct RemoteCompactionV2Output {
 
 async fn run_remote_compaction_request_v2(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
 ) -> CodexResult<RemoteCompactionV2Output> {
+    let turn_context = step_context.turn.as_ref();
     let max_retries = turn_context
         .provider
         .info()
@@ -346,7 +347,7 @@ async fn run_remote_compaction_request_v2(
                 prompt,
                 &turn_context.model_info,
                 &turn_context.session_telemetry,
-                turn_context.reasoning_effort.clone(),
+                step_context.reasoning_effort.clone(),
                 turn_context.reasoning_summary,
                 turn_context.config.service_tier.clone(),
                 responses_metadata,

@@ -2894,8 +2894,10 @@ impl Session {
                 &selected_capability_roots,
             )
             .await;
+        let reasoning_effort = turn_context.config.model_reasoning_effort.clone();
         Arc::new(StepContext::new(
             turn_context,
+            reasoning_effort,
             environments,
             selected_capability_roots,
             mcp,

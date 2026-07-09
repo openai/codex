@@ -1204,7 +1204,7 @@ mod tests {
     async fn test_review_params() -> GuardianReviewSessionParams {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let model = turn.model_info.slug.clone();
-        let reasoning_effort = turn.reasoning_effort.clone();
+        let reasoning_effort = turn.config.model_reasoning_effort.clone();
         let reasoning_summary = turn.reasoning_summary;
         let personality = turn.personality;
         #[allow(deprecated)]

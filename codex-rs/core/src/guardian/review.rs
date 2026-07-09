@@ -722,7 +722,8 @@ pub(super) async fn guardian_review_session_config(
                 .supported_reasoning_levels
                 .iter()
                 .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            turn.reasoning_effort
+            turn.config
+                .model_reasoning_effort
                 .clone()
                 .or_else(|| turn.model_info.default_reasoning_level.clone()),
         );

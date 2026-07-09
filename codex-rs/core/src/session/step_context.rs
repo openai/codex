@@ -6,12 +6,14 @@ use crate::session::McpRuntimeSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ToolInfo;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use tokio::sync::OnceCell;
 
 /// Request-scoped state that may change between model sampling requests.
 #[derive(Debug)]
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Capability roots bound to ready environments in this exact step.
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
@@ -26,6 +28,7 @@ pub(crate) struct StepContext {
 impl StepContext {
     pub(crate) fn new(
         turn: Arc<TurnContext>,
+        reasoning_effort: Option<ReasoningEffortConfig>,
         environments: TurnEnvironmentSnapshot,
         selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
         mcp: Arc<McpRuntimeSnapshot>,
@@ -33,6 +36,7 @@ impl StepContext {
     ) -> Self {
         Self {
             turn,
+            reasoning_effort,
             environments,
             selected_capability_roots,
             mcp,
@@ -45,5 +49,21 @@ impl StepContext {
         self.mcp_tool_snapshot
             .get_or_init(|| self.mcp.manager().list_all_tools())
             .await
+    }
+
+    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        if self.turn.model_info.supports_reasoning_summaries {
+            self.reasoning_effort
+                .clone()
+                .or_else(|| self.turn.model_info.default_reasoning_level.clone())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+        self.effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "default".to_string())
     }
 }
