@@ -57,10 +57,17 @@ fn udp_loop_continues_after_proxy_error() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind DNS proxy fixture");
     let endpoint = listener.local_addr().expect("fixture local addr");
     let (received_tx, received_rx) = mpsc::channel();
+    let (failed_session_tx, failed_session_rx) = mpsc::channel();
     let expected_response = b"dns-response".to_vec();
     let response = expected_response.clone();
     std::thread::spawn(move || {
-        let _ = listener.accept().expect("accept failing DNS proxy session");
+        let (mut stream, _) = listener.accept().expect("accept failing DNS proxy session");
+        stream
+            .write_all(&[0; DNS_PROXY_SESSION_PREFACE.len()])
+            .expect("write invalid preface ack");
+        failed_session_tx
+            .send(())
+            .expect("send failing session signal");
 
         let (mut stream, _) = listener.accept().expect("accept DNS proxy session");
         let mut preface = [0_u8; DNS_PROXY_SESSION_PREFACE.len()];
@@ -84,8 +91,10 @@ fn udp_loop_continues_after_proxy_error() {
     client
         .send_to(b"first-query", dns_addr)
         .expect("send first query");
+    failed_session_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("failing session");
     let mut buffer = [0; 64];
-    let _ = client.recv_from(&mut buffer);
 
     client
         .send_to(b"second-query", dns_addr)
