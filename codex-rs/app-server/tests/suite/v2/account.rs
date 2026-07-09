@@ -1148,6 +1148,126 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
 }
 
 #[tokio::test]
+async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_changes() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let expected_auth = load_file_auth(codex_home.path())?;
+    let expected_config = read_config_toml(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_args(&["-c", "model_provider=\"mock_provider\""])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        error.error.message,
+        "Amazon Bedrock login cannot select `amazon-bedrock` because session-flags sets `model_provider` to \"mock_provider\""
+    );
+    assert_eq!(load_file_auth(codex_home.path())?, expected_auth);
+    assert_eq!(read_config_toml(codex_home.path())?, expected_config);
+
+    let maybe_completed = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await;
+    assert!(
+        maybe_completed.is_err(),
+        "account/login/completed should not be emitted when the provider is overridden"
+    );
+    let maybe_updated = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await;
+    assert!(
+        maybe_updated.is_err(),
+        "account/updated should not be emitted when the provider is overridden"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_amazon_bedrock_allows_bedrock_provider_override() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let mut expected_config = read_config_toml(codex_home.path())?;
+    expected_config
+        .as_table_mut()
+        .expect("config should be a table")
+        .insert(
+            "model_provider".to_string(),
+            toml::Value::String("amazon-bedrock".to_string()),
+        );
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_args(&["-c", "model_provider=\"amazon-bedrock\""])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<LoginAccountResponse>(response)?,
+        LoginAccountResponse::AmazonBedrock {}
+    );
+    assert_eq!(
+        load_file_auth(codex_home.path())?,
+        Some(AuthDotJson {
+            auth_mode: Some(DomainAuthMode::BedrockApiKey),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: Some(BedrockApiKeyAuth {
+                api_key: "managed-bedrock-api-key".to_string(),
+                region: "us-west-2".to_string(),
+            }),
+        })
+    );
+    assert_eq!(read_config_toml(codex_home.path())?, expected_config);
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn managed_bedrock_login_requires_experimental_api() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
