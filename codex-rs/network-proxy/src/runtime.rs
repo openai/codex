@@ -546,11 +546,11 @@ impl NetworkProxyState {
         };
         let (deny_set, allow_set, allow_local_binding, allowed_domains) = {
             let guard = self.state.read().await;
-            let allowed_domains = guard.config.network.allowed_domains();
+            let allowed_domains = guard.config.allowed_domains();
             (
                 guard.deny_set.clone(),
                 guard.allow_set.clone(),
-                guard.config.network.allow_local_binding,
+                guard.config.allow_local_binding,
                 allowed_domains,
             )
         };

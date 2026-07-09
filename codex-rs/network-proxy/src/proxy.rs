@@ -218,11 +218,8 @@ impl NetworkProxyBuilder {
             if self.managed_by_codex {
                 let runtime = config::resolve_runtime(&current_cfg)?;
                 #[cfg(target_os = "windows")]
-                let (managed_http_addr, managed_socks_addr) = config::clamp_bind_addrs(
-                    runtime.http_addr,
-                    runtime.socks_addr,
-                    &current_cfg,
-                );
+                let (managed_http_addr, managed_socks_addr) =
+                    config::clamp_bind_addrs(runtime.http_addr, runtime.socks_addr, &current_cfg);
                 #[cfg(target_os = "windows")]
                 let reserved = reserve_windows_managed_listeners(
                     managed_http_addr,
@@ -1300,7 +1297,8 @@ mod tests {
                 "stale-token".to_string(),
             ),
         ]);
-        let global = proxy.prepare_for_optional_environment(HashMap::new(), None)?;
+        let global =
+            proxy.prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
         let local = proxy.prepare_for_optional_environment(base_env.clone(), Some("local"))?;
         let remote = proxy.prepare_for_optional_environment(HashMap::new(), Some("remote"))?;
         let local_addrs = proxy.environment_proxy_addrs("local")?;
