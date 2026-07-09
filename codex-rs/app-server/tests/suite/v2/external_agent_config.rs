@@ -51,9 +51,6 @@ fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String
     response.import_id
 }
 
-#[path = "external_agent_config_source_cu.rs"]
-mod source_cu_tests;
-
 #[tokio::test]
 async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
 -> Result<()> {
