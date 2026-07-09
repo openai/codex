@@ -170,14 +170,14 @@ Example with notification opt-out:
 - `thread/rollback` — deprecated and will be removed soon. Drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; paths must be absolute. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Deprecated experimental `multiAgentMode` is ignored; Ultra reasoning effort selects proactive behavior.
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
-- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`.
+- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and, for websocket transport only, `version` to override configured realtime selection for this session only, and pass `includeStartupContext: false` to omit Codex's generated startup context. By default, automatic Codex text follows the protocol's speakable output path. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. For V1 sessions, pass `codexResponseHandoffPrefix` while item mode is disabled to route automatic Codex commentary through `conversation.handoff.append` with that prefix; final answers remain unprefixed. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create an AVAS/v1 WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Explicit `version: "v2"` requests are rejected for WebRTC.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user`, `developer`, or `assistant` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `review/start` — start a regular turn that asks Codex to delegate the requested review to a sub-agent using the bundled `$review-agent` skill. The response shape is unchanged, while progress and the final review use the normal turn, collaboration, and `agentMessage` events.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
@@ -987,20 +987,23 @@ not emit `turn/started` and does not accept thread settings overrides.
 ```
 
 `expectedTurnId` is required. If there is no active turn, `expectedTurnId` does not match the
-active turn, or the active turn kind does not accept same-turn steering (for example review or
-manual compaction), the request fails with an `invalid request` error.
+active turn, or the active turn kind does not accept same-turn steering (for example manual
+compaction), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
-Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
+Use `review/start` to ask Codex to delegate a review of the currently checked-out project to a
+sub-agent. App-server translates the target into an ordinary user turn that explicitly invokes the
+bundled `$review-agent` skill. The request takes the thread id plus a `target` describing what
+should be reviewed:
 
 - `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
-- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
+- `{"type":"baseBranch","branch":"main"}` — diff against the provided base branch.
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
-- `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
-  - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
-  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
+- `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the delegation turn runs:
+  - `"inline"`: run the delegation as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
+  - `"detached"`: fork a new thread from the parent conversation and run the delegation there. The response’s `reviewThreadId` is the id of this new thread, and the server emits a `thread/started` notification for it before streaming turn items.
 
 Example request/response:
 
@@ -1015,7 +1018,7 @@ Example request/response:
         "id": "turn_900",
         "status": "inProgress",
         "items": [
-            { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
+            { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Spawn one sub-agent with the current conversation context. Tell it to use the $review-agent skill to review the target below. The sub-agent must perform the review itself and must not delegate to other agents. Wait for it to finish, then return its complete response as your final answer. Do not perform the review yourself.\n\nReview target:\nReview the changes introduced by commit 1234567deadbeef (\"Polish tui colors\")." } ] }
         ],
         "error": null
     },
@@ -1023,41 +1026,15 @@ Example request/response:
 } }
 ```
 
-For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn.
+For a detached review, use `"delivery": "detached"`. The response is the same shape, but
+`reviewThreadId` will be the id of the new thread (different from the original `threadId`). The
+server also emits a `thread/started` notification for that thread before streaming the delegation
+turn.
 
-Codex streams the usual `turn/started` notification followed by an `item/started`
-with an `enteredReviewMode` item so clients can show progress:
-
-```json
-{
-  "method": "item/started",
-  "params": {
-    "item": {
-      "type": "enteredReviewMode",
-      "id": "turn_900",
-      "review": "current changes"
-    }
-  }
-}
-```
-
-When the reviewer finishes, the server emits `item/started` and `item/completed`
-containing an `exitedReviewMode` item with the final review text:
-
-```json
-{
-  "method": "item/completed",
-  "params": {
-    "item": {
-      "type": "exitedReviewMode",
-      "id": "turn_900",
-      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
-    }
-  }
-}
-```
-
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
+The delegation is an ordinary user turn. Clients receive the usual `turn/started`, `item/*`,
+collaboration or sub-agent activity, final `agentMessage`, and `turn/completed` events. New reviews
+do not emit `enteredReviewMode` or `exitedReviewMode`; those item types remain in the schema so
+clients can replay older rollouts. Render the final `agentMessage` as the review result.
 
 ### Example: One-off command execution
 
@@ -1378,8 +1355,8 @@ Today both notifications carry an empty `items` array even when item events were
 - `webSearch` — `{id, query, action?}` for a web search request issued by the agent; `action` mirrors the Responses API web_search action payload (`search`, `open_page`, `find_in_page`) and may be omitted until completion.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `sleep` — `{id, durationMs}` emitted while the agent waits for a duration or new input.
-- `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
-- `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
+- `enteredReviewMode` — legacy `{id, review}` item retained so clients can replay older review rollouts.
+- `exitedReviewMode` — legacy `{id, review}` item retained so clients can replay older review rollouts.
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 

@@ -12,6 +12,7 @@ use crate::image_url::is_remote_image_url;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
+const REVIEW_AGENT_SKILL_NAME: &str = "review-agent";
 
 fn validate_user_input_image_urls(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
     if input.iter().any(|item| {
@@ -350,55 +351,47 @@ impl TurnRequestProcessor {
         collaboration_mode
     }
 
-    fn review_request_from_target(
-        target: ApiReviewTarget,
-    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
-        let cleaned_target = match target {
-            ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
+    fn review_prompt_from_target(target: ApiReviewTarget) -> Result<String, JSONRPCErrorError> {
+        let target = match target {
+            ApiReviewTarget::UncommittedChanges => {
+                "Review the current code changes (staged, unstaged, and untracked files)."
+                    .to_string()
+            }
             ApiReviewTarget::BaseBranch { branch } => {
                 let branch = branch.trim().to_string();
                 if branch.is_empty() {
                     return Err(invalid_request("branch must not be empty".to_string()));
                 }
-                ApiReviewTarget::BaseBranch { branch }
+                format!("Review the code changes against the base branch '{branch}'.")
             }
             ApiReviewTarget::Commit { sha, title } => {
                 let sha = sha.trim().to_string();
                 if sha.is_empty() {
                     return Err(invalid_request("sha must not be empty".to_string()));
                 }
-                let title = title
+                if let Some(title) = title
                     .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty());
-                ApiReviewTarget::Commit { sha, title }
+                    .filter(|t| !t.is_empty())
+                {
+                    format!("Review the changes introduced by commit {sha} (\"{title}\").")
+                } else {
+                    format!("Review the changes introduced by commit {sha}.")
+                }
             }
             ApiReviewTarget::Custom { instructions } => {
-                let trimmed = instructions.trim().to_string();
-                if trimmed.is_empty() {
+                let instructions = instructions.trim().to_string();
+                if instructions.is_empty() {
                     return Err(invalid_request(
                         "instructions must not be empty".to_string(),
                     ));
                 }
-                ApiReviewTarget::Custom {
-                    instructions: trimmed,
-                }
+                instructions
             }
         };
 
-        let core_target = match cleaned_target {
-            ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
-            ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
-            ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
-            ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
-        };
-
-        let hint = codex_core::review_prompts::user_facing_hint(&core_target);
-        let review_request = ReviewRequest {
-            target: core_target,
-            user_facing_hint: Some(hint.clone()),
-        };
-
-        Ok((review_request, hint))
+        Ok(format!(
+            "Spawn one sub-agent with the current conversation context. Tell it to use the ${REVIEW_AGENT_SKILL_NAME} skill to review the target below. The sub-agent must perform the review itself and must not delegate to other agents. Wait for it to finish, then return its complete response as your final answer. Do not perform the review yourself.\n\nReview target:\n{target}"
+        ))
     }
 
     async fn request_trace_context(
@@ -1129,16 +1122,16 @@ impl TurnRequestProcessor {
         Ok(Some(ThreadRealtimeStopResponse::default()))
     }
 
-    fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
-        let items = if display_text.is_empty() {
+    fn build_review_turn(turn_id: String, prompt: &str) -> Turn {
+        let items = if prompt.is_empty() {
             Vec::new()
         } else {
             vec![ThreadItem::UserMessage {
                 id: turn_id.clone(),
                 client_id: None,
                 content: vec![V2UserInput::Text {
-                    text: display_text.to_string(),
-                    // Review prompt display text is synthesized; no UI element ranges to preserve.
+                    text: prompt.to_string(),
+                    // The review prompt is synthesized; no UI element ranges need preservation.
                     text_elements: Vec::new(),
                 }],
             }]
@@ -1153,6 +1146,19 @@ impl TurnRequestProcessor {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+        }
+    }
+
+    fn review_turn_op(prompt: &str) -> Op {
+        Op::UserInput {
+            items: vec![CoreInputItem::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         }
     }
 
@@ -1175,19 +1181,18 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         parent_thread: Arc<CodexThread>,
-        review_request: ReviewRequest,
-        display_text: &str,
+        prompt: &str,
         parent_thread_id: String,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let turn_id = self
             .submit_core_op(
                 request_id,
                 parent_thread.as_ref(),
-                Op::Review { review_request },
+                Self::review_turn_op(prompt),
             )
             .await
             .map_err(|err| internal_error(format!("failed to start review: {err}")))?;
-        let turn = Self::build_review_turn(turn_id, display_text);
+        let turn = Self::build_review_turn(turn_id, prompt);
         self.emit_review_started(request_id, turn, parent_thread_id)
             .await;
         Ok(())
@@ -1198,8 +1203,7 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         parent_thread_id: ThreadId,
         parent_thread: Arc<CodexThread>,
-        review_request: ReviewRequest,
-        display_text: &str,
+        prompt: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -1216,10 +1220,7 @@ impl TurnRequestProcessor {
                 ))
             })?;
 
-        let mut config = self.config.as_ref().clone();
-        if let Some(review_model) = &config.review_model {
-            config.model = Some(review_model.clone());
-        }
+        let config = self.config.as_ref().clone();
 
         let NewThread {
             thread_id,
@@ -1229,7 +1230,7 @@ impl TurnRequestProcessor {
             .thread_manager
             .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
-                config.clone(),
+                config,
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: parent_thread_id,
                     history: Arc::new(parent_history.items),
@@ -1290,14 +1291,14 @@ impl TurnRequestProcessor {
             .submit_core_op(
                 request_id,
                 review_thread.as_ref(),
-                Op::Review { review_request },
+                Self::review_turn_op(prompt),
             )
             .await
             .map_err(|err| {
                 internal_error(format!("failed to start detached review turn: {err}"))
             })?;
 
-        let turn = Self::build_review_turn(turn_id, display_text);
+        let turn = Self::build_review_turn(turn_id, prompt);
         let review_thread_id = thread_id.to_string();
         self.emit_review_started(request_id, turn, review_thread_id)
             .await;
@@ -1317,27 +1318,17 @@ impl TurnRequestProcessor {
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        let (review_request, display_text) = Self::review_request_from_target(target)?;
+        self.ensure_direct_input_allowed(request_id, parent_thread.as_ref())
+            .await?;
+        let prompt = Self::review_prompt_from_target(target)?;
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {
-                self.start_inline_review(
-                    request_id,
-                    parent_thread,
-                    review_request,
-                    &display_text,
-                    thread_id,
-                )
-                .await?;
+                self.start_inline_review(request_id, parent_thread, &prompt, thread_id)
+                    .await?;
             }
             CoreReviewDelivery::Detached => {
-                self.start_detached_review(
-                    request_id,
-                    parent_thread_id,
-                    parent_thread,
-                    review_request,
-                    &display_text,
-                )
-                .await?;
+                self.start_detached_review(request_id, parent_thread_id, parent_thread, &prompt)
+                    .await?;
             }
         }
         Ok(())
