@@ -412,6 +412,49 @@ async fn reads_skill_files_while_resolving_plugin_namespaces() {
     );
 }
 
+#[tokio::test]
+async fn loading_empty_root_skips_namespace_probes() {
+    use std::sync::Arc;
+
+    use codex_core_skills::loader::SkillRoot;
+    use codex_core_skills::loader::load_skills_from_roots;
+    use codex_protocol::protocol::SkillScope;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+
+    let root = tempdir().expect("tempdir");
+    let skills_root = root.path().join("skills");
+    fs::create_dir_all(&skills_root).expect("skills dir");
+
+    let recording = Arc::new(RecordingFileSystem::new(
+        LOCAL_FS.as_ref(),
+        ManifestMetadataBehavior::Immediate,
+    ));
+    let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: skills_root.abs(),
+            scope: SkillScope::User,
+            file_system,
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+        }],
+        /*plugin_skill_snapshots*/ None,
+    )
+    .await;
+
+    assert!(outcome.skills.is_empty());
+    assert!(outcome.errors.is_empty());
+    assert_eq!(
+        recording.calls(),
+        FileSystemCalls {
+            walks: 1,
+            read_files: Vec::new(),
+            metadata_files: Vec::new(),
+        }
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {

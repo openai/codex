@@ -536,6 +536,9 @@ async fn load_skills_under_root(
     for warning in warnings {
         error!("{warning}");
     }
+    if skills.is_empty() {
+        return;
+    }
     let root_uri = PathUri::from_abs_path(root);
     let resolved_skills = futures::stream::iter(skills)
         .map(|skill| async move {
