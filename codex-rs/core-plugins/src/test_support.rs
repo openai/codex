@@ -1,18 +1,71 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
+use crate::http_client_selector::HttpClientSelector;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::RouteAwareClientPool;
+use codex_http_client::RouteAwareRequestBuilder;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use http::Method;
 use toml::Value;
 
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
+
+pub(crate) fn test_http_client_factory() -> HttpClientFactory {
+    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+}
+
+#[derive(Debug)]
+pub(crate) struct RecordingHttpClientSelector {
+    selected_urls: Arc<Mutex<Vec<String>>>,
+    delegate: RouteAwareClientPool,
+}
+
+impl RecordingHttpClientSelector {
+    pub(crate) fn new() -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        let selected_urls = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RouteAwareClientPool::with_chatgpt_cloudflare_cookies(
+            test_http_client_factory(),
+            ClientRouteClass::Api,
+        );
+        (
+            Arc::new(Self {
+                selected_urls: Arc::clone(&selected_urls),
+                delegate,
+            }),
+            selected_urls,
+        )
+    }
+}
+
+impl HttpClientSelector for RecordingHttpClientSelector {
+    fn request(&self, method: Method, url: &str) -> RouteAwareRequestBuilder {
+        match self.selected_urls.lock() {
+            Ok(mut selected_urls) => selected_urls.push(url.to_string()),
+            Err(error) => panic!("selected URL recorder lock should not be poisoned: {error}"),
+        }
+        self.delegate.request(method, url)
+    }
+}
+
+pub(crate) fn recorded_http_client_urls(selected_urls: &Mutex<Vec<String>>) -> Vec<String> {
+    match selected_urls.lock() {
+        Ok(selected_urls) => selected_urls.clone(),
+        Err(error) => panic!("selected URL recorder lock should not be poisoned: {error}"),
+    }
+}
 
 pub(crate) fn write_file(path: &Path, contents: &str) {
     fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
@@ -152,6 +205,7 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
             /*default_enabled*/ true,
         ),
         "https://chatgpt.com/backend-api/".to_string(),
+        test_http_client_factory(),
     )
 }
 
