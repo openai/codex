@@ -96,9 +96,11 @@ impl ExternalAgentConfigRequestProcessor {
             config_manager,
             arg0_paths,
         );
+        let migration_service =
+            ExternalAgentConfigService::new(codex_home, analytics_events_client.clone());
         Self {
             outgoing,
-            migration_service: ExternalAgentConfigService::new(codex_home),
+            migration_service,
             session_importer,
             thread_manager,
             config_processor,
