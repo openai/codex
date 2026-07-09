@@ -17,8 +17,8 @@ use crate::NoopCodeModeSessionDelegate;
 fn provider_reuses_its_live_process_host() {
     let provider = ProcessOwnedCodeModeSessionProvider::default();
 
-    let first = provider.process_host();
-    let second = provider.process_host();
+    let first = provider.process_host().expect("owned process host");
+    let second = provider.process_host().expect("owned process host");
 
     assert!(Arc::ptr_eq(&first, &second));
 }

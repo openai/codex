@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -49,34 +50,34 @@ const IPC_CHANNEL_CAPACITY: usize = 128;
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) enum ConnectionError {
-    HostProgramNotFound(String),
+    Spawn {
+        host_program: PathBuf,
+        error: io::Error,
+    },
     Other(String),
 }
 
 impl ConnectionError {
-    fn from_spawn(host_program: &Path, error: io::Error) -> Self {
-        let message = format!(
-            "failed to spawn code-mode host {}: {error}",
-            host_program.display()
-        );
-        if error.kind() == io::ErrorKind::NotFound {
-            Self::HostProgramNotFound(message)
-        } else {
-            Self::Other(message)
-        }
-    }
-
     pub(super) fn host_program_not_found(&self) -> bool {
-        matches!(self, Self::HostProgramNotFound(_))
+        matches!(
+            self,
+            Self::Spawn { error, .. } if error.kind() == io::ErrorKind::NotFound
+        )
     }
 }
 
 impl fmt::Display for ConnectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HostProgramNotFound(message) | Self::Other(message) => {
-                formatter.write_str(message)
-            }
+            Self::Spawn {
+                host_program,
+                error,
+            } => write!(
+                formatter,
+                "failed to spawn code-mode host {}: {error}",
+                host_program.display()
+            ),
+            Self::Other(message) => formatter.write_str(message),
         }
     }
 }
@@ -141,7 +142,10 @@ impl Connection {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|error| ConnectionError::from_spawn(host_program, error))?;
+            .map_err(|error| ConnectionError::Spawn {
+                host_program: host_program.to_path_buf(),
+                error,
+            })?;
 
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {

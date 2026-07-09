@@ -35,32 +35,32 @@ type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 
 /// Creates code-mode sessions backed by one lazily spawned process host.
 pub struct ProcessOwnedCodeModeSessionProvider {
-    host_program: PathBuf,
-    process_host: StdMutex<Option<Arc<OwnedProcessHost>>>,
-    use_in_process: AtomicBool,
+    state: StdMutex<ProviderState>,
+}
+
+enum ProviderState {
+    OwnedProcess(Arc<OwnedProcessHost>),
+    InProcess,
 }
 
 impl ProcessOwnedCodeModeSessionProvider {
     pub fn with_host_program(host_program: PathBuf) -> Self {
         Self {
-            host_program,
-            process_host: StdMutex::new(None),
-            use_in_process: AtomicBool::new(false),
+            state: StdMutex::new(ProviderState::OwnedProcess(Arc::new(
+                OwnedProcessHost::new(host_program),
+            ))),
         }
     }
 
-    fn process_host(&self) -> Arc<OwnedProcessHost> {
-        let mut process_host = self
-            .process_host
+    fn process_host(&self) -> Option<Arc<OwnedProcessHost>> {
+        match &*self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(process_host) = process_host.as_ref() {
-            return Arc::clone(process_host);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            ProviderState::OwnedProcess(process_host) => Some(Arc::clone(process_host)),
+            ProviderState::InProcess => None,
         }
-
-        let new_process_host = Arc::new(OwnedProcessHost::new(self.host_program.clone()));
-        *process_host = Some(Arc::clone(&new_process_host));
-        new_process_host
     }
 }
 
@@ -76,17 +76,20 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async move {
-            if self.use_in_process.load(Ordering::Acquire) {
+            let Some(process_host) = self.process_host() else {
                 let session: Arc<dyn CodeModeSession> =
                     Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
                 return Ok(session);
-            }
+            };
 
-            let process_host = self.process_host();
             match process_host.connection().await {
                 Ok(_) => {}
                 Err(error) if error.host_program_not_found() => {
-                    self.use_in_process.store(true, Ordering::Release);
+                    *self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        ProviderState::InProcess;
                     let session: Arc<dyn CodeModeSession> =
                         Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
                     return Ok(session);
