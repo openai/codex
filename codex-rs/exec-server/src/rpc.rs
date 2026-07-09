@@ -367,19 +367,6 @@ impl RpcClient {
         RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst))
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.request",
-        level = "info",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = method,
-            rpc.system = "jsonrpc",
-            rpc.method = method,
-            rpc.request_id = tracing::field::Empty,
-            method,
-        )
-    )]
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
     where
         P: Serialize,
@@ -387,7 +374,6 @@ impl RpcClient {
     {
         let _call_slot = self.acquire_regular_call_slot()?;
         let request_id = self.allocate_request_id();
-        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
         self.call_inner(request_id, method, params, RpcCallTimeout::None)
             .await
     }
@@ -413,19 +399,6 @@ impl RpcClient {
         .await
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.request",
-        level = "info",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = method,
-            rpc.system = "jsonrpc",
-            rpc.method = method,
-            rpc.request_id = tracing::field::Empty,
-            method,
-        )
-    )]
     pub(crate) async fn call_for_cleanup<P, T>(
         &self,
         method: &str,
@@ -446,11 +419,23 @@ impl RpcClient {
             },
         };
         let request_id = self.allocate_request_id();
-        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
         self.call_inner(request_id, method, params, RpcCallTimeout::None)
             .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = %request_id,
+            method,
+        )
+    )]
     async fn call_inner<P, T>(
         &self,
         request_id: RequestId,
