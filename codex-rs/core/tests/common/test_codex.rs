@@ -1235,6 +1235,7 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![Box::new(|config| {
+            config.model = Some("gpt-5.5".to_string());
             config
                 .features
                 .disable(Feature::Apps)
