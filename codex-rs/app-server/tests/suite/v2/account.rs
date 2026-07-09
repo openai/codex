@@ -1291,8 +1291,12 @@ async fn logout_managed_bedrock_restores_default_account() -> Result<()> {
         .expect("config should be a table")
         .remove("model_provider");
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1358,8 +1362,12 @@ async fn logout_aws_managed_bedrock_preserves_openai_auth_and_config() -> Result
     let expected_auth = load_file_auth(codex_home.path())?;
     let expected_config = read_config_toml(codex_home.path())?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp.send_logout_account_request().await?;
     let response = timeout(
@@ -1390,7 +1398,11 @@ async fn logout_managed_bedrock_preserves_changed_provider_without_experimental_
         AuthKeyringBackendKind::default(),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     let initialized = mcp
         .initialize_with_capabilities(
             ClientInfo {
