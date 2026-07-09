@@ -265,15 +265,7 @@ impl ToolOrchestrator {
             .sandbox_cwd(req)
             .cloned()
             .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
-        let workspace_roots = tool
-            .workspace_roots(req)
-            .or_else(|| {
-                turn_ctx
-                    .environments
-                    .primary()
-                    .map(|environment| environment.workspace_roots())
-            })
-            .unwrap_or_default();
+        let workspace_roots = tool.workspace_roots(req);
         let permissions = workspace_roots
             .iter()
             .map(PathUri::to_abs_path)
