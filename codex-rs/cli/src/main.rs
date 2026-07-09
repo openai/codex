@@ -1182,7 +1182,15 @@ async fn cli_main(
                         print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
                     }
                     AppServerDaemonSubcommand::PidUpdateLoop => {
-                        codex_app_server_daemon::run_pid_update_loop().await?;
+                        let cli_overrides = root_config_overrides
+                            .parse_overrides()
+                            .map_err(anyhow::Error::msg)?;
+                        let config = ConfigBuilder::default()
+                            .cli_overrides(cli_overrides)
+                            .build()
+                            .await?;
+                        codex_app_server_daemon::run_pid_update_loop(config.http_client_factory())
+                            .await?;
                     }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {

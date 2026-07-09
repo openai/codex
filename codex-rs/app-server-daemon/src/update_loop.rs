@@ -11,6 +11,11 @@ use anyhow::Result;
 #[cfg(not(unix))]
 use anyhow::bail;
 #[cfg(unix)]
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+#[cfg(unix)]
+use codex_http_client::RouteAwareClientPool;
+#[cfg(unix)]
 use futures::FutureExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -48,17 +53,20 @@ const INITIAL_UPDATE_DELAY: Duration = Duration::from_secs(5 * 60);
 const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(unix)]
 const UPDATE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+#[cfg(unix)]
+const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 
 #[cfg(unix)]
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
     let running_updater_identity = current_updater_identity().await?;
+    let http = RouteAwareClientPool::new(http_client_factory, ClientRouteClass::Other);
     if sleep_or_terminate(INITIAL_UPDATE_DELAY, &mut terminate).await {
         return Ok(());
     }
     loop {
-        match update_once(&running_updater_identity, &mut terminate).await {
+        match update_once(&http, &running_updater_identity, &mut terminate).await {
             Ok(UpdateLoopControl::Continue) | Err(_) => {}
             Ok(UpdateLoopControl::Stop) => return Ok(()),
         }
@@ -69,7 +77,7 @@ pub(crate) async fn run() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(_http_client_factory: HttpClientFactory) -> Result<()> {
     bail!("pid-managed updater loop is unsupported on this platform")
 }
 
@@ -89,10 +97,11 @@ enum UpdateLoopControl {
 
 #[cfg(unix)]
 async fn update_once(
+    http: &RouteAwareClientPool,
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
-    install_latest_standalone().await?;
+    install_latest_standalone(http).await?;
 
     let daemon = Daemon::from_environment()?;
     let managed_codex_bin = resolved_managed_codex_bin(&daemon.managed_codex_bin).await?;
@@ -154,8 +163,13 @@ pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Res
 }
 
 #[cfg(unix)]
-async fn install_latest_standalone() -> Result<()> {
-    let script = reqwest::get("https://chatgpt.com/codex/install.sh")
+async fn install_latest_standalone(http: &RouteAwareClientPool) -> Result<()> {
+    let script = http
+        .client_for_url(INSTALL_URL)
+        .await
+        .context("failed to configure standalone Codex updater client")?
+        .get(INSTALL_URL)
+        .send()
         .await
         .context("failed to fetch standalone Codex updater")?
         .error_for_status()
