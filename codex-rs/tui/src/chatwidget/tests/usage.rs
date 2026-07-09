@@ -515,7 +515,7 @@ async fn rate_limit_reset_confirmation_no_and_escape_return_to_picker() {
 }
 
 #[tokio::test]
-async fn rejected_reset_confirmation_rearms_its_picker_row() {
+async fn reset_picker_allows_only_one_pending_confirmation() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_loading_popup();
     let first_expiry = expiry_timestamp(/*day*/ 18, /*hour*/ 9, /*minute*/ 39);
@@ -536,26 +536,7 @@ async fn rejected_reset_confirmation_rearms_its_picker_row() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
-    let Ok(AppEvent::OpenRateLimitResetConfirmation {
-        picker_request_id,
-        confirmation_gate,
-        credit_id,
-        reset_title,
-        reset_detail,
-        reset_description,
-    }) = rx.try_recv()
-    else {
-        panic!("expected second reset confirmation event");
-    };
-    assert_eq!(reset_title, "Second reset");
-    assert!(!chat.show_rate_limit_reset_confirmation(
-        picker_request_id,
-        confirmation_gate,
-        credit_id,
-        reset_title,
-        reset_detail,
-        reset_description,
-    ));
+    assert!(rx.try_recv().is_err());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

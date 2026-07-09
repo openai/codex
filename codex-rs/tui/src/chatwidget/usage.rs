@@ -169,10 +169,11 @@ impl ChatWidget {
         picker_request_id: u64,
         reset_credits: &RateLimitResetCreditsSummary,
     ) -> SelectionViewParams {
+        let confirmation_gate = Arc::new(AtomicBool::new(true));
         let mut items = reset_credit_options(reset_credits)
             .into_iter()
             .map(|option| {
-                let confirmation_gate = Arc::new(AtomicBool::new(true));
+                let confirmation_gate = confirmation_gate.clone();
                 let credit_id = option.credit_id;
                 let reset_title = option.name.clone();
                 let reset_detail = option.detail;
