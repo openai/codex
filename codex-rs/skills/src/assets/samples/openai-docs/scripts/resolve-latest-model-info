@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_PATH="$SCRIPT_DIR/resolve-latest-model-info.cjs"
+
+if [ -n "${NODE:-}" ] && [ -x "$NODE" ]; then
+  "$NODE" "$SCRIPT_PATH" "$@"
+  exit $?
+fi
+
+if command -v node >/dev/null 2>&1; then
+  node "$SCRIPT_PATH" "$@"
+  exit $?
+fi
+
+for CANDIDATE in \
+  "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" \
+  "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/node" \
+  "/opt/homebrew/bin/node" \
+  "/usr/local/bin/node" \
+  "/usr/bin/node"
+do
+  if [ -x "$CANDIDATE" ]; then
+    "$CANDIDATE" "$SCRIPT_PATH" "$@"
+    exit $?
+  fi
+done
+
+echo "No usable Node runtime found for resolve-latest-model-info.cjs" >&2
+exit 127
