@@ -316,7 +316,10 @@ fn resolve_mcp_oauth_credentials_store_mode(
 pub(crate) async fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
+        ConfigToml {
+            model: Some("gpt-5.5".to_string()),
+            ..Default::default()
+        },
         ConfigOverrides::default(),
         AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )

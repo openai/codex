@@ -325,6 +325,8 @@ async fn exec_cli_applies_model_instructions_file() {
     let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("--model")
+        .arg("gpt-5.5")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -395,6 +397,8 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("--model")
+        .arg("gpt-5.5")
         .arg("--profile")
         .arg("default")
         .arg("-c")

@@ -1272,7 +1272,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
 
 #[tokio::test]
 async fn enter_submits_when_plan_stream_is_not_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -1562,7 +1562,7 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
 
 #[tokio::test]
 async fn collab_mode_is_sent_after_enabling() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
 
@@ -1587,7 +1587,7 @@ async fn collab_mode_is_sent_after_enabling() {
 
 #[tokio::test]
 async fn collab_mode_applies_default_preset() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
 
     chat.bottom_pane
