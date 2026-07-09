@@ -192,6 +192,7 @@ fn exec_server_params_for_request(
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
         managed_network: request.exec_server_managed_network.clone(),
+        network_proxy: request.exec_server_network_proxy.clone(),
     }
 }
 
@@ -915,6 +916,7 @@ impl UnifiedExecProcessManager {
         options: ExecOptions,
         attempt: &SandboxAttempt<'_>,
         network: Option<&NetworkProxy>,
+        network_proxy_launch: Option<codex_network_proxy::RemoteNetworkProxyLaunchConfig>,
         environment_id: Option<&str>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         tty: bool,
@@ -927,6 +929,7 @@ impl UnifiedExecProcessManager {
             attempt.env_for(command, options, network, environment_id)
         }
         .map_err(ToolError::Codex)?;
+        request.exec_server_network_proxy = network_proxy_launch;
         request.exec_server_env_config = exec_server_env_config;
         self.open_session_with_prepared_exec_env(
             process_id,

@@ -153,6 +153,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(

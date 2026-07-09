@@ -348,9 +348,6 @@ pub struct ManagedNetworkSandboxContext {
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
-    /// Effective proxy settings for an exec-server that must start its own local listeners.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy_config: Option<crate::RemoteNetworkProxyConfig>,
 }
 
 /// Environment-specific managed-network settings prepared for one command launch.
@@ -660,6 +657,29 @@ impl NetworkProxy {
         self.state.current_cfg().await
     }
 
+    /// Captures the static inputs needed to launch a matching executor-local proxy.
+    pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
+        let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(
+            &self.state.current_cfg().await?,
+        )?;
+        let (environment_id, execution_id) = self
+            .execution_scope
+            .as_ref()
+            .map(|scope| {
+                (
+                    Some(scope.environment_id.clone()),
+                    Some(scope.execution_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        Ok(crate::RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata: self.state.audit_metadata().clone(),
+            environment_id,
+            execution_id,
+        })
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }
@@ -730,7 +750,6 @@ impl NetworkProxy {
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
                 allow_local_binding: runtime_settings.allow_local_binding,
-                proxy_config: None,
             },
         }
     }
@@ -1220,7 +1239,6 @@ mod tests {
                 ManagedNetworkSandboxContext {
                     loopback_ports: expected_ports,
                     allow_local_binding: false,
-                    proxy_config: None,
                 }
             );
         }

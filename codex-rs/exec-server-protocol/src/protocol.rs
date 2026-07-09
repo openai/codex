@@ -5,6 +5,7 @@ use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
 use codex_utils_path_uri::PathUri;
@@ -144,6 +145,9 @@ pub struct ExecParams {
     /// continue to fail closed. This preserves compatibility with older clients.
     #[serde(default)]
     pub managed_network: Option<ManagedNetworkSandboxContext>,
+    /// Optional instructions for starting an executor-local managed-network proxy.
+    #[serde(default)]
+    pub network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -574,13 +578,17 @@ mod tests {
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
+    use codex_network_proxy::NetworkProxyAuditMetadata;
+    use codex_network_proxy::NetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
     #[test]
-    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+    fn exec_params_keeps_proxy_launch_separate_from_sandbox_facts() {
         let cwd =
             PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                 .expect("cwd URI");
@@ -598,8 +606,18 @@ mod tests {
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
-                proxy_config: None,
             }),
+            network_proxy: Some(
+                RemoteNetworkProxyLaunchConfig::new(
+                    RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+                        .expect("supported remote config"),
+                )
+                .with_audit_metadata(NetworkProxyAuditMetadata {
+                    conversation_id: Some("conversation-1".to_string()),
+                    ..NetworkProxyAuditMetadata::default()
+                })
+                .for_execution("remote".to_string(), "execution-1".to_string()),
+            ),
         };
 
         let mut serialized = serde_json::to_value(&params).expect("serialize exec params");
@@ -610,6 +628,10 @@ mod tests {
                 "allowLocalBinding": false,
             })
         );
+        assert_eq!(
+            serialized["networkProxy"]["auditMetadata"]["conversationId"],
+            "conversation-1"
+        );
         let round_trip: ExecParams =
             serde_json::from_value(serialized.clone()).expect("deserialize exec params");
         assert_eq!(round_trip, params);
@@ -618,10 +640,15 @@ mod tests {
             .as_object_mut()
             .expect("exec params object")
             .remove("managedNetwork");
+        serialized
+            .as_object_mut()
+            .expect("exec params object")
+            .remove("networkProxy");
         let legacy: ExecParams =
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
         assert!(legacy.enforce_managed_network);
         assert_eq!(legacy.managed_network, None);
+        assert_eq!(legacy.network_proxy, None);
     }
 
     #[test]

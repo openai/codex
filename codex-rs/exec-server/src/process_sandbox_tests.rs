@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -53,6 +54,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         sandbox: Some(sandbox),
         enforce_managed_network: false,
         managed_network: None,
+        network_proxy: None,
     };
 
     let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
@@ -117,8 +119,8 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         managed_network: Some(ManagedNetworkSandboxContext {
             loopback_ports: vec![43123],
             allow_local_binding: false,
-            proxy_config: None,
         }),
+        network_proxy: None,
     };
 
     let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
@@ -153,6 +155,7 @@ async fn native_request_preserves_native_launch_fields() {
         sandbox: None,
         enforce_managed_network: false,
         managed_network: None,
+        network_proxy: None,
     };
 
     let prepared = prepare_exec_request(&params, env.clone(), /*runtime_paths*/ None)
@@ -189,11 +192,11 @@ async fn remote_proxy_config_starts_executor_local_proxy() {
         arg0: None,
         sandbox: None,
         enforce_managed_network: false,
-        managed_network: Some(ManagedNetworkSandboxContext {
-            loopback_ports: Vec::new(),
-            allow_local_binding: false,
-            proxy_config: Some(proxy_config),
-        }),
+        managed_network: None,
+        network_proxy: Some(
+            RemoteNetworkProxyLaunchConfig::new(proxy_config)
+                .for_execution("remote".to_string(), "execution-1".to_string()),
+        ),
     };
     let stale_proxy = "http://127.0.0.1:9".to_string();
     let env = HashMap::from([("HTTP_PROXY".to_string(), stale_proxy.clone())]);

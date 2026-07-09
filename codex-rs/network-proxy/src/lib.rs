@@ -69,6 +69,7 @@ pub use proxy::PreparedManagedNetwork;
 pub use proxy::has_proxy_url_env_vars;
 pub use proxy::proxy_url_env_value;
 pub use remote_config::RemoteNetworkProxyConfig;
+pub use remote_config::RemoteNetworkProxyLaunchConfig;
 pub use runtime::BlockedRequest;
 pub use runtime::BlockedRequestArgs;
 pub use runtime::BlockedRequestObserver;

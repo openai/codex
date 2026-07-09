@@ -7,6 +7,7 @@ use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -38,8 +39,12 @@ pub(crate) async fn prepare_exec_request(
     env: HashMap<String, String>,
     runtime_paths: Option<&ExecServerRuntimePaths>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
-    let (env, managed_network, network_proxy_handle) =
-        prepare_managed_network(params.managed_network.as_ref(), env).await?;
+    let (env, managed_network, network_proxy_handle) = prepare_managed_network(
+        params.managed_network.as_ref(),
+        params.network_proxy.as_ref(),
+        env,
+    )
+    .await?;
     let Some(sandbox_context) = params.sandbox.as_ref() else {
         return Ok(PreparedExecRequest {
             command: params.argv.clone(),
@@ -155,6 +160,7 @@ pub(crate) async fn prepare_exec_request(
 
 async fn prepare_managed_network(
     managed_network: Option<&ManagedNetworkSandboxContext>,
+    network_proxy: Option<&RemoteNetworkProxyLaunchConfig>,
     env: HashMap<String, String>,
 ) -> Result<
     (
@@ -164,11 +170,10 @@ async fn prepare_managed_network(
     ),
     JSONRPCErrorError,
 > {
-    let Some(proxy_config) = managed_network.and_then(|context| context.proxy_config.clone())
-    else {
+    let Some(network_proxy) = network_proxy.cloned() else {
         return Ok((env, managed_network.cloned(), None));
     };
-    let state = NetworkProxyState::from_static_config(proxy_config.into_network_proxy_config())
+    let state = NetworkProxyState::from_remote_launch_config(network_proxy)
         .map_err(|err| invalid_params(format!("invalid network proxy config: {err}")))?;
     let proxy = NetworkProxy::builder()
         .state(Arc::new(state))

@@ -23,6 +23,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -47,7 +48,8 @@ const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_POLICY_VIOLATION_PREFIX: &str = "CODEX_NETWORK_POLICY_VIOLATION";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkProxyAuditMetadata {
     pub conversation_id: Option<String>,
     pub app_version: Option<String>,
@@ -284,6 +286,29 @@ impl NetworkProxyState {
             state.clone(),
             Arc::new(StaticConfigReloader { state }),
         ))
+    }
+
+    /// Builds immutable runtime state for one executor-local proxy launch.
+    pub fn from_remote_launch_config(
+        launch: crate::RemoteNetworkProxyLaunchConfig,
+    ) -> Result<Self> {
+        let crate::RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata,
+            environment_id,
+            execution_id,
+        } = launch;
+        let config = proxy.into_network_proxy_config();
+        let state = build_config_state(config, NetworkProxyConstraints::default())?;
+        Ok(Self {
+            environment_id: environment_id.map(Into::into),
+            execution_id: execution_id.map(Into::into),
+            ..Self::with_reloader_and_audit_metadata(
+                state.clone(),
+                Arc::new(StaticConfigReloader { state }),
+                audit_metadata,
+            )
+        })
     }
 
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {

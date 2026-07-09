@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct ExecutionScope {
     pub(super) environment_id: String,
+    pub(super) execution_id: String,
     pub(super) attribution_token: String,
     state: Arc<NetworkProxyState>,
 }
@@ -30,6 +31,7 @@ impl NetworkProxy {
         let mut proxy = self.clone();
         proxy.execution_scope = Some(Arc::new(ExecutionScope {
             environment_id: environment_id.to_string(),
+            execution_id: execution_id.to_string(),
             attribution_token,
             state: Arc::clone(&self.state),
         }));

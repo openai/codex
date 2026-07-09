@@ -5,8 +5,48 @@ use serde::Serialize;
 
 use crate::NetworkDomainPermissions;
 use crate::NetworkMode;
+use crate::NetworkProxyAuditMetadata;
 use crate::NetworkProxyConfig;
 use crate::NetworkUnixSocketPermissions;
+
+/// Executor-local proxy launch inputs transported with one process start.
+///
+/// Unlike [`crate::ManagedNetworkSandboxContext`], this describes how the executor should create
+/// proxy listeners. The sandbox context is materialized only after those listeners are running.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct RemoteNetworkProxyLaunchConfig {
+    pub proxy: RemoteNetworkProxyConfig,
+    #[serde(default)]
+    pub audit_metadata: NetworkProxyAuditMetadata,
+    #[serde(default)]
+    pub environment_id: Option<String>,
+    #[serde(default)]
+    pub execution_id: Option<String>,
+}
+
+impl RemoteNetworkProxyLaunchConfig {
+    pub fn new(proxy: RemoteNetworkProxyConfig) -> Self {
+        Self {
+            proxy,
+            audit_metadata: NetworkProxyAuditMetadata::default(),
+            environment_id: None,
+            execution_id: None,
+        }
+    }
+
+    pub fn with_audit_metadata(mut self, audit_metadata: NetworkProxyAuditMetadata) -> Self {
+        self.audit_metadata = audit_metadata;
+        self
+    }
+
+    pub fn for_execution(mut self, environment_id: String, execution_id: String) -> Self {
+        self.environment_id = Some(environment_id);
+        self.execution_id = Some(execution_id);
+        self
+    }
+}
 
 /// Effective network proxy settings that are safe to send to a remote executor.
 ///
