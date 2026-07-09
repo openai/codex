@@ -53,6 +53,8 @@ pub struct Originator {
 static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
 static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
     LazyLock::new(|| RwLock::new(None));
+static ROUTE_AWARE_CLIENT_BUILD_PERMIT: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(1);
 
 #[derive(Debug)]
 pub enum SetOriginatorError {
@@ -263,6 +265,26 @@ pub fn build_default_reqwest_client_for_route(
         request_url,
         route_class,
     )
+}
+
+/// Builds the default Codex reqwest client for a concrete outbound route without blocking the
+/// async runtime worker that initiated the request.
+pub async fn build_default_reqwest_client_for_route_async(
+    http_client_factory: HttpClientFactory,
+    request_url: String,
+    route_class: ClientRouteClass,
+) -> std::io::Result<reqwest::Client> {
+    let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
+        .acquire()
+        .await
+        .map_err(std::io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        build_default_reqwest_client_for_route(&http_client_factory, &request_url, route_class)
+            .map_err(std::io::Error::from)
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 fn default_reqwest_client_builder() -> reqwest::ClientBuilder {

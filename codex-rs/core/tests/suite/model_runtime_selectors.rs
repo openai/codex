@@ -74,7 +74,10 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = manager
-            .list_models(RefreshStrategy::Online)
+            .list_models(
+                RefreshStrategy::Online,
+                codex_core::test_support::default_http_client_factory(),
+            )
             .await
             .iter()
             .find(|model| model.model == slug)

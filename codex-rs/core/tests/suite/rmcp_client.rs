@@ -1729,7 +1729,10 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     fixture
         .thread_manager
         .get_models_manager()
-        .list_models(RefreshStrategy::Online)
+        .list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
     assert_eq!(models_mock.requests().len(), 1);
 

@@ -189,6 +189,7 @@ impl ExternalAgentSessionImporter {
                 &config.model,
                 /*allow_provider_model_fallback*/ false,
                 RefreshStrategy::Offline,
+                config.http_client_factory(),
             )
             .await;
         let model_info = models_manager

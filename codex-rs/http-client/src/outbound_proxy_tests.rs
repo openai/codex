@@ -4,6 +4,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 use std::io::Read;
 use std::io::Write;
+use std::sync::Arc;
 
 struct MapEnv {
     values: HashMap<String, String>,
@@ -164,6 +165,44 @@ fn unavailable_system_proxy_decision_is_cached() {
     cache_system_proxy_decision(request_url, decision.clone());
 
     assert_eq!(cached_system_proxy_decision(request_url), Some(decision));
+}
+
+#[test]
+fn system_proxy_resolution_is_single_flight() {
+    let cache = Arc::new(Mutex::new(HashMap::new()));
+    let request_url = "https://single-flight.test/models";
+    let origin = RequestOrigin::parse(request_url).expect("valid request URL");
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_cache = Arc::clone(&cache);
+    let worker_origin = origin.clone();
+
+    let worker = std::thread::spawn(move || {
+        resolve_system_proxy_with(&worker_cache, request_url, &worker_origin, |_, _| {
+            started_tx.send(()).expect("test should still be running");
+            release_rx.recv().expect("test should release resolver");
+            SystemProxyDecision::Direct
+        })
+    });
+
+    started_rx.recv().expect("resolver should start");
+    assert!(matches!(
+        cache.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
+    release_tx
+        .send(())
+        .expect("resolver should still be running");
+    assert_eq!(
+        worker.join().expect("resolver should finish"),
+        SystemProxyDecision::Direct
+    );
+    assert_eq!(
+        resolve_system_proxy_with(&cache, request_url, &origin, |_, _| {
+            panic!("cached waiter should not resolve the platform proxy again")
+        }),
+        SystemProxyDecision::Direct
+    );
 }
 
 #[test]

@@ -131,7 +131,10 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
 
     let models_manager = thread_manager.get_models_manager();
     models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
     let model_info = models_manager
         .get_model_info(model, &config.to_models_manager_config())
