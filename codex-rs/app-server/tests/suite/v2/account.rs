@@ -2378,6 +2378,66 @@ region = "us-west-2"
 }
 
 #[tokio::test]
+async fn account_reads_use_startup_config_when_config_reload_fails() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-west-2"
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
+
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+            }),
+            requires_openai_auth: false,
+        }
+    );
+
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<GetAuthStatusResponse>(response)?,
+        GetAuthStatusResponse {
+            auth_method: None,
+            auth_token: None,
+            requires_openai_auth: Some(false),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_account_with_managed_bedrock_provider() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
