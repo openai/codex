@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -92,6 +93,49 @@ async fn https_proxy_tunnels_secure_websocket_before_handshake() {
     assert_proxy_tunnels_secure_websocket(/*proxy_tls*/ true).await;
 }
 
+#[tokio::test]
+async fn environment_proxy_route_honors_no_proxy_in_a_subprocess() {
+    assert_no_proxy_subprocess("127.0.0.1", /*expect_proxy*/ false).await;
+    assert_no_proxy_subprocess("unrelated.example", /*expect_proxy*/ true).await;
+}
+
+#[tokio::test]
+async fn no_proxy_subprocess_probe() {
+    let Ok(url) = std::env::var("CODEX_WEBSOCKET_NO_PROXY_PROBE_URL") else {
+        return;
+    };
+    let proxy_url = std::env::var("CODEX_WEBSOCKET_NO_PROXY_PROBE_PROXY")
+        .expect("parent test should provide a proxy URL");
+    let no_proxy = std::env::var("NO_PROXY").expect("parent test should provide a no-proxy value");
+    let request = url
+        .into_client_request()
+        .expect("websocket request should build");
+    let (inner, _) = connect(
+        request,
+        WebSocketConfig::default(),
+        test_tls_configs().0,
+        OutboundProxyRoute::Proxy {
+            url: proxy_url,
+            no_proxy: Some(no_proxy),
+        },
+    )
+    .await
+    .expect("websocket handshake should succeed");
+    let mut websocket = WebSocketConnection { inner };
+    websocket
+        .send(Message::Text("probe".into()))
+        .await
+        .expect("probe should send");
+    assert_eq!(
+        websocket
+            .next()
+            .await
+            .expect("probe should receive a message")
+            .expect("probe message should be valid"),
+        Message::Text("probe".into())
+    );
+}
+
 #[test]
 fn https_proxy_defaults_to_port_443_and_preserves_explicit_port() {
     let default_port = ProxyEndpoint::parse("https://proxy.example")
@@ -175,6 +219,92 @@ async fn start_plain_echo_websocket_server() -> (SocketAddr, JoinHandle<()>) {
     (address, task)
 }
 
+async fn assert_no_proxy_subprocess(no_proxy: &str, expect_proxy: bool) {
+    let (target_addr, target_task) = start_plain_echo_websocket_server().await;
+    let proxy_listener = Arc::new(
+        TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("proxy listener should bind"),
+    );
+    let proxy_addr = proxy_listener
+        .local_addr()
+        .expect("proxy listener should have an address");
+    let proxy_task = if expect_proxy {
+        let proxy_listener = Arc::clone(&proxy_listener);
+        Some(tokio::spawn(async move {
+            let (mut client, _) = proxy_listener.accept().await.expect("proxy should accept");
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                client
+                    .read_exact(&mut byte)
+                    .await
+                    .expect("proxy should read CONNECT request");
+                request.push(byte[0]);
+            }
+            let mut target = tokio::net::TcpStream::connect(target_addr)
+                .await
+                .expect("proxy should connect to target");
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .await
+                .expect("proxy should acknowledge CONNECT");
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut target).await;
+            String::from_utf8(request).expect("CONNECT request should be UTF-8")
+        }))
+    } else {
+        None
+    };
+    let executable = std::env::current_exe().expect("test executable should be available");
+    let target_url = format!("ws://127.0.0.1:{}/v1/responses", target_addr.port());
+    let proxy_url = format!("http://127.0.0.1:{}", proxy_addr.port());
+    let no_proxy = no_proxy.to_string();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut command = Command::new(executable);
+        command.args([
+            "--exact",
+            "dialer::tests::no_proxy_subprocess_probe",
+            "--nocapture",
+        ]);
+        for key in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            command.env_remove(key);
+        }
+        command
+            .env("HTTP_PROXY", &proxy_url)
+            .env("NO_PROXY", no_proxy)
+            .env("CODEX_WEBSOCKET_NO_PROXY_PROBE_URL", target_url)
+            .env("CODEX_WEBSOCKET_NO_PROXY_PROBE_PROXY", proxy_url)
+            .output()
+            .expect("WebSocket no-proxy subprocess should run")
+    })
+    .await
+    .expect("WebSocket no-proxy subprocess should join");
+    assert!(
+        output.status.success(),
+        "WebSocket no-proxy subprocess failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    target_task.await.expect("target task should finish");
+    // In the bypass case no task services the proxy listener, so the successful child connection
+    // above also proves that the matching NO_PROXY value selected the target directly.
+    if let Some(proxy_task) = proxy_task {
+        let request = proxy_task.await.expect("proxy task should finish");
+        let expected_request_line = format!("CONNECT {target_addr} HTTP/1.1");
+        assert_eq!(request.lines().next(), Some(expected_request_line.as_str()));
+    }
+}
+
 async fn assert_proxy_tunnels_secure_websocket(proxy_tls: bool) {
     let (tls_config, acceptor) = test_tls_configs();
     let (target_addr, target_task) = start_tls_websocket_server(acceptor.clone()).await;
@@ -232,6 +362,7 @@ async fn assert_proxy_tunnels_secure_websocket(proxy_tls: bool) {
         tls_config,
         OutboundProxyRoute::Proxy {
             url: format!("{proxy_scheme}://localhost:{}", proxy_addr.port()),
+            no_proxy: None,
         },
     )
     .await
