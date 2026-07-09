@@ -80,7 +80,7 @@ impl ChatWidget {
         if self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned() {
             self.set_status_header(String::from("Working"));
         }
-        self.full_reasoning_buffer.clear();
+        self.reasoning_summary_parts.clear();
         self.reasoning_buffer.clear();
         self.set_ambient_pet_notification(
             crate::pets::PetNotificationKind::Running,

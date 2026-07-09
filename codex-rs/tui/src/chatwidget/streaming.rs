@@ -226,24 +226,26 @@ impl ChatWidget {
 
     pub(super) fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
-            let cell = history_cell::new_reasoning_summary_block(
-                self.full_reasoning_buffer.clone(),
-                &self.config.cwd,
-            );
+        if !self.reasoning_buffer.is_empty() {
+            self.reasoning_summary_parts
+                .push(std::mem::take(&mut self.reasoning_buffer));
+        }
+        if !self.reasoning_summary_parts.is_empty() {
+            let reasoning_parts = std::mem::take(&mut self.reasoning_summary_parts);
+            let cell = history_cell::new_reasoning_summary_block(reasoning_parts, &self.config.cwd);
             self.add_boxed_history(cell);
         }
         self.reasoning_buffer.clear();
-        self.full_reasoning_buffer.clear();
+        self.reasoning_summary_parts.clear();
         self.request_redraw();
     }
 
     pub(super) fn on_reasoning_section_break(&mut self) {
         // Start a new reasoning block for header extraction and accumulate transcript.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        self.full_reasoning_buffer.push_str("\n\n");
-        self.reasoning_buffer.clear();
+        if !self.reasoning_buffer.is_empty() {
+            self.reasoning_summary_parts
+                .push(std::mem::take(&mut self.reasoning_buffer));
+        }
     }
 
     pub(super) fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {

@@ -113,13 +113,18 @@ impl ChatWidget {
                 summary, content, ..
             } => {
                 if from_replay {
-                    for delta in summary {
-                        self.on_agent_reasoning_delta(delta);
-                    }
-                    if self.config.show_raw_agent_reasoning {
-                        for delta in content {
-                            self.on_agent_reasoning_delta(delta);
+                    let reasoning_parts = summary.into_iter().chain(
+                        self.config
+                            .show_raw_agent_reasoning
+                            .then_some(content)
+                            .into_iter()
+                            .flatten(),
+                    );
+                    for (index, delta) in reasoning_parts.enumerate() {
+                        if index > 0 {
+                            self.on_reasoning_section_break();
                         }
+                        self.on_agent_reasoning_delta(delta);
                     }
                 }
                 self.on_agent_reasoning_final();
