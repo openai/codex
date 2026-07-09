@@ -23,11 +23,19 @@ use codex_exec_server::CreateDirectoryOptions;
 #[cfg(target_os = "linux")]
 use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -206,6 +214,51 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
         log.contains("--argv0"),
         "expected fs helper sandbox path to invoke PATH bwrap with --argv0, got: {log}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_read_file_materializes_environment_workspace_roots() -> Result<()> {
+    let context = create_file_system_context(FileSystemImplementation::Remote).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    let workspace_file = workspace.join("included.txt");
+    let excluded_file = tmp.path().join("excluded.txt");
+    std::fs::create_dir(&workspace)?;
+    std::fs::write(&workspace_file, b"included")?;
+    std::fs::write(&excluded_file, b"excluded")?;
+
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        PathUri::from_host_native_path(tmp.path())?,
+    );
+    sandbox.workspace_roots = vec![PathUri::from_host_native_path(&workspace)?];
+
+    assert_eq!(
+        file_system
+            .read_file(
+                &PathUri::from_host_native_path(&workspace_file)?,
+                Some(&sandbox),
+            )
+            .await?,
+        b"included"
+    );
+    let error = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&excluded_file)?,
+            Some(&sandbox),
+        )
+        .await
+        .expect_err("read outside environment workspace roots should fail");
+    assert_sandbox_denied(&error);
 
     Ok(())
 }
