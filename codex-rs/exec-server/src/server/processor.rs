@@ -129,7 +129,7 @@ async fn run_connection(
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
-                        let request_span = request_span(method, &request);
+                        let request_span = request_span(method, &request, transport);
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
@@ -160,7 +160,7 @@ async fn run_connection(
                         drop(request_span);
                     } else {
                         let method = "unknown";
-                        let request_span = request_span(method, &request);
+                        let request_span = request_span(method, &request, transport);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
@@ -244,12 +244,17 @@ async fn run_connection(
 fn request_span(
     span_name: &str,
     request: &codex_exec_server_protocol::JSONRPCRequest,
+    transport: ConnectionTransport,
 ) -> tracing::Span {
     let method = request.method.as_str();
     let span = tracing::info_span!(
         "codex.exec_server.request",
         otel.kind = "server",
         otel.name = span_name,
+        rpc.system = "jsonrpc",
+        rpc.method = method,
+        rpc.transport = transport.metric_tag(),
+        rpc.request_id = %request.id,
         method,
         result = tracing::field::Empty,
     );
@@ -351,7 +356,11 @@ mod tests {
                 params: None,
                 trace: Some(trace),
             };
-            let request_span = request_span("unknown", &request);
+            let request_span = request_span(
+                "unknown",
+                &request,
+                crate::telemetry::ConnectionTransport::Stdio,
+            );
             request_span.in_scope(|| {});
             drop(request_span);
         });

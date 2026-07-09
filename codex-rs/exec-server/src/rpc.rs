@@ -363,6 +363,10 @@ impl RpcClient {
         })
     }
 
+    fn allocate_request_id(&self) -> RequestId {
+        RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst))
+    }
+
     #[tracing::instrument(
         name = "codex.exec_server.request",
         level = "info",
@@ -370,6 +374,9 @@ impl RpcClient {
         fields(
             otel.kind = "client",
             otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = tracing::field::Empty,
             method,
         )
     )]
@@ -379,7 +386,10 @@ impl RpcClient {
         T: DeserializeOwned,
     {
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        let request_id = self.allocate_request_id();
+        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
+        self.call_inner(request_id, method, params, RpcCallTimeout::None)
+            .await
     }
 
     pub(crate) async fn call_with_timeout<P, T>(
@@ -393,8 +403,14 @@ impl RpcClient {
         T: DeserializeOwned,
     {
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::After(call_timeout))
-            .await
+        let request_id = self.allocate_request_id();
+        self.call_inner(
+            request_id,
+            method,
+            params,
+            RpcCallTimeout::After(call_timeout),
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -404,6 +420,9 @@ impl RpcClient {
         fields(
             otel.kind = "client",
             otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = tracing::field::Empty,
             method,
         )
     )]
@@ -426,11 +445,15 @@ impl RpcClient {
                 }
             },
         };
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        let request_id = self.allocate_request_id();
+        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
+        self.call_inner(request_id, method, params, RpcCallTimeout::None)
+            .await
     }
 
     async fn call_inner<P, T>(
         &self,
+        request_id: RequestId,
         method: &str,
         params: &P,
         call_timeout: RpcCallTimeout,
@@ -439,7 +462,6 @@ impl RpcClient {
         P: Serialize,
         T: DeserializeOwned,
     {
-        let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
