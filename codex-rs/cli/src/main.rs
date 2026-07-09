@@ -1182,7 +1182,25 @@ async fn cli_main(
                         print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
                     }
                     AppServerDaemonSubcommand::PidUpdateLoop => {
-                        codex_app_server_daemon::run_pid_update_loop().await?;
+                        let cli_overrides = root_config_overrides
+                            .parse_overrides()
+                            .map_err(anyhow::Error::msg)?;
+                        let http_client_factory = match ConfigBuilder::default()
+                            .cli_overrides(cli_overrides)
+                            .build()
+                            .await
+                        {
+                            Ok(config) => config.http_client_factory(),
+                            Err(error) => {
+                                eprintln!(
+                                    "warning: failed to load updater network configuration: {error}"
+                                );
+                                codex_http_client::HttpClientFactory::new(
+                                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+                                )
+                            }
+                        };
+                        codex_app_server_daemon::run_pid_update_loop(http_client_factory).await?;
                     }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
