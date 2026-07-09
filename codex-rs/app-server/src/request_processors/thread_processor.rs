@@ -1189,7 +1189,6 @@ impl ThreadRequestProcessor {
         let environments = resolve_turn_environment_selections(
             listener_task_context.thread_manager.as_ref(),
             environments,
-            &config.workspace_roots,
         )?
         .unwrap_or_else(|| {
             listener_task_context

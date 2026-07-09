@@ -6,6 +6,7 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_path_uri::PathUri;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -484,15 +485,8 @@ impl TurnRequestProcessor {
         let runtime_workspace_roots = params
             .runtime_workspace_roots
             .map(resolve_runtime_workspace_roots);
-        let fallback_workspace_roots = match runtime_workspace_roots.as_ref() {
-            Some(workspace_roots) => workspace_roots.clone(),
-            None => thread.config_snapshot().await.workspace_roots,
-        };
-        let environment_selections = resolve_turn_environment_selections(
-            self.thread_manager.as_ref(),
-            params.environments,
-            &fallback_workspace_roots,
-        )?;
+        let environment_selections =
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), params.environments)?;
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -595,12 +589,10 @@ impl TurnRequestProcessor {
         }
         let snapshot = thread.config_snapshot().await;
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
-        let legacy_fallback_workspace_roots = workspace_roots.unwrap_or(snapshot.workspace_roots);
         let environment_selections = environment_selections.unwrap_or_else(|| {
-            self.thread_manager.default_environment_selections(
-                &legacy_fallback_cwd,
-                &legacy_fallback_workspace_roots,
-            )
+            let workspace_roots = workspace_roots.unwrap_or(snapshot.workspace_roots);
+            self.thread_manager
+                .default_environment_selections(&legacy_fallback_cwd, &workspace_roots)
         });
         Some(TurnEnvironmentSelections::new(
             legacy_fallback_cwd,
@@ -674,15 +666,29 @@ impl TurnRequestProcessor {
                         "{method} permission selection missing thread snapshot"
                     )));
                 };
+                let workspace_roots = environments
+                    .as_ref()
+                    .map(|environments| {
+                        environments
+                            .environments
+                            .first()
+                            .map(|environment| {
+                                environment
+                                    .workspace_roots
+                                    .iter()
+                                    .map(PathUri::to_abs_path)
+                                    .collect::<std::io::Result<Vec<_>>>()
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .or_else(|| runtime_workspace_roots.clone())
+                    .unwrap_or_else(|| snapshot.workspace_roots.clone());
                 let overrides = ConfigOverrides {
                     cwd: environments
                         .as_ref()
                         .map(|environments| environments.legacy_fallback_cwd.to_path_buf()),
-                    workspace_roots: Some(
-                        runtime_workspace_roots
-                            .clone()
-                            .unwrap_or_else(|| snapshot.workspace_roots.clone()),
-                    ),
+                    workspace_roots: Some(workspace_roots),
                     default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),

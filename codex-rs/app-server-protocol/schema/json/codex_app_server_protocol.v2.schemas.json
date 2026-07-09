@@ -17951,7 +17951,7 @@
           "type": "string"
         },
         "runtimeWorkspaceRoots": {
-          "description": "Environment-native runtime workspace roots. Omitted inherits the request's top-level `runtimeWorkspaceRoots` fallback.",
+          "description": "Environment-native runtime workspace roots. Omitted defaults to `cwd`.",
           "items": {
             "$ref": "#/definitions/LegacyAppPathString"
           },

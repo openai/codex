@@ -464,7 +464,6 @@ use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -564,7 +563,6 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
 fn resolve_turn_environment_selections(
     thread_manager: &ThreadManager,
     environments: Option<Vec<TurnEnvironmentParams>>,
-    fallback_workspace_roots: &[AbsolutePathBuf],
 ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
     let Some(environments) = environments else {
         return Ok(None);
@@ -598,12 +596,7 @@ fn resolve_turn_environment_selections(
                 Ok::<_, JSONRPCErrorError>(resolved_roots)
             })
             .transpose()?
-            .unwrap_or_else(|| {
-                fallback_workspace_roots
-                    .iter()
-                    .map(PathUri::from_abs_path)
-                    .collect()
-            });
+            .unwrap_or_else(|| vec![cwd.clone()]);
         selections.push(TurnEnvironmentSelection {
             environment_id,
             cwd,

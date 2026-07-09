@@ -2712,7 +2712,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn turn_environment_workspace_roots_override_and_inherit_turn_fallback() -> Result<()> {
+async fn turn_environment_workspace_roots_override_and_default_to_cwd() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -2801,7 +2801,7 @@ stream_max_retries = 0
                 text: "select dev profile".to_string(),
                 text_elements: Vec::new(),
             }],
-            runtime_workspace_roots: Some(vec![fallback_root]),
+            runtime_workspace_roots: Some(vec![fallback_root.clone()]),
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "local".to_string(),
                 cwd: environment_cwd.clone().into(),
@@ -2833,7 +2833,7 @@ stream_max_retries = 0
             runtime_workspace_roots: Some(vec![new_root]),
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "local".to_string(),
-                cwd: environment_cwd.into(),
+                cwd: fallback_root.into(),
                 runtime_workspace_roots: None,
             }]),
             ..Default::default()
@@ -2870,10 +2870,14 @@ stream_max_retries = 0
     );
 
     let second_permissions = latest_permissions_instructions(&requests[1]);
-    assert!(second_permissions.contains(&new_root_text));
+    assert!(second_permissions.contains(&fallback_root_text));
     assert!(
         !second_permissions.contains(&old_root_text),
-        "omitted environment roots should inherit the updated turn-level fallback"
+        "omitted environment roots should not retain the previous environment roots"
+    );
+    assert!(
+        !second_permissions.contains(&new_root_text),
+        "explicit environments should ignore top-level roots"
     );
 
     Ok(())
