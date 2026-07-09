@@ -112,6 +112,23 @@ async fn bounds_cached_routes_and_rebuilds_an_evicted_route() {
     );
 }
 
+#[tokio::test]
+async fn request_timeout_covers_route_selection() {
+    let pool = RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        ClientRouteClass::Api,
+    );
+
+    let error = pool
+        .get("http://127.0.0.1:1")
+        .timeout(Duration::ZERO)
+        .send()
+        .await
+        .expect_err("expired request should time out before connecting");
+
+    assert!(error.is_timeout());
+}
+
 #[derive(Clone)]
 struct FakeRouteResolver {
     routes: Arc<HashMap<String, OutboundProxyRoute>>,
