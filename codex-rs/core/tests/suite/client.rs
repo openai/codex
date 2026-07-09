@@ -370,6 +370,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
     let rollout = vec![
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
@@ -387,6 +388,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
                 id: Some("fc_existing".to_string()),
                 name: "do_it".to_string(),
@@ -895,6 +897,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
     let rollout = vec![
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
@@ -912,10 +915,12 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(legacy_custom_tool_call),
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: "legacy-js-call".to_string(),
@@ -926,6 +931,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:03.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -1031,6 +1037,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
     let rollout = vec![
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
@@ -1048,6 +1055,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
                 id: None,
                 name: "view_image".to_string(),
@@ -1059,6 +1067,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.500Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: function_call_id.to_string(),
@@ -1073,6 +1082,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
                 id: None,
                 status: Some("completed".to_string()),
@@ -1085,6 +1095,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.500Z".to_string(),
+            ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: custom_call_id.to_string(),

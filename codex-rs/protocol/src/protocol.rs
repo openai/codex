@@ -3325,6 +3325,8 @@ impl Mul<f64> for TruncationPolicy {
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 pub struct RolloutLine {
     pub timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u64>,
     #[serde(flatten)]
     pub item: RolloutItem,
 }

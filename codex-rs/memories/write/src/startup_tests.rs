@@ -678,6 +678,7 @@ async fn seed_stage1_candidate(
     let rollout_path = codex_home.join(format!("rollout-{thread_id}.jsonl"));
     let line = RolloutLine {
         timestamp: updated_at.to_rfc3339(),
+        ordinal: None,
         item: RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
             role: "user".to_string(),

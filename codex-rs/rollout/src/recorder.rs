@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Error as IoError;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,6 +49,8 @@ use super::list::get_threads_in_root;
 use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
+use super::ordinal::RolloutOrdinalState;
+use super::ordinal::ordinal_state_for_rollout;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
 use crate::state_db;
@@ -751,7 +757,7 @@ impl RolloutRecorder {
         config: &impl RolloutConfigView,
         params: RolloutRecorderParams,
     ) -> std::io::Result<Self> {
-        let (file, deferred_log_file_info, rollout_path, meta) = match params {
+        let (file, deferred_log_file_info, rollout_path, meta, ordinal_state) = match params {
             RolloutRecorderParams::Create {
                 session_id,
                 conversation_id,
@@ -767,6 +773,7 @@ impl RolloutRecorder {
                 history_mode,
                 initial_window_id,
             } => {
+                let ordinal_state = RolloutOrdinalState::for_new_rollout(history_mode);
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
                 let thread_id = log_file_info.conversation_id;
@@ -808,25 +815,22 @@ impl RolloutRecorder {
                     context_window: initial_window_id.map(SessionContextWindow::new),
                 };
 
-                (None, Some(log_file_info), path, Some(session_meta))
+                (
+                    None,
+                    Some(log_file_info),
+                    path,
+                    Some(session_meta),
+                    ordinal_state,
+                )
             }
             RolloutRecorderParams::Resume { path } => {
-                let path = compression::materialize_rollout_for_append(path.as_path()).await?;
-                (
-                    Some(
-                        tokio::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .await?,
-                    ),
-                    None,
-                    path,
-                    None,
-                )
+                let (path, file) = open_rollout_for_append(path.as_path()).await?;
+                let ordinal_state = ordinal_state_for_rollout(path.as_path()).await?;
+                (Some(file), None, path, None, ordinal_state)
             }
         };
 
-        // Clone the cwd for the spawned task to collect git info asynchronously
+        // Clone the cwd for the spawned task to collect git info asynchronously.
         let cwd = config.cwd().to_path_buf();
 
         // A reasonably-sized bounded channel. If the buffer fills up the send
@@ -847,6 +851,7 @@ impl RolloutRecorder {
                 meta,
                 cwd,
                 rollout_path_for_spawn.clone(),
+                ordinal_state,
             )
             .await;
             if let Err(err) = result {
@@ -1554,6 +1559,7 @@ struct RolloutWriterState {
     meta: Option<SessionMeta>,
     cwd: PathBuf,
     rollout_path: PathBuf,
+    ordinal_state: RolloutOrdinalState,
     last_logged_error: Option<String>,
 }
 
@@ -1564,6 +1570,7 @@ impl RolloutWriterState {
         meta: Option<SessionMeta>,
         cwd: PathBuf,
         rollout_path: PathBuf,
+        ordinal_state: RolloutOrdinalState,
     ) -> Self {
         Self {
             writer: file.map(|file| JsonlWriter { file }),
@@ -1572,6 +1579,7 @@ impl RolloutWriterState {
             meta,
             cwd,
             rollout_path,
+            ordinal_state,
             last_logged_error: None,
         }
     }
@@ -1675,7 +1683,13 @@ impl RolloutWriterState {
         let Some(session_meta) = self.meta.as_ref().cloned() else {
             return Ok(());
         };
-        write_session_meta(self.writer.as_mut(), session_meta, &self.cwd).await?;
+        write_session_meta(
+            self.writer.as_mut(),
+            &mut self.ordinal_state,
+            session_meta,
+            &self.cwd,
+        )
+        .await?;
         self.meta = None;
         Ok(())
     }
@@ -1700,9 +1714,18 @@ impl RolloutWriterState {
         let mut written_count = 0usize;
         let mut write_result = Ok(());
         for item in &self.pending_items {
-            if let Err(err) = writer.write_rollout_item(item).await {
-                write_result = Err(err);
-                break;
+            match self.ordinal_state.current() {
+                Ok(ordinal) => match writer.write_rollout_item(item, ordinal).await {
+                    Ok(()) => self.ordinal_state.advance(),
+                    Err(err) => {
+                        write_result = Err(err);
+                        break;
+                    }
+                },
+                Err(err) => {
+                    write_result = Err(err);
+                    break;
+                }
             }
             written_count += 1;
         }
@@ -1722,8 +1745,16 @@ async fn rollout_writer(
     meta: Option<SessionMeta>,
     cwd: PathBuf,
     rollout_path: PathBuf,
+    ordinal_state: RolloutOrdinalState,
 ) -> std::io::Result<()> {
-    let mut state = RolloutWriterState::new(file, deferred_log_file_info, meta, cwd, rollout_path);
+    let mut state = RolloutWriterState::new(
+        file,
+        deferred_log_file_info,
+        meta,
+        cwd,
+        rollout_path,
+        ordinal_state,
+    );
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
@@ -1755,6 +1786,7 @@ async fn rollout_writer(
 
 async fn write_session_meta(
     mut writer: Option<&mut JsonlWriter>,
+    ordinal_state: &mut RolloutOrdinalState,
     session_meta: SessionMeta,
     cwd: &Path,
 ) -> std::io::Result<()> {
@@ -1774,7 +1806,9 @@ async fn write_session_meta(
 
     let rollout_item = RolloutItem::SessionMeta(session_meta_line);
     if let Some(writer) = writer.as_mut() {
-        writer.write_rollout_item(&rollout_item).await?;
+        let ordinal = ordinal_state.current()?;
+        writer.write_rollout_item(&rollout_item, ordinal).await?;
+        ordinal_state.advance();
     }
     Ok(())
 }
@@ -1788,13 +1822,42 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let rollout_path = compression::materialize_rollout_for_append(rollout_path).await?;
+    let (rollout_path, file) = open_rollout_for_append(rollout_path).await?;
+    let ordinal_state = ordinal_state_for_rollout(rollout_path.as_path()).await?;
+    let ordinal = ordinal_state.current()?;
+    let mut writer = JsonlWriter { file };
+    writer.write_rollout_item(item, ordinal).await
+}
+
+async fn open_rollout_for_append(path: &Path) -> std::io::Result<(PathBuf, tokio::fs::File)> {
+    let path = compression::materialize_rollout_for_append(path).await?;
+    let path_for_repair = path.clone();
+    tokio::task::spawn_blocking(move || {
+        ensure_rollout_is_newline_terminated(path_for_repair.as_path())
+    })
+    .await
+    .map_err(IoError::other)??;
     let file = tokio::fs::OpenOptions::new()
         .append(true)
-        .open(rollout_path)
+        .open(&path)
         .await?;
-    let mut writer = JsonlWriter { file };
-    writer.write_rollout_item(item).await
+    Ok((path, file))
+}
+
+fn ensure_rollout_is_newline_terminated(path: &Path) -> std::io::Result<()> {
+    let mut file = File::options().read(true).append(true).open(path)?;
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::End(-1))?;
+    let mut final_byte = [0];
+    file.read_exact(&mut final_byte)?;
+    if final_byte[0] != b'\n' {
+        file.write_all(b"\n")?;
+        file.flush()?;
+    }
+    Ok(())
 }
 
 struct JsonlWriter {
@@ -1804,12 +1867,18 @@ struct JsonlWriter {
 #[derive(serde::Serialize)]
 struct RolloutLineRef<'a> {
     timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ordinal: Option<u64>,
     #[serde(flatten)]
     item: &'a RolloutItem,
 }
 
 impl JsonlWriter {
-    async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
+    async fn write_rollout_item(
+        &mut self,
+        rollout_item: &RolloutItem,
+        ordinal: Option<u64>,
+    ) -> std::io::Result<()> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -1819,6 +1888,7 @@ impl JsonlWriter {
 
         let line = RolloutLineRef {
             timestamp,
+            ordinal,
             item: rollout_item,
         };
         self.write_line(&line).await
