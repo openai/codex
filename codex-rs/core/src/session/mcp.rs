@@ -361,6 +361,9 @@ impl Session {
             cancellation_token
         };
         let current_runtime = self.services.latest_mcp_runtime();
+        let codex_apps_auth_manager =
+            codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
+                .then(|| Arc::clone(&self.services.auth_manager));
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             mcp_config.mcp_oauth_credentials_store_mode,
@@ -382,6 +385,7 @@ impl Session {
                 .load(std::sync::atomic::Ordering::Relaxed),
             tool_plugin_provenance,
             auth.as_ref(),
+            codex_apps_auth_manager,
             elicitation_reviewer,
             Some(self.mcp_elicitation_lifecycle()),
             current_runtime.manager().elicitation_router(),

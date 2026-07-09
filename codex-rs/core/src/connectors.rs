@@ -248,6 +248,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     drop(rx_event);
 
     let cancel_token = CancellationToken::new();
+    let codex_apps_auth_manager =
+        codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
+            .then(|| Arc::clone(&auth_manager));
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -269,6 +272,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         auth.as_ref(),
+        codex_apps_auth_manager,
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),
