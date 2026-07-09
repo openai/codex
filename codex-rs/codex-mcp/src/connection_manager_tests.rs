@@ -1,7 +1,6 @@
 use super::*;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheContext;
-use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
@@ -19,8 +18,6 @@ use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
-use crate::tools::supported_openai_file_input_optional_fields;
-use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
@@ -41,7 +38,6 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::JsonObject;
-use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashMap;
@@ -207,249 +203,6 @@ fn is_code_mode_compatible_tool_name(name: &ToolName) -> bool {
         .chain(std::iter::once(name.name.as_str()))
         .flat_map(str::chars)
         .all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-#[test]
-fn declared_openai_file_fields_treat_names_literally() {
-    let meta = serde_json::json!({
-        "openai/fileParams": ["file", "input_file", "attachments"]
-    });
-    let meta = meta.as_object().expect("meta object");
-
-    assert_eq!(
-        declared_openai_file_input_param_names(Some(meta)),
-        vec![
-            "file".to_string(),
-            "input_file".to_string(),
-            "attachments".to_string(),
-        ]
-    );
-}
-
-#[test]
-fn tool_with_model_visible_input_schema_masks_file_params() {
-    let mut tool = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "upload").tool;
-    tool.input_schema = Arc::new(
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file": {
-                    "type": "object",
-                    "description": "Original file payload."
-                },
-                "files": {
-                    "type": "array",
-                    "items": {"type": "object"}
-                }
-            }
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    );
-    tool.meta = Some(Meta(
-        serde_json::json!({
-            "openai/fileParams": ["file", "files"]
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    ));
-
-    let tool = tool_with_model_visible_input_schema(&tool);
-
-    assert_eq!(
-        *tool.input_schema,
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file": {
-                    "type": "string",
-                    "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
-                },
-                "files": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
-                }
-            }
-        })
-        .as_object()
-        .expect("object")
-        .clone()
-    );
-}
-
-#[test]
-fn supported_openai_file_input_optional_fields_follow_payload_schemas() {
-    let mut tool = Tool::new(
-        "upload".to_string(),
-        "Upload files".to_string(),
-        Arc::new(
-            serde_json::json!({
-                "type": "object",
-                "$defs": {
-                    "Rich/File": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
-                            "file_name": {"type": "string"}
-                        },
-                        "additionalProperties": false
-                    }
-                },
-                "properties": {
-                    "photoshop_image": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"}
-                        },
-                        "additionalProperties": false
-                    },
-                    "drive_import": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
-                            "mime_type": {"type": "string"},
-                            "file_name": {"type": "string"}
-                        },
-                        "additionalProperties": false
-                    },
-                    "attachments": {
-                        "anyOf": [
-                            {
-                                "type": "array",
-                                "items": {
-                                    "oneOf": [
-                                        {
-                                            "allOf": [
-                                                {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "download_url": {"type": "string"},
-                                                        "file_id": {"type": "string"}
-                                                    }
-                                                },
-                                                {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "mime_type": {"type": "string"}
-                                                    }
-                                                }
-                                            ]
-                                        },
-                                        {"type": "null"}
-                                    ]
-                                }
-                            },
-                            {"type": "null"}
-                        ]
-                    },
-                    "referenced_file": {
-                        "$ref": "#/$defs/Rich~1File"
-                    },
-                    "custom_file": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"},
-                            "mime_type": {"type": "string"},
-                            "uri": {"type": "string"}
-                        },
-                        "additionalProperties": false
-                    },
-                    "open_file": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"}
-                        }
-                    },
-                    "explicitly_open_file": {
-                        "type": "object",
-                        "properties": {
-                            "download_url": {"type": "string"},
-                            "file_id": {"type": "string"}
-                        },
-                        "additionalProperties": true
-                    },
-                    "items_only_files": {
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "download_url": {"type": "string"},
-                                "file_id": {"type": "string"},
-                                "file_name": {"type": "string"}
-                            },
-                            "additionalProperties": false
-                        }
-                    }
-                }
-            })
-            .as_object()
-            .expect("object")
-            .clone(),
-        ),
-    );
-    tool.meta = Some(Meta(
-        serde_json::json!({
-            "openai/fileParams": [
-                "photoshop_image",
-                "drive_import",
-                "attachments",
-                "referenced_file",
-                "custom_file",
-                "open_file",
-                "explicitly_open_file",
-                "items_only_files",
-                "missing_file"
-            ]
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    ));
-
-    assert_eq!(
-        supported_openai_file_input_optional_fields(&tool),
-        HashMap::from([
-            ("photoshop_image".to_string(), Vec::new()),
-            (
-                "drive_import".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            (
-                "attachments".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            ("referenced_file".to_string(), vec!["file_name".to_string()]),
-            ("custom_file".to_string(), vec!["mime_type".to_string()]),
-            (
-                "open_file".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            (
-                "explicitly_open_file".to_string(),
-                vec!["mime_type".to_string(), "file_name".to_string()]
-            ),
-            (
-                "items_only_files".to_string(),
-                vec!["file_name".to_string()]
-            ),
-            ("missing_file".to_string(), Vec::new()),
-        ])
-    );
-}
-
-#[test]
-fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchanged() {
-    let original_tool = create_test_tool("custom", "upload").tool;
-
-    let tool = tool_with_model_visible_input_schema(&original_tool);
-
-    assert_eq!(tool, original_tool);
 }
 
 #[test]

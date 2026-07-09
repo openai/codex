@@ -1,21 +1,18 @@
-//! MCP tool metadata, filtering, schema shaping, and name normalization.
+//! MCP tool metadata, filtering, and name normalization.
 //!
 //! Raw MCP tool identities must be preserved for protocol calls, while
 //! model-visible tool names must be sanitized, deduplicated, and kept within API
 //! limits. This module owns that translation as well as the shared [`ToolInfo`]
-//! type and helpers that adjust tool schemas before exposing them to the model.
+//! type.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use codex_config::McpServerConfig;
 use codex_protocol::ToolName;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Map;
-use serde_json::Value as JsonValue;
 use sha1::Digest;
 use sha1::Sha1;
 use tracing::warn;
@@ -66,23 +63,6 @@ impl ToolInfo {
     }
 }
 
-pub fn declared_openai_file_input_param_names(
-    meta: Option<&Map<String, JsonValue>>,
-) -> Vec<String> {
-    let Some(meta) = meta else {
-        return Vec::new();
-    };
-
-    meta.get(META_OPENAI_FILE_PARAMS)
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(JsonValue::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 /// A tool is allowed to be used if both are true:
 /// 1. enabled is None (no allowlist is set) or the tool is explicitly enabled.
 /// 2. The tool is not explicitly disabled.
@@ -116,24 +96,6 @@ impl ToolFilter {
 
         !self.disabled.contains(tool_name)
     }
-}
-
-/// Returns the model-visible view of a tool while preserving the raw metadata used by execution.
-/// Declared file parameters are presented as local file paths; execution later uploads those files
-/// and replaces the paths with the uploaded-file objects expected by the app.
-pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
-    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
-    if file_params.is_empty() {
-        return tool.clone();
-    }
-
-    let mut tool = tool.clone();
-    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
-    rewrite_input_schema_for_local_file_paths(&mut input_schema, &file_params);
-    if let JsonValue::Object(input_schema) = input_schema {
-        tool.input_schema = Arc::new(input_schema);
-    }
-    tool
 }
 
 pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
@@ -265,167 +227,6 @@ struct CallableToolCandidate {
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
-const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
-
-#[derive(Default)]
-struct OpenAiFileSchemaInfo {
-    accepts_mime_type: bool,
-    accepts_file_name: bool,
-}
-
-pub(crate) fn supported_openai_file_input_optional_fields(
-    tool: &Tool,
-) -> HashMap<String, Vec<String>> {
-    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
-    let properties = tool
-        .input_schema
-        .get("properties")
-        .and_then(JsonValue::as_object);
-
-    file_params
-        .into_iter()
-        .map(|field_name| {
-            let optional_fields = properties
-                .and_then(|properties| properties.get(&field_name))
-                .map(|schema| {
-                    let schema_info = openai_file_schema_info(schema, tool.input_schema.as_ref());
-                    let mut optional_fields = Vec::new();
-                    if schema_info.accepts_mime_type {
-                        optional_fields.push("mime_type".to_string());
-                    }
-                    if schema_info.accepts_file_name {
-                        optional_fields.push("file_name".to_string());
-                    }
-                    optional_fields
-                })
-                .unwrap_or_default();
-            (field_name, optional_fields)
-        })
-        .collect()
-}
-
-fn openai_file_schema_info(
-    schema: &JsonValue,
-    root_schema: &Map<String, JsonValue>,
-) -> OpenAiFileSchemaInfo {
-    let mut info = OpenAiFileSchemaInfo::default();
-    let mut pending = vec![schema];
-    let mut visited_refs = HashSet::new();
-
-    while let Some(schema) = pending.pop() {
-        let Some(schema) = schema.as_object() else {
-            continue;
-        };
-
-        if let Some(schema_ref) = schema.get("$ref").and_then(JsonValue::as_str)
-            && visited_refs.insert(schema_ref)
-            && let Some(referenced_schema) = resolve_local_schema_ref(root_schema, schema_ref)
-        {
-            pending.push(referenced_schema);
-        }
-
-        for keyword in ["anyOf", "oneOf", "allOf"] {
-            if let Some(variants) = schema.get(keyword).and_then(JsonValue::as_array) {
-                pending.extend(variants);
-            }
-        }
-
-        if schema.get("type").and_then(JsonValue::as_str) == Some("array")
-            || schema.contains_key("items")
-        {
-            if let Some(items) = schema.get("items") {
-                pending.push(items);
-            }
-            continue;
-        }
-
-        let properties = schema.get("properties").and_then(JsonValue::as_object);
-        let is_object_schema = schema.get("type").and_then(JsonValue::as_str) == Some("object")
-            || properties.is_some()
-            || schema.contains_key("additionalProperties");
-        if !is_object_schema {
-            continue;
-        }
-        let accepts_additional_properties = !matches!(
-            schema.get("additionalProperties"),
-            Some(JsonValue::Bool(false) | JsonValue::Object(_))
-        );
-        info.accepts_mime_type |= accepts_additional_properties
-            || properties.is_some_and(|properties| properties.contains_key("mime_type"));
-        info.accepts_file_name |= accepts_additional_properties
-            || properties.is_some_and(|properties| properties.contains_key("file_name"));
-    }
-
-    info
-}
-
-fn resolve_local_schema_ref<'a>(
-    root_schema: &'a Map<String, JsonValue>,
-    schema_ref: &str,
-) -> Option<&'a JsonValue> {
-    let pointer = schema_ref.strip_prefix("#/")?;
-    let mut segments = pointer.split('/');
-    let first_segment = segments.next()?.replace("~1", "/").replace("~0", "~");
-    let mut referenced_schema = root_schema.get(&first_segment)?;
-
-    for segment in segments {
-        let segment = segment.replace("~1", "/").replace("~0", "~");
-        referenced_schema = match referenced_schema {
-            JsonValue::Object(object) => object.get(&segment)?,
-            JsonValue::Array(array) => array.get(segment.parse::<usize>().ok()?)?,
-            _ => return None,
-        };
-    }
-
-    Some(referenced_schema)
-}
-
-fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(JsonValue::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        rewrite_input_property_schema_as_local_file_path(property_schema);
-    }
-}
-
-fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-    if description.is_empty() {
-        description = guidance.to_string();
-    } else if !description.contains(guidance) {
-        description = format!("{description} {guidance}");
-    }
-
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
-    }
-}
-
 fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
     if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
         namespace.to_string()
