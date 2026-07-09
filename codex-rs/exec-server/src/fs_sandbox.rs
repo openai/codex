@@ -67,10 +67,22 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
+        let native_workspace_roots = sandbox
+            .workspace_roots
+            .iter()
+            .map(native_workspace_root)
+            .collect::<Result<Vec<_>, _>>()?;
+        let workspace_roots = if native_workspace_roots.is_empty() {
+            std::slice::from_ref(&cwd.native)
+        } else {
+            native_workspace_roots.as_slice()
+        };
         let native_permissions: PermissionProfile =
             sandbox.permissions.clone().try_into().map_err(|err| {
                 invalid_request(format!("invalid sandbox permission path URI: {err}"))
             })?;
+        let native_permissions =
+            native_permissions.materialize_project_roots_with_workspace_roots(workspace_roots);
         let mut file_system_policy = native_permissions.file_system_sandbox_policy();
         let helper_read_roots = if sandbox.use_legacy_landlock {
             Vec::new()
@@ -89,7 +101,8 @@ impl FileSystemSandboxRunner {
             &file_system_policy,
             network_policy,
         );
-        let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
+        let command =
+            self.sandbox_exec_request(&permission_profile, &cwd, workspace_roots, sandbox)?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
     }
@@ -98,6 +111,7 @@ impl FileSystemSandboxRunner {
         &self,
         permission_profile: &PermissionProfile,
         cwd: &SandboxCwd,
+        workspace_roots: &[AbsolutePathBuf],
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
@@ -117,16 +131,6 @@ impl FileSystemSandboxRunner {
             env: self.helper_env.clone(),
             managed_network: None,
             additional_permissions: None,
-        };
-        let native_workspace_roots = sandbox_context
-            .workspace_roots
-            .iter()
-            .map(native_workspace_root)
-            .collect::<Result<Vec<_>, _>>()?;
-        let workspace_roots = if native_workspace_roots.is_empty() {
-            std::slice::from_ref(&cwd.native)
-        } else {
-            native_workspace_roots.as_slice()
         };
         sandbox_manager
             .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
@@ -560,7 +564,12 @@ mod tests {
         };
 
         let request = runner
-            .sandbox_exec_request(&permission_profile, &sandbox_cwd, &sandbox_context)
+            .sandbox_exec_request(
+                &permission_profile,
+                &sandbox_cwd,
+                std::slice::from_ref(&sandbox_cwd.native),
+                &sandbox_context,
+            )
             .expect("sandbox exec request");
 
         assert_eq!(request.env.get(&path_key), Some(&path));
