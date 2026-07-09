@@ -108,7 +108,9 @@ fn netns_udp_loop(socket: UdpSocket, endpoint: SocketAddr) -> io::Result<()> {
     let mut query = vec![0; MAX_DNS_MESSAGE_BYTES];
     loop {
         let (len, peer) = socket.recv_from(&mut query)?;
-        let response = resolve_through_proxy(endpoint, &query[..len])?;
+        let Ok(response) = resolve_through_proxy(endpoint, &query[..len]) else {
+            continue;
+        };
         socket.send_to(&response, peer)?;
     }
 }
