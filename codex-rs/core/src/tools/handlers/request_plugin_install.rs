@@ -10,6 +10,7 @@ use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
@@ -44,6 +45,8 @@ use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_i
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolSuggestPresentation;
+
+const MAX_REMOTE_PLUGIN_ID_BYTES: usize = 256;
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct RecommendedPluginInstallArgs {
@@ -146,19 +149,38 @@ impl RequestPluginInstallHandler {
             self.discoverable_tools.clone(),
             turn.app_server_client_name.as_deref(),
         );
+        let requested_plugin = requested_tool_type == Some(DiscoverableToolType::Plugin)
+            || self.presentation == ToolSuggestPresentation::RecommendationContext;
 
-        let tool = discoverable_tools
-            .into_iter()
-            .find(|tool| {
-                tool.id() == requested_tool_id
-                    && match self.presentation {
-                        ToolSuggestPresentation::ListTool => {
-                            Some(tool.tool_type()) == requested_tool_type
-                        }
-                        ToolSuggestPresentation::RecommendationContext => {
-                            matches!(tool, DiscoverableTool::Plugin(_))
-                        }
+        let matching_tool = discoverable_tools.into_iter().find(|tool| {
+            tool.id() == requested_tool_id
+                && match self.presentation {
+                    ToolSuggestPresentation::ListTool => {
+                        Some(tool.tool_type()) == requested_tool_type
                     }
+                    ToolSuggestPresentation::RecommendationContext => {
+                        matches!(tool, DiscoverableTool::Plugin(_))
+                    }
+                }
+        });
+        let direct_remote = matching_tool.is_none();
+        let tool = matching_tool
+            .or_else(|| {
+                (requested_plugin
+                    && turn.config.plugins_config_input().remote_plugin_enabled
+                    && !requested_tool_id.trim().is_empty()
+                    && requested_tool_id.len() <= MAX_REMOTE_PLUGIN_ID_BYTES)
+                    .then(|| {
+                        DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+                            id: requested_tool_id.clone(),
+                            remote_plugin_id: Some(requested_tool_id.clone()),
+                            name: requested_tool_id.clone(),
+                            description: None,
+                            has_skills: false,
+                            mcp_server_names: Vec::new(),
+                            app_connector_ids: Vec::new(),
+                        }))
+                    })
             })
             .ok_or_else(|| {
                 let (argument_name, source) = match self.presentation {
@@ -174,13 +196,17 @@ impl RequestPluginInstallHandler {
                     ),
                 };
                 FunctionCallError::RespondToModel(format!(
-                    "{argument_name} must match one of {source}"
+                    "{argument_name} must match one of {source} or be a non-empty remote plugin id"
                 ))
             })?;
         let tool_type = tool.tool_type();
 
         let suggestion_id = format!("request_plugin_install_{call_id}");
-        if let DiscoverableTool::Plugin(plugin) = &tool {
+        // The analytics contract has no source value for direct remote lookups, so do not
+        // misattribute them to endpoint recommendations or legacy discovery.
+        if let DiscoverableTool::Plugin(plugin) = &tool
+            && !direct_remote
+        {
             let source = match self.presentation {
                 ToolSuggestPresentation::ListTool => PluginInstallRequestSource::LegacyDiscovery,
                 ToolSuggestPresentation::RecommendationContext => {
@@ -228,8 +254,10 @@ impl RequestPluginInstallHandler {
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
-        let auth = session.services.auth_manager.auth().await;
-        let completed = if user_confirmed {
+        let completed = if user_confirmed && direct_remote {
+            true
+        } else if user_confirmed {
+            let auth = session.services.auth_manager.auth().await;
             verify_request_plugin_install_completed(&session, &turn, manager, &tool, auth.as_ref())
                 .await
         } else {

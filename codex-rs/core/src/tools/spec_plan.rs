@@ -771,20 +771,24 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         }
     }
 
-    if tool_suggest_enabled(turn_context)
-        && let Some(candidates) = context
-            .tool_suggest_candidates
-            .filter(|candidates| !candidates.tools.is_empty())
-    {
-        if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
-            planned_tools.add(ListAvailablePluginsToInstallHandler::new(
-                collect_request_plugin_install_entries(&candidates.tools),
-            ));
+    if tool_suggest_enabled(turn_context) {
+        let accepts_remote_plugin_ids = features.enabled(Feature::RemotePlugin)
+            && turn_context.app_server_client_name.as_deref() != Some("codex-tui");
+        if let Some(candidates) = context.tool_suggest_candidates {
+            if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool
+                && !candidates.tools.is_empty()
+            {
+                planned_tools.add(ListAvailablePluginsToInstallHandler::new(
+                    collect_request_plugin_install_entries(&candidates.tools),
+                ));
+            }
+            if !candidates.tools.is_empty() || accepts_remote_plugin_ids {
+                planned_tools.add(RequestPluginInstallHandler::new(
+                    candidates.tools.clone(),
+                    candidates.presentation,
+                ));
+            }
         }
-        planned_tools.add(RequestPluginInstallHandler::new(
-            candidates.tools.clone(),
-            candidates.presentation,
-        ));
     }
 
     if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()

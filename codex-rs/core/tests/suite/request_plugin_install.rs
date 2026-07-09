@@ -329,8 +329,10 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() -> Result<()> {
+async fn endpoint_mode_accepts_remote_plugin_ids_outside_recommendations() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    const REMOTE_PLUGIN_ID: &str = "Plugin_slack";
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -357,7 +359,8 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
         })),
     )
     .await;
-    let call_id = "invented-plugin";
+    let call_id = "remote-plugin";
+    let suggest_reason = "Use Slack for this request";
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -367,8 +370,8 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
                     call_id,
                     REQUEST_PLUGIN_INSTALL_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "plugin_id": "invented@openai-curated-remote",
-                        "suggest_reason": "Try this"
+                        "plugin_id": REMOTE_PLUGIN_ID,
+                        "suggest_reason": suggest_reason
                     }))?,
                 ),
                 ev_completed("resp-1"),
@@ -383,7 +386,18 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
     .await;
     let test = build_test(&server, &apps_server).await?;
 
-    test.submit_turn("suggest a plugin").await?;
+    let elicitation = start_install_turn(&test, "suggest a plugin").await?;
+    let ElicitationRequest::Form {
+        meta: Some(meta), ..
+    } = &elicitation.request
+    else {
+        panic!("expected form elicitation metadata");
+    };
+    assert_eq!(meta["tool_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(meta["tool_name"], REMOTE_PLUGIN_ID);
+    assert_eq!(meta["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(meta["app_connector_ids"], json!([]));
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
@@ -391,6 +405,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
     assert!(contextual_user_message.contains("<recommended_plugins>"));
     assert!(contextual_user_message.contains("github@openai-curated-remote"));
     assert!(contextual_user_message.contains("google-calendar@openai-curated-remote"));
+    assert!(!contextual_user_message.contains(REMOTE_PLUGIN_ID));
     let body = requests[0].body_json();
     let tools = tool_names(&body);
     assert!(
@@ -403,10 +418,22 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );
-    let output = requests[1]
-        .function_call_output_text(call_id)
-        .expect("request tool output");
-    assert!(output.contains("<recommended_plugins> list"));
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &requests[1]
+                .function_call_output_text(call_id)
+                .expect("request tool output")
+        )?,
+        json!({
+            "completed": true,
+            "user_confirmed": true,
+            "tool_type": "plugin",
+            "action_type": "install",
+            "tool_id": REMOTE_PLUGIN_ID,
+            "tool_name": REMOTE_PLUGIN_ID,
+            "suggest_reason": suggest_reason
+        })
+    );
     Ok(())
 }
 
@@ -624,16 +651,16 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         "the resumed router should reflect the refreshed Apps tools"
     );
     assert!(
-        !tool_names(&requests[1].body_json())
+        tool_names(&requests[1].body_json())
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "the refreshed installed-plugin cache should filter the cached recommendation"
+        "direct remote plugin ids should remain installable after recommendations are filtered"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools() -> Result<()> {
+async fn endpoint_mode_with_no_eligible_candidates_keeps_remote_install_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -688,9 +715,10 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
             .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
     );
     assert!(
-        !tools
+        tools
             .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+        "remote plugin ids should remain installable without recommendation candidates"
     );
     Ok(())
 }

@@ -954,6 +954,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
                     turn,
                     &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
                 );
+                set_feature(turn, Feature::RemotePlugin, /*enabled*/ false);
             },
             ToolPlanInputs {
                 tool_suggest_candidates,
@@ -1011,7 +1012,7 @@ async fn request_plugin_install_stays_visible_without_tool_search() {
 }
 
 #[tokio::test]
-async fn request_plugin_install_description_refers_to_recommended_plugins_hint() {
+async fn request_plugin_install_description_accepts_recommendations_and_remote_ids() {
     let plan = probe_with(
         |turn| {
             set_features(
@@ -1037,6 +1038,7 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
         panic!("expected request_plugin_install function spec");
     };
     assert!(request_description.contains("the `<recommended_plugins>` list"));
+    assert!(request_description.contains("exact remote plugin id"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
     assert!(has_parameter(request_spec, "plugin_id"));
