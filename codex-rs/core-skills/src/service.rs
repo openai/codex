@@ -180,8 +180,43 @@ impl SkillsService {
             return snapshot;
         }
 
+        let snapshot = self.load_snapshot_for_cwd(input, fs).await;
+        if use_cwd_cache {
+            let mut cache = self
+                .cache_by_cwd
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.insert(input.cwd.clone(), snapshot.clone());
+        }
+        snapshot
+    }
+
+    /// Loads a cwd snapshot without updating the shared cwd cache.
+    ///
+    /// Existing cached data can still be reused unless `force_reload` is set.
+    pub async fn inspect_snapshot_for_cwd(
+        &self,
+        input: &SkillsLoadInput,
+        force_reload: bool,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> HostSkillsSnapshot {
+        if fs.is_some()
+            && !force_reload
+            && let Some(snapshot) = self.cached_snapshot_for_cwd(&input.cwd)
+        {
+            return snapshot;
+        }
+
+        self.load_snapshot_for_cwd(input, fs).await
+    }
+
+    async fn load_snapshot_for_cwd(
+        &self,
+        input: &SkillsLoadInput,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> HostSkillsSnapshot {
         let mut roots = skill_roots(
-            fs.clone(),
+            fs,
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
@@ -192,18 +227,10 @@ impl SkillsService {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let snapshot = HostSkillsSnapshot::new(Arc::new(
+        HostSkillsSnapshot::new(Arc::new(
             self.build_skill_outcome(input, roots, &skill_config_rules)
                 .await,
-        ));
-        if use_cwd_cache {
-            let mut cache = self
-                .cache_by_cwd
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(input.cwd.clone(), snapshot.clone());
-        }
-        snapshot
+        ))
     }
 
     #[instrument(level = "trace", skip_all)]

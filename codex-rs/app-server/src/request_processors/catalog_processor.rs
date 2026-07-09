@@ -508,6 +508,7 @@ impl CatalogRequestProcessor {
             Some(thread_id) => self.thread_skills(thread_id).await?,
             None => (Vec::new(), Vec::new()),
         };
+        let inspect_thread = thread_id.is_some();
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
@@ -521,7 +522,7 @@ impl CatalogRequestProcessor {
             .environment_manager()
             .default_environment()
             .map(|environment| {
-                if thread_id.is_some() {
+                if inspect_thread {
                     environment.get_filesystem_without_reconnect()
                 } else {
                     environment.get_filesystem()
@@ -568,9 +569,15 @@ impl CatalogRequestProcessor {
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
-                    let snapshot = skills_service
-                        .snapshot_for_cwd(&skills_input, force_reload, fs)
-                        .await;
+                    let snapshot = if inspect_thread {
+                        skills_service
+                            .inspect_snapshot_for_cwd(&skills_input, force_reload, fs)
+                            .await
+                    } else {
+                        skills_service
+                            .snapshot_for_cwd(&skills_input, force_reload, fs)
+                            .await
+                    };
                     let outcome = snapshot.outcome();
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

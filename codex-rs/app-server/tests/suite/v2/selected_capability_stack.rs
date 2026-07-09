@@ -210,6 +210,25 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         (Vec::new(), Vec::new())
     );
     exec_server_proxy.resume()?;
+    wait_for_selected_mcp_server(&mut app_server, &inspection_thread_id).await?;
+
+    let request_id = app_server
+        .send_skills_list_request(SkillsListParams {
+            cwds: Vec::new(),
+            force_reload: false,
+            thread_id: None,
+        })
+        .await?;
+    let response = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data, .. } = to_response(response)?;
+    assert!(
+        data.iter()
+            .any(|entry| { entry.skills.iter().any(|skill| skill.name == SKILL_NAME) })
+    );
 
     exec_server.kill().await?;
     drop(app_server);
