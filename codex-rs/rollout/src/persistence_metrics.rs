@@ -8,6 +8,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 
 use crate::policy::is_persisted_rollout_item;
 
@@ -95,6 +96,7 @@ struct TurnMeasurementUpdate {
 /// Measures logical JSON sizes while applying the shared rollout persistence policy once.
 pub fn measure_and_filter_rollout_items(
     items: &[RolloutItem],
+    history_mode: ThreadHistoryMode,
 ) -> (Vec<RolloutItem>, RolloutPersistenceBatchMeasurement) {
     let mut persisted = Vec::new();
     let mut measurement = RolloutPersistenceBatchMeasurement {
@@ -103,7 +105,7 @@ pub fn measure_and_filter_rollout_items(
     };
 
     for item in items {
-        let kept = is_persisted_rollout_item(item);
+        let kept = is_persisted_rollout_item(item, history_mode);
         let decision = if kept {
             PersistenceDecision::Kept
         } else {
@@ -256,6 +258,8 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::Sleep(_) => "sleep",
         TurnItem::Extension(_) => "extension",
         TurnItem::ImageGeneration(_) => "image_generation",
+        TurnItem::EnteredReviewMode(_) => "entered_review_mode",
+        TurnItem::ExitedReviewMode(_) => "exited_review_mode",
         TurnItem::FileChange(_) => "file_change",
         TurnItem::McpToolCall(_) => "mcp_tool_call",
         TurnItem::ContextCompaction(_) => "context_compaction",

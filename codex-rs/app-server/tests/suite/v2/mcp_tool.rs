@@ -348,6 +348,7 @@ url = "{mcp_server_url}/mcp"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // This test adds and refreshes an explicitly selected runtime environment.
         .without_auto_env()
         .build()
         .await?;

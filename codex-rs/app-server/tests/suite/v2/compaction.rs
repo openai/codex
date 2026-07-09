@@ -83,7 +83,6 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -170,7 +169,6 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
@@ -281,7 +279,6 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -335,7 +332,6 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -375,7 +371,6 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -399,7 +394,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
 
 async fn start_thread(mcp: &mut TestAppServer) -> Result<String> {
     let thread_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

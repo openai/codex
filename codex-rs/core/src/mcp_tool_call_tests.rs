@@ -1462,6 +1462,7 @@ async fn host_owned_codex_apps_manager(
         /*supports_openai_form_elicitation*/ false,
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         codex_mcp::ElicitationRequestRouter::default(),

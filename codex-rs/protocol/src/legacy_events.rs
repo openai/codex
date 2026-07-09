@@ -10,6 +10,8 @@ use crate::items::CommandExecutionStatus;
 use crate::items::ContextCompactionItem;
 use crate::items::DynamicToolCallItem;
 use crate::items::DynamicToolCallStatus;
+use crate::items::EnteredReviewModeItem;
+use crate::items::ExitedReviewModeItem;
 use crate::items::FileChangeItem;
 use crate::items::ImageGenerationItem;
 use crate::items::McpToolCallItem;
@@ -36,10 +38,12 @@ use crate::protocol::CollabWaitingBeginEvent;
 use crate::protocol::CollabWaitingEndEvent;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::DynamicToolCallResponseEvent;
+use crate::protocol::EnteredReviewModeEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandStatus;
+use crate::protocol::ExitedReviewModeEvent;
 use crate::protocol::ImageGenerationBeginEvent;
 use crate::protocol::ImageGenerationEndEvent;
 use crate::protocol::ItemCompletedEvent;
@@ -71,10 +75,10 @@ impl ContextCompactionItem {
 }
 
 impl UserMessageItem {
-    pub fn as_legacy_event(&self) -> EventMsg {
+    pub fn as_legacy_user_message_event(&self) -> UserMessageEvent {
         // Legacy user-message events flatten only text inputs into `message` and
         // rebase text element ranges onto that concatenated text.
-        EventMsg::UserMessage(UserMessageEvent {
+        UserMessageEvent {
             client_id: self.client_id.clone(),
             message: self.message(),
             images: Some(self.image_urls()),
@@ -82,7 +86,11 @@ impl UserMessageItem {
             local_images: self.local_image_paths(),
             local_image_details: self.local_image_details(),
             text_elements: self.text_elements(),
-        })
+        }
+    }
+
+    pub fn as_legacy_event(&self) -> EventMsg {
+        EventMsg::UserMessage(self.as_legacy_user_message_event())
     }
 }
 
@@ -98,6 +106,27 @@ impl AgentMessageItem {
                 }),
             })
             .collect()
+    }
+}
+
+impl EnteredReviewModeItem {
+    pub fn as_legacy_event(&self, turn_id: String) -> EventMsg {
+        EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            target: self.target.clone(),
+            user_facing_hint: Some(self.user_facing_hint.clone()),
+            turn_id: Some(turn_id),
+            item_id: Some(self.id.clone()),
+        })
+    }
+}
+
+impl ExitedReviewModeItem {
+    pub fn as_legacy_event(&self, turn_id: String) -> EventMsg {
+        EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            turn_id: Some(turn_id),
+            item_id: Some(self.id.clone()),
+            review_output: self.review_output.clone(),
+        })
     }
 }
 
@@ -489,6 +518,7 @@ impl TurnItem {
             TurnItem::Sleep(_) => Vec::new(),
             TurnItem::Extension(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
+            TurnItem::EnteredReviewMode(_) | TurnItem::ExitedReviewMode(_) => Vec::new(),
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(String::new())
                 .into_iter()
@@ -550,6 +580,12 @@ impl HasLegacyEvent for ItemCompletedEvent {
                 .collect(),
             TurnItem::SubAgentActivity(item) => {
                 vec![item.as_legacy_event(self.completed_at_ms)]
+            }
+            TurnItem::EnteredReviewMode(item) => {
+                vec![item.as_legacy_event(self.turn_id.clone())]
+            }
+            TurnItem::ExitedReviewMode(item) => {
+                vec![item.as_legacy_event(self.turn_id.clone())]
             }
             _ => self.item.as_legacy_events(show_raw_agent_reasoning),
         }

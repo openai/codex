@@ -46,7 +46,6 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -113,7 +112,6 @@ async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -167,7 +165,6 @@ async fn thread_settings_update_while_turn_is_active_emits_notification() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -214,7 +211,6 @@ async fn thread_settings_update_null_service_tier_uses_default() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -284,7 +280,6 @@ async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -322,7 +317,6 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -402,7 +396,7 @@ async fn start_text_turn(mcp: &mut TestAppServer, thread_id: String) -> Result<(
 
 async fn start_thread(mcp: &mut TestAppServer) -> Result<ThreadStartResponse> {
     let request_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

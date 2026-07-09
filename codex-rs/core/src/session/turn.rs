@@ -389,9 +389,9 @@ pub(crate) async fn run_turn(
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            sess.record_conversation_items(
+                            sess.record_response_item_and_emit_turn_item(
                                 &turn_context,
-                                std::slice::from_ref(&hook_prompt_message),
+                                hook_prompt_message,
                             )
                             .await;
                             stop_hook_active = true;
@@ -1288,8 +1288,8 @@ pub(crate) async fn built_tools(
     let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
+    let all_mcp_tools = step_context
+        .mcp_tools()
         .or_cancel(cancellation_token)
         .await?;
     let loaded_plugins = sess
@@ -1302,7 +1302,7 @@ pub(crate) async fn built_tools(
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
+        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(all_mcp_tools));
     let accessible_connectors_with_enabled_state =
         accessible_connectors.as_ref().map(|connectors| {
             connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
@@ -1395,7 +1395,7 @@ pub(crate) async fn built_tools(
             .await
         };
     let mcp_tool_exposure = build_mcp_tool_exposure(
-        &all_mcp_tools,
+        all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
         search_tool_enabled(turn_context),
@@ -1919,7 +1919,6 @@ async fn handle_assistant_item_done_in_plan_mode(
         let mut finalized_facts = None;
         if let Some(finalized_turn_item) = finalize_non_tool_response_item(
             sess,
-            turn_context,
             TurnItemContributorPolicy::Run(turn_store),
             item,
             /*plan_mode*/ true,
@@ -1980,6 +1979,21 @@ async fn drain_in_flight(
         }
     }
     Ok(())
+}
+
+fn assign_missing_streamed_response_item_id(
+    item: &mut ResponseItem,
+    active_item: Option<&TurnItem>,
+) {
+    if item.id().is_some() {
+        return;
+    }
+
+    let active_item_id = active_item
+        .map(TurnItem::id)
+        .filter(|item_id| !item_id.is_empty());
+    item.set_id(active_item_id);
+    Session::assign_missing_response_item_id(item);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2096,7 +2110,10 @@ async fn try_run_sampling_request(
 
         match event {
             ResponseEvent::Created => {}
-            ResponseEvent::OutputItemDone(item) => {
+            ResponseEvent::OutputItemDone(mut item) => {
+                if turn_context.item_ids_enabled() {
+                    assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
+                }
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
@@ -2190,7 +2207,10 @@ async fn try_run_sampling_request(
                     });
                 }
             }
-            ResponseEvent::OutputItemAdded(item) => {
+            ResponseEvent::OutputItemAdded(mut item) => {
+                if turn_context.item_ids_enabled() {
+                    assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
+                }
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,
@@ -2207,7 +2227,6 @@ async fn try_run_sampling_request(
                 }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
-                    turn_context.as_ref(),
                     TurnItemContributorPolicy::Skip,
                     &item,
                     plan_mode,
@@ -2318,7 +2337,10 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
-                sess.services.models_manager.refresh_if_new_etag(etag).await;
+                sess.services
+                    .models_manager
+                    .refresh_if_new_etag(etag, turn_context.config.http_client_factory())
+                    .await;
             }
             ResponseEvent::Completed {
                 token_usage,

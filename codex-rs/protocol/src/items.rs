@@ -16,6 +16,8 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyStatus;
+use crate::protocol::ReviewOutputEvent;
+use crate::protocol::ReviewTarget;
 use crate::protocol::SubAgentActivityKind;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
@@ -47,19 +49,25 @@ pub enum TurnItem {
     DynamicToolCall(DynamicToolCallItem),
     CollabAgentToolCall(CollabAgentToolCallItem),
     SubAgentActivity(SubAgentActivityItem),
+    /// Hosted Responses API web-search item handled directly by core.
+    ///
+    /// Standalone web search uses Self::Extension instead because its display
+    /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
-    /// Standalone image generation uses this path. App-server wraps the same
-    /// typed item in its public image-generation variant.
+    /// Standalone image generation and web search use this path. App-server
+    /// wraps the same typed items in their public variants.
     Extension(ExtensionItem),
     /// Hosted Responses API image-generation item handled directly by core.
     ///
     /// This remains separate from [`Self::Extension`] because core still owns
     /// hosted image persistence and legacy-event fanout.
     ImageGeneration(ImageGenerationItem),
+    EnteredReviewMode(EnteredReviewModeItem),
+    ExitedReviewMode(ExitedReviewModeItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
@@ -123,6 +131,19 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub memory_citation: Option<MemoryCitation>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct EnteredReviewModeItem {
+    pub id: String,
+    pub target: ReviewTarget,
+    pub user_facing_hint: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ExitedReviewModeItem {
+    pub id: String,
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -388,11 +409,13 @@ pub struct ContextCompactionItem {
     pub id: String,
 }
 
+fn new_item_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 impl ContextCompactionItem {
     pub fn new() -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-        }
+        Self { id: new_item_id() }
     }
 }
 
@@ -405,7 +428,7 @@ impl Default for ContextCompactionItem {
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             client_id: None,
             content: content.to_vec(),
         }
@@ -507,9 +530,7 @@ fn trim_trailing_default_image_details(
 impl HookPromptItem {
     pub fn from_fragments(id: Option<&String>, fragments: Vec<HookPromptFragment>) -> Self {
         Self {
-            id: id
-                .cloned()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: id.cloned().unwrap_or_else(new_item_id),
             fragments,
         }
     }
@@ -539,7 +560,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
-        id: Some(uuid::Uuid::new_v4().to_string()),
+        id: Some(new_item_id()),
         role: "user".to_string(),
         content,
         phase: None,
@@ -592,7 +613,7 @@ fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<Strin
 impl AgentMessageItem {
     pub fn new(content: &[AgentMessageContent]) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_item_id(),
             content: content.to_vec(),
             phase: None,
             memory_citation: None,
@@ -617,6 +638,8 @@ impl TurnItem {
             TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
+            TurnItem::EnteredReviewMode(item) => item.id.clone(),
+            TurnItem::ExitedReviewMode(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),

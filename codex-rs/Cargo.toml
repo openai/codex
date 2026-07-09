@@ -90,6 +90,7 @@ members = [
     "tui",
     "tools",
     "v8-poc",
+    "websocket-client",
     "utils/absolute-path",
     "utils/path-uri",
     "utils/cargo-bin",
@@ -167,6 +168,7 @@ codex-code-mode = { path = "code-mode" }
 codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-http-client = { path = "http-client" }
+codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-connectors-extension = { path = "ext/connectors" }
@@ -427,6 +429,7 @@ thiserror = "2.0.17"
 time = "0.3.47"
 tiny_http = "0.12"
 tokio = "1"
+tokio-rustls = "0.26.4"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
 tokio-tungstenite = { version = "0.28.0", features = [

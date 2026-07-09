@@ -299,7 +299,8 @@ impl MessageProcessor {
             )
         });
         let models_manager = thread_manager.get_models_manager();
-        let models_refresh_worker = crate::models_refresh_worker::spawn(&models_manager);
+        let models_refresh_worker =
+            crate::models_refresh_worker::spawn(&models_manager, config.http_client_factory());
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());

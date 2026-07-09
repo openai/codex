@@ -241,7 +241,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     )
     .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.2").with_home(home);
     let test = builder
         .build(&server)
         .await
@@ -290,7 +290,7 @@ async fn indexed_web_search_mode_sets_indexed_access() {
     std::fs::write(home.path().join("config.toml"), r#"web_search = "indexed""#)
         .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.2").with_home(home);
     let test = builder
         .build(&server)
         .await

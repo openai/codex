@@ -3089,7 +3089,7 @@ async fn model_selection_popup_snapshot() {
 
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_personality_popup();
 
@@ -3150,8 +3150,8 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 
 #[tokio::test]
 async fn server_overloaded_error_does_not_switch_models() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.set_model("gpt-5.3-codex");
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_model("gpt-5.2");
     while rx.try_recv().is_ok() {}
     while op_rx.try_recv().is_ok() {}
 
@@ -3164,7 +3164,7 @@ async fn server_overloaded_error_does_not_switch_models() {
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::UpdateModel(model) = event {
             assert_eq!(
-                model, "gpt-5.3-codex",
+                model, "gpt-5.2",
                 "did not expect model switch on server-overloaded error"
             );
         }
@@ -3234,6 +3234,68 @@ async fn model_reasoning_selection_popup_applies_custom_effort() {
             (Some("gpt-5.4".to_string()), Some(custom_effort)),
         ]
     );
+}
+
+async fn select_ultra_with_multi_agent_thread_limit(max_threads: usize) -> (bool, Vec<String>) {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config
+        .multi_agent_v2
+        .max_concurrent_threads_per_session = max_threads;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.default_reasoning_effort = ReasoningEffortConfig::High;
+    preset.supported_reasoning_efforts = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::High,
+            description: "High reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Ultra,
+            description: "Ultra reasoning".to_string(),
+        },
+    ];
+    chat.open_reasoning_popup(preset);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut selected_ultra = false;
+    let mut warnings = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Ultra)) => {
+                selected_ultra = true;
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                warnings.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+            }
+            _ => {}
+        }
+    }
+
+    (selected_ultra, warnings)
+}
+
+#[tokio::test]
+async fn ultra_reasoning_selection_warns_for_high_multi_agent_concurrency() {
+    let (selected_ultra, warnings) =
+        select_ultra_with_multi_agent_thread_limit(/*max_threads*/ 8).await;
+
+    assert!(selected_ultra);
+    assert_eq!(warnings.len(), 1);
+    assert_chatwidget_snapshot!(
+        "ultra_reasoning_selection_high_multi_agent_concurrency_warning",
+        &warnings[0]
+    );
+}
+
+#[tokio::test]
+async fn ultra_reasoning_selection_skips_warning_below_threshold() {
+    let below_threshold = select_ultra_with_multi_agent_thread_limit(/*max_threads*/ 7).await;
+
+    assert_eq!(below_threshold, (true, Vec::new()));
 }
 
 #[tokio::test]
