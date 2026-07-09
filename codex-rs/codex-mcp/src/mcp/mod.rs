@@ -51,6 +51,7 @@ use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
+const DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU: &str = "codex";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
@@ -528,19 +529,18 @@ fn mcp_server_config_for_url(
     originator: Option<&str>,
     auth_mode: McpServerAuth,
 ) -> McpServerConfig {
-    let mut http_headers = HashMap::new();
+    let product_sku = apps_mcp_product_sku.unwrap_or(DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU);
+    let mut http_headers =
+        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())]);
     if let Some(originator) = originator {
         http_headers.insert("originator".to_string(), originator.to_string());
-    }
-    if let Some(product_sku) = apps_mcp_product_sku {
-        http_headers.insert("X-OpenAI-Product-Sku".to_string(), product_sku.to_string());
     }
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers: (!http_headers.is_empty()).then_some(http_headers),
+            http_headers: Some(http_headers),
             env_http_headers: None,
         },
         auth: auth_mode,

@@ -289,14 +289,43 @@ fn codex_apps_server_config_forwards_thread_originator_header() {
         } => {
             assert_eq!(
                 http_headers,
-                &Some(HashMap::from([(
-                    "originator".to_string(),
-                    "thread_originator".to_string(),
-                )]))
+                &Some(HashMap::from([
+                    ("originator".to_string(), "thread_originator".to_string()),
+                    ("X-OpenAI-Product-Sku".to_string(), "codex".to_string()),
+                ]))
             );
             assert!(env_http_headers.is_none());
         }
         other => panic!("expected streamable http transport, got {other:?}"),
+    }
+}
+
+#[test]
+fn codex_apps_server_config_sets_product_sku_header() {
+    for (configured_product_sku, expected_product_sku) in [(None, "codex"), (Some("tpp"), "tpp")] {
+        let config = codex_apps_mcp_server_config(
+            "https://chatgpt.com",
+            configured_product_sku,
+            /*originator*/ None,
+        );
+
+        match &config.transport {
+            McpServerTransportConfig::StreamableHttp {
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                assert_eq!(
+                    http_headers,
+                    &Some(HashMap::from([(
+                        "X-OpenAI-Product-Sku".to_string(),
+                        expected_product_sku.to_string(),
+                    )]))
+                );
+                assert!(env_http_headers.is_none());
+            }
+            other => panic!("expected streamable http transport, got {other:?}"),
+        }
     }
 }
 
