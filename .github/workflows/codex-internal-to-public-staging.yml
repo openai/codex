@@ -241,7 +241,14 @@ jobs:
     needs:
       - prepare
       - validate-message
-    if: ${{ needs.validate-message.result == 'success' }}
+    # The message job is intentionally skipped for automatic and reviewed messages. A status check
+    # function avoids GitHub's implicit success() guard, while !cancelled() honors cancellation.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.prepare.result == 'success' &&
+        needs.validate-message.result == 'success'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
