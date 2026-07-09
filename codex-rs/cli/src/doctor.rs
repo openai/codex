@@ -2383,9 +2383,11 @@ async fn websocket_reachability_check(
         HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
     );
     let client = ResponsesWebsocketClient::new(api_provider, api_auth);
+    let http_client_factory = config.http_client_factory();
     match tokio::time::timeout(
         provider.websocket_connect_timeout(),
         client.probe_handshake(
+            &http_client_factory,
             extra_headers,
             default_headers(),
             WEBSOCKET_IMMEDIATE_CLOSE_GRACE,

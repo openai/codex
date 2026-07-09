@@ -71,11 +71,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure Dev Drive (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: ../.github/scripts/setup-dev-drive.ps1
-
       - uses: ./.github/actions/setup-ci
 
       - name: Install Linux build dependencies
@@ -136,11 +131,7 @@ jobs:
             echo "Using sccache GitHub backend"
           else
             echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-            if [[ -n "${DEV_DRIVE:-}" ]]; then
-              echo "SCCACHE_DIR=${DEV_DRIVE}\\.sccache" >> "$GITHUB_ENV"
-            else
-              echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
-            fi
+            echo "SCCACHE_DIR=${CI_BUILD_ROOT}/sccache" >> "$GITHUB_ENV"
             echo "Using sccache local disk + actions/cache fallback"
           fi
 

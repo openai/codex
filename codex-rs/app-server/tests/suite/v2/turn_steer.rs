@@ -26,6 +26,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use core_test_support::skip_if_remote;
 use serde_json::Value;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -52,14 +53,13 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -111,6 +111,12 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
+    // TODO(anp): Remove after the active-turn fixture can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "uses a host-local command and cwd fixture unavailable to remote executors"
+    );
+
     #[cfg(target_os = "windows")]
     let shell_command = vec![
         "powershell".to_string(),
@@ -143,14 +149,13 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -228,6 +233,12 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
 
 #[tokio::test]
 async fn turn_steer_returns_active_turn_id() -> Result<()> {
+    // TODO(anp): Remove after the active-turn fixture can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "uses a host-local command and cwd fixture unavailable to remote executors"
+    );
+
     #[cfg(target_os = "windows")]
     let shell_command = vec![
         "powershell".to_string(),
@@ -262,14 +273,13 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -379,6 +389,12 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
 
 #[tokio::test]
 async fn turn_steer_rejects_context_only_input_without_merging_context() -> Result<()> {
+    // TODO(anp): Remove after the active-turn fixture can run in the selected remote environment.
+    skip_if_remote!(
+        Ok(()),
+        "uses a host-local command and cwd fixture unavailable to remote executors"
+    );
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -404,14 +420,13 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

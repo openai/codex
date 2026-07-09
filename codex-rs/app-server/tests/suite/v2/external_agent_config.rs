@@ -615,6 +615,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
+    let control_request = "<ide_selection>src/auth.rs:1-5</ide_selection>";
+    let first_request = "Fix auth flow";
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
     std::fs::write(
@@ -624,7 +626,14 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "type": "user",
                 "cwd": &project_root,
                 "timestamp": &recent_timestamp,
-                "message": { "content": "first request" },
+                "message": { "content": control_request },
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "user",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": first_request },
             })
             .to_string(),
             serde_json::json!({
@@ -632,11 +641,6 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "cwd": &project_root,
                 "timestamp": &recent_timestamp,
                 "message": { "content": "first answer" },
-            })
-            .to_string(),
-            serde_json::json!({
-                "type": "custom-title",
-                "customTitle": "source session title",
             })
             .to_string(),
         ]
@@ -667,6 +671,14 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     .await??;
     let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
     assert_eq!(detected.items.len(), 1);
+    assert_eq!(
+        detected.items[0]
+            .details
+            .as_ref()
+            .and_then(|details| details.sessions.first())
+            .and_then(|session| session.title.as_deref()),
+        Some("Fix auth flow")
+    );
 
     let request_id = mcp
         .send_raw_request(
@@ -743,8 +755,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .expect("expected imported thread")
         .clone();
     assert_eq!(imported_thread_id, thread.id.to_string());
-    assert_eq!(thread.preview, "first request");
-    assert_eq!(thread.name.as_deref(), Some("source session title"));
+    assert_eq!(thread.preview, control_request);
+    assert_eq!(thread.name.as_deref(), Some("Fix auth flow"));
 
     let request_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -758,13 +770,39 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
-    assert_eq!(response.thread.turns.len(), 1);
-    let items = &response.thread.turns[0].items;
-    assert_eq!(items.len(), 3);
+    assert_eq!(response.thread.turns.len(), 2);
+    let control_items = &response.thread.turns[0].items;
+    assert_eq!(control_items.len(), 1);
+    match &control_items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: control_request.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+    let imported_items = &response.thread.turns[1].items;
+    assert_eq!(imported_items.len(), 3);
+    match &imported_items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: first_request.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
     assert_eq!(
-        items.last(),
+        imported_items.last(),
         Some(&ThreadItem::AgentMessage {
-            id: "item-3".into(),
+            id: "item-4".into(),
             text: "<EXTERNAL SESSION IMPORTED>".into(),
             phase: None,
             memory_citation: None,
@@ -818,8 +856,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
-    assert_eq!(response.thread.turns.len(), 2);
-    match &response.thread.turns[1].items[1] {
+    assert_eq!(response.thread.turns.len(), 3);
+    match &response.thread.turns[2].items[1] {
         ThreadItem::AgentMessage { text, .. } => assert_eq!(text, "follow-up answer"),
         other => panic!("expected agent message item, got {other:?}"),
     }

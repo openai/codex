@@ -148,9 +148,7 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                 }
             })
             .collect(),
-        ToolSpec::ImageGeneration { .. }
-        | ToolSpec::ToolSearch { .. }
-        | ToolSpec::WebSearch { .. } => Vec::new(),
+        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => Vec::new(),
     }
 }
 

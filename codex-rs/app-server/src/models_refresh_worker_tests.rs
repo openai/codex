@@ -3,6 +3,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -55,6 +57,7 @@ impl ModelsEndpointClient for TestModelsEndpoint {
     fn list_models<'a>(
         &'a self,
         _client_version: &'a str,
+        _http_client_factory: HttpClientFactory,
     ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
         Box::pin(async move {
             let fetch_index = self.fetch_count.fetch_add(1, Ordering::SeqCst);
@@ -79,7 +82,11 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
         endpoint.clone(),
         /*auth_manager*/ None,
     ));
-    let worker = spawn_with_interval(&models_manager, Duration::from_millis(10));
+    let worker = spawn_with_interval(
+        &models_manager,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        Duration::from_millis(10),
+    );
 
     endpoint.wait_for_fetch_count(/*expected*/ 2).await;
     drop(worker);

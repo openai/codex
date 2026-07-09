@@ -124,6 +124,16 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn code_mode_host_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::CodeModeHost.stage(), Stage::Stable);
+    assert_eq!(Feature::CodeModeHost.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("code_mode_host"),
+        Some(Feature::CodeModeHost)
+    );
+}
+
+#[test]
 fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
 
@@ -253,16 +263,44 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 }
 
 #[test]
-fn image_generation_is_stable_and_enabled_by_default() {
+fn image_generation_is_stable_and_extension_alias_is_supported() {
     assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
     assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("image_generation"),
+        Some(Feature::ImageGeneration)
+    );
+    assert_eq!(
+        feature_for_key("imagegenext"),
+        Some(Feature::ImageGeneration)
+    );
 }
 
 #[test]
-fn image_generation_extension_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::ImageGenExt.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ImageGenExt.default_enabled(), false);
-    assert_eq!(feature_for_key("imagegenext"), Some(Feature::ImageGenExt));
+fn image_generation_toggle_controls_extension_backed_generation() {
+    let mut entries = BTreeMap::new();
+    entries.insert("image_generation".to_string(), false);
+    let mut features = Features::with_defaults();
+    features.apply_map(&entries);
+    assert!(!features.enabled(Feature::ImageGeneration));
+
+    entries.insert("image_generation".to_string(), true);
+    features.disable(Feature::ImageGeneration);
+    features.apply_map(&entries);
+    assert!(features.enabled(Feature::ImageGeneration));
+}
+
+#[test]
+fn canonical_image_generation_toggle_wins_over_extension_alias() {
+    for (canonical, alias) in [(false, true), (true, false)] {
+        let entries = BTreeMap::from([
+            ("image_generation".to_string(), canonical),
+            ("imagegenext".to_string(), alias),
+        ]);
+        let mut features = Features::with_defaults();
+        features.apply_map(&entries);
+        assert_eq!(features.enabled(Feature::ImageGeneration), canonical);
+    }
 }
 
 #[test]
