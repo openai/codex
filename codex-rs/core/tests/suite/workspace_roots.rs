@@ -35,7 +35,7 @@ const PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 fn workspace_roots_read_profile() -> Result<PermissionProfile> {
-    let mut entries = vec![
+    let entries = vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::Minimal,
@@ -50,18 +50,22 @@ fn workspace_roots_read_profile() -> Result<PermissionProfile> {
         },
     ];
     #[cfg(target_os = "linux")]
-    if !core_test_support::is_remote_test_environment() {
-        // Bubblewrap re-execs the test binary after applying the filesystem policy.
-        // Bazel places that binary outside the platform paths covered by `:minimal`.
-        entries.push(FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-                    std::env::current_exe()?,
-                )?,
-            },
-            access: FileSystemAccessMode::Read,
-        });
-    }
+    let entries = {
+        let mut entries = entries;
+        if !core_test_support::is_remote_test_environment() {
+            // Bubblewrap re-execs the test binary after applying the filesystem policy.
+            // Bazel places that binary outside the platform paths covered by `:minimal`.
+            entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                        std::env::current_exe()?,
+                    )?,
+                },
+                access: FileSystemAccessMode::Read,
+            });
+        }
+        entries
+    };
 
     Ok(PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(entries),
@@ -207,7 +211,10 @@ async fn workspace_roots_allow_file_read_and_command_run() -> Result<()> {
         .function_call_output_content_and_success(COMMAND_CALL_ID)
         .context("command result should be present")?;
     assert_ne!(success, Some(false));
-    assert!(command_output.is_some_and(|output| output.contains(COMMAND_CONTENTS)));
+    assert!(
+        command_output.is_some_and(|output| output.contains(COMMAND_CONTENTS)),
+        "command should read the workspace-root file, got {command_output:?}"
+    );
 
     remove_files(&test, &[&image_path, &text_path]).await
 }
@@ -262,7 +269,10 @@ async fn workspace_roots_deny_file_and_command_reads_outside_roots() -> Result<(
         .function_call_output_content_and_success(COMMAND_CALL_ID)
         .context("denied command result should be present")?;
     let command_output = command_output.context("denied command output should be present")?;
-    assert!(command_output.contains(&text_path_display));
+    assert!(
+        command_output.contains(&text_path_display),
+        "denied command output should identify {text_path_display}, got {command_output:?}"
+    );
     assert!(
         command_output.contains("Permission denied")
             || command_output.contains("Operation not permitted")
