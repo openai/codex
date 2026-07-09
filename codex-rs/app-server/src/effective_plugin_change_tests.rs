@@ -49,3 +49,15 @@ fn only_workspace_listed_materializations_are_eligible() {
 
     assert_eq!(plugin_ids, BTreeSet::from(["eligible@test".to_string()]));
 }
+
+#[test]
+fn hook_trusted_hash_edit_targets_only_escaped_leaf() {
+    assert_eq!(
+        hook_trusted_hash_edit(r#"plugin."quoted"\path"#, "sha256:current"),
+        ConfigEdit {
+            key_path: r#"hooks.state."plugin.\"quoted\"\\path".trusted_hash"#.to_string(),
+            value: serde_json::json!("sha256:current"),
+            merge_strategy: MergeStrategy::Replace,
+        }
+    );
+}

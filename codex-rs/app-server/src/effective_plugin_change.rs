@@ -10,8 +10,6 @@ use codex_core_plugins::remote::RemotePluginMaterialization;
 use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::RemotePluginShareDiscoverability;
 use codex_login::AuthManager;
-use serde_json::Map;
-use serde_json::Value;
 use serde_json::json;
 use tracing::warn;
 
@@ -94,6 +92,15 @@ fn workspace_listed_plugin_ids(
         .collect()
 }
 
+fn hook_trusted_hash_edit(hook_key: &str, current_hash: &str) -> ConfigEdit {
+    let escaped_hook_key = hook_key.replace('\\', "\\\\").replace('"', "\\\"");
+    ConfigEdit {
+        key_path: format!(r#"hooks.state."{escaped_hook_key}".trusted_hash"#),
+        value: json!(current_hash),
+        merge_strategy: MergeStrategy::Replace,
+    }
+}
+
 async fn trust_materialized_plugin_hooks(
     materializations: Vec<RemotePluginMaterialization>,
     auth_manager: &AuthManager,
@@ -133,7 +140,7 @@ async fn trust_materialized_plugin_hooks(
             "hook discovery reported warnings while trusting materialized plugins"
         );
     }
-    let hook_states = hooks
+    let edits = hooks
         .hooks
         .into_iter()
         .filter(|hook| {
@@ -141,9 +148,9 @@ async fn trust_materialized_plugin_hooks(
                 .as_ref()
                 .is_some_and(|plugin_id| plugin_ids.contains(plugin_id))
         })
-        .map(|hook| (hook.key, json!({ "trusted_hash": hook.current_hash })))
-        .collect::<Map<String, Value>>();
-    if hook_states.is_empty() {
+        .map(|hook| hook_trusted_hash_edit(&hook.key, &hook.current_hash))
+        .collect::<Vec<_>>();
+    if edits.is_empty() {
         return Ok(());
     }
     if auth_manager
@@ -157,11 +164,7 @@ async fn trust_materialized_plugin_hooks(
     }
 
     let params = ConfigBatchWriteParams {
-        edits: vec![ConfigEdit {
-            key_path: "hooks.state".to_string(),
-            value: Value::Object(hook_states),
-            merge_strategy: MergeStrategy::Upsert,
-        }],
+        edits,
         file_path: None,
         expected_version: None,
         reload_user_config: true,
