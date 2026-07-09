@@ -137,6 +137,16 @@ async fn serve_exec_with_pushed_events(
                 )
                 .await;
             }
+            Some("fs/walk") => {
+                send_exec_server_json(
+                    &mut websocket,
+                    json!({
+                        "id": request["id"],
+                        "result": { "entries": [], "errors": [], "truncated": false }
+                    }),
+                )
+                .await;
+            }
             method => panic!("unexpected exec-server request before process/start: {method:?}"),
         }
     };
