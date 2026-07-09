@@ -418,6 +418,8 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
     use std::os::unix::fs::symlink;
     use std::sync::Arc;
 
+    use codex_core_skills::SkillMetadata;
+    use codex_core_skills::SkillPolicy;
     use codex_core_skills::loader::SkillRoot;
     use codex_core_skills::loader::load_skills_from_roots;
     use codex_protocol::protocol::SkillScope;
@@ -473,13 +475,41 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
     let outcome = future.await;
 
     assert_eq!(outcome.errors, Vec::new());
+    let first_skill_path = dunce::canonicalize(skills_root.join("first/SKILL.md"))
+        .unwrap()
+        .abs();
+    let second_skill_path = dunce::canonicalize(skills_root.join("second/SKILL.md"))
+        .unwrap()
+        .abs();
     assert_eq!(
-        outcome
-            .skills
-            .iter()
-            .map(|skill| skill.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["linked:first", "linked:second"]
+        outcome.skills,
+        vec![
+            SkillMetadata {
+                name: "linked:first".to_string(),
+                description: "first skill.".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(false),
+                    products: Vec::new(),
+                }),
+                path_to_skills_md: first_skill_path,
+                scope: SkillScope::User,
+                plugin_id: None,
+            },
+            SkillMetadata {
+                name: "linked:second".to_string(),
+                description: "second skill.".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                path_to_skills_md: second_skill_path,
+                scope: SkillScope::User,
+                plugin_id: None,
+            },
+        ]
     );
 
     let calls = recording.calls();
