@@ -81,7 +81,10 @@ impl McpManager {
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
         self.runtime_config_with_context(
             McpServerContributionContext::global(config),
-            /*originator*/ None,
+            // Threadless discovery and control-plane paths have no effective thread
+            // originator; active-thread tool calls use runtime_config_for_step below.
+            /*originator*/
+            None,
         )
         .await
         .config
