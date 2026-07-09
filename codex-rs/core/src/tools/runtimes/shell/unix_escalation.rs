@@ -108,6 +108,7 @@ pub(super) async fn try_run_zsh_fork(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     command: &[String],
+    plugin_script: Option<Arc<crate::plugin_script_lifecycle::PluginScriptExecution>>,
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
     let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
         tracing::warn!("ZshFork backend specified, but shell_zsh_path is not configured.");
@@ -202,6 +203,7 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_workspace_roots,
         codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        plugin_script,
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -225,6 +227,7 @@ pub(super) async fn try_run_zsh_fork(
     // escalation server.
     let stopwatch = Stopwatch::new(effective_timeout);
     let mut cancel_token = stopwatch.cancellation_token();
+    cancel_token = cancel_when_either(cancel_token, req.cancellation_token.clone());
     if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
         cancel_token = cancel_when_either(cancel_token, cancellation);
     }
@@ -259,7 +262,7 @@ pub(super) async fn try_run_zsh_fork(
         .await
         .map_err(|err| ToolError::Rejected(err.to_string()))?;
 
-    map_exec_result(attempt.sandbox, exec_result).map(Some)
+    map_exec_result(attempt.sandbox, exec_result, &req.cancellation_token).map(Some)
 }
 
 pub(crate) async fn prepare_unified_exec_zsh_fork(
@@ -315,6 +318,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
         codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        plugin_script: None,
     };
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
@@ -824,6 +828,7 @@ struct CoreShellCommandExecutor {
     windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
+    plugin_script: Option<Arc<crate::plugin_script_lifecycle::PluginScriptExecution>>,
 }
 
 struct PrepareSandboxedExecParams<'a> {
@@ -881,6 +886,18 @@ impl CoreShellCommandExecutor {
             }
         }
 
+        let after_spawn = match (after_spawn, self.plugin_script.clone()) {
+            (Some(after_spawn), Some(plugin_script)) => Some(Box::new(move || {
+                after_spawn();
+                plugin_script.mark_started();
+            })
+                as Box<dyn FnOnce() + Send>),
+            (Some(after_spawn), None) => Some(after_spawn),
+            (None, Some(plugin_script)) => {
+                Some(Box::new(move || plugin_script.mark_started()) as Box<dyn FnOnce() + Send>)
+            }
+            (None, None) => None,
+        };
         let result = crate::sandboxing::execute_exec_request_with_after_spawn(
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
@@ -1097,6 +1114,7 @@ fn extract_shell_script(command: &[String]) -> Result<ParsedShellCommand, ToolEr
 fn map_exec_result(
     sandbox: SandboxType,
     result: ExecResult,
+    user_cancellation_token: &CancellationToken,
 ) -> Result<ExecToolCallOutput, ToolError> {
     let output = ExecToolCallOutput {
         exit_code: result.exit_code,
@@ -1106,6 +1124,10 @@ fn map_exec_result(
         duration: result.duration,
         timed_out: result.timed_out,
     };
+
+    if user_cancellation_token.is_cancelled() {
+        return Err(ToolError::Rejected("rejected by user".to_string()));
+    }
 
     if result.timed_out {
         return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout {
