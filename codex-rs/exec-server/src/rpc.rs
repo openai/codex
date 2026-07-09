@@ -367,6 +367,19 @@ impl RpcClient {
         RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst))
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = tracing::field::Empty,
+            method,
+        )
+    )]
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
     where
         P: Serialize,
@@ -374,10 +387,24 @@ impl RpcClient {
     {
         let _call_slot = self.acquire_regular_call_slot()?;
         let request_id = self.allocate_request_id();
+        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
         self.call_inner(request_id, method, params, RpcCallTimeout::None)
             .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = tracing::field::Empty,
+            method,
+        )
+    )]
     pub(crate) async fn call_with_timeout<P, T>(
         &self,
         method: &str,
@@ -390,6 +417,7 @@ impl RpcClient {
     {
         let _call_slot = self.acquire_regular_call_slot()?;
         let request_id = self.allocate_request_id();
+        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
         self.call_inner(
             request_id,
             method,
@@ -399,6 +427,19 @@ impl RpcClient {
         .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            rpc.system = "jsonrpc",
+            rpc.method = method,
+            rpc.request_id = tracing::field::Empty,
+            method,
+        )
+    )]
     pub(crate) async fn call_for_cleanup<P, T>(
         &self,
         method: &str,
@@ -419,23 +460,11 @@ impl RpcClient {
             },
         };
         let request_id = self.allocate_request_id();
+        tracing::Span::current().record("rpc.request_id", tracing::field::display(&request_id));
         self.call_inner(request_id, method, params, RpcCallTimeout::None)
             .await
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.request",
-        level = "info",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = method,
-            rpc.system = "jsonrpc",
-            rpc.method = method,
-            rpc.request_id = %request_id,
-            method,
-        )
-    )]
     async fn call_inner<P, T>(
         &self,
         request_id: RequestId,
@@ -971,6 +1000,98 @@ mod tests {
                 Err(RpcCallError::Closed)
             ));
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(exec_server_tracing)]
+    async fn rpc_client_emits_spans_for_admission_failures() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+        let (_incoming_tx, incoming_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+        let (_disconnected_tx, disconnected_rx) = tokio::sync::watch::channel(/*init*/ false);
+        let connection = JsonRpcConnection {
+            outgoing_tx,
+            incoming_rx,
+            disconnected_rx,
+            task_handles: Vec::new(),
+            transport: JsonRpcTransport::Plain,
+        };
+        let (client, _events_rx) = RpcClient::new(connection);
+        let _regular_call_slots = (0..MAX_IN_FLIGHT_REGULAR_CALLS)
+            .map(|_| {
+                client
+                    .shared_call_slots
+                    .try_acquire()
+                    .expect("regular call slot")
+            })
+            .collect::<Vec<_>>();
+        let _cleanup_call_slot = client
+            .cleanup_call_slots
+            .try_acquire()
+            .expect("cleanup call slot");
+        let params = serde_json::json!({});
+
+        assert!(matches!(
+            client
+                .call::<_, serde_json::Value>("overflow", &params)
+                .await,
+            Err(RpcCallError::PendingRequestLimitExceeded { limit })
+                if limit == MAX_IN_FLIGHT_REGULAR_CALLS
+        ));
+        assert!(matches!(
+            client
+                .call_for_cleanup::<_, serde_json::Value>("cleanup-overflow", &params)
+                .await,
+            Err(RpcCallError::Closed)
+        ));
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let mut rpc_spans = spans
+            .iter()
+            .filter(|span| matches!(span.name.as_ref(), "overflow" | "cleanup-overflow"))
+            .filter_map(|span| {
+                let rpc_system = span.attributes.iter().find_map(|attribute| {
+                    (attribute.key.as_str() == "rpc.system").then_some(&attribute.value)
+                })?;
+                let rpc_method = span.attributes.iter().find_map(|attribute| {
+                    (attribute.key.as_str() == "rpc.method").then_some(&attribute.value)
+                })?;
+                Some((
+                    span.name.to_string(),
+                    rpc_system.to_string(),
+                    rpc_method.to_string(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        rpc_spans.sort();
+        assert_eq!(
+            rpc_spans,
+            vec![
+                (
+                    "cleanup-overflow".to_string(),
+                    "jsonrpc".to_string(),
+                    "cleanup-overflow".to_string(),
+                ),
+                (
+                    "overflow".to_string(),
+                    "jsonrpc".to_string(),
+                    "overflow".to_string(),
+                ),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
