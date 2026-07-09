@@ -809,7 +809,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains(),
+        current_cfg.allowed_domains(),
         Some(vec!["example.com".to_string()])
     );
     Ok(())
@@ -854,7 +854,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains(),
+        current_cfg.allowed_domains(),
         Some(vec!["managed.example.com".to_string()])
     );
     Ok(())
@@ -895,7 +895,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
     let spec = spec.recompute_for_permission_profile(&PermissionProfile::workspace_write())?;
     spec.apply_to_started_proxy(&started_proxy).await?;
     let current_cfg = started_proxy.proxy().current_cfg().await?;
-    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(current_cfg.allowed_domains(), None);
 
     use tokio::io::AsyncReadExt as _;
     use tokio::io::AsyncWriteExt as _;
@@ -934,9 +934,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let initial_permission_profile = PermissionProfile::workspace_write();
 
     let mut network_config = NetworkProxyConfig::default();
-    network_config
-        .network
-        .set_allowed_domains(vec!["evil.com".to_string()]);
+    network_config.set_allowed_domains(vec!["evil.com".to_string()]);
     let requirements = NetworkConstraints {
         domains: Some(NetworkDomainPermissionsToml {
             entries: std::collections::BTreeMap::from([(
@@ -962,12 +960,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     )
     .await?;
     assert_eq!(
-        started_proxy
-            .proxy()
-            .current_cfg()
-            .await?
-            .network
-            .allowed_domains(),
+        started_proxy.proxy().current_cfg().await?.allowed_domains(),
         Some(vec!["*.example.com".to_string(), "evil.com".to_string()])
     );
 
@@ -1006,12 +999,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         .load_full()
         .expect("managed network proxy should be present");
     assert_eq!(
-        started_proxy
-            .proxy()
-            .current_cfg()
-            .await?
-            .network
-            .allowed_domains(),
+        started_proxy.proxy().current_cfg().await?.allowed_domains(),
         Some(vec!["*.example.com".to_string()])
     );
 

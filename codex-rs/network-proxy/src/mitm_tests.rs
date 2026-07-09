@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::config::NetworkProxySettings;
+use crate::config::NetworkProxyConfig;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -139,7 +139,7 @@ fn policy_ctx(
 #[tokio::test]
 async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
     let app_state = Arc::new(network_proxy_state_for_policy({
-        let mut network = NetworkProxySettings::default();
+        let mut network = NetworkProxyConfig::default();
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network
     }));
@@ -178,7 +178,7 @@ async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
 #[tokio::test]
 async fn mitm_policy_rejects_host_mismatch() {
     let app_state = Arc::new(network_proxy_state_for_policy({
-        let mut network = NetworkProxySettings::default();
+        let mut network = NetworkProxyConfig::default();
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network
     }));
@@ -207,7 +207,7 @@ async fn mitm_policy_rejects_host_mismatch() {
 #[tokio::test]
 async fn mitm_policy_rechecks_local_private_target_after_connect() {
     let app_state = Arc::new(network_proxy_state_for_policy({
-        let mut network = NetworkProxySettings::default();
+        let mut network = NetworkProxyConfig::default();
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network.allow_local_binding = false;
         network
@@ -247,11 +247,11 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
     hook.actions.inject_request_headers[0].secret_env_var = None;
     hook.actions.inject_request_headers[0].secret_file =
         Some(secret_file.path().display().to_string());
-    let mut network = NetworkProxySettings {
+    let mut network = NetworkProxyConfig {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Full,
-        ..NetworkProxySettings::default()
+        ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));
@@ -281,11 +281,11 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
 async fn mitm_policy_blocks_matching_hooked_write_in_limited_mode() {
     let mut hook = github_write_hook();
     hook.actions.inject_request_headers.clear();
-    let mut network = NetworkProxySettings {
+    let mut network = NetworkProxyConfig {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Limited,
-        ..NetworkProxySettings::default()
+        ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));
@@ -329,11 +329,11 @@ async fn mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_f
     hook.actions.inject_request_headers[0].secret_env_var = None;
     hook.actions.inject_request_headers[0].secret_file =
         Some(secret_file.path().display().to_string());
-    let mut network = NetworkProxySettings {
+    let mut network = NetworkProxyConfig {
         mitm: true,
         mitm_hooks: vec![hook],
         mode: NetworkMode::Full,
-        ..NetworkProxySettings::default()
+        ..NetworkProxyConfig::default()
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));

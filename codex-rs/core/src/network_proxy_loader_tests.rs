@@ -57,14 +57,14 @@ default_permissions = "dev"
     .expect("higher layer should apply");
 
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec![
             "lower.example.com".to_string(),
             "higher.example.com".to_string()
         ])
     );
     assert_eq!(
-        config.network.denied_domains(),
+        config.denied_domains(),
         Some(vec!["blocked.example.com".to_string()])
     );
 }
@@ -108,13 +108,13 @@ default_permissions = "dev"
     .expect("higher layer should apply");
 
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec![
             "other.example.com".to_string(),
             "shared.example.com".to_string()
         ])
     );
-    assert_eq!(config.network.denied_domains(), None);
+    assert_eq!(config.denied_domains(), None);
 }
 
 #[test]
@@ -169,20 +169,20 @@ strip_request_headers = ["x-api-key"]
         .expect("higher layer should apply");
     let config = accumulator.finish().expect("merged config should build");
 
-    assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
-    assert!(config.network.mitm);
+    assert_eq!(config.mode, codex_network_proxy::NetworkMode::Full);
+    assert!(config.mitm);
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec![
             "lower.example.com".to_string(),
             "higher.example.com".to_string()
         ])
     );
-    assert_eq!(config.network.mitm_hooks.len(), 1);
-    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
-    assert_eq!(config.network.mitm_hooks[0].matcher.methods, vec!["POST"]);
+    assert_eq!(config.mitm_hooks.len(), 1);
+    assert_eq!(config.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(config.mitm_hooks[0].matcher.methods, vec!["POST"]);
     assert_eq!(
-        config.network.mitm_hooks[0].actions.strip_request_headers,
+        config.mitm_hooks[0].actions.strip_request_headers,
         vec!["x-api-key"]
     );
 }
@@ -190,12 +190,8 @@ strip_request_headers = ["x-api-key"]
 #[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
-    config
-        .network
-        .set_allowed_domains(vec!["config.example.com".to_string()]);
-    config
-        .network
-        .set_denied_domains(vec!["blocked.example.com".to_string()]);
+    config.set_allowed_domains(vec!["config.example.com".to_string()]);
+    config.set_denied_domains(vec!["blocked.example.com".to_string()]);
 
     let mut exec_policy = Policy::empty();
     exec_policy
@@ -218,14 +214,14 @@ fn execpolicy_network_rules_overlay_network_lists() {
     apply_exec_policy_network_rules(&mut config, &exec_policy);
 
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec![
             "config.example.com".to_string(),
             "blocked.example.com".to_string()
         ])
     );
     assert_eq!(
-        config.network.denied_domains(),
+        config.denied_domains(),
         Some(vec!["api.example.com".to_string()])
     );
 }
@@ -270,7 +266,7 @@ async fn malformed_custom_rules_preserve_managed_denied_domain() {
         .expect("proxy state should tolerate malformed custom rules");
 
     assert_eq!(
-        state.config.network.denied_domains(),
+        state.config.denied_domains(),
         Some(vec!["blocked.example.com".to_string()])
     );
 }
@@ -468,7 +464,7 @@ fn config_from_layers_resolves_inherited_profiles_across_layers() {
         config_from_layers(&layers, &Policy::empty()).expect("inherited profiles should load");
 
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec![
             "base.example.com".to_string(),
             "child.example.com".to_string(),
@@ -507,10 +503,10 @@ fn config_from_layers_normalizes_profile_network_domains_before_merging_layers()
         .expect("network domain layer precedence should load");
 
     assert_eq!(
-        config.network.allowed_domains(),
+        config.allowed_domains(),
         Some(vec!["example.com".to_string()])
     );
-    assert_eq!(config.network.denied_domains(), None);
+    assert_eq!(config.denied_domains(), None);
 }
 
 #[test]
@@ -542,8 +538,8 @@ fn config_from_layers_uses_only_the_final_selected_profile_network() {
     let config = config_from_layers(&layers, &Policy::empty())
         .expect("final built-in profile selection should load");
 
-    assert_eq!(config.network.allowed_domains(), None);
-    assert_eq!(config.network.denied_domains(), None);
+    assert_eq!(config.allowed_domains(), None);
+    assert_eq!(config.denied_domains(), None);
 }
 
 #[test]

@@ -1182,16 +1182,16 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
 
     let config = network.to_network_proxy_config();
 
-    assert_eq!(config.network.mode, NetworkMode::Full);
-    assert!(config.network.mitm);
-    assert_eq!(config.network.mitm_hooks.len(), 1);
-    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(config.mode, NetworkMode::Full);
+    assert!(config.mitm);
+    assert_eq!(config.mitm_hooks.len(), 1);
+    assert_eq!(config.mitm_hooks[0].host, "api.github.com");
     assert_eq!(
-        config.network.mitm_hooks[0].matcher.methods,
+        config.mitm_hooks[0].matcher.methods,
         vec!["POST".to_string()]
     );
     assert_eq!(
-        config.network.mitm_hooks[0].actions.strip_request_headers,
+        config.mitm_hooks[0].actions.strip_request_headers,
         vec!["authorization".to_string()]
     );
 }
@@ -1228,13 +1228,13 @@ action = ["noop"]
 
     let config = network.to_network_proxy_config();
 
-    assert_eq!(config.network.mitm_hooks.len(), 2);
+    assert_eq!(config.mitm_hooks.len(), 2);
     assert_eq!(
-        config.network.mitm_hooks[0].matcher.path_prefixes,
+        config.mitm_hooks[0].matcher.path_prefixes,
         vec!["/repos/openai/".to_string()]
     );
     assert_eq!(
-        config.network.mitm_hooks[1].matcher.path_prefixes,
+        config.mitm_hooks[1].matcher.path_prefixes,
         vec!["/repos/".to_string()]
     );
 }

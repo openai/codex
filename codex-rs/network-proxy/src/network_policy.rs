@@ -554,7 +554,6 @@ mod tests {
     use super::*;
     use crate::config::NetworkMode;
     use crate::config::NetworkProxyConfig;
-    use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
     use crate::reasons::REASON_METHOD_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED;
@@ -595,12 +594,12 @@ mod tests {
     }
 
     fn state_with_metadata(metadata: NetworkProxyAuditMetadata) -> NetworkProxyState {
-        let network = NetworkProxySettings {
+        let network = NetworkProxyConfig {
             enabled: true,
             mode: NetworkMode::Full,
-            ..NetworkProxySettings::default()
+            ..NetworkProxyConfig::default()
         };
-        let config = NetworkProxyConfig { network };
+        let config = network;
         let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
         let reloader = Arc::new(StaticReloader {
             state: state.clone(),
@@ -628,7 +627,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_host_policy_emits_domain_event_for_decider_allow_override() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let state = network_proxy_state_for_policy(NetworkProxyConfig::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
             let calls = calls.clone();
@@ -697,7 +696,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_host_policy_emits_execution_id_for_baseline_allow() {
         let state = network_proxy_state_for_policy({
-            let mut network = NetworkProxySettings::default();
+            let mut network = NetworkProxyConfig::default();
             network.set_allowed_domains(vec!["example.com".to_string()]);
             network
         });
@@ -737,7 +736,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_host_policy_emits_domain_event_for_baseline_deny() {
         let state = network_proxy_state_for_policy({
-            let mut network = NetworkProxySettings::default();
+            let mut network = NetworkProxyConfig::default();
             network.set_allowed_domains(vec!["example.com".to_string()]);
             network.set_denied_domains(vec!["blocked.com".to_string()]);
             network
@@ -789,7 +788,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_host_policy_emits_domain_event_for_decider_ask() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let state = network_proxy_state_for_policy(NetworkProxyConfig::default());
         let decider: Arc<dyn NetworkPolicyDecider> =
             Arc::new(|_req| async { NetworkDecision::ask(REASON_NOT_ALLOWED) });
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
@@ -876,7 +875,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn emit_block_decision_audit_event_emits_non_domain_event() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let state = network_proxy_state_for_policy(NetworkProxyConfig::default());
 
         let (_, events) = capture_events(|| async {
             emit_block_decision_audit_event(
@@ -925,7 +924,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_host_policy_still_denies_not_allowed_local_without_decider_override() {
         let state = network_proxy_state_for_policy({
-            let mut network = NetworkProxySettings::default();
+            let mut network = NetworkProxyConfig::default();
             network.set_allowed_domains(vec!["example.com".to_string()]);
             network.allow_local_binding = false;
             network

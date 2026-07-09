@@ -162,14 +162,14 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(domains) = network.domains.as_ref() {
         let mut config = NetworkProxyConfig::default();
         if let Some(allowed_domains) = constraints.allowed_domains.take() {
-            config.network.set_allowed_domains(allowed_domains);
+            config.set_allowed_domains(allowed_domains);
         }
         if let Some(denied_domains) = constraints.denied_domains.take() {
-            config.network.set_denied_domains(denied_domains);
+            config.set_denied_domains(denied_domains);
         }
         overlay_network_domain_permissions(&mut config, domains);
-        constraints.allowed_domains = config.network.allowed_domains();
-        constraints.denied_domains = config.network.denied_domains();
+        constraints.allowed_domains = config.allowed_domains();
+        constraints.denied_domains = config.denied_domains();
     }
     if let Some(unix_sockets) = network.unix_sockets.as_ref() {
         let allow_unix_sockets = unix_sockets.allow_unix_sockets();
@@ -256,11 +256,11 @@ impl NetworkConfigAccumulator {
             };
             mitm.validate_action_references(&actions)
                 .map_err(anyhow::Error::msg)?;
-            self.config.network.mitm_hooks = mitm.to_runtime_hooks(Some(&actions));
+            self.config.mitm_hooks = mitm.to_runtime_hooks(Some(&actions));
         }
 
-        self.config.network.mitm = self.config.network.mode == NetworkMode::Limited
-            || !self.config.network.mitm_hooks.is_empty();
+        self.config.mitm =
+            self.config.mode == NetworkMode::Limited || !self.config.mitm_hooks.is_empty();
         Ok(self.config)
     }
 }
@@ -310,9 +310,7 @@ fn upsert_network_domain(
     host: String,
     permission: codex_network_proxy::NetworkDomainPermission,
 ) {
-    config
-        .network
-        .upsert_domain_permission(host, permission, normalize_host);
+    config.upsert_domain_permission(host, permission, normalize_host);
 }
 
 fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {

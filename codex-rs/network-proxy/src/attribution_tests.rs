@@ -1,6 +1,6 @@
 use super::BindConnectionAttribution;
 use super::write_attribution_frame;
-use crate::config::NetworkProxySettings;
+use crate::config::NetworkProxyConfig;
 use crate::runtime::network_proxy_state_for_policy;
 use crate::state::NetworkProxyState;
 use pretty_assertions::assert_eq;
@@ -28,9 +28,7 @@ fn attribution_frame_has_bounded_binary_prefix() -> io::Result<()> {
 
 #[tokio::test]
 async fn framed_connection_receives_registered_execution_state() -> Result<(), BoxError> {
-    let state = Arc::new(network_proxy_state_for_policy(
-        NetworkProxySettings::default(),
-    ));
+    let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
     state.register_execution("token-1", "local", "execution-1");
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;

@@ -78,7 +78,6 @@ pub use runtime::NetworkProxyState;
 pub use state::NetworkProxyAuditMetadata;
 pub use state::NetworkProxyConstraintError;
 pub use state::NetworkProxyConstraints;
-pub use state::PartialNetworkConfig;
 pub use state::PartialNetworkProxyConfig;
 pub use state::build_config_state;
 pub use state::validate_policy_against_constraints;
