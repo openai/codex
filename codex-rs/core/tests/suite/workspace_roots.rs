@@ -11,7 +11,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::EventMsg;
 use codex_utils_path_uri::PathUri;
 use core_test_support::TestTargetOs;
 use core_test_support::responses::ResponseMock;
@@ -26,7 +25,6 @@ use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_target_os;
-use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -127,12 +125,7 @@ async fn mount_file_and_command_calls(
 
 async fn submit_workspace_turn(test: &TestCodex, prompt: &str) -> Result<()> {
     test.submit_turn_with_permission_profile(prompt, workspace_roots_read_profile())
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    Ok(())
+        .await
 }
 
 async fn remove_files(test: &TestCodex, paths: &[&PathUri]) -> Result<()> {
