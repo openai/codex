@@ -845,7 +845,7 @@ impl AccountRequestProcessor {
             self.auth_manager.auth_cached(),
             Some(CodexAuth::BedrockApiKey(_))
         );
-        let config = self.load_latest_config().await?;
+        let config = self.load_latest_config().await;
         if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
             return Ok(self
                 .auth_manager

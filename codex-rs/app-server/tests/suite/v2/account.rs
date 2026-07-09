@@ -333,6 +333,43 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
 }
 
 #[tokio::test]
+async fn logout_account_succeeds_when_config_reload_fails() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
+
+    let request_id = mcp.send_logout_account_request().await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<LogoutAccountResponse>(response)?,
+        LogoutAccountResponse {}
+    );
+    assert_eq!(load_file_auth(codex_home.path())?, None);
+    assert_account_updated(&mut mcp, /*auth_mode*/ None).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
