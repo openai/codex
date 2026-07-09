@@ -2274,10 +2274,11 @@ dependencies = [
  "codex-login",
  "codex-model-provider",
  "codex-protocol",
+ "http 1.4.0",
  "pretty_assertions",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -2418,6 +2419,7 @@ dependencies = [
  "codex-backend-client",
  "codex-config",
  "codex-core",
+ "codex-http-client",
  "codex-login",
  "codex-otel",
  "codex-protocol",
@@ -2472,6 +2474,7 @@ dependencies = [
  "codex-api",
  "codex-backend-client",
  "codex-git-utils",
+ "codex-http-client",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
