@@ -1,5 +1,7 @@
 use super::LoadedPlugin;
 use super::PluginLoadOutcome;
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
@@ -1331,6 +1333,7 @@ impl PluginsManager {
             self.track_plugin_install_resolution_failed(&err);
             return Err(err.into());
         }
+        self.validate_curated_marketplace_install_source(&request.marketplace_path, &resolved)?;
         Ok(resolved)
     }
 
@@ -1431,6 +1434,36 @@ impl PluginsManager {
                 error_type.to_string(),
             );
         }
+    }
+
+    fn validate_curated_marketplace_install_source(
+        &self,
+        marketplace_path: &AbsolutePathBuf,
+        resolved: &ResolvedMarketplacePlugin,
+    ) -> Result<(), PluginInstallError> {
+        let marketplace_name = resolved.plugin_id.marketplace_name.as_str();
+        let expected_path = match marketplace_name {
+            OPENAI_CURATED_MARKETPLACE_NAME => curated_plugins_repo_path(self.codex_home.as_path())
+                .join(".agents/plugins/marketplace.json"),
+            OPENAI_API_CURATED_MARKETPLACE_NAME => {
+                curated_plugins_api_marketplace_path(self.codex_home.as_path())
+            }
+            _ => return Ok(()),
+        };
+        let expected_path = AbsolutePathBuf::try_from(expected_path)
+            .ok()
+            .and_then(|path| path.canonicalize().ok());
+        let requested_path = marketplace_path.canonicalize().ok();
+        if requested_path
+            .zip(expected_path)
+            .is_none_or(|(requested, expected)| requested != expected)
+        {
+            return Err(PluginStoreError::Invalid(format!(
+                "marketplace '{marketplace_name}' can only be installed from the synced curated marketplace"
+            ))
+            .into());
+        }
+        Ok(())
     }
 
     async fn install_resolved_plugin(

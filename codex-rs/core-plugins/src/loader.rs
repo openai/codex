@@ -1,3 +1,5 @@
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
 use crate::is_openai_curated_marketplace_name;
@@ -14,6 +16,9 @@ use crate::marketplace_policy::configured_plugins_from_stack;
 use crate::npm_source::materialize_npm_plugin_source;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
+use crate::startup_sync::curated_plugins_api_marketplace_path;
+use crate::startup_sync::curated_plugins_repo_path;
+use crate::startup_sync::read_curated_plugins_sha;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use crate::store::plugin_version_for_source_with_fallback_manifest;
@@ -762,6 +767,7 @@ async fn load_plugin(
         manifest_name: None,
         plugin_namespace: None,
         manifest_description: None,
+        is_first_party: false,
         root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
@@ -802,6 +808,7 @@ async fn load_plugin(
         return loaded_plugin;
     };
 
+    loaded_plugin.is_first_party = is_openai_curated_plugin(&loaded_plugin_id, &plugin_root, store);
     let manifest_paths = &manifest.paths;
     loaded_plugin.plugin_namespace = Some(manifest.name.clone());
     match scope {
@@ -844,6 +851,45 @@ async fn load_plugin(
     loaded_plugin.hook_sources = hook_sources;
     loaded_plugin.hook_load_warnings = hook_load_warnings;
     loaded_plugin
+}
+
+fn is_openai_curated_plugin(
+    plugin_id: &PluginId,
+    loaded_root: &AbsolutePathBuf,
+    store: &PluginStore,
+) -> bool {
+    if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) {
+        return false;
+    }
+
+    let Some(curated_sha) = read_curated_plugins_sha(store.codex_home()) else {
+        return false;
+    };
+    let expected_version = curated_plugin_cache_version(&curated_sha);
+    let expected_root = store.plugin_root(plugin_id, &expected_version);
+    if loaded_root != &expected_root || !expected_root.as_path().is_dir() {
+        return false;
+    }
+
+    let marketplace_path = match plugin_id.marketplace_name.as_str() {
+        OPENAI_CURATED_MARKETPLACE_NAME => {
+            curated_plugins_repo_path(store.codex_home()).join(".agents/plugins/marketplace.json")
+        }
+        OPENAI_API_CURATED_MARKETPLACE_NAME => {
+            curated_plugins_api_marketplace_path(store.codex_home())
+        }
+        _ => return false,
+    };
+    let Ok(marketplace_path) = AbsolutePathBuf::try_from(marketplace_path) else {
+        return false;
+    };
+    load_marketplace(&marketplace_path).is_ok_and(|marketplace| {
+        marketplace.name == plugin_id.marketplace_name
+            && marketplace
+                .plugins
+                .iter()
+                .any(|plugin| plugin.name == plugin_id.plugin_name)
+    })
 }
 
 fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {

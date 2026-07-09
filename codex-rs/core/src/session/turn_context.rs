@@ -5,6 +5,7 @@ use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_plugin::FirstPartyPluginRoot;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -139,6 +140,7 @@ pub struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_skills: TurnSkillsContext,
+    pub(crate) first_party_plugin_roots: Arc<Vec<FirstPartyPluginRoot>>,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) terminal_error: Arc<Mutex<Option<String>>>,
     pub(crate) server_model_warning_emitted: AtomicBool,
@@ -296,6 +298,7 @@ impl TurnContext {
             turn_metadata_state: self.turn_metadata_state.clone(),
             extension_data: Arc::clone(&self.extension_data),
             turn_skills: self.turn_skills.clone(),
+            first_party_plugin_roots: Arc::clone(&self.first_party_plugin_roots),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
             terminal_error: Arc::clone(&self.terminal_error),
             server_model_warning_emitted: AtomicBool::new(
@@ -496,6 +499,7 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
+        first_party_plugin_roots: Vec<FirstPartyPluginRoot>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -576,6 +580,7 @@ impl Session {
             turn_metadata_state,
             extension_data,
             turn_skills: TurnSkillsContext::new(skills_snapshot),
+            first_party_plugin_roots: Arc::new(first_party_plugin_roots),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             terminal_error: Arc::new(Mutex::new(None)),
             server_model_warning_emitted: AtomicBool::new(false),
@@ -733,6 +738,7 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&plugins_input)
             .await;
+        let first_party_plugin_roots = plugin_outcome.effective_first_party_plugin_roots();
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let plugin_skill_snapshots = self
             .services
@@ -775,6 +781,7 @@ impl Session {
             cwd,
             sub_id,
             skills_snapshot,
+            first_party_plugin_roots,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

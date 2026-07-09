@@ -13,6 +13,7 @@ mod provider;
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use load_outcome::EffectiveSkillRoots;
+pub use load_outcome::FirstPartyPluginRoot;
 pub use load_outcome::LoadedPlugin;
 pub use load_outcome::PluginLoadOutcome;
 pub use load_outcome::prompt_safe_plugin_description;
