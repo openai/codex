@@ -437,13 +437,13 @@ def open_or_update_pr(change: PublicChange, body_file: Path, message_file: Path)
     run(["git", "fetch", "origin", "refs/heads/main:refs/remotes/origin/main"])
     fetch_sync_branch()
 
+    if trees_match("origin/main", f"origin/{SYNC_BRANCH}"):
+        create_empty_import_marker_commit(change, message_file)
+        fetch_sync_branch()
+
     ahead_count = int(output(["git", "rev-list", "--count", f"origin/main..origin/{SYNC_BRANCH}"]))
     if ahead_count == 0:
-        create_empty_import_marker_commit_if_unchanged(change, message_file)
-        fetch_sync_branch()
-        ahead_count = int(output(["git", "rev-list", "--count", f"origin/main..origin/{SYNC_BRANCH}"]))
-        if ahead_count == 0:
-            raise RuntimeError(f"Copybara produced no commits on {SYNC_BRANCH}.")
+        raise RuntimeError(f"Copybara produced no commits on {SYNC_BRANCH}.")
 
     validate_sync_branch_paths(change.rev)
 
@@ -510,18 +510,6 @@ def validate_sync_branch_paths(public_change_rev: str) -> None:
             f"Copybara changed paths not touched by public commit {public_change_rev}:\n"
             f"{formatted_paths}"
         )
-
-
-def create_empty_import_marker_commit_if_unchanged(
-    change: PublicChange, message_file: Path
-) -> None:
-    if not trees_match("origin/main", f"origin/{SYNC_BRANCH}"):
-        raise RuntimeError(
-            f"Copybara produced no commits on {SYNC_BRANCH}, but the sync branch "
-            "differs from origin/main."
-        )
-
-    create_empty_import_marker_commit(change, message_file)
 
 
 def create_empty_import_marker_commit(change: PublicChange, message_file: Path) -> None:
