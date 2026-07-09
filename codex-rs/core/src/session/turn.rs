@@ -2144,7 +2144,7 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(mut item) => {
                 if turn_context.item_ids_enabled() {
-                    assign_missing_streamed_response_item_id(&mut item, None);
+                    assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 }
                 if let ResponseItem::CustomToolCall {
                     call_id,
