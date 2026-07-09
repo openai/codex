@@ -492,6 +492,39 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
 }
 
 #[tokio::test]
+async fn thread_resume_params_only_include_explicit_review_policy_override() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with guardian review policy");
+
+    let params_without_override = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*approvals_reviewer_override*/ None,
+    );
+    let params_with_override = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview),
+    );
+
+    assert_eq!(params_without_override.approvals_reviewer, None);
+    assert_eq!(
+        params_with_override.approvals_reviewer,
+        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview)
+    );
+}
+
+#[tokio::test]
 async fn build_exec_config_retries_without_invalid_headless_policy_for_auto_review() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
@@ -616,7 +649,11 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
     )]));
 
     let start_params = thread_start_params_from_config(&config);
-    let resume_params = thread_resume_params_from_config(&config, "thread-id".to_string());
+    let resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*approvals_reviewer_override*/ None,
+    );
 
     assert_eq!(start_params.config, expected_config);
     assert_eq!(resume_params.config, expected_config);
@@ -648,7 +685,11 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
         .expect("build config with legacy sandbox override");
 
     let start_params = thread_start_params_from_config(&config);
-    let resume_params = thread_resume_params_from_config(&config, "thread-id".to_string());
+    let resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*approvals_reviewer_override*/ None,
+    );
 
     assert_eq!(config.permissions.active_permission_profile(), None);
     assert_eq!(

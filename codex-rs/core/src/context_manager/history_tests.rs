@@ -223,6 +223,7 @@ fn reference_context_item() -> TurnContextItem {
         current_date: Some("2026-03-23".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
         approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: None,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         permission_profile: None,
         network: None,

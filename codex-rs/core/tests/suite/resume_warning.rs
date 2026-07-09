@@ -34,6 +34,7 @@ fn resume_history(
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
+        approvals_reviewer: None,
         sandbox_policy: config.legacy_sandbox_policy(),
         permission_profile: None,
         network: None,

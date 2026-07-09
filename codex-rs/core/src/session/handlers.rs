@@ -95,14 +95,25 @@ pub async fn update_thread_settings(
     thread_settings: ThreadSettingsOverrides,
 ) {
     let updates = thread_settings_update(sess, thread_settings).await;
-    let msg = match sess.update_settings(updates).await {
-        Ok(()) => thread_settings_applied_event(sess).await,
-        Err(err) => EventMsg::Error(ErrorEvent {
-            message: format!("invalid thread settings override: {err}"),
-            codex_error_info: Some(CodexErrorInfo::BadRequest),
-        }),
-    };
-    sess.send_event_raw(Event { id: sub_id, msg }).await;
+    match sess.update_settings(updates).await {
+        Ok(()) => {
+            sess.send_event_raw_without_materializing_rollout(Event {
+                id: sub_id,
+                msg: thread_settings_applied_event(sess).await,
+            })
+            .await;
+        }
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("invalid thread settings override: {err}"),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+        }
+    }
 }
 
 async fn thread_settings_update(
@@ -209,7 +220,7 @@ pub(super) async fn user_input_or_turn_inner(
         return;
     };
     if emit_thread_settings_applied {
-        sess.send_event_raw(Event {
+        sess.send_event_raw_without_materializing_rollout(Event {
             id: sub_id.clone(),
             msg: thread_settings_applied_event(sess).await,
         })

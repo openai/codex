@@ -361,6 +361,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
+            approvals_reviewer: Some(self.config.approvals_reviewer),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
             network: self.turn_context_network_item(),
