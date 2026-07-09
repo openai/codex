@@ -6,19 +6,18 @@ use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_http_client::HttpClientFactory;
 use codex_login::CodexAuth;
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetryableFailureKind {
-    BackendClientInit,
     Request { status_code: Option<u16> },
 }
 
 impl RetryableFailureKind {
     pub(crate) fn status_code(self) -> Option<u16> {
         match self {
-            Self::BackendClientInit => None,
             Self::Request { status_code } => status_code,
         }
     }
@@ -46,24 +45,25 @@ pub(crate) trait BundleClient: Send + Sync {
 
 pub(crate) struct BackendBundleClient {
     base_url: String,
+    http_client_factory: HttpClientFactory,
 }
 
 impl BackendBundleClient {
-    pub(crate) fn new(base_url: String) -> Self {
-        Self { base_url }
+    pub(crate) fn new(base_url: String, http_client_factory: HttpClientFactory) -> Self {
+        Self {
+            base_url,
+            http_client_factory,
+        }
     }
 }
 
 impl BundleClient for BackendBundleClient {
     async fn get_bundle(&self, auth: &CodexAuth) -> Result<CloudConfigBundle, BundleRequestError> {
-        let client = BackendClient::from_auth(self.base_url.clone(), auth)
-            .inspect_err(|err| {
-                tracing::warn!(
-                    error = %err,
-                    "Failed to construct backend client for cloud config bundle"
-                );
-            })
-            .map_err(|_| BundleRequestError::Retryable(RetryableFailureKind::BackendClientInit))?;
+        let client = BackendClient::from_auth(
+            self.base_url.clone(),
+            auth,
+            self.http_client_factory.clone(),
+        );
 
         let response = client
             .get_config_bundle()

@@ -458,7 +458,7 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+        let config = Arc::clone(&self.config);
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
@@ -480,7 +480,7 @@ impl AccountRequestProcessor {
                 &outgoing_clone,
                 config_manager,
                 thread_manager,
-                chatgpt_base_url,
+                config,
                 login_id,
                 success,
                 error_msg,
@@ -537,7 +537,7 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+        let config = Arc::clone(&self.config);
         let active_login = self.active_login.clone();
         tokio::spawn(async move {
             let (success, error_msg) = tokio::select! {
@@ -556,7 +556,7 @@ impl AccountRequestProcessor {
                 &outgoing_clone,
                 config_manager,
                 thread_manager,
-                chatgpt_base_url,
+                config,
                 login_id,
                 success,
                 error_msg,
@@ -671,6 +671,7 @@ impl AccountRequestProcessor {
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
+            self.config.http_client_factory(),
         );
         self.config_manager
             .sync_default_client_residency_requirement()
@@ -709,7 +710,7 @@ impl AccountRequestProcessor {
         outgoing: &OutgoingMessageSender,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
-        chatgpt_base_url: String,
+        config: Arc<Config>,
         login_id: Uuid,
         success: bool,
         error_msg: Option<String>,
@@ -726,8 +727,11 @@ impl AccountRequestProcessor {
         if success {
             let auth_manager = thread_manager.auth_manager();
             auth_manager.reload().await;
-            config_manager
-                .replace_cloud_config_bundle_loader(auth_manager.clone(), chatgpt_base_url);
+            config_manager.replace_cloud_config_bundle_loader(
+                auth_manager.clone(),
+                config.chatgpt_base_url.clone(),
+                config.http_client_factory(),
+            );
             config_manager
                 .sync_default_client_residency_requirement()
                 .await;
@@ -933,8 +937,11 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.config.http_client_factory(),
+        );
 
         let (response, detailed_rate_limit_reset_credits) = tokio::join!(
             client.get_rate_limits_with_reset_credits(),
@@ -1003,8 +1010,11 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.config.http_client_factory(),
+        );
         let profile = tokio::time::timeout(
             ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT,
             client.get_token_usage_profile(),
@@ -1030,8 +1040,11 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.config.http_client_factory(),
+        );
         let messages = tokio::time::timeout(
             ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT,
             client.list_workspace_messages(),
@@ -1118,8 +1131,11 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.config.http_client_factory(),
+        );
 
         match client
             .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
