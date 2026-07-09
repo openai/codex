@@ -2880,49 +2880,18 @@ impl Session {
         world_state
     }
 
-    /// Captures one request-scoped view of dynamic state.
-    ///
-    /// This may refresh filesystem-derived state. Normal turns should call it only from
-    /// `run_turn` and pass the result down; standalone request or history boundaries may capture
-    /// their own step.
-    #[tracing::instrument(name = "step_context.capture", level = "info", skip_all)]
-    pub(crate) async fn capture_step_context(
+    /// Captures one lightweight request-scoped view before refreshing dynamic state.
+    pub(crate) fn capture_step_context(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
     ) -> Arc<StepContext> {
-        let deferred_executor_enabled = turn_context
-            .config
-            .features
-            .enabled(Feature::DeferredExecutor);
-        // Keep the old turn-frozen environment view unless deferred executors are enabled.
-        let environments = if deferred_executor_enabled {
-            self.services.turn_environments.snapshot().await
-        } else {
-            turn_context.environments.clone()
-        };
-        if deferred_executor_enabled {
-            self.services
-                .agents_md_manager
-                .refresh(&turn_context.config, &environments)
-                .await;
-        }
-        let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
-        let selected_capability_roots = self
-            .resolve_selected_capability_roots_for_step(&environments)
-            .await;
-        let mcp = self
-            .mcp_runtime_for_step(
-                turn_context.as_ref(),
-                &environments,
-                &selected_capability_roots,
-            )
-            .await;
+        let environments = turn_context.environments.clone();
         Arc::new(StepContext::new(
             turn_context,
             environments,
-            selected_capability_roots,
-            mcp,
-            loaded_agents_md,
+            Vec::new(),
+            self.services.latest_mcp_runtime(),
+            /*loaded_agents_md*/ None,
         ))
     }
 

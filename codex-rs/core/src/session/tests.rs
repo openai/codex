@@ -7752,6 +7752,7 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let old_runtime = session.services.latest_mcp_runtime();
     let step_context = session
         .capture_step_context(Arc::clone(&turn_context))
+        .refresh_env(&session)
         .await;
     assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
     let old_token = session.mcp_startup_cancellation_token().await;
@@ -7901,7 +7902,10 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let step_context = session.capture_step_context(turn_context).await;
+    let step_context = session
+        .capture_step_context(turn_context)
+        .refresh_env(&session)
+        .await;
 
     let mut refresh_config = step_context.turn.config.as_ref().clone();
     refresh_config.mcp_servers.set(HashMap::from([(

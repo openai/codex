@@ -269,6 +269,7 @@ async fn schedule_startup_prewarm_inner(
     // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
     let step_context = session
         .capture_step_context(Arc::clone(&startup_turn_context))
+        .refresh_env(&session)
         .await;
     let startup_router = built_tools(
         session.as_ref(),

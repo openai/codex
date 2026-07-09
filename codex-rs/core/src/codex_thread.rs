@@ -481,6 +481,7 @@ impl CodexThread {
                 .codex
                 .session
                 .capture_step_context(Arc::clone(&turn_context))
+                .refresh_env(&self.codex.session)
                 .await;
             self.codex
                 .session
@@ -610,6 +611,7 @@ impl CodexThread {
         self.codex
             .session
             .capture_step_context(turn_context)
+            .refresh_env(&self.codex.session)
             .await
             .mcp
             .clone()

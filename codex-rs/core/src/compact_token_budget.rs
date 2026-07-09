@@ -36,7 +36,10 @@ pub(crate) async fn run_manual_compact_task(
     sess.send_event(&turn_context, start_event).await;
 
     // Manual compaction runs outside run_turn, so it captures its own current step.
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    let step_context = sess
+        .capture_step_context(Arc::clone(&turn_context))
+        .refresh_env(&sess)
+        .await;
     let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
     run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Manual).await
 }
