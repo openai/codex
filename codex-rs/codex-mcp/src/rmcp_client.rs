@@ -21,9 +21,9 @@ use std::time::Instant;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
-use crate::codex_apps_cache::CodexAppsToolsCacheContext;
-use crate::codex_apps_cache::CodexAppsToolsFetchSource;
-use crate::codex_apps_cache::load_startup_cached_codex_apps_server_info;
+use crate::connector_runtime::CodexAppsToolsCacheContext;
+use crate::connector_runtime::CodexAppsToolsFetchSource;
+use crate::connector_runtime::load_startup_cached_codex_apps_server_info;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -481,13 +481,18 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn reconnect_failed_startup(&self) {
+        if !self.connector_runtime_context_is_active() {
+            return;
+        }
         let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;
         };
         if !self.startup_complete.load(Ordering::Acquire) {
             return;
         }
-        if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. })) {
+        if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. }))
+            && self.connector_runtime_context_is_active()
+        {
             startup_reconnect.reconnect_in_background();
         }
     }
@@ -509,6 +514,14 @@ impl AsyncManagedClient {
             .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
     }
 
+    pub(crate) fn connector_runtime_context_is_active(&self) -> bool {
+        !self.is_codex_apps_mcp_server
+            || self
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .is_none_or(CodexAppsToolsCacheContext::is_active)
+    }
+
     fn cached_tools(&self) -> Option<Vec<ToolInfo>> {
         self.codex_apps_tools_cache_context
             .as_ref()
@@ -517,6 +530,9 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+        if !self.connector_runtime_context_is_active() {
+            return None;
+        }
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if !self.startup_complete.load(Ordering::Acquire)
             && let Some(startup_tools) = self.cached_tools()
@@ -528,6 +544,9 @@ impl AsyncManagedClient {
                 Err(_) => self.cached_tools(),
             }
         }?;
+        if !self.connector_runtime_context_is_active() {
+            return None;
+        }
         Some(if self.is_codex_apps_mcp_server {
             prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
         } else {
@@ -861,9 +880,9 @@ async fn start_server_task(
     .map_err(StartupOutcomeError::from)?;
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
-        (Some(cache_context), Some(fetch_ticket)) => {
-            cache_context.publish_if_newest_accepted(fetch_ticket, &server_info, tools)
-        }
+        (Some(cache_context), Some(fetch_ticket)) => cache_context
+            .publish_if_newest_accepted(fetch_ticket, &server_info, tools)
+            .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?,
         (None, None) => tools,
         _ => unreachable!("Codex Apps fetch ticket requires cache context"),
     };

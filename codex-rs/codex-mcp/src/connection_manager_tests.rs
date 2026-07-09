@@ -1,6 +1,6 @@
 use super::*;
-use crate::codex_apps_cache::CodexAppsToolsCache;
-use crate::codex_apps_cache::CodexAppsToolsCacheContext;
+use crate::connector_runtime::CodexAppsToolsCache;
+use crate::connector_runtime::CodexAppsToolsCacheContext;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
@@ -140,6 +140,45 @@ async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> AsyncManaged
         tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         cancel_token: CancellationToken::new(),
     }
+}
+
+async fn create_blocked_codex_apps_client(
+    tools: Vec<ToolInfo>,
+    cache_context: CodexAppsToolsCacheContext,
+    tool_filter: ToolFilter,
+) -> (
+    AsyncManagedClient,
+    tokio::sync::oneshot::Receiver<()>,
+    Arc<tokio::sync::Notify>,
+) {
+    let mut managed_client = create_test_managed_client(tools).await;
+    managed_client.tool_filter = tool_filter.clone();
+    managed_client.codex_apps_tools_cache_context = Some(cache_context.clone());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let release_for_client = Arc::clone(&release);
+    let client = async move {
+        let _ = started_tx.send(());
+        release_for_client.notified().await;
+        Ok(managed_client)
+    }
+    .boxed()
+    .shared();
+    (
+        AsyncManagedClient {
+            client,
+            is_codex_apps_mcp_server: true,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: Some(cache_context),
+            tool_filter,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_reconnect: None,
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+        started_rx,
+        release,
+    )
 }
 
 fn create_test_manager_with_failed_apps_startup(
@@ -1148,6 +1187,85 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
 }
 
 #[tokio::test]
+async fn context_discard_while_checking_failed_startup_does_not_reconnect() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (failure_started_tx, failure_started_rx) = tokio::sync::oneshot::channel();
+    let release_failure = Arc::new(tokio::sync::Notify::new());
+    let release_failure_for_client = Arc::clone(&release_failure);
+    let client: ManagedClientFuture = async move {
+        let _ = failure_started_tx.send(());
+        release_failure_for_client.notified().await;
+        Err(StartupOutcomeError::Failed {
+            error: "startup failed".to_string(),
+            is_authentication_required: false,
+        })
+    }
+    .boxed()
+    .shared();
+    let reconnect_attempts = Arc::new(AtomicUsize::new(0));
+    let reconnect_attempts_for_factory = Arc::clone(&reconnect_attempts);
+    let reconnect_factory = Arc::new(move || {
+        reconnect_attempts_for_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        futures::future::ready(Err(StartupOutcomeError::Failed {
+            error: "reconnect should not start".to_string(),
+            is_authentication_required: false,
+        }))
+        .boxed()
+        .shared()
+    });
+    let client = AsyncManagedClient {
+        client,
+        is_codex_apps_mcp_server: true,
+        cached_server_info: None,
+        codex_apps_tools_cache_context: Some(context),
+        tool_filter: ToolFilter::default(),
+        startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        startup_reconnect: Some(Arc::new(CodexAppsStartupReconnect::new(reconnect_factory))),
+        tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        cancel_token: CancellationToken::new(),
+    };
+    let reconnect_task = tokio::spawn({
+        let client = client.clone();
+        async move { client.reconnect_failed_startup().await }
+    });
+
+    failure_started_rx
+        .await
+        .expect("failed startup check should begin");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_failure.notify_one();
+    reconnect_task.await.expect("reconnect check should finish");
+    tokio::task::yield_now().await;
+    assert_eq!(
+        reconnect_attempts.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    client.reconnect_failed_startup().await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        reconnect_attempts.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
 async fn list_all_tools_reconnects_failed_codex_apps_startup_and_reuses_client() {
     let recovered_client = create_test_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
@@ -1411,6 +1529,235 @@ async fn list_all_tools_adds_server_metadata_to_tools() {
     assert_eq!(tool.server_name, server_name);
     assert!(tool.supports_parallel_tool_calls);
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
+}
+
+#[tokio::test]
+async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let mut client = create_ready_async_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "old_tool",
+    )])
+    .await;
+    client.is_codex_apps_mcp_server = true;
+    client.codex_apps_tools_cache_context = Some(context);
+
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert!(manager.list_all_tools().await.is_empty());
+    let error = manager
+        .call_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "old_tool",
+            /*arguments*/ None,
+            /*meta*/ None,
+        )
+        .await
+        .expect_err("discarded context should reject tool calls");
+    assert_eq!(error.to_string(), "connector runtime context was discarded");
+}
+
+#[tokio::test]
+async fn context_discard_during_startup_hides_codex_apps_tools() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
+        context,
+        ToolFilter::default(),
+    )
+    .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let list_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move { manager.list_all_tools().await }
+    });
+
+    startup_started
+        .await
+        .expect("tool listing should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    let tools = tokio::time::timeout(Duration::from_secs(1), list_task)
+        .await
+        .expect("tool listing should finish")
+        .expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn context_discard_during_startup_is_not_reported_ready() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) =
+        create_blocked_codex_apps_client(Vec::new(), context, ToolFilter::default()).await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let ready_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::from_secs(1))
+                .await
+        }
+    });
+
+    startup_started
+        .await
+        .expect("readiness check should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    assert!(!ready_task.await.expect("readiness check should not panic"));
+    assert!(
+        !manager
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn context_discard_during_startup_rejects_codex_apps_calls() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
+        context,
+        ToolFilter {
+            enabled: None,
+            disabled: HashSet::from(["old_tool".to_string()]),
+        },
+    )
+    .await;
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+    let manager = Arc::new(manager);
+    let call_task = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .call_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "old_tool",
+                    /*arguments*/ None,
+                    /*meta*/ None,
+                )
+                .await
+        }
+    });
+
+    startup_started
+        .await
+        .expect("tool call should await startup");
+    let _new_context = cache.context(
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-two".to_string()),
+            chatgpt_user_id: Some("user-two".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    release_startup.notify_one();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), call_task)
+        .await
+        .expect("tool call should finish")
+        .expect("tool call task should not panic")
+        .expect_err("discarded context should reject tool calls");
+    assert_eq!(error.to_string(), "connector runtime context was discarded");
 }
 
 #[test]
