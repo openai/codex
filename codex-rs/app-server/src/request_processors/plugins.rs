@@ -1593,6 +1593,7 @@ impl PluginRequestProcessor {
         })?;
 
         let result = codex_core_plugins::remote_bundle::download_and_install_remote_plugin_bundle(
+            &remote_plugin_service_config,
             config.codex_home.to_path_buf(),
             validated_bundle,
         )
