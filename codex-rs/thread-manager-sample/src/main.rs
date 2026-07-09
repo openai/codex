@@ -24,6 +24,7 @@ use codex_core_api::Constrained;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
+use codex_core_api::ExtensionRegistryBuilder;
 use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
@@ -55,9 +56,9 @@ use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
-use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
+use codex_core_api::install_image_generation_extension;
 use codex_core_api::item_event_to_server_notification;
 use codex_core_api::local_agent_graph_store_from_state_db;
 use codex_core_api::resolve_installation_id;
@@ -125,12 +126,16 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_image_generation_extension(&mut extensions, auth_manager.clone(), |config: &Config| {
+        Some(config.codex_home.clone())
+    });
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
         environment_manager,
-        empty_extension_registry(),
+        Arc::new(extensions.build()),
         user_instructions_provider,
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),

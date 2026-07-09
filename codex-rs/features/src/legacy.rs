@@ -30,6 +30,10 @@ const ALIASES: &[Alias] = &[
         feature: Feature::WebSearchRequest,
     },
     Alias {
+        legacy_key: "imagegenext",
+        feature: Feature::ImageGeneration,
+    },
+    Alias {
         legacy_key: "collab",
         feature: Feature::Collab,
     },

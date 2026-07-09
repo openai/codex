@@ -58,13 +58,6 @@ fn tool_spec_name_covers_all_variants() {
         "tool_search"
     );
     assert_eq!(
-        ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
-        }
-        .name(),
-        "image_generation"
-    );
-    assert_eq!(
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             indexed_web_access: None,

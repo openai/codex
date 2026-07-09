@@ -50,7 +50,6 @@ pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
 pub(crate) use current_time_reminder::CurrentTimeReminder;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;
 pub(crate) use hook_additional_context::HookAdditionalContext;
-pub(crate) use image_generation_instructions::ImageGenerationInstructions;
 pub use image_generation_instructions::extension_image_generation_output_hint;
 pub(crate) use inter_agent_completion_message::InterAgentCompletionMessage;
 pub use internal_model_context::InternalContextSource;

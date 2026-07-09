@@ -43,8 +43,6 @@ fn configure_responses_tools(config: &mut Config) {
             .disable(Feature::StandaloneWebSearch)
             .is_ok()
     );
-    assert!(config.features.enable(Feature::ImageGeneration).is_ok());
-    assert!(config.features.disable(Feature::ImageGenExt).is_ok());
 }
 
 fn configure_image_capable_model(model_info: &mut codex_protocol::openai_models::ModelInfo) {
@@ -382,7 +380,7 @@ async fn responses_lite_omits_hosted_tools_without_standalone_extensions() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_lite_uses_hosted_tools_when_standalone_features_are_disabled() -> Result<()> {
+async fn non_lite_uses_standalone_image_generation_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -404,18 +402,18 @@ async fn non_lite_uses_hosted_tools_when_standalone_features_are_disabled() -> R
         .with_config(configure_responses_tools);
     let test = builder.build(&server).await?;
 
-    test.submit_turn("Use hosted tools").await?;
+    test.submit_turn("Use image generation").await?;
 
     let request = response_mock.single_request();
     assert_eq!(request.header(RESPONSES_LITE_HEADER), None);
     assert!(request.tool_by_name("web", "run").is_none());
-    assert!(request.tool_by_name("image_gen", "imagegen").is_none());
+    assert!(request.tool_by_name("image_gen", "imagegen").is_some());
     let body = request.body_json();
     let tools = body["tools"]
         .as_array()
         .context("Responses request tools should be an array")?;
     assert!(has_hosted_tool(tools, "web_search"));
-    assert!(has_hosted_tool(tools, "image_generation"));
+    assert!(!has_hosted_tool(tools, "image_generation"));
 
     Ok(())
 }
