@@ -2,7 +2,11 @@ CREATE TABLE thread_turns (
     thread_id TEXT NOT NULL,
     turn_id TEXT NOT NULL,
     rollout_ordinal INTEGER NOT NULL,
-    metadata_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error_json TEXT,
+    started_at INTEGER,
+    completed_at INTEGER,
+    duration_ms INTEGER,
     summary_first_user_item_id TEXT,
     summary_final_agent_item_id TEXT,
     PRIMARY KEY (thread_id, turn_id)
@@ -16,7 +20,7 @@ CREATE TABLE thread_items (
     turn_id TEXT,
     item_id TEXT NOT NULL,
     rollout_ordinal INTEGER NOT NULL,
-    materialized_thread_item_json TEXT NOT NULL,
+    item_json TEXT NOT NULL,
     PRIMARY KEY (thread_id, item_id)
 );
 
