@@ -542,9 +542,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let config = RemotePluginServiceConfig {
-            chatgpt_base_url: format!("{}/backend-api", server.uri()),
-        };
+        let config = RemotePluginServiceConfig::new(
+            format!("{}/backend-api", server.uri()),
+            crate::test_support::test_http_client_factory(),
+        );
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
         let outcome = sync_remote_installed_plugin_bundles_once(

@@ -1,4 +1,5 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::http_client_selector::HttpClientSelector;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
@@ -9,6 +10,9 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::AppConnectorId;
@@ -29,6 +33,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::instrument;
 use url::Url;
@@ -118,10 +123,39 @@ const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 6] = [
     ),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RemotePluginServiceConfig {
     pub chatgpt_base_url: String,
+    pub(crate) http_clients: Arc<dyn HttpClientSelector>,
 }
+
+impl RemotePluginServiceConfig {
+    /// Creates remote plugin service state from the effective application HTTP configuration.
+    ///
+    /// Keeping the factory mandatory ensures every catalog, mutation, upload, and bundle request
+    /// follows the same outbound proxy policy.
+    pub fn new(chatgpt_base_url: String, http_client_factory: HttpClientFactory) -> Self {
+        let http_clients =
+            RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(
+                http_client_factory,
+                ClientRouteClass::Api,
+            );
+        Self {
+            chatgpt_base_url,
+            http_clients: Arc::new(http_clients),
+        }
+    }
+}
+
+impl PartialEq for RemotePluginServiceConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.chatgpt_base_url == other.chatgpt_base_url
+            && self.http_clients.outbound_proxy_policy()
+                == other.http_clients.outbound_proxy_policy()
+    }
+}
+
+impl Eq for RemotePluginServiceConfig {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginUninstallTarget {
