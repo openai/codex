@@ -1,4 +1,4 @@
-use http::Error as HttpError;
+use http::Error as HttpRequestBuildError;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
@@ -6,12 +6,14 @@ use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use reqwest::IntoUrl;
 use reqwest::Method;
-use reqwest::Response;
 use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+pub type HttpError = reqwest::Error;
+pub type HttpResponse = reqwest::Response;
 
 #[derive(Clone, Debug)]
 pub struct HttpClient {
@@ -149,9 +151,9 @@ impl RequestBuilder {
     pub fn header<K, V>(self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpRequestBuildError>,
         HeaderValue: TryFrom<V>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpRequestBuildError>,
     {
         self.map(|builder| builder.header(key, value))
     }
@@ -181,7 +183,7 @@ impl RequestBuilder {
         self.map(|builder| builder.body(body))
     }
 
-    pub async fn send(self) -> Result<Response, reqwest::Error> {
+    pub async fn send(self) -> Result<HttpResponse, HttpError> {
         let headers = trace_headers();
 
         match self.builder.headers(headers).send().await {

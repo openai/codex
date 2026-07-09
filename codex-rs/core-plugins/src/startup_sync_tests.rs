@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_support::RecordingHttpClientSelector;
+use crate::test_support::recorded_http_client_urls;
 use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -16,6 +18,46 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[tokio::test]
+async fn backup_archive_routes_metadata_and_backend_supplied_download_urls() {
+    let metadata_server = MockServer::start().await;
+    let download_server = MockServer::start().await;
+    let download_url = format!(
+        "{}/files/curated-plugins.zip?sig=signed",
+        download_server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/export/curated"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"download_url": download_url.clone()})),
+        )
+        .expect(1)
+        .mount(&metadata_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/curated-plugins.zip"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"archive".to_vec()))
+        .expect(1)
+        .mount(&download_server)
+        .await;
+    let metadata_url = format!(
+        "{}/backend-api/plugins/export/curated",
+        metadata_server.uri()
+    );
+    let (http_clients, selected_urls) = RecordingHttpClientSelector::new();
+
+    let body = fetch_curated_repo_backup_archive_zip(http_clients.as_ref(), &metadata_url)
+        .await
+        .expect("backup archive download should succeed");
+
+    assert_eq!(body, b"archive");
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![metadata_url, download_url]
+    );
+}
 
 #[test]
 fn git_command_sanitizes_ambient_repository_environment() {
@@ -196,6 +238,7 @@ async fn run_sync_with_transport_overrides(
             Some(git_binary.as_path()),
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -215,6 +258,7 @@ async fn run_sync_without_git(
             /*git_binary*/ None,
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -227,7 +271,11 @@ async fn run_http_sync(
 ) -> Result<String, String> {
     let api_base_url = api_base_url.into();
     tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_via_http(codex_home.as_path(), &api_base_url)
+        sync_openai_plugins_repo_via_http(
+            codex_home.as_path(),
+            &api_base_url,
+            &crate::test_support::test_http_client_factory(),
+        )
     })
     .await
     .expect("sync task should join")
@@ -366,6 +414,7 @@ exit 1
                 Some(git_path.as_path()),
                 "http://127.0.0.1:9",
                 "http://127.0.0.1:9/backend-api/plugins/export/curated",
+                &crate::test_support::test_http_client_factory(),
             )
         };
         let first = scope.spawn(run_sync);
