@@ -352,13 +352,13 @@ jobs:
             rm -rf "$bundle_root"
             mkdir -p "$bundle_root/codex-resources"
             cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
-            cp "$dest/codex-code-mode-host-${{ matrix.target }}" "$bundle_root/codex-resources/codex-code-mode-host"
+            cp "$dest/codex-code-mode-host-${{ matrix.target }}" "$bundle_root/codex-code-mode-host"
             cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
             chmod 0755 \
               "$bundle_root/codex" \
-              "$bundle_root/codex-resources/codex-code-mode-host" \
+              "$bundle_root/codex-code-mode-host" \
               "$bundle_root/codex-resources/bwrap"
-            tar -C "$bundle_root" -cf - codex codex-resources/codex-code-mode-host codex-resources/bwrap |
+            tar -C "$bundle_root" -cf - codex codex-code-mode-host codex-resources/bwrap |
               zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
           fi
 

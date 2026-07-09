@@ -760,6 +760,15 @@ handle_conflicting_install() {
   fi
 }
 
+package_code_mode_host_relative_path() {
+  package_dir="$1"
+  if [ -f "$package_dir/codex-resources/codex-code-mode-host" ]; then
+    printf 'codex-resources/codex-code-mode-host\n'
+  else
+    printf 'bin/codex-code-mode-host\n'
+  fi
+}
+
 install_package_release() {
   release_dir="$1"
   archive_path="$2"
@@ -769,9 +778,10 @@ install_package_release() {
   rm -rf "$stage_release"
   mkdir -p "$stage_release"
   tar -xzf "$archive_path" -C "$stage_release"
+  code_mode_host_relative_path="$(package_code_mode_host_relative_path "$stage_release")"
   chmod 0755 \
     "$stage_release/bin/codex" \
-    "$stage_release/codex-resources/codex-code-mode-host" \
+    "$stage_release/$code_mode_host_relative_path" \
     "$stage_release/codex-path/rg"
   if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
@@ -824,7 +834,8 @@ release_dir_is_complete() {
     package)
       [ -f "$release_dir/codex-package.json" ] &&
         [ -x "$release_dir/bin/codex" ] &&
-        [ -x "$release_dir/codex-resources/codex-code-mode-host" ] &&
+        { [ -x "$release_dir/codex-resources/codex-code-mode-host" ] ||
+          [ -x "$release_dir/bin/codex-code-mode-host" ]; } &&
         [ -x "$release_dir/codex-path/rg" ] ||
         return 1
       ;;
@@ -866,17 +877,23 @@ update_visible_command() {
   mkdir -p "$BIN_DIR"
   tmp_link="$BIN_DIR/.codex.$$"
   codex_relative_path="$(release_codex_relative_path "$release_dir")"
+  code_mode_host_relative_path="$(package_code_mode_host_relative_path "$release_dir")"
 
   replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/$codex_relative_path" "$tmp_link"
 
-  if [ "$os" = "darwin" ] && [ -x "$release_dir/bin/codex-code-mode-host" ]; then
+  if [ "$os" = "darwin" ] && [ -x "$release_dir/$code_mode_host_relative_path" ]; then
     replace_path_with_symlink \
       "$CODE_MODE_HOST_BIN_PATH" \
-      "$CURRENT_LINK/bin/codex-code-mode-host" \
+      "$CURRENT_LINK/$code_mode_host_relative_path" \
       "$tmp_link"
-  elif [ "$(readlink "$CODE_MODE_HOST_BIN_PATH" 2>/dev/null || true)" = \
-    "$CURRENT_LINK/bin/codex-code-mode-host" ]; then
-    rm -f "$CODE_MODE_HOST_BIN_PATH"
+  else
+    existing_code_mode_host_target="$(readlink "$CODE_MODE_HOST_BIN_PATH" 2>/dev/null || true)"
+    case "$existing_code_mode_host_target" in
+      "$CURRENT_LINK/bin/codex-code-mode-host" | \
+        "$CURRENT_LINK/codex-resources/codex-code-mode-host")
+        rm -f "$CODE_MODE_HOST_BIN_PATH"
+        ;;
+    esac
   fi
 }
 

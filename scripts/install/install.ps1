@@ -539,7 +539,6 @@ function Test-PackageContentsAreComplete {
         "codex-package.json",
         "bin\codex.exe",
         "codex-path\rg.exe",
-        "codex-resources\codex-code-mode-host.exe",
         "codex-resources\codex-command-runner.exe",
         "codex-resources\codex-windows-sandbox-setup.exe"
     )
@@ -549,7 +548,17 @@ function Test-PackageContentsAreComplete {
         }
     }
 
-    return $true
+    $hostPaths = @(
+        "codex-resources\codex-code-mode-host.exe",
+        "bin\codex-code-mode-host.exe"
+    )
+    foreach ($name in $hostPaths) {
+        if (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Test-LegacyPlatformNpmContentsAreComplete {

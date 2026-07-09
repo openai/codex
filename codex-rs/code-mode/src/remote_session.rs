@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -63,7 +64,7 @@ impl ProcessOwnedCodeModeSessionProvider {
 
 impl Default for ProcessOwnedCodeModeSessionProvider {
     fn default() -> Self {
-        Self::with_host_program(InstallContext::current().code_mode_host_program())
+        Self::with_host_program(default_host_program())
     }
 }
 
@@ -192,9 +193,7 @@ impl ProcessOwnedCodeModeSession {
     pub fn new() -> Self {
         Self::with_process_host(
             Arc::new(NoopCodeModeSessionDelegate),
-            Arc::new(OwnedProcessHost::new(
-                InstallContext::current().code_mode_host_program(),
-            )),
+            Arc::new(OwnedProcessHost::new(default_host_program())),
         )
     }
 
@@ -491,6 +490,26 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
         Box::pin(ProcessOwnedCodeModeSession::shutdown(self))
     }
+}
+
+fn default_host_program() -> PathBuf {
+    InstallContext::current()
+        .code_mode_host_program()
+        .unwrap_or_else(|| resolve_host_program(std::env::current_exe()))
+}
+
+fn resolve_host_program(current_exe: io::Result<PathBuf>) -> PathBuf {
+    let executable_name = if cfg!(windows) {
+        "codex-code-mode-host.exe"
+    } else {
+        "codex-code-mode-host"
+    };
+    if let Ok(current_exe) = current_exe
+        && let Some(parent) = current_exe.parent()
+    {
+        return parent.join(executable_name);
+    }
+    PathBuf::from(executable_name)
 }
 
 #[cfg(test)]

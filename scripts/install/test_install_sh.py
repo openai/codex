@@ -89,30 +89,38 @@ class InstallShTest(unittest.TestCase):
         self.assertNotIn("codex-package_SHA256SUMS", requests[1])
 
     def test_macos_install_exposes_code_mode_host_beside_codex(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            archive_path, checksum_path, metadata_json = create_package_release(root)
+        for host_dir in ("codex-resources", "bin"):
+            with (
+                self.subTest(host_dir=host_dir),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                archive_path, checksum_path, metadata_json = create_package_release(
+                    root, host_dir=host_dir
+                )
 
-            result, _requests = run_installer_in(
-                root,
-                VERSION,
-                metadata_json=metadata_json,
-                archive_path=archive_path,
-                checksum_path=checksum_path,
-                force_macos=True,
-            )
+                result, _requests = run_installer_in(
+                    root,
+                    VERSION,
+                    metadata_json=metadata_json,
+                    archive_path=archive_path,
+                    checksum_path=checksum_path,
+                    force_macos=True,
+                )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            install_bin = root / "install-bin"
-            current = root / "codex-home" / "packages" / "standalone" / "current"
-            codex_path = install_bin / "codex"
-            host_path = install_bin / "codex-code-mode-host"
-            self.assertEqual(os.readlink(codex_path), str(current / "bin" / "codex"))
-            self.assertEqual(
-                os.readlink(host_path),
-                str(current / "bin" / "codex-code-mode-host"),
-            )
-            self.assertTrue(os.access(host_path, os.X_OK))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                install_bin = root / "install-bin"
+                current = root / "codex-home" / "packages" / "standalone" / "current"
+                codex_path = install_bin / "codex"
+                host_path = install_bin / "codex-code-mode-host"
+                self.assertEqual(
+                    os.readlink(codex_path), str(current / "bin" / "codex")
+                )
+                self.assertEqual(
+                    os.readlink(host_path),
+                    str(current / host_dir / "codex-code-mode-host"),
+                )
+                self.assertTrue(os.access(host_path, os.X_OK))
 
 
 def run_installer(
@@ -241,9 +249,12 @@ def run_installer_in(
     return result, requests
 
 
-def create_package_release(root: Path) -> tuple[Path, Path, str]:
+def create_package_release(
+    root: Path, *, host_dir: str = "codex-resources"
+) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
+    (package_dir / host_dir).mkdir(exist_ok=True)
     (package_dir / "codex-path").mkdir()
     (package_dir / "codex-package.json").write_text("{}\n", encoding="utf-8")
     write_executable(
@@ -251,7 +262,7 @@ def create_package_release(root: Path) -> tuple[Path, Path, str]:
         f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
     )
     write_executable(
-        package_dir / "bin" / "codex-code-mode-host",
+        package_dir / host_dir / "codex-code-mode-host",
         "#!/bin/sh\nexit 0\n",
     )
     write_executable(package_dir / "codex-path" / "rg", "#!/bin/sh\nexit 0\n")

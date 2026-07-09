@@ -1,6 +1,4 @@
 use std::ffi::OsStr;
-use std::ffi::OsString;
-use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -8,7 +6,6 @@ use std::sync::OnceLock;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const BIN_DIRNAME: &str = "bin";
-const CODE_MODE_HOST_PATH_ENV: &str = "CODEX_CODE_MODE_HOST_PATH";
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -150,35 +147,10 @@ impl InstallContext {
         default_rg_command()
     }
 
-    /// Resolves the code-mode host executable for the current installation.
-    pub fn code_mode_host_program(&self) -> PathBuf {
-        self.resolve_code_mode_host_program(
-            std::env::var_os(CODE_MODE_HOST_PATH_ENV),
-            std::env::current_exe(),
-        )
-    }
-
-    fn resolve_code_mode_host_program(
-        &self,
-        override_path: Option<OsString>,
-        current_exe: io::Result<PathBuf>,
-    ) -> PathBuf {
-        if let Some(path) = override_path {
-            return PathBuf::from(path);
-        }
-
-        let executable_name = code_mode_host_executable_name();
-        if let Some(path) = self.bundled_resource(executable_name) {
-            return path.into_path_buf();
-        }
-
-        if let Ok(current_exe) = current_exe
-            && let Some(parent) = current_exe.parent()
-        {
-            return parent.join(executable_name);
-        }
-
-        PathBuf::from(executable_name)
+    /// Returns the code-mode host when it is part of the detected package layout.
+    pub fn code_mode_host_program(&self) -> Option<PathBuf> {
+        self.bundled_resource(code_mode_host_executable_name())
+            .map(AbsolutePathBuf::into_path_buf)
     }
 
     pub fn bundled_resource(&self, file_name: impl AsRef<Path>) -> Option<AbsolutePathBuf> {
@@ -334,7 +306,7 @@ mod tests {
     const TEST_RESOURCE_NAME: &str = "codex-test-helper";
 
     #[test]
-    fn code_mode_host_program_prefers_override_then_bundled_resource() -> std::io::Result<()> {
+    fn code_mode_host_program_returns_bundled_resource() -> std::io::Result<()> {
         let package_dir = tempfile::tempdir()?;
         let bin_dir = package_dir.path().join(BIN_DIRNAME);
         let resources_dir = package_dir.path().join(RESOURCES_DIRNAME);
@@ -352,53 +324,18 @@ mod tests {
             /*method_override*/ None,
         );
 
-        assert_eq!(
-            context.resolve_code_mode_host_program(
-                Some("custom-code-mode-host".into()),
-                Ok(exe_path.clone()),
-            ),
-            PathBuf::from("custom-code-mode-host")
-        );
-        assert_eq!(
-            context.resolve_code_mode_host_program(/*override_path*/ None, Ok(exe_path),),
-            canonical_host_path
-        );
+        assert_eq!(context.code_mode_host_program(), Some(canonical_host_path));
         Ok(())
     }
 
     #[test]
-    fn code_mode_host_program_uses_adjacent_binary_for_legacy_layout() {
+    fn code_mode_host_program_is_none_without_bundled_resource() {
         let context = InstallContext {
             method: InstallMethod::Other,
             package_layout: None,
         };
 
-        assert_eq!(
-            context.resolve_code_mode_host_program(
-                /*override_path*/ None,
-                Ok(PathBuf::from("/opt/codex/bin/codex")),
-            ),
-            PathBuf::from("/opt/codex/bin").join(code_mode_host_executable_name())
-        );
-    }
-
-    #[test]
-    fn code_mode_host_program_falls_back_to_executable_name() {
-        let context = InstallContext {
-            method: InstallMethod::Other,
-            package_layout: None,
-        };
-
-        assert_eq!(
-            context.resolve_code_mode_host_program(
-                /*override_path*/ None,
-                Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "missing executable"
-                )),
-            ),
-            PathBuf::from(code_mode_host_executable_name())
-        );
+        assert_eq!(context.code_mode_host_program(), None);
     }
 
     #[test]

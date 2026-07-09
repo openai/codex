@@ -17,16 +17,12 @@ from codex_package.targets import TARGET_SPECS
 class PackageLayoutTest(unittest.TestCase):
     def test_app_server_package_places_code_mode_host_in_resources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            for target in (
-                "x86_64-unknown-linux-musl",
-                "x86_64-pc-windows-msvc",
-            ):
+            for target, spec in TARGET_SPECS.items():
                 with self.subTest(target=target):
                     root = Path(temp_dir) / target
                     root.mkdir()
                     package_dir = root / "package"
                     package_dir.mkdir()
-                    spec = TARGET_SPECS[target]
                     inputs = PackageInputs(
                         entrypoint_bin=touch_executable(root / "codex-app-server"),
                         code_mode_host_bin=touch_executable(

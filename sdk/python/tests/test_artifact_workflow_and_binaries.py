@@ -51,13 +51,15 @@ def _load_runtime_setup_module():
     return module
 
 
-def _write_fake_codex_package(package_dir: Path, script) -> Path:
+def _write_fake_codex_package(
+    package_dir: Path, script, *, host_dir: str = "codex-resources"
+) -> Path:
     (package_dir / "bin").mkdir(parents=True)
     (package_dir / "codex-resources").mkdir()
     (package_dir / "codex-path").mkdir()
     (package_dir / "codex-package.json").write_text('{"variant":"codex"}\n')
     (package_dir / "bin" / script.runtime_binary_name()).write_text("fake codex\n")
-    (package_dir / "codex-resources" / script.runtime_code_mode_host_name()).write_text(
+    (package_dir / host_dir / script.runtime_code_mode_host_name()).write_text(
         "fake code mode host\n"
     )
     (package_dir / "codex-resources" / "bwrap").write_text("fake bwrap\n")
@@ -699,6 +701,26 @@ def test_stage_runtime_release_copies_package_layout_and_sets_version(
     }
     assert 'name = "openai-codex-cli-bin"' in (staged / "pyproject.toml").read_text()
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
+
+
+def test_stage_runtime_release_accepts_legacy_code_mode_host_location(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    package_dir = _write_fake_codex_package(tmp_path / "codex-package", script, host_dir="bin")
+    package_archive = tmp_path / "codex-package.tar.gz"
+    _write_package_archive(package_dir, package_archive)
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        package_archive,
+    )
+
+    package_root = script.staged_runtime_package_root(staged)
+    assert (
+        package_root / "bin" / script.runtime_code_mode_host_name()
+    ).read_text() == "fake code mode host\n"
 
 
 def test_normalize_codex_version_accepts_release_tags_and_pep440_versions() -> None:
