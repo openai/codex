@@ -214,6 +214,7 @@ mod platform_actions;
 mod plugin_mentions;
 mod replay_filter;
 mod resize_reflow;
+mod safety_buffering;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
