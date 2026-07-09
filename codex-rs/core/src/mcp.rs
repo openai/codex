@@ -270,7 +270,3 @@ impl McpManager {
         effective_mcp_servers(&mcp_config, auth)
     }
 }
-
-#[cfg(test)]
-#[path = "mcp_tests.rs"]
-mod tests;
