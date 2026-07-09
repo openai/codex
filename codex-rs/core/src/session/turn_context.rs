@@ -125,7 +125,8 @@ pub struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) collaboration_mode: CollaborationMode,
+    pub(crate) mode: ModeKind,
+    pub(crate) collaboration_mode_developer_instructions: Option<String>,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
@@ -154,6 +155,17 @@ impl TurnContext {
     pub(crate) fn item_ids_enabled(&self) -> bool {
         self.config.features.enabled(Feature::ItemIds)
             || matches!(self.history_mode, ThreadHistoryMode::Paginated)
+    }
+
+    pub(crate) fn collaboration_mode(&self) -> CollaborationMode {
+        CollaborationMode {
+            mode: self.mode,
+            settings: Settings {
+                model: self.model_info.slug.clone(),
+                reasoning_effort: self.reasoning_effort.clone(),
+                developer_instructions: self.collaboration_mode_developer_instructions.clone(),
+            },
+        }
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -245,11 +257,6 @@ impl TurnContext {
         };
         config.model_reasoning_effort = reasoning_effort.clone();
 
-        let collaboration_mode = self.collaboration_mode.with_updates(
-            Some(model.clone()),
-            Some(reasoning_effort.clone()),
-            /*developer_instructions*/ None,
-        );
         let available_models = models_manager
             .list_models(
                 RefreshStrategy::OnlineIfUncached,
@@ -282,7 +289,10 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
-            collaboration_mode,
+            mode: self.mode,
+            collaboration_mode_developer_instructions: self
+                .collaboration_mode_developer_instructions
+                .clone(),
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
@@ -380,7 +390,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,
-            collaboration_mode: Some(self.collaboration_mode.clone()),
+            collaboration_mode: Some(self.collaboration_mode()),
             multi_agent_version: Some(self.multi_agent_version),
             multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
             realtime_active: Some(self.realtime_active),
@@ -497,7 +507,8 @@ impl Session {
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
     ) -> TurnContext {
-        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+        let collaboration_mode = &session_configuration.collaboration_mode;
+        let reasoning_effort = collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
@@ -562,7 +573,11 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            collaboration_mode: session_configuration.collaboration_mode.clone(),
+            mode: collaboration_mode.mode,
+            collaboration_mode_developer_instructions: collaboration_mode
+                .settings
+                .developer_instructions
+                .clone(),
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),

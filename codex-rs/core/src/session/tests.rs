@@ -2530,7 +2530,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         thread_level_id: session.thread_id.to_string(),
         turn_level_id: turn_context.sub_id.clone(),
         turn_id: turn_context.sub_id.clone(),
-        collaboration_mode: turn_context.collaboration_mode.clone(),
+        collaboration_mode: turn_context.collaboration_mode(),
         token_usage_at_turn_start,
         saw_session_store: true,
         saw_thread_store: true,
@@ -3097,7 +3097,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         model: previous_model.to_string(),
         comp_hash: None,
         personality: turn_context.personality,
-        collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+        collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
@@ -3991,14 +3991,14 @@ async fn turn_context_with_model_updates_model_fields() {
         .await;
 
     assert_eq!(updated.config.model.as_deref(), Some("gpt-5.4"));
-    assert_eq!(updated.collaboration_mode.model(), "gpt-5.4");
+    assert_eq!(updated.collaboration_mode().model(), "gpt-5.4");
     assert_eq!(updated.model_info, expected_model_info);
     assert_eq!(
         updated.reasoning_effort,
         Some(ReasoningEffortConfig::Medium)
     );
     assert_eq!(
-        updated.collaboration_mode.reasoning_effort(),
+        updated.collaboration_mode().reasoning_effort(),
         Some(ReasoningEffortConfig::Medium)
     );
     assert_eq!(

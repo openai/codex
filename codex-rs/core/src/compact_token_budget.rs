@@ -31,7 +31,7 @@ pub(crate) async fn run_manual_compact_task(
         trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+        collaboration_mode_kind: turn_context.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
