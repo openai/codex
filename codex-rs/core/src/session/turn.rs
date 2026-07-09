@@ -206,8 +206,7 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    track_turn_resolved_config_analytics(&sess, &turn_context, &input, first_step_context.clone())
-        .await;
+    track_turn_resolved_config_analytics(&sess, &input, first_step_context.clone()).await;
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
@@ -750,10 +749,10 @@ async fn build_extension_turn_input_items(
 )]
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
-    turn_context: &TurnContext,
     input: &[TurnInput],
     first_step_context: Arc<StepContext>,
 ) {
+    let turn_context = first_step_context.turn.as_ref();
     let thread_config = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
@@ -1030,7 +1029,6 @@ async fn run_auto_compact(
         );
         run_inline_auto_compact_task(
             Arc::clone(sess),
-            Arc::clone(turn_context),
             Arc::clone(&step_context),
             initial_context_injection,
             reason,
@@ -1169,7 +1167,6 @@ async fn run_sampling_request(
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
             step_context.clone(),
             Arc::clone(&turn_store),
             client_session,
@@ -1933,14 +1930,13 @@ async fn drain_in_flight(
 #[instrument(level = "trace",
     skip_all,
     fields(
-        turn_id = %turn_context.sub_id,
-        model = %turn_context.model_info.slug
+        turn_id = %step_context.turn.sub_id,
+        model = %step_context.turn.model_info.slug
     )
 )]
 async fn try_run_sampling_request(
     tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
@@ -1949,6 +1945,7 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    let turn_context = step_context.turn.clone();
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),

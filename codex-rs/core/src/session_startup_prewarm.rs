@@ -256,16 +256,11 @@ async fn schedule_startup_prewarm_inner(
         .await;
     if routes_approval_to_guardian(&startup_turn_context) {
         let guardian_session = Arc::clone(&session);
-        let guardian_parent_turn = Arc::clone(&startup_turn_context);
         let guardian_step_context = Arc::clone(&step_context);
         drop(tokio::spawn(async move {
             if let Err(err) = guardian_session
                 .guardian_review_session
-                .initialize(
-                    Arc::clone(&guardian_session),
-                    guardian_parent_turn,
-                    guardian_step_context,
-                )
+                .initialize(Arc::clone(&guardian_session), guardian_step_context)
                 .await
             {
                 warn!("failed to initialize guardian review session: {err:#}");

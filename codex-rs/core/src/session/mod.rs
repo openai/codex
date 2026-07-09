@@ -1728,7 +1728,6 @@ impl Session {
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
-        current_context: &TurnContext,
         step_context: &StepContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
@@ -1743,7 +1742,6 @@ impl Session {
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
-            current_context,
             step_context,
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
@@ -2289,13 +2287,13 @@ impl Session {
     )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
         step_context: &Arc<StepContext>,
         call_id: String,
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        let turn_context = &step_context.turn;
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2339,7 +2337,6 @@ impl Session {
             };
             let review_id = crate::guardian::new_guardian_review_id();
             let session = Arc::clone(self);
-            let turn = Arc::clone(turn_context);
             let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id: call_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -2348,7 +2345,6 @@ impl Session {
             };
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
-                turn,
                 step_context.clone(),
                 review_id,
                 request,
@@ -2459,13 +2455,13 @@ impl Session {
 
     pub(crate) async fn request_permissions_for_cwd(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
         step_context: &Arc<StepContext>,
         call_id: String,
         args: RequestPermissionsArgs,
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        let turn_context = &step_context.turn;
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
@@ -2484,7 +2480,6 @@ impl Session {
         let mut environment = turn_environment.selection();
         environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
-            turn_context,
             step_context,
             call_id,
             args,
@@ -3189,20 +3184,19 @@ impl Session {
 
     pub(crate) async fn build_initial_context_with_world_state(
         &self,
-        turn_context: &TurnContext,
         world_state: &WorldState,
         step_context: &StepContext,
     ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_world_state_and_mcp(turn_context, world_state, step_context)
+        self.build_initial_context_with_world_state_and_mcp(world_state, step_context)
             .await
     }
 
     async fn build_initial_context_with_world_state_and_mcp(
         &self,
-        turn_context: &TurnContext,
         world_state: &WorldState,
         step_context: &StepContext,
     ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
         let mcp = step_context.mcp.as_ref();
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -3474,9 +3468,7 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
-        if let Some(multi_agent_mode) =
-            multi_agents::effective_multi_agent_mode(turn_context, step_context)
-        {
+        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(step_context) {
             items.push(ContextualUserFragment::into(
                 MultiAgentModeInstructions::new(multi_agent_mode),
             ));
@@ -3543,23 +3535,19 @@ impl Session {
 
     pub(crate) async fn start_new_context_window(
         &self,
-        turn_context: &TurnContext,
         world_state: Arc<WorldState>,
         step_context: &StepContext,
     ) -> u64 {
+        let turn_context = step_context.turn.as_ref();
         let window = {
             let mut state = self.state.lock().await;
             state.start_new_context_window()
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state(
-                turn_context,
-                world_state.as_ref(),
-                step_context,
-            )
+            .build_initial_context_with_world_state(world_state.as_ref(), step_context)
             .await;
-        let turn_context_item = turn_context.to_turn_context_item(step_context);
+        let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(
             turn_context,
             context_items,
@@ -3607,18 +3595,14 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
-        let turn_context_item = turn_context.to_turn_context_item(step_context);
+        let turn_context_item = step_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
         let world_state = Arc::new(self.build_world_state_for_step(step_context).await);
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
-                .build_initial_context_with_world_state_and_mcp(
-                    turn_context,
-                    world_state.as_ref(),
-                    step_context,
-                )
+                .build_initial_context_with_world_state_and_mcp(world_state.as_ref(), step_context)
                 .await;
             let snapshot = world_state.snapshot();
             self.state
@@ -3634,11 +3618,7 @@ impl Session {
             // Steady-state path: append only built-in context diffs here; turn-scoped extension
             // context is added below.
             let mut context_items = self
-                .build_settings_update_items(
-                    reference_context_item.as_ref(),
-                    turn_context,
-                    step_context,
-                )
+                .build_settings_update_items(reference_context_item.as_ref(), step_context)
                 .await;
             let (world_state_items, world_state_item) = {
                 let mut state = self.state.lock().await;

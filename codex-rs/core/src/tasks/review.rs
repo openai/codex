@@ -75,7 +75,6 @@ impl SessionTask for ReviewTask {
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
             session.clone(),
-            ctx.clone(),
             user_input,
             step_context,
             cancellation_token.clone(),
@@ -98,11 +97,11 @@ impl SessionTask for ReviewTask {
 
 async fn start_review_conversation(
     session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     step_context: Arc<StepContext>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
+    let ctx = &step_context.turn;
     let config = ctx.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
@@ -132,7 +131,6 @@ async fn start_review_conversation(
         session.models_manager(),
         input,
         session.clone_session(),
-        ctx.clone(),
         step_context,
         cancellation_token,
         SubAgentSource::Review,

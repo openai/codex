@@ -52,7 +52,6 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::session::turn_context::TurnContext;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -79,12 +78,12 @@ pub(crate) async fn run_codex_thread_interactive(
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    let parent_ctx = step_context.turn.as_ref();
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
@@ -158,7 +157,6 @@ pub(crate) async fn run_codex_thread_interactive(
     // Forward events from the sub-agent to the consumer, filtering approvals and
     // routing them to the parent session for decisions.
     let parent_session_clone = Arc::clone(&parent_session);
-    let parent_ctx_clone = Arc::clone(&parent_ctx);
     let step_context_clone = Arc::clone(&step_context);
     let codex_for_events = Arc::clone(&codex);
     // Cache the child call's MCP metadata at begin time. The later legacy
@@ -170,7 +168,6 @@ pub(crate) async fn run_codex_thread_interactive(
             codex_for_events,
             tx_sub,
             parent_session_clone,
-            parent_ctx_clone,
             step_context_clone,
             pending_mcp_invocations,
             cancel_token_events,
@@ -203,7 +200,6 @@ pub(crate) async fn run_codex_thread_one_shot(
     models_manager: SharedModelsManager,
     input: Vec<UserInput>,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
@@ -218,7 +214,6 @@ pub(crate) async fn run_codex_thread_one_shot(
         auth_manager,
         models_manager,
         parent_session,
-        parent_ctx,
         step_context,
         child_cancel.clone(),
         subagent_source,
@@ -284,7 +279,6 @@ async fn forward_events(
     codex: Arc<Codex>,
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     pending_mcp_invocations: Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     cancel_token: CancellationToken,
@@ -321,7 +315,6 @@ async fn forward_events(
                             &codex,
                             id,
                             &parent_session,
-                            &parent_ctx,
                             Arc::clone(&step_context),
                             event,
                             &cancel_token,
@@ -336,7 +329,6 @@ async fn forward_events(
                             &codex,
                             id,
                             &parent_session,
-                            &parent_ctx,
                             Arc::clone(&step_context),
                             event,
                             &cancel_token,
@@ -350,7 +342,6 @@ async fn forward_events(
                         handle_request_permissions(
                             &codex,
                             &parent_session,
-                            &parent_ctx,
                             &step_context,
                             event,
                             &cancel_token,
@@ -365,7 +356,6 @@ async fn forward_events(
                             &codex,
                             id,
                             &parent_session,
-                            &parent_ctx,
                             Arc::clone(&step_context),
                             &pending_mcp_invocations,
                             event,
@@ -503,11 +493,11 @@ async fn handle_exec_approval(
     codex: &Codex,
     turn_id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_ctx = &step_context.turn;
     let approval_id_for_op = event.effective_approval_id();
     let ExecApprovalRequestEvent {
         call_id,
@@ -526,8 +516,7 @@ async fn handle_exec_approval(
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
-            step_context,
+            step_context.clone(),
             new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
@@ -590,11 +579,11 @@ async fn handle_patch_approval(
     codex: &Codex,
     _id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     event: ApplyPatchApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_ctx = &step_context.turn;
     let ApplyPatchApprovalRequestEvent {
         call_id,
         changes,
@@ -641,8 +630,7 @@ async fn handle_patch_approval(
             .join("\n");
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
-            step_context,
+            step_context.clone(),
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
@@ -694,16 +682,15 @@ async fn handle_request_user_input(
     codex: &Codex,
     id: String,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_ctx = &step_context.turn;
     if let Some(response) = maybe_auto_review_mcp_request_user_input(
         parent_session,
-        parent_ctx,
-        step_context,
+        Arc::clone(&step_context),
         pending_mcp_invocations,
         &event,
         cancel_token,
@@ -739,12 +726,12 @@ async fn handle_request_user_input(
 /// `McpToolCallBegin` in order to rebuild the full guardian review request.
 async fn maybe_auto_review_mcp_request_user_input(
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
     event: &RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) -> Option<RequestUserInputResponse> {
+    let parent_ctx = &step_context.turn;
     // TODO(ccunningham): Support delegated MCP approval elicitations here too after
     // coordinating with @fouad. Today guardian only auto-reviews the RequestUserInput
     // compatibility path for delegated MCP approvals.
@@ -767,7 +754,6 @@ async fn maybe_auto_review_mcp_request_user_input(
     let review_cancel = cancel_token.child_token();
     let review_rx = spawn_approval_request_review(
         Arc::clone(parent_session),
-        Arc::clone(parent_ctx),
         step_context,
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
@@ -814,11 +800,11 @@ async fn maybe_auto_review_mcp_request_user_input(
 async fn handle_request_permissions(
     codex: &Codex,
     parent_session: &Arc<Session>,
-    parent_ctx: &Arc<TurnContext>,
     step_context: &Arc<StepContext>,
     event: RequestPermissionsEvent,
     cancel_token: &CancellationToken,
 ) {
+    let parent_ctx = &step_context.turn;
     let call_id = event.call_id;
     let args = RequestPermissionsArgs {
         environment_id: event.environment_id,
@@ -830,7 +816,6 @@ async fn handle_request_permissions(
         parent_ctx.cwd.clone()
     });
     let response_fut = parent_session.request_permissions_for_cwd(
-        parent_ctx,
         step_context,
         call_id.clone(),
         args,

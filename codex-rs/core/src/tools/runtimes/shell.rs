@@ -106,7 +106,7 @@ impl ShellRuntime {
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
-            sub_id: ctx.turn.sub_id.clone(),
+            sub_id: ctx.step_context.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
@@ -149,7 +149,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         let session = ctx.session;
-        let turn = ctx.turn;
+        let turn = &ctx.step_context.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             with_cached_approval(&session.services, "shell", keys, move || async move {
@@ -213,7 +213,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         req: &ShellRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let file_system_sandbox_policy = ctx.step_context.turn.file_system_sandbox_policy();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
             &file_system_sandbox_policy,

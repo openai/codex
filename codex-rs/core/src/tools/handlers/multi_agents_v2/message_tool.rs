@@ -90,7 +90,7 @@ pub(crate) async fn handle_message_string_tool(
     let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
-    let resume_config = build_agent_resume_config(turn.as_ref(), step_context.as_ref())?;
+    let resume_config = build_agent_resume_config(step_context.as_ref())?;
     session
         .services
         .agent_control

@@ -275,7 +275,6 @@ pub(crate) async fn record_guardian_denial_for_test(
 /// caller as distinct from explicit guardian denials.
 async fn run_guardian_review(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
@@ -283,6 +282,7 @@ async fn run_guardian_review(
     approval_request_source: GuardianApprovalRequestSource,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
+    let turn = step_context.turn.clone();
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -360,7 +360,6 @@ async fn run_guardian_review(
     let terminal_action = action_summary.clone();
     let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
-        turn.clone(),
         step_context.clone(),
         request,
         retry_reason.clone(),
@@ -596,7 +595,6 @@ async fn run_guardian_review(
 /// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
@@ -606,7 +604,6 @@ pub(crate) async fn review_approval_request(
     // guardian session state machine into their own async stack.
     Box::pin(run_guardian_review(
         Arc::clone(session),
-        Arc::clone(turn),
         step_context,
         review_id,
         request,
@@ -619,7 +616,6 @@ pub(crate) async fn review_approval_request(
 
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
     step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
@@ -629,7 +625,6 @@ pub(crate) async fn review_approval_request_with_cancel(
 ) -> ReviewDecision {
     run_guardian_review(
         Arc::clone(session),
-        Arc::clone(turn),
         step_context,
         review_id,
         request,
@@ -642,7 +637,6 @@ pub(crate) async fn review_approval_request_with_cancel(
 
 pub(crate) fn spawn_approval_request_review(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
@@ -661,7 +655,6 @@ pub(crate) fn spawn_approval_request_review(
         };
         let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
-            &turn,
             step_context,
             review_id,
             request,
@@ -686,9 +679,9 @@ pub(super) struct GuardianReviewSessionConfig {
 
 pub(super) async fn guardian_review_session_config(
     session: &Session,
-    turn: &TurnContext,
     step_context: &StepContext,
 ) -> anyhow::Result<GuardianReviewSessionConfig> {
+    let turn = step_context.turn.as_ref();
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
@@ -778,7 +771,6 @@ pub(super) async fn guardian_review_session_config(
 /// rules.
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -786,12 +778,8 @@ async fn run_guardian_review_session_before_deadline(
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let session_config = match guardian_review_session_config(
-        session.as_ref(),
-        turn.as_ref(),
-        step_context.as_ref(),
-    )
-    .await
+    let turn = step_context.turn.clone();
+    let session_config = match guardian_review_session_config(session.as_ref(), &step_context).await
     {
         Ok(session_config) => session_config,
         Err(err) => {
@@ -879,7 +867,6 @@ async fn run_guardian_review_session_before_deadline(
 
 pub(super) async fn run_guardian_review_session_with_retry(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -893,7 +880,6 @@ pub(super) async fn run_guardian_review_session_with_retry(
     loop {
         let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
             Arc::clone(&session),
-            Arc::clone(&turn),
             Arc::clone(&step_context),
             request.clone(),
             retry_reason.clone(),

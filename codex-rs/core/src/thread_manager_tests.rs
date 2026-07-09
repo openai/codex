@@ -4,6 +4,7 @@ use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
+use crate::session::step_context::StepContext;
 use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -320,8 +321,9 @@ async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let step_context = StepContext::for_test(turn_context.clone());
     let mut items = session
-        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .build_initial_context_with_world_state(&world_state, &step_context)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));

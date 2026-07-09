@@ -624,7 +624,6 @@ async fn review_guardian_mcp_elicitation(
     let review_id = crate::guardian::new_guardian_review_id();
     let decision = crate::guardian::review_approval_request(
         &session,
-        &turn_context,
         step_context,
         review_id.clone(),
         guardian_request,

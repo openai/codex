@@ -35,7 +35,6 @@ impl SpawnAgentsOnCsvHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
             step_context,
             payload,
             ..
@@ -50,7 +49,7 @@ impl SpawnAgentsOnCsvHandler {
             }
         };
 
-        handle(session, turn, step_context, arguments)
+        handle(session, step_context, arguments)
             .await
             .map(boxed_tool_output)
     }
@@ -69,10 +68,10 @@ impl CoreToolRuntime for SpawnAgentsOnCsvHandler {
 /// `report_agent_job_result`, then exported to CSV on completion.
 pub async fn handle(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     step_context: Arc<StepContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
+    let turn = step_context.turn.clone();
     let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
     if args.instruction.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -184,23 +183,17 @@ pub async fn handle(
         })?;
 
     let requested_concurrency = args.max_concurrency.or(args.max_workers);
-    let options = match build_runner_options(
-        &session,
-        &turn,
-        step_context.as_ref(),
-        requested_concurrency,
-    )
-    .await
-    {
-        Ok(options) => options,
-        Err(err) => {
-            let error_message = err.to_string();
-            let _ = db
-                .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
-                .await;
-            return Err(err);
-        }
-    };
+    let options =
+        match build_runner_options(&session, step_context.as_ref(), requested_concurrency).await {
+            Ok(options) => options,
+            Err(err) => {
+                let error_message = err.to_string();
+                let _ = db
+                    .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+                    .await;
+                return Err(err);
+            }
+        };
     db.mark_agent_job_running(job_id.as_str())
         .await
         .map_err(|err| {

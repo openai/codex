@@ -8,6 +8,7 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -239,6 +240,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
+    step_context: Arc<StepContext>,
     trigger: GuardianNetworkAccessTrigger,
     command: String,
     environment_id: String,
@@ -293,7 +295,7 @@ impl NetworkApprovalService {
     async fn register_call(
         &self,
         registration_id: String,
-        turn_id: String,
+        step_context: Arc<StepContext>,
         trigger: GuardianNetworkAccessTrigger,
         command: String,
         environment_id: String,
@@ -301,11 +303,13 @@ impl NetworkApprovalService {
     ) {
         let mut calls = self.calls.lock().await;
         let key = registration_id.clone();
+        let turn_id = step_context.turn.sub_id.clone();
         calls.active_calls.insert(
             key,
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
+                step_context,
                 trigger,
                 command,
                 environment_id,
@@ -632,9 +636,15 @@ impl NetworkApprovalService {
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
+            let Some(step_context) = owner_call
+                .as_ref()
+                .map(|owner_call| owner_call.step_context.clone())
+            else {
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
+            };
             review_approval_request(
                 &session,
-                &turn_context,
+                step_context,
                 review_id,
                 GuardianApprovalRequest::NetworkAccess {
                     id: guardian_approval_id.clone(),
@@ -849,7 +859,7 @@ pub(crate) fn build_network_policy_decider(
 
 pub(crate) async fn begin_network_approval(
     session: &Session,
-    turn_id: &str,
+    step_context: Arc<StepContext>,
     managed_network_active: bool,
     selected_sandbox: SandboxType,
     spec: Option<NetworkApprovalSpec>,
@@ -890,7 +900,7 @@ pub(crate) async fn begin_network_approval(
         .network_approval
         .register_call(
             registration_id.clone(),
-            turn_id.to_string(),
+            step_context,
             trigger,
             command,
             environment_id,

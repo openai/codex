@@ -174,7 +174,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     ) -> BoxFuture<'b, ReviewDecision> {
         let keys = self.approval_keys(req);
         let session = ctx.session;
-        let turn = ctx.turn;
+        let turn = &ctx.step_context.turn;
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
@@ -264,7 +264,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let file_system_sandbox_policy = ctx.step_context.turn.file_system_sandbox_policy();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
             &file_system_sandbox_policy,

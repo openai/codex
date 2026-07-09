@@ -89,7 +89,6 @@ async fn handle_spawn_agent(
         .await;
     let mut config = build_agent_spawn_config(
         &session.get_base_instructions().await,
-        turn.as_ref(),
         step_context.as_ref(),
     )?;
     if let Some(service_tier) = args.service_tier.as_ref() {

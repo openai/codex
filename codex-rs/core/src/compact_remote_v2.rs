@@ -283,7 +283,6 @@ async fn run_remote_compact_task_inner_impl(
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
-        compaction_turn_context.as_ref(),
         step_context.as_ref(),
         compacted_history,
         &initial_context_injection,
@@ -293,7 +292,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(compaction_turn_context.to_turn_context_item(step_context))
+            Some(step_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {
@@ -330,12 +329,12 @@ struct RemoteCompactionV2Output {
 
 async fn run_remote_compaction_request_v2(
     sess: &Session,
-    turn_context: &TurnContext,
     step_context: &StepContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
 ) -> CodexResult<RemoteCompactionV2Output> {
+    let turn_context = step_context.turn.as_ref();
     let max_retries = turn_context
         .provider
         .info()

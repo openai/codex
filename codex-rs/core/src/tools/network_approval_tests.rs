@@ -1,5 +1,7 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContext;
+use crate::session::tests::make_session_and_context;
 use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -296,10 +298,11 @@ async fn register_call_with_default_shell_trigger(
     registration_id: &str,
 ) -> CancellationToken {
     let cancellation_token = CancellationToken::new();
+    let (_session, turn) = make_session_and_context().await;
     service
         .register_call(
             registration_id.to_string(),
-            "turn-1".to_string(),
+            StepContext::for_test(Arc::new(turn)),
             GuardianNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
                 tool_name: "shell_command".to_string(),
@@ -321,6 +324,7 @@ async fn register_call_with_default_shell_trigger(
 #[tokio::test]
 async fn active_call_preserves_triggering_command_context() {
     let service = NetworkApprovalService::default();
+    let (_session, turn) = make_session_and_context().await;
     let expected = GuardianNetworkAccessTrigger {
         call_id: "call-1".to_string(),
         tool_name: "shell_command".to_string(),
@@ -335,7 +339,7 @@ async fn active_call_preserves_triggering_command_context() {
     service
         .register_call(
             "registration-1".to_string(),
-            "turn-1".to_string(),
+            StepContext::for_test(Arc::new(turn)),
             expected.clone(),
             "curl https://example.com".to_string(),
             "remote".to_string(),

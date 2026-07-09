@@ -108,10 +108,10 @@ fn required_state_db(
 
 async fn build_runner_options(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
     step_context: &StepContext,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
+    let turn = &step_context.turn;
     let multi_agent_version = turn.multi_agent_version;
     if multi_agent_version == MultiAgentVersion::Disabled {
         return Err(FunctionCallError::RespondToModel(
@@ -126,7 +126,7 @@ async fn build_runner_options(
     }
     let max_concurrency = normalize_concurrency(requested_concurrency, agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
-    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref(), step_context)?;
+    let spawn_config = build_agent_spawn_config(&base_instructions, step_context)?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,

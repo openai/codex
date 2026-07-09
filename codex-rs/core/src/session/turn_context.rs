@@ -341,41 +341,46 @@ impl TurnContext {
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then_some(file_system_sandbox_policy)
     }
+}
 
-    pub(crate) fn to_turn_context_item(&self, step_context: &StepContext) -> TurnContextItem {
-        let workspace_roots = self.config.effective_workspace_roots();
+impl StepContext {
+    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let turn = self.turn.as_ref();
+        let workspace_roots = turn.config.effective_workspace_roots();
         #[allow(deprecated)]
-        let cwd = self.cwd.clone();
+        let cwd = turn.cwd.clone();
         TurnContextItem {
-            turn_id: Some(self.sub_id.clone()),
+            turn_id: Some(turn.sub_id.clone()),
             cwd,
             workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
-            current_date: self.current_date.clone(),
-            timezone: self.timezone.clone(),
-            approval_policy: self.approval_policy.value(),
-            sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.permission_profile()),
-            network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
-            model: self.model_info.slug.clone(),
-            comp_hash: self.model_info.comp_hash.clone(),
-            personality: self.personality,
+            current_date: turn.current_date.clone(),
+            timezone: turn.timezone.clone(),
+            approval_policy: turn.approval_policy.value(),
+            sandbox_policy: turn.sandbox_policy(),
+            permission_profile: Some(turn.permission_profile()),
+            network: turn.turn_context_network_item(),
+            file_system_sandbox_policy: turn.non_legacy_file_system_sandbox_policy(),
+            model: turn.model_info.slug.clone(),
+            comp_hash: turn.model_info.comp_hash.clone(),
+            personality: turn.personality,
             collaboration_mode: Some(CollaborationMode {
-                mode: self.mode,
+                mode: turn.mode,
                 settings: Settings {
-                    model: self.model_info.slug.clone(),
-                    reasoning_effort: step_context.reasoning_effort.clone(),
-                    developer_instructions: self.collaboration_mode_developer_instructions.clone(),
+                    model: turn.model_info.slug.clone(),
+                    reasoning_effort: self.reasoning_effort.clone(),
+                    developer_instructions: turn.collaboration_mode_developer_instructions.clone(),
                 },
             }),
-            multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self, step_context),
-            realtime_active: Some(self.realtime_active),
-            effort: step_context.effective_reasoning_effort(),
+            multi_agent_version: Some(turn.multi_agent_version),
+            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
+            realtime_active: Some(turn.realtime_active),
+            effort: self.effective_reasoning_effort(),
             summary: ReasoningSummaryConfig::Auto,
         }
     }
+}
 
+impl TurnContext {
     fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
         let network = self
             .config

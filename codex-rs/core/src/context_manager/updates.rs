@@ -83,11 +83,10 @@ fn build_collaboration_mode_update_item(
 
 fn build_multi_agent_mode_update_item(
     previous: Option<&TurnContextItem>,
-    next: &TurnContext,
     step_context: &StepContext,
 ) -> Option<String> {
     let effective_multi_agent_mode =
-        crate::session::multi_agents::effective_multi_agent_mode(next, step_context);
+        crate::session::multi_agents::effective_multi_agent_mode(step_context);
     let previous = previous?;
     if previous.multi_agent_mode == effective_multi_agent_mode {
         return None;
@@ -241,11 +240,11 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
 pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
-    next: &TurnContext,
     step_context: &StepContext,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
+    let next = step_context.turn.as_ref();
     // TODO(ccunningham): build_settings_update_items still does not cover every
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
@@ -256,7 +255,7 @@ pub(crate) fn build_settings_update_items(
         build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
-        build_multi_agent_mode_update_item(previous, next, step_context),
+        build_multi_agent_mode_update_item(previous, step_context),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]
