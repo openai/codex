@@ -1312,6 +1312,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
+        .with_model("gpt-5.2")
         .with_config(move |config| {
             insert_mcp_server(
                 config,

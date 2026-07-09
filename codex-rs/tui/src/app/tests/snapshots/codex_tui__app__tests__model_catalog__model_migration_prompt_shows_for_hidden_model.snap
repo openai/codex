@@ -2,10 +2,10 @@
 source: tui/src/app/tests/model_catalog.rs
 expression: model_migration_copy_to_plain_text(&copy)
 ---
-Introducing GPT-5.5
+Codex just got an upgrade. Introducing GPT-5.5.
 
-GPT-5.5 is now available in Codex. It's our strongest agentic coding model yet, built to reason through large codebases, check assumptions with tools, and keep going until the work is done.
+We recommend switching from gpt-5.2 to gpt-5.5.
 
-Learn more: https://openai.com/index/introducing-gpt-5-5/
+Frontier model for complex coding, research, and real-world work.
 
-You can always keep using GPT-5.4 if you prefer.
+You can continue using gpt-5.2 if you prefer.

@@ -1,4 +1,4 @@
-{ 
+{
   "models": [
     {
       "slug": "gpt-5.6-sol",
@@ -59,7 +59,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": "0.142.2",
+      "minimal_client_version": "0.144.0",
       "supported_in_api": true,
       "availability_nux": {
         "message": "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts—try starting lower, then turn it up for harder jobs."
@@ -173,7 +173,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": "0.142.2",
+      "minimal_client_version": "0.144.0",
       "supported_in_api": true,
       "availability_nux": null,
       "upgrade": null,
@@ -281,7 +281,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": "0.142.2",
+      "minimal_client_version": "0.144.0",
       "supported_in_api": true,
       "availability_nux": null,
       "upgrade": null,

@@ -9,6 +9,24 @@ fn all_model_presets() -> Vec<ModelPreset> {
     crate::test_support::TEST_MODEL_PRESETS.clone()
 }
 
+fn model_presets_with_test_upgrades() -> Vec<ModelPreset> {
+    let mut presets = all_model_presets();
+    for model in ["gpt-5.2", "gpt-5.4"] {
+        let preset = presets
+            .iter_mut()
+            .find(|preset| preset.model == model)
+            .unwrap_or_else(|| panic!("{model} preset present"));
+        preset.upgrade = Some(ModelUpgrade {
+            id: "gpt-5.5".to_string(),
+            migration_config_key: "hide_test_migration_prompt".to_string(),
+            model_link: None,
+            upgrade_copy: None,
+            migration_markdown: None,
+        });
+    }
+    presets
+}
+
 fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
     ModelAvailabilityNuxConfig {
         shown_count: shown_count
@@ -40,23 +58,15 @@ fn model_migration_copy_to_plain_text(copy: &crate::model_migration::ModelMigrat
 #[tokio::test]
 async fn model_migration_prompt_only_shows_for_deprecated_models() {
     let seen = BTreeMap::new();
+    let presets = model_presets_with_test_upgrades();
     assert!(should_show_model_migration_prompt(
-        "gpt-5.2",
-        "gpt-5.5",
-        &seen,
-        &all_model_presets()
+        "gpt-5.2", "gpt-5.5", &seen, &presets
     ));
     assert!(should_show_model_migration_prompt(
-        "gpt-5.4",
-        "gpt-5.5",
-        &seen,
-        &all_model_presets()
+        "gpt-5.4", "gpt-5.5", &seen, &presets
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.4",
-        "gpt-5.4",
-        &seen,
-        &all_model_presets()
+        "gpt-5.4", "gpt-5.4", &seen, &presets
     ));
 }
 
@@ -339,7 +349,7 @@ async fn model_migration_prompt_shows_for_hidden_model() {
         .await
         .expect("config");
 
-    let mut available_models = all_model_presets();
+    let mut available_models = model_presets_with_test_upgrades();
     let current = available_models
         .iter_mut()
         .find(|preset| preset.model == "gpt-5.2")
