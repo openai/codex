@@ -580,6 +580,7 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
     assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["plugin_name"], json!(null));
     assert_eq!(event_params["marketplace_name"], json!(null));
+    assert_eq!(event_params["source"], "manual");
     assert_eq!(
         event_params["error_type"],
         "remote_catalog_unexpected_status"
@@ -1019,6 +1020,7 @@ async fn plugin_install_failure_tracks_analytics_event() -> Result<()> {
     assert_eq!(event_params["mcp_server_count"], json!(null));
     assert_eq!(event_params["connector_ids"], json!(null));
     assert_eq!(event_params["product_client_id"], DEFAULT_CLIENT_NAME);
+    assert_eq!(event_params["source"], "manual");
     assert_eq!(event_params["error_type"], "store_invalid");
     Ok(())
 }
@@ -1145,6 +1147,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
     assert_eq!(event_params["plugin_id"], "linear@openai-curated-remote");
     assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
+    assert_eq!(event_params["source"], "manual");
     assert_eq!(event_params["error_type"], "remote_bundle_download_status");
     assert!(
         !codex_home
