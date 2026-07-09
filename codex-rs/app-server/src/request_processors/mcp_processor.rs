@@ -201,12 +201,20 @@ impl McpRequestProcessor {
         let notification_name = name.clone();
         let notification_thread_id = thread_id;
         let outgoing = Arc::clone(&self.outgoing);
+        let oauth_span = tracing::info_span!(
+            parent: None,
+            "app_server.mcp_oauth_login",
+            codex.thread.id = notification_thread_id.as_deref().unwrap_or(""),
+            result = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&oauth_span);
 
-        tokio::spawn(async move {
+        let oauth_task = async move {
             let (success, error) = match handle.wait().await {
                 Ok(()) => (true, None),
                 Err(err) => (false, Some(err.to_string())),
             };
+            tracing::Span::current().record("result", if success { "success" } else { "error" });
 
             let notification = ServerNotification::McpServerOauthLoginCompleted(
                 McpServerOauthLoginCompletedNotification {
@@ -217,7 +225,8 @@ impl McpRequestProcessor {
                 },
             );
             outgoing.send_server_notification(notification).await;
-        });
+        };
+        tokio::spawn(oauth_task.instrument(oauth_span));
 
         Ok(McpServerOauthLoginResponse { authorization_url })
     }

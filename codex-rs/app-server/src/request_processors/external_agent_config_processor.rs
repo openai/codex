@@ -48,6 +48,7 @@ use codex_state::ExternalAgentConfigImportSuccessRecord;
 use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use tracing::Instrument;
 
 use super::ConfigRequestProcessor;
 use super::external_agent_session_import::ExternalAgentSessionImporter;
@@ -281,7 +282,16 @@ impl ExternalAgentConfigRequestProcessor {
             )
         });
         let pending_plugin_imports = import_outcome.pending_plugin_imports;
-        tokio::spawn(async move {
+        let background_import_span = tracing::info_span!(
+            parent: None,
+            "app_server.external_agent_config_import",
+            external_agent_config.import.id = %import_id,
+            external_agent_config.import.session_count = pending_session_imports.len(),
+            external_agent_config.import.plugin_count = pending_plugin_imports.len(),
+            result = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&background_import_span);
+        let background_import_task = async move {
             let session_progress_outgoing = Arc::clone(&outgoing);
             let session_import_id = import_id.clone();
             let session_imports = async move {
@@ -340,6 +350,15 @@ impl ExternalAgentConfigRequestProcessor {
                 thread_manager.plugins_manager().clear_cache();
                 thread_manager.skills_service().clear_cache();
             }
+            let result = if completed_item_results
+                .iter()
+                .any(|item_result| item_result.error_count > 0)
+            {
+                "partial_error"
+            } else {
+                "success"
+            };
+            tracing::Span::current().record("result", result);
             send_completed_import_notification(
                 &outgoing,
                 state_db.as_ref(),
@@ -349,7 +368,8 @@ impl ExternalAgentConfigRequestProcessor {
                 &completed_item_results,
             )
             .await;
-        });
+        };
+        tokio::spawn(background_import_task.instrument(background_import_span));
 
         Ok(())
     }

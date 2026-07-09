@@ -822,3 +822,52 @@ async fn server_request_span_records_terminal_outcomes() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
+async fn detached_span_is_linked_without_holding_its_cause_open() {
+    let tracing = init_test_tracing();
+    tracing.exporter.reset();
+    let cause = tracing::info_span!("test.app_server.request");
+    let detached = cause.in_scope(|| {
+        let span = tracing::info_span!(parent: None, "test.app_server.detached");
+        crate::app_server_tracing::link_to_current_span(&span);
+        span
+    });
+
+    drop(cause);
+    let spans = wait_for_exported_spans(tracing, |spans| {
+        spans
+            .iter()
+            .any(|span| span.name == "test.app_server.request")
+    })
+    .await;
+    assert!(
+        !spans
+            .iter()
+            .any(|span| span.name == "test.app_server.detached")
+    );
+
+    drop(detached);
+    let spans = wait_for_exported_spans(tracing, |spans| {
+        spans
+            .iter()
+            .any(|span| span.name == "test.app_server.detached")
+    })
+    .await;
+    let cause = spans
+        .iter()
+        .find(|span| span.name == "test.app_server.request")
+        .expect("cause span should export");
+    let detached = spans
+        .iter()
+        .find(|span| span.name == "test.app_server.detached")
+        .expect("detached span should export");
+    assert_eq!(detached.parent_span_id, SpanId::INVALID);
+    assert!(
+        detached
+            .links
+            .iter()
+            .any(|link| link.span_context.span_id() == cause.span_context.span_id())
+    );
+}

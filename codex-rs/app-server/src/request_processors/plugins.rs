@@ -490,14 +490,20 @@ impl PluginRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         config_manager: ConfigManager,
     ) {
-        tokio::spawn(async move {
+        let span = tracing::info_span!(
+            parent: None,
+            "app_server.plugins.refresh_after_change",
+        );
+        crate::app_server_tracing::link_to_current_span(&span);
+        let refresh_task = async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
             crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
-        });
+        };
+        tokio::spawn(refresh_task.instrument(span));
     }
 
     fn clear_plugin_related_caches(&self) {
@@ -1862,8 +1868,14 @@ impl PluginRequestProcessor {
             let callback_url = config.mcp_oauth_callback_url.clone();
             let outgoing = Arc::clone(&self.outgoing);
             let notification_name = name.clone();
+            let oauth_span = tracing::info_span!(
+                parent: None,
+                "app_server.plugin_mcp_oauth_login",
+                result = tracing::field::Empty,
+            );
+            crate::app_server_tracing::link_to_current_span(&oauth_span);
 
-            tokio::spawn(async move {
+            let oauth_task = async move {
                 let oauth_client_id = server.oauth_client_id();
                 let first_attempt = perform_oauth_login_silent(
                     &name,
@@ -1904,6 +1916,8 @@ impl PluginRequestProcessor {
                     Ok(()) => (true, None),
                     Err(err) => (false, Some(err.to_string())),
                 };
+                tracing::Span::current()
+                    .record("result", if success { "success" } else { "error" });
 
                 let notification = ServerNotification::McpServerOauthLoginCompleted(
                     McpServerOauthLoginCompletedNotification {
@@ -1914,7 +1928,8 @@ impl PluginRequestProcessor {
                     },
                 );
                 outgoing.send_server_notification(notification).await;
-            });
+            };
+            tokio::spawn(oauth_task.instrument(oauth_span));
         }
     }
 

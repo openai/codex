@@ -32,6 +32,10 @@ where
     tokio::task::spawn_blocking(move || span.in_scope(function))
 }
 
+pub(crate) fn link_to_current_span(span: &Span) {
+    span.follows_from(Span::current());
+}
+
 pub(crate) fn request_span(
     request: &JSONRPCRequest,
     transport: &AppServerTransport,

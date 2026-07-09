@@ -73,8 +73,20 @@ impl WindowsSandboxRequestProcessor {
 
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
+        let setup_mode_name = match setup_mode {
+            CoreWindowsSandboxSetupMode::Elevated => "elevated",
+            CoreWindowsSandboxSetupMode::Unelevated => "unelevated",
+        };
+        let setup_span = tracing::info_span!(
+            parent: None,
+            "app_server.windows_sandbox_setup",
+            app_server.connection_id = %connection_id,
+            windows_sandbox.setup.mode = setup_mode_name,
+            result = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&setup_span);
 
-        tokio::spawn(async move {
+        let setup_task = async move {
             let setup_request = WindowsSandboxSetupRequest {
                 mode: setup_mode,
                 permission_profile: config.permissions.effective_permission_profile(),
@@ -85,6 +97,14 @@ impl WindowsSandboxRequestProcessor {
             };
             let setup_result =
                 codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await;
+            tracing::Span::current().record(
+                "result",
+                if setup_result.is_ok() {
+                    "success"
+                } else {
+                    "error"
+                },
+            );
             let notification = WindowsSandboxSetupCompletedNotification {
                 mode: match setup_mode {
                     CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,
@@ -99,7 +119,8 @@ impl WindowsSandboxRequestProcessor {
                     ServerNotification::WindowsSandboxSetupCompleted(notification),
                 )
                 .await;
-        });
+        };
+        tokio::spawn(setup_task.instrument(setup_span));
         Ok(())
     }
 }

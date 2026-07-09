@@ -235,14 +235,20 @@ impl AccountRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         config_manager: ConfigManager,
     ) {
-        tokio::spawn(async move {
+        let span = tracing::info_span!(
+            parent: None,
+            "app_server.plugins.refresh_after_account_change",
+        );
+        crate::app_server_tracing::link_to_current_span(&span);
+        let refresh_task = async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
             crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
-        });
+        };
+        tokio::spawn(refresh_task.instrument(span));
     }
 
     async fn login_v2(
@@ -464,7 +470,15 @@ impl AccountRequestProcessor {
         let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
-        tokio::spawn(async move {
+        let login_span = tracing::info_span!(
+            parent: None,
+            "app_server.account_login",
+            account.login.id = %login_id,
+            account.login.mode = "browser",
+            result = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&login_span);
+        let login_task = async move {
             let (success, error_msg) = match tokio::time::timeout(
                 LOGIN_CHATGPT_TIMEOUT,
                 server.block_until_done(),
@@ -478,6 +492,7 @@ impl AccountRequestProcessor {
                     (false, Some("Login timed out".to_string()))
                 }
             };
+            tracing::Span::current().record("result", if success { "success" } else { "error" });
 
             Self::send_chatgpt_login_completion_notifications(
                 &outgoing_clone,
@@ -495,7 +510,8 @@ impl AccountRequestProcessor {
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
-        });
+        };
+        tokio::spawn(login_task.instrument(login_span));
 
         Ok(LoginAccountResponse::Chatgpt {
             login_id: login_id.to_string(),
@@ -542,7 +558,15 @@ impl AccountRequestProcessor {
         let thread_manager = Arc::clone(&self.thread_manager);
         let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
-        tokio::spawn(async move {
+        let login_span = tracing::info_span!(
+            parent: None,
+            "app_server.account_login",
+            account.login.id = %login_id,
+            account.login.mode = "device_code",
+            result = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&login_span);
+        let login_task = async move {
             let (success, error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
                     (false, Some("Login was not completed".to_string()))
@@ -554,6 +578,7 @@ impl AccountRequestProcessor {
                     }
                 }
             };
+            tracing::Span::current().record("result", if success { "success" } else { "error" });
 
             Self::send_chatgpt_login_completion_notifications(
                 &outgoing_clone,
@@ -570,7 +595,8 @@ impl AccountRequestProcessor {
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
-        });
+        };
+        tokio::spawn(login_task.instrument(login_span));
 
         Ok(LoginAccountResponse::ChatgptDeviceCode {
             login_id: login_id.to_string(),
