@@ -44,6 +44,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
 use crate::session::Codex;
 use crate::session::session::Session;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 use codex_config::types::McpServerConfig;
 use codex_features::Feature;
@@ -299,9 +300,12 @@ impl GuardianReviewSessionManager {
     ) -> BoxFuture<'_, anyhow::Result<()>> {
         // Boxing breaks the Session::new -> Guardian -> Session::new future recursion.
         Box::pin(async move {
-            let spawn_config = guardian_review_session_config(&parent_session, &parent_turn)
-                .await?
-                .spawn_config;
+            let spawn_config = guardian_review_session_config(
+                &parent_session,
+                &StepContextSeed::from_turn(Arc::clone(&parent_turn)),
+            )
+            .await?
+            .spawn_config;
             let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
                 &spawn_config,
                 parent_session.user_instructions().await,

@@ -383,7 +383,7 @@ impl Session {
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
-        let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
+        let reasoning_effort = turn_context.turn_start_reasoning_effort_for_tracing();
         let task_span = info_span!(
             "turn",
             otel.name = span_name,

@@ -4487,6 +4487,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         ..ShellEnvironmentPolicy::default()
     };
     config.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
     turn.config = Arc::new(config);
     let temp_dir = tempfile::tempdir().expect("temp dir");
     #[allow(deprecated)]
@@ -4513,12 +4514,18 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+    let turn = Arc::new(turn);
+    let mut step_context = StepContext::for_test(Arc::clone(&turn));
+    Arc::get_mut(&mut step_context)
+        .expect("step context should be uniquely owned")
+        .reasoning_effort = Some(ReasoningEffort::Low);
+
+    let config = build_agent_spawn_config(&base_instructions, &step_context).expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.config.model_reasoning_effort.clone();
+    expected.model_reasoning_effort = Some(ReasoningEffort::Low);
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]
@@ -4542,18 +4549,25 @@ async fn build_agent_resume_config_clears_base_instructions() {
     let (_session, mut turn) = make_session_and_context().await;
     let mut base_config = (*turn.config).clone();
     base_config.base_instructions = Some("caller-base".to_string());
+    base_config.model_reasoning_effort = Some(ReasoningEffort::High);
     turn.config = Arc::new(base_config);
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_resume_config(&turn).expect("resume config");
+    let turn = Arc::new(turn);
+    let mut step_context = StepContext::for_test(Arc::clone(&turn));
+    Arc::get_mut(&mut step_context)
+        .expect("step context should be uniquely owned")
+        .reasoning_effort = Some(ReasoningEffort::Low);
+
+    let config = build_agent_resume_config(&step_context).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.config.model_reasoning_effort.clone();
+    expected.model_reasoning_effort = Some(ReasoningEffort::Low);
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     #[allow(deprecated)]

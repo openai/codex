@@ -262,6 +262,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
         Arc::clone(&turn),
+        StepContext::for_test(Arc::clone(&turn)),
         "call-unified-denied".to_string(),
     );
     let request = ExecCommandRequest {

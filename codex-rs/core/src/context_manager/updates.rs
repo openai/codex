@@ -9,6 +9,7 @@ use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -63,20 +64,18 @@ fn build_permissions_update_item(
 
 fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
-    next: &TurnContext,
+    next: &StepContext,
 ) -> Option<String> {
-    if !next.config.include_collaboration_mode_instructions {
+    if !next.turn.config.include_collaboration_mode_instructions {
         return None;
     }
 
     let prev = previous?;
-    if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
+    let collaboration_mode = next.collaboration_mode();
+    if prev.collaboration_mode.as_ref() != Some(&collaboration_mode) {
         // If the next mode has empty developer instructions, this returns None and we emit no
         // update, so prior collaboration instructions remain in the prompt history.
-        Some(
-            CollaborationModeInstructions::from_collaboration_mode(&next.collaboration_mode)?
-                .render(),
-        )
+        Some(CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)?.render())
     } else {
         None
     }
@@ -84,7 +83,7 @@ fn build_collaboration_mode_update_item(
 
 fn build_multi_agent_mode_update_item(
     previous: Option<&TurnContextItem>,
-    next: &TurnContext,
+    next: &StepContext,
 ) -> Option<String> {
     let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(next);
     let previous = previous?;
@@ -240,10 +239,11 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
 pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
-    next: &TurnContext,
+    next: &StepContext,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
+    let turn_context = next.turn.as_ref();
     // TODO(ccunningham): build_settings_update_items still does not cover every
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
@@ -251,12 +251,12 @@ pub(crate) fn build_settings_update_items(
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
-        build_model_instructions_update_item(previous_turn_settings, next),
-        build_permissions_update_item(previous, next, exec_policy),
+        build_model_instructions_update_item(previous_turn_settings, turn_context),
+        build_permissions_update_item(previous, turn_context, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_multi_agent_mode_update_item(previous, next),
-        build_realtime_update_item(previous, previous_turn_settings, next),
-        build_personality_update_item(previous, next, personality_feature_enabled),
+        build_realtime_update_item(previous, previous_turn_settings, turn_context),
+        build_personality_update_item(previous, turn_context, personality_feature_enabled),
     ]
     .into_iter()
     .flatten()

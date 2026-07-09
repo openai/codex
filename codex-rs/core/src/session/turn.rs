@@ -204,7 +204,7 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
+    track_turn_resolved_config_analytics(&sess, first_step_context.as_ref(), &input).await;
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
@@ -742,9 +742,10 @@ async fn build_extension_turn_input_items(
 )]
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
 ) {
+    let turn_context = step_context.turn.as_ref();
     let thread_config = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
@@ -777,7 +778,7 @@ async fn track_turn_resolved_config_analytics(
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
-            reasoning_effort: turn_context.config.model_reasoning_effort.clone(),
+            reasoning_effort: step_context.reasoning_effort.clone(),
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
                 .config
@@ -1935,7 +1936,7 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let turn_context = &step_context.turn;
+    let turn_context = Arc::clone(&step_context.turn);
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),

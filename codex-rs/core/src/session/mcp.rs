@@ -1,3 +1,4 @@
+use super::step_context::StepContextSeed;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
@@ -623,7 +624,7 @@ async fn review_guardian_mcp_elicitation(
     let review_id = crate::guardian::new_guardian_review_id();
     let decision = crate::guardian::review_approval_request(
         &session,
-        &turn_context,
+        &StepContextSeed::from_turn(Arc::clone(&turn_context)),
         review_id.clone(),
         guardian_request,
         /*retry_reason*/ None,

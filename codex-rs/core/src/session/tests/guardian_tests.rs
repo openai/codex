@@ -4,6 +4,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolOutput;
@@ -132,7 +133,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     let response = tokio::time::timeout(
         Duration::from_secs(45),
         session.request_permissions_for_environment(
-            &turn_context,
+            &StepContextSeed::from_turn(Arc::clone(&turn_context)),
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
                 environment_id: None,
@@ -227,7 +228,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    &StepContextSeed::from_turn(Arc::clone(&turn_context)),
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
                         environment_id: None,
@@ -531,12 +532,13 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
     let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
     let initial_context_injection = InitialContextInjection::BeforeLastUserMessage(world_state);
 
     let (refreshed, _) = crate::compact_remote::process_compacted_history(
         &session,
-        &turn_context,
+        &step_context,
         vec![
             ResponseItem::Message {
                 id: None,

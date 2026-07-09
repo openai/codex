@@ -3,6 +3,7 @@ use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
@@ -154,34 +155,36 @@ pub(crate) fn parse_collab_input(
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
-/// runtime-owned fields carried on `turn`, including model selection, reasoning settings,
+/// runtime-owned fields carried on the turn and step contexts, including model selection, reasoning settings,
 /// approval policy, sandbox, and cwd. Role-specific overrides are layered after this step;
 /// skipping this helper and cloning stale config state directly can send the child agent out with
 /// the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
-    turn: &TurnContext,
+    step_context: &StepContext,
 ) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn)?;
+    let mut config = build_agent_shared_config(step_context)?;
     config.base_instructions = Some(base_instructions.text.clone());
     Ok(config)
 }
 
-pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn)?;
+pub(crate) fn build_agent_resume_config(
+    step_context: &StepContext,
+) -> Result<Config, FunctionCallError> {
+    let mut config = build_agent_shared_config(step_context)?;
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
 }
 
-fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
+fn build_agent_shared_config(step_context: &StepContext) -> Result<Config, FunctionCallError> {
+    let turn = step_context.turn.as_ref();
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.info().clone();
-    config.model_reasoning_effort = turn
-        .config
-        .model_reasoning_effort
+    config.model_reasoning_effort = step_context
+        .reasoning_effort
         .clone()
         .or_else(|| turn.model_info.default_reasoning_level.clone());
     config.model_reasoning_summary = Some(turn.reasoning_summary);

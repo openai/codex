@@ -51,6 +51,7 @@ use crate::session::CodexSpawnOk;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -514,7 +515,7 @@ async fn handle_exec_approval(
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
+            StepContextSeed::from_turn(Arc::clone(parent_ctx)),
             new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
@@ -627,7 +628,7 @@ async fn handle_patch_approval(
             .join("\n");
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
+            StepContextSeed::from_turn(Arc::clone(parent_ctx)),
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
@@ -749,7 +750,7 @@ async fn maybe_auto_review_mcp_request_user_input(
     let review_cancel = cancel_token.child_token();
     let review_rx = spawn_approval_request_review(
         Arc::clone(parent_session),
-        Arc::clone(parent_ctx),
+        StepContextSeed::from_turn(Arc::clone(parent_ctx)),
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
@@ -809,8 +810,9 @@ async fn handle_request_permissions(
         #[allow(deprecated)]
         parent_ctx.cwd.clone()
     });
+    let step_context_seed = StepContextSeed::from_turn(Arc::clone(parent_ctx));
     let response_fut = parent_session.request_permissions_for_cwd(
-        parent_ctx,
+        &step_context_seed,
         call_id.clone(),
         args,
         cwd,

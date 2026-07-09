@@ -13,6 +13,7 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
+use crate::session::step_context::StepContextSeed;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -71,7 +72,7 @@ impl ToolOrchestrator {
     {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
-            &tool_ctx.turn.sub_id,
+            tool_ctx.step_context.as_ref(),
             managed_network_active,
             attempt.sandbox,
             tool.network_approval_spec(req, tool_ctx),
@@ -85,6 +86,7 @@ impl ToolOrchestrator {
         let attempt_tool_ctx = ToolCtx {
             session: tool_ctx.session.clone(),
             turn: tool_ctx.turn.clone(),
+            step_context: tool_ctx.step_context.clone(),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
@@ -172,6 +174,7 @@ impl ToolOrchestrator {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
+                        step_context: &tool_ctx.step_context,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: None,
@@ -207,6 +210,7 @@ impl ToolOrchestrator {
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
+                    step_context: &tool_ctx.step_context,
                     call_id: &tool_ctx.call_id,
                     guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason.clone(),
@@ -404,6 +408,7 @@ impl ToolOrchestrator {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
+                        step_context: &tool_ctx.step_context,
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
@@ -579,7 +584,7 @@ impl ToolOrchestrator {
                 Ok(action) => {
                     review_approval_request(
                         approval_ctx.session,
-                        approval_ctx.turn,
+                        &StepContextSeed::from(approval_ctx.step_context.as_ref()),
                         review_id,
                         action,
                         approval_ctx.retry_reason.clone(),

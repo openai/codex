@@ -1,7 +1,7 @@
 use super::*;
 use crate::agent::next_thread_spawn_depth;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
 use codex_tools::ToolSpec;
 use std::sync::Arc;
@@ -35,6 +35,7 @@ async fn handle_resume_agent(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         payload,
         call_id,
         ..
@@ -87,7 +88,7 @@ async fn handle_resume_agent(
     let (receiver_agent, error) = if matches!(status, AgentStatus::NotFound) {
         match Box::pin(try_resume_closed_agent(
             &session,
-            &turn,
+            step_context.as_ref(),
             receiver_thread_id,
             child_depth,
         ))
@@ -187,11 +188,12 @@ impl ToolOutput for ResumeAgentResult {
 
 async fn try_resume_closed_agent(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
+    step_context: &StepContext,
     receiver_thread_id: ThreadId,
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref())?;
+    let turn = step_context.turn.as_ref();
+    let config = build_agent_resume_config(step_context)?;
     Box::pin(session.services.agent_control.resume_agent_from_rollout(
         config,
         receiver_thread_id,

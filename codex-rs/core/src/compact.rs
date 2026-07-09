@@ -70,14 +70,14 @@ pub(crate) enum InitialContextInjection {
 
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Return the rendered state with its items so history and its baseline stay identical.
     match initial_context_injection {
         InitialContextInjection::BeforeLastUserMessage(world_state) => {
             let items = sess
-                .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+                .build_initial_context_with_world_state(step_context, world_state.as_ref())
                 .await;
             (items, Some(Arc::clone(world_state)))
         }
@@ -337,7 +337,7 @@ async fn run_compact_task_inner_impl(
 
     let (initial_context, world_state_baseline) = build_compaction_initial_context(
         sess.as_ref(),
-        turn_context.as_ref(),
+        step_context.as_ref(),
         &initial_context_injection,
     )
     .await;
@@ -348,7 +348,7 @@ async fn run_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(turn_context.to_turn_context_item())
+            Some(step_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {

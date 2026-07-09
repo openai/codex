@@ -8,6 +8,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -22,6 +24,7 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -243,6 +246,7 @@ struct ActiveNetworkApprovalCall {
     command: String,
     environment_id: String,
     cancellation_token: CancellationToken,
+    reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
 enum ActiveNetworkApprovalAttribution {
@@ -298,6 +302,7 @@ impl NetworkApprovalService {
         command: String,
         environment_id: String,
         cancellation_token: CancellationToken,
+        reasoning_effort: Option<ReasoningEffortConfig>,
     ) {
         let mut calls = self.calls.lock().await;
         let key = registration_id.clone();
@@ -310,6 +315,7 @@ impl NetworkApprovalService {
                 command,
                 environment_id,
                 cancellation_token,
+                reasoning_effort,
             }),
         );
     }
@@ -632,9 +638,16 @@ impl NetworkApprovalService {
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
+            let step_context_seed = owner_call.as_ref().map_or_else(
+                || StepContextSeed::from_turn(Arc::clone(&turn_context)),
+                |call| StepContextSeed {
+                    turn: Arc::clone(&turn_context),
+                    reasoning_effort: call.reasoning_effort.clone(),
+                },
+            );
             review_approval_request(
                 &session,
-                &turn_context,
+                &step_context_seed,
                 review_id,
                 GuardianApprovalRequest::NetworkAccess {
                     id: guardian_approval_id.clone(),
@@ -849,7 +862,7 @@ pub(crate) fn build_network_policy_decider(
 
 pub(crate) async fn begin_network_approval(
     session: &Session,
-    turn_id: &str,
+    step_context: &StepContext,
     managed_network_active: bool,
     selected_sandbox: SandboxType,
     spec: Option<NetworkApprovalSpec>,
@@ -890,11 +903,12 @@ pub(crate) async fn begin_network_approval(
         .network_approval
         .register_call(
             registration_id.clone(),
-            turn_id.to_string(),
+            step_context.turn.sub_id.clone(),
             trigger,
             command,
             environment_id,
             cancellation_token.clone(),
+            step_context.reasoning_effort.clone(),
         )
         .await;
 

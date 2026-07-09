@@ -19,6 +19,7 @@ use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -1274,7 +1275,7 @@ async fn maybe_request_mcp_tool_approval(
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
-            turn_context,
+            &StepContextSeed::from(step_context.as_ref()),
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             /*retry_reason*/ None,

@@ -212,8 +212,8 @@ async fn run_remote_compact_task_inner_impl(
         analytics_details,
     )
     .await;
-    let (attempt, compaction_turn_context) = match attempt {
-        Ok(attempt) => (attempt, turn_context),
+    let (attempt, compaction_step_context) = match attempt {
+        Ok(attempt) => (attempt, step_context),
         Err(error) => {
             let Some(fallback_step_context) = fallback_step_context else {
                 return Err(error);
@@ -247,11 +247,12 @@ async fn run_remote_compact_task_inner_impl(
                 fallback_result.as_ref().err(),
             );
             match fallback_result {
-                Ok(attempt) => (attempt, fallback_turn_context),
+                Ok(attempt) => (attempt, fallback_step_context),
                 Err(_) => return Err(error),
             }
         }
     };
+    let compaction_turn_context = compaction_step_context.turn.as_ref();
     let RemoteCompactAttempt {
         new_history,
         trace_input_history,
@@ -259,7 +260,7 @@ async fn run_remote_compact_task_inner_impl(
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
-        compaction_turn_context.as_ref(),
+        compaction_step_context.as_ref(),
         new_history,
         &initial_context_injection,
     )
@@ -268,7 +269,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(compaction_turn_context.to_turn_context_item())
+            Some(compaction_step_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {
@@ -287,7 +288,7 @@ async fn run_remote_compact_task_inner_impl(
         replacement_history: &new_history,
     });
     sess.replace_compacted_history(
-        compaction_turn_context.as_ref(),
+        compaction_turn_context,
         new_history,
         reference_context_item,
         world_state_baseline,
@@ -303,7 +304,7 @@ async fn run_remote_compact_task_inner_impl(
 
 pub(crate) async fn process_compacted_history(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
@@ -311,7 +312,7 @@ pub(crate) async fn process_compacted_history(
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
     let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess, turn_context, initial_context_injection).await;
+        build_compaction_initial_context(sess, step_context, initial_context_injection).await;
 
     compacted_history.retain(should_keep_compacted_history_item);
     (

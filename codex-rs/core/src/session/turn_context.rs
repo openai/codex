@@ -168,19 +168,17 @@ impl TurnContext {
         )
     }
 
-    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        if self.model_info.supports_reasoning_summaries {
+    /// Resolves effort for the turn span, which is created before the first step is captured.
+    pub(crate) fn turn_start_reasoning_effort_for_tracing(&self) -> String {
+        let reasoning_effort = if self.model_info.supports_reasoning_summaries {
             self.config
                 .model_reasoning_effort
                 .clone()
                 .or_else(|| self.model_info.default_reasoning_level.clone())
         } else {
             None
-        }
-    }
-
-    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
-        self.effective_reasoning_effort()
+        };
+        reasoning_effort
             .map(|effort| effort.to_string())
             .unwrap_or_else(|| "default".to_string())
     }
@@ -333,7 +331,7 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    pub(super) fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -349,34 +347,7 @@ impl TurnContext {
             .then_some(file_system_sandbox_policy)
     }
 
-    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let workspace_roots = self.config.effective_workspace_roots();
-        #[allow(deprecated)]
-        let cwd = self.cwd.clone();
-        TurnContextItem {
-            turn_id: Some(self.sub_id.clone()),
-            cwd,
-            workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
-            current_date: self.current_date.clone(),
-            timezone: self.timezone.clone(),
-            approval_policy: self.approval_policy.value(),
-            sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.permission_profile()),
-            network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
-            model: self.model_info.slug.clone(),
-            comp_hash: self.model_info.comp_hash.clone(),
-            personality: self.personality,
-            collaboration_mode: Some(self.collaboration_mode.clone()),
-            multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
-            realtime_active: Some(self.realtime_active),
-            effort: self.config.model_reasoning_effort.clone(),
-            summary: ReasoningSummaryConfig::Auto,
-        }
-    }
-
-    fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
+    pub(super) fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
         let network = self
             .config
             .config_layer_stack

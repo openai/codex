@@ -313,6 +313,7 @@ async fn register_call_with_default_shell_trigger(
             "curl https://example.com".to_string(),
             "local".to_string(),
             cancellation_token.clone(),
+            /*reasoning_effort*/ None,
         )
         .await;
     cancellation_token
@@ -340,6 +341,7 @@ async fn active_call_preserves_triggering_command_context() {
             "curl https://example.com".to_string(),
             "remote".to_string(),
             CancellationToken::new(),
+            /*reasoning_effort*/ None,
         )
         .await;
 

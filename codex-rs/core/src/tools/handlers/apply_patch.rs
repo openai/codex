@@ -11,6 +11,7 @@ use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
@@ -445,6 +446,7 @@ impl ApplyPatchHandler {
                         let tool_ctx = ToolCtx {
                             session: session.clone(),
                             turn: turn.clone(),
+                            step_context: step_context.clone(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.clone(),
                         };
@@ -550,6 +552,7 @@ pub(crate) async fn intercept_apply_patch(
     turn_environment: TurnEnvironment,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
@@ -608,6 +611,7 @@ pub(crate) async fn intercept_apply_patch(
                     let tool_ctx = ToolCtx {
                         session: session.clone(),
                         turn: turn.clone(),
+                        step_context,
                         call_id: call_id.to_string(),
                         tool_name: ToolName::plain(tool_name),
                     };

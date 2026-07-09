@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::tests::make_session_and_context_with_rx;
+use crate::session::step_context::StepContextSeed;
 use crate::state::ActiveTurn;
 
 async fn wait_until_held(pause_state: &mut watch::Receiver<bool>) {
@@ -114,7 +115,7 @@ async fn permission_request_holds_an_elicitation_until_response() {
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    &StepContextSeed::from_turn(Arc::clone(&turn_context)),
                     "call-1".to_string(),
                     RequestPermissionsArgs {
                         environment_id: None,

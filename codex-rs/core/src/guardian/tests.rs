@@ -7,6 +7,7 @@ use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::session::session::Session;
+use crate::session::step_context::StepContextSeed;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
@@ -1151,7 +1152,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
 
     let decision = review_approval_request_with_cancel(
         &session,
-        &turn,
+        &StepContextSeed::from_turn(Arc::clone(&turn)),
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
@@ -2321,7 +2322,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &StepContextSeed::from_turn(Arc::clone(&turn)),
         "review-shell-guardian-error".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-error".to_string(),
@@ -2461,7 +2462,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &StepContextSeed::from_turn(Arc::clone(&turn)),
         "review-missing-assessment".to_string(),
         guardian_shell_request("shell-missing-assessment"),
         /*retry_reason*/ None,
@@ -2565,7 +2566,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &StepContextSeed::from_turn(Arc::clone(&turn)),
         "review-exhausted-retry".to_string(),
         guardian_shell_request("shell-exhausted-retry"),
         /*retry_reason*/ None,
@@ -2616,7 +2617,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
 
     let decision = review_approval_request(
         &session,
-        &turn,
+        &StepContextSeed::from_turn(Arc::clone(&turn)),
         "review-valid-denial".to_string(),
         guardian_shell_request("shell-valid-denial"),
         /*retry_reason*/ None,
@@ -2719,7 +2720,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         assert_eq!(
             review_approval_request(
                 &session,
-                &turn,
+                &StepContextSeed::from_turn(Arc::clone(&turn)),
                 "review-shell-guardian-1".to_string(),
                 initial_request,
                 /*retry_reason*/ None
@@ -2773,7 +2774,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         let mut second_review = tokio::spawn(async move {
             review_approval_request(
                 &session_for_second,
-                &turn_for_second,
+                &StepContextSeed::from_turn(Arc::clone(&turn_for_second)),
                 "review-shell-guardian-2".to_string(),
                 second_request,
                 Some("trunk follow-up".to_string()),
@@ -2820,7 +2821,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
 
         let third_decision = review_approval_request(
             &session,
-            &turn,
+            &StepContextSeed::from_turn(Arc::clone(&turn)),
             "review-shell-guardian-3".to_string(),
             third_request,
             Some("parallel follow-up".to_string()),

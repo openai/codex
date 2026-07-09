@@ -227,6 +227,7 @@ impl ShellCommandHandler {
             prefix_rule,
             session,
             turn,
+            step_context,
             turn_environment,
             tracker,
             call_id,

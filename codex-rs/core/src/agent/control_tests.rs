@@ -11,6 +11,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::session::tests::turn_context_item_for_test;
 use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
@@ -983,7 +984,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             ],
         )
         .await;
-    let parent_reference_context_item = turn_context.to_turn_context_item();
+    let parent_reference_context_item = turn_context_item_for_test(&turn_context);
     parent_thread
         .codex
         .session
@@ -1187,7 +1188,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 previous_window_id: None,
                 window_id: None,
             }),
-            RolloutItem::TurnContext(turn_context.to_turn_context_item()),
+            RolloutItem::TurnContext(turn_context_item_for_test(&turn_context)),
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
@@ -1374,9 +1375,9 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     parent_thread
         .codex
         .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(
-            spawn_turn_context.to_turn_context_item(),
-        )])
+        .persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item_for_test(
+            &spawn_turn_context,
+        ))])
         .await;
     parent_thread
         .codex

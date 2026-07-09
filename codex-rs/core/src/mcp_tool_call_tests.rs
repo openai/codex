@@ -93,10 +93,11 @@ fn approval_metadata(
     }
 }
 
-fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {
+fn mcp_turn_metadata_context(step_context: &StepContext) -> McpTurnMetadataContext<'_> {
+    let turn_context = step_context.turn.as_ref();
     McpTurnMetadataContext {
         model: turn_context.model_info.slug.as_str(),
-        reasoning_effort: turn_context.effective_reasoning_effort(),
+        reasoning_effort: step_context.effective_reasoning_effort(),
     }
 }
 
@@ -1091,12 +1092,17 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
-    let (_, turn_context) = make_session_and_context().await;
+    let (_, mut turn_context) = make_session_and_context().await;
+    Arc::make_mut(&mut turn_context.config).model_reasoning_effort =
+        Some(codex_protocol::openai_models::ReasoningEffort::High);
     let turn_context = Arc::new(turn_context);
-    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let mut step_context = StepContext::for_test(Arc::clone(&turn_context));
+    Arc::get_mut(&mut step_context)
+        .expect("step context should be uniquely owned")
+        .reasoning_effort = Some(codex_protocol::openai_models::ReasoningEffort::Low);
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&step_context))
         .expect("turn metadata");
 
     let meta = build_mcp_tool_call_request_meta(
@@ -1204,7 +1210,7 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&step_context))
         .expect("turn metadata");
     let mut metadata = approval_metadata(
         /*connector_id*/ None, /*connector_name*/ None,
@@ -1325,7 +1331,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&step_context))
         .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
@@ -1378,7 +1384,7 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let expected_turn_metadata = turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&step_context))
         .expect("turn metadata");
 
     assert_eq!(

@@ -13,6 +13,7 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContextSeed;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
@@ -38,6 +39,7 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -236,6 +238,7 @@ pub(super) async fn try_run_zsh_fork(
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
+        reasoning_effort: ctx.step_context.reasoning_effort.clone(),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
@@ -320,6 +323,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
+        reasoning_effort: ctx.step_context.reasoning_effort.clone(),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
@@ -355,6 +359,7 @@ struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,
+    reasoning_effort: Option<ReasoningEffortConfig>,
     call_id: String,
     environment_id: String,
     tool_name: GuardianCommandSource,
@@ -451,6 +456,10 @@ impl CoreShellActionProvider {
         let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
+        let step_context_seed = StepContextSeed {
+            turn: Arc::clone(&turn),
+            reasoning_effort: self.reasoning_effort.clone(),
+        };
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
@@ -493,7 +502,7 @@ impl CoreShellActionProvider {
                 if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
-                        &turn,
+                        &step_context_seed,
                         review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
