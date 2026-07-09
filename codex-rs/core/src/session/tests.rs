@@ -8020,17 +8020,30 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
 }
 
 #[tokio::test]
-async fn record_context_updates_emits_environment_item_for_network_changes() {
-    let (session, previous_context) = make_session_and_context().await;
-    let previous_context = Arc::new(previous_context);
-    let mut current_context = previous_context
-        .with_model(
-            previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+async fn record_context_updates_emits_disabled_network_transition() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    let permission_profile = PermissionProfile::workspace_write();
+    let mut network_config = NetworkProxyConfig::default();
+    network_config.enabled = true;
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        network_config,
+        /*requirements*/ None,
+        &permission_profile,
+    )
+    .expect("build network proxy spec");
+    let started_proxy = network_spec
+        .start_proxy(
+            &permission_profile,
+            /*policy_decider*/ None,
+            /*blocked_request_observer*/ None,
+            /*enable_network_approval_flow*/ false,
+            crate::config::NetworkProxyAuditMetadata::default(),
         )
-        .await;
+        .await
+        .expect("start network proxy");
+    previous_context.network = Some(started_proxy.proxy());
 
-    let mut config = (*current_context.config).clone();
+    let mut config = (*previous_context.config).clone();
     let mut requirements = config.config_layer_stack.requirements().clone();
     requirements.network = Some(Sourced::new(
         NetworkConstraints {
@@ -8065,7 +8078,15 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
         config.config_layer_stack.requirements_toml().clone(),
     )
     .expect("rebuild config layer stack with network requirements");
-    current_context.config = Arc::new(config);
+    previous_context.config = Arc::new(config);
+    let previous_context = Arc::new(previous_context);
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.network = None;
 
     let update_items =
         record_context_update_items(&session, previous_context, current_context).await;
@@ -8074,9 +8095,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
         .into_iter()
         .find(|text| text.contains("<environment_context>"))
         .expect("environment update item should be emitted");
-    assert!(environment_update.contains(
-        "<network enabled=\"true\"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>"
-    ));
+    assert!(environment_update.contains("<network enabled=\"false\"></network>"));
 }
 
 #[tokio::test]

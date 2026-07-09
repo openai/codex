@@ -1372,6 +1372,7 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    #[cfg(target_os = "windows")]
     use super::is_unrecoverable_windows_network_config_error;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;

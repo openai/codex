@@ -369,6 +369,7 @@ fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContex
         .as_ref()?;
 
     Some(NetworkContext::new(
+        turn_context.network.is_some(),
         network
             .domains
             .as_ref()

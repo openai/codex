@@ -756,10 +756,13 @@ impl WindowsRequirementsToml {
     }
 
     pub fn allows_only_elevated_sandbox(&self) -> bool {
-        matches!(
-            self.allowed_sandbox_implementations.as_deref(),
-            Some([WindowsSandboxModeToml::Elevated])
-        )
+        let Some(modes) = self.allowed_sandbox_implementations.as_deref() else {
+            return false;
+        };
+        !modes.is_empty()
+            && modes
+                .iter()
+                .all(|&mode| mode == WindowsSandboxModeToml::Elevated)
     }
 }
 
