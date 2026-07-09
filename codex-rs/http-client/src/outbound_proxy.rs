@@ -352,12 +352,32 @@ enum SystemProxyDecision {
 }
 
 fn resolve_system_proxy(request_url: &str, origin: &RequestOrigin) -> SystemProxyDecision {
-    if let Some(decision) = cached_system_proxy_decision(request_url) {
+    let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    resolve_system_proxy_with(cache, request_url, origin, resolve_platform_system_proxy)
+}
+
+fn resolve_system_proxy_with(
+    cache: &Mutex<HashMap<String, CachedSystemProxyDecision>>,
+    request_url: &str,
+    origin: &RequestOrigin,
+    resolve_platform_system_proxy: impl FnOnce(&str, &RequestOrigin) -> SystemProxyDecision,
+) -> SystemProxyDecision {
+    let mut cache = match cache.lock() {
+        Ok(cache) => cache,
+        Err(error) => panic!("system proxy cache lock should not be poisoned: {error}"),
+    };
+    let cache_key = system_proxy_cache_key(request_url);
+    if let Some(decision) =
+        cached_system_proxy_decision_from_cache(&mut cache, &cache_key, Instant::now())
+    {
         return decision;
     }
 
+    // Keep cache misses single-flight. Platform PAC/WPAD APIs are synchronous, so async callers
+    // run this work on the blocking pool; serializing misses prevents concurrent requests from
+    // consuming an unbounded number of blocking workers while system lookup is pending.
     let decision = resolve_platform_system_proxy(request_url, origin);
-    cache_system_proxy_decision(request_url, decision.clone());
+    insert_system_proxy_cache_entry(&mut cache, &cache_key, decision.clone(), Instant::now());
     decision
 }
 
@@ -390,18 +410,28 @@ struct CachedSystemProxyDecision {
 static SYSTEM_PROXY_CACHE: OnceLock<Mutex<HashMap<String, CachedSystemProxyDecision>>> =
     OnceLock::new();
 
+#[cfg(test)]
 fn cached_system_proxy_decision(request_url: &str) -> Option<SystemProxyDecision> {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().ok()?;
     let key = system_proxy_cache_key(request_url);
-    let cached = cache.get(&key)?;
-    if cached.expires_at > Instant::now() {
+    cached_system_proxy_decision_from_cache(&mut cache, &key, Instant::now())
+}
+
+fn cached_system_proxy_decision_from_cache(
+    cache: &mut HashMap<String, CachedSystemProxyDecision>,
+    cache_key: &str,
+    now: Instant,
+) -> Option<SystemProxyDecision> {
+    let cached = cache.get(cache_key)?;
+    if cached.expires_at > now {
         return Some(cached.decision.clone());
     }
-    cache.remove(&key);
+    cache.remove(cache_key);
     None
 }
 
+#[cfg(test)]
 fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision) {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {

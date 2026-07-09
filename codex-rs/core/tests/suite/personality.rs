@@ -802,7 +802,12 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+        let models = manager
+            .list_models(
+                RefreshStrategy::OnlineIfUncached,
+                codex_core::test_support::default_http_client_factory(),
+            )
+            .await;
         if models.iter().any(|model| model.model == slug) {
             return;
         }

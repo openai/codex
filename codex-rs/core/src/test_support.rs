@@ -11,6 +11,8 @@ use codex_exec_server::EnvironmentManager;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructionsProvider;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -156,6 +158,10 @@ pub fn models_manager_with_provider(
 ) -> SharedModelsManager {
     let provider = create_model_provider(provider, Some(auth_manager));
     provider.models_manager(codex_home, /*config_model_catalog*/ None)
+}
+
+pub fn default_http_client_factory() -> HttpClientFactory {
+    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
 }
 
 pub fn get_model_offline(model: Option<&str>) -> String {
