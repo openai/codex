@@ -517,7 +517,7 @@ impl NetworkToml {
             config.enable_socks5_udp = enable_socks5_udp;
         }
         if let Some(enable_dns) = self.enable_dns {
-            config.network.enable_dns = enable_dns;
+            config.enable_dns = enable_dns;
         }
         if let Some(allow_upstream_proxy) = self.allow_upstream_proxy {
             config.allow_upstream_proxy = allow_upstream_proxy;
