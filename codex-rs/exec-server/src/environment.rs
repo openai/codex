@@ -608,10 +608,10 @@ impl Environment {
         }
     }
 
-    /// Returns the completed initial startup result without initiating startup.
-    pub fn startup_result(&self) -> Option<Result<(), ExecServerError>> {
+    /// Returns whether the environment can serve a request without waiting or reconnecting.
+    pub(crate) fn readiness_result(&self) -> Option<Result<(), ExecServerError>> {
         match &self.remote_client {
-            Some(client) => client.startup_result(),
+            Some(client) => client.readiness_result(),
             None => Some(Ok(())),
         }
     }
@@ -626,6 +626,14 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
+    }
+
+    /// Returns a filesystem view that fails instead of starting or waiting for a connection.
+    pub fn get_filesystem_without_reconnect(&self) -> Arc<dyn ExecutorFileSystem> {
+        match &self.remote_client {
+            Some(client) => Arc::new(RemoteFileSystem::new(client.fail_fast())),
+            None => Arc::clone(&self.filesystem),
+        }
     }
 }
 
@@ -1154,7 +1162,7 @@ mod tests {
         let status = manager.inspect_selected_capability_roots(&[selected_root]);
         assert!(status.ready_roots.is_empty());
         assert_eq!(status.warnings.len(), 1);
-        assert!(status.warnings[0].contains("environment `stdio` failed to start"));
+        assert!(status.warnings[0].contains("environment `stdio` is unavailable"));
     }
 
     #[tokio::test]

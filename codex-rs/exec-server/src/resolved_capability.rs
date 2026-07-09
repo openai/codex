@@ -21,11 +21,11 @@ pub struct ResolvedSelectedCapabilityRoot {
 }
 
 /// A passive view of selected capability roots and unavailable environments.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelectedCapabilityRootsStatus {
     /// Selected roots whose environments are ready.
     pub ready_roots: Vec<SelectedCapabilityRoot>,
-    /// Missing environments and completed startup failures.
+    /// Missing environments and terminal connection failures.
     pub warnings: Vec<String>,
 }
 
@@ -46,9 +46,9 @@ impl ResolvedSelectedCapabilityRoot {
 impl EnvironmentManager {
     /// Inspects selected roots without starting or waiting for an environment.
     ///
-    /// Still-starting environments are omitted. Missing environments and completed startup
-    /// failures are returned as warnings so read-only catalog clients can distinguish them from
-    /// an empty catalog.
+    /// Starting or recovering environments are omitted. Missing environments and terminal
+    /// connection failures are returned as warnings so read-only catalog clients can distinguish
+    /// them from an empty catalog.
     ///
     /// Environment IDs are stable identities, so callers can safely resolve a returned root by
     /// ID when they read it.
@@ -84,11 +84,11 @@ impl EnvironmentManager {
             if readiness.contains_key(environment_id) {
                 continue;
             }
-            let ready = match environment.startup_result() {
+            let ready = match environment.readiness_result() {
                 Some(Ok(())) => true,
                 Some(Err(error)) => {
                     warnings.push(format!(
-                        "selected capability environment `{environment_id}` failed to start: {error}"
+                        "selected capability environment `{environment_id}` is unavailable: {error}"
                     ));
                     false
                 }

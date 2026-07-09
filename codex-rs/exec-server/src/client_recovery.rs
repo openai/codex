@@ -15,6 +15,7 @@ use super::ExecServerClient;
 use super::ExecServerError;
 use super::Inner;
 use super::OrderedSessionEvents;
+use super::RecoveryPolicy;
 use super::SessionState;
 use super::disconnected_message;
 use super::fail_all_in_flight_work;
@@ -402,6 +403,7 @@ impl Inner {
         let rpc_client = Arc::new(rpc_client);
         let client = ExecServerClient {
             inner: Arc::clone(self),
+            recovery_policy: RecoveryPolicy::Wait,
         };
         // Resuming a session redirects notifications from its running processes
         // to this connection during initialize. Drain them immediately so a

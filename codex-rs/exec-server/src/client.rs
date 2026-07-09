@@ -218,9 +218,16 @@ enum ConnectionStatus {
     Failed(String),
 }
 
+#[derive(Clone, Copy)]
+enum RecoveryPolicy {
+    Wait,
+    FailFast,
+}
+
 #[derive(Clone)]
 pub struct ExecServerClient {
     inner: Arc<Inner>,
+    recovery_policy: RecoveryPolicy,
 }
 
 struct ActiveProcessStart {
@@ -239,6 +246,7 @@ type ConnectionAttempt = OnceCell<ConnectionResult>;
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: ExecServerTransportParams,
+    recovery_policy: RecoveryPolicy,
     // Saves the first startup result so callers share it and failures remain final.
     startup: Arc<ConnectionAttempt>,
     // The latest successful client, replaced whenever reconnecting succeeds.
@@ -250,6 +258,7 @@ impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
             transport_params,
+            recovery_policy: RecoveryPolicy::Wait,
             startup: Arc::new(ConnectionAttempt::new()),
             current_client: Arc::new(StdMutex::new(None)),
             reconnect: Arc::new(StdMutex::new(None)),
@@ -276,11 +285,21 @@ impl LazyRemoteExecServerClient {
         self.startup.get().is_some()
     }
 
-    pub(crate) fn startup_result(&self) -> Option<Result<(), ExecServerError>> {
-        self.startup.get().map(|result| match result {
-            Ok(_) => Ok(()),
-            Err(error) => Err(ExecServerError::ConnectionAttempt(Arc::clone(error))),
+    pub(crate) fn readiness_result(&self) -> Option<Result<(), ExecServerError>> {
+        if let Some(client) = self.cached_client() {
+            return client.readiness_result();
+        }
+        self.startup.get().and_then(|result| match result {
+            Ok(client) => client.readiness_result(),
+            Err(error) => Some(Err(ExecServerError::ConnectionAttempt(Arc::clone(error)))),
         })
+    }
+
+    pub(crate) fn fail_fast(&self) -> Self {
+        Self {
+            recovery_policy: RecoveryPolicy::FailFast,
+            ..self.clone()
+        }
     }
 
     pub(crate) async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
@@ -288,6 +307,23 @@ impl LazyRemoteExecServerClient {
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
+        if matches!(self.recovery_policy, RecoveryPolicy::FailFast) {
+            let client = match self.cached_client() {
+                Some(client) => client,
+                None => match self.startup.get() {
+                    Some(Ok(client)) => client.clone(),
+                    Some(Err(error)) => {
+                        return Err(ExecServerError::ConnectionAttempt(Arc::clone(error)));
+                    }
+                    None => {
+                        return Err(ExecServerError::Disconnected(
+                            "exec-server environment is not ready".to_string(),
+                        ));
+                    }
+                },
+            };
+            return client.fail_fast();
+        }
         if let Some(client) = self.connected_client() {
             return Ok(client);
         }
@@ -463,11 +499,45 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
+    fn fail_fast(&self) -> Result<Self, ExecServerError> {
+        self.rpc_client_without_recovery()?;
+        Ok(Self {
+            inner: Arc::clone(&self.inner),
+            recovery_policy: RecoveryPolicy::FailFast,
+        })
+    }
+
+    fn rpc_client_without_recovery(&self) -> Result<Arc<RpcClient>, ExecServerError> {
+        let connection = self
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &connection.status {
+            ConnectionStatus::Connected(rpc_client) if !rpc_client.is_disconnected() => {
+                Ok(Arc::clone(rpc_client))
+            }
+            ConnectionStatus::Connected(_) | ConnectionStatus::Recovering => Err(
+                ExecServerError::Disconnected("exec-server environment is recovering".to_string()),
+            ),
+            ConnectionStatus::Failed(message) => {
+                Err(ExecServerError::Disconnected(message.clone()))
+            }
+        }
+    }
+
+    async fn rpc_client(&self) -> Result<Arc<RpcClient>, ExecServerError> {
+        match self.recovery_policy {
+            RecoveryPolicy::Wait => self.inner.rpc_client().await,
+            RecoveryPolicy::FailFast => self.rpc_client_without_recovery(),
+        }
+    }
+
     pub async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
     ) -> Result<InitializeResponse, ExecServerError> {
-        let rpc_client = self.inner.rpc_client().await?;
+        let rpc_client = self.rpc_client().await?;
         self.initialize_rpc(&rpc_client, options).await
     }
 
@@ -518,7 +588,7 @@ impl ExecServerClient {
     }
 
     pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        let rpc_client = self.inner.rpc_client().await?;
+        let rpc_client = self.rpc_client().await?;
         map_rpc_call_result(
             rpc_client
                 .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
@@ -657,7 +727,7 @@ impl ExecServerClient {
         params: ExecParams,
     ) -> Result<Session, ExecServerError> {
         loop {
-            let rpc_client = self.inner.rpc_client().await?;
+            let rpc_client = self.rpc_client().await?;
             if !self.inner.begin_process_start(&rpc_client) {
                 continue;
             }
@@ -734,6 +804,23 @@ impl ExecServerClient {
         self.inner.is_failed()
     }
 
+    fn readiness_result(&self) -> Option<Result<(), ExecServerError>> {
+        let connection = self
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &connection.status {
+            ConnectionStatus::Connected(rpc_client) if !rpc_client.is_disconnected() => {
+                Some(Ok(()))
+            }
+            ConnectionStatus::Connected(_) | ConnectionStatus::Recovering => None,
+            ConnectionStatus::Failed(message) => {
+                Some(Err(ExecServerError::Disconnected(message.clone())))
+            }
+        }
+    }
+
     pub(crate) async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -765,7 +852,10 @@ impl ExecServerClient {
             session_id,
             reconnect_strategy,
         });
-        let client = Self { inner };
+        let client = Self {
+            inner,
+            recovery_policy: RecoveryPolicy::Wait,
+        };
         // An explicit resume can redirect notifications from running processes
         // before initialize returns. Drain them immediately so a burst cannot
         // fill the bounded event channel and block the initialize response.
@@ -779,7 +869,7 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        let rpc_client = self.inner.rpc_client().await?;
+        let rpc_client = self.rpc_client().await?;
         self.call_rpc(&rpc_client, method, params).await
     }
 
