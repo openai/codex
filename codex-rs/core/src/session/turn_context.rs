@@ -108,7 +108,6 @@ pub struct TurnContext {
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
-    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -123,7 +122,8 @@ pub struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) collaboration_mode: CollaborationMode,
+    pub(crate) mode: ModeKind,
+    pub(crate) collaboration_mode_developer_instructions: Option<String>,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
@@ -149,6 +149,17 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn collaboration_mode(&self) -> CollaborationMode {
+        CollaborationMode {
+            mode: self.mode,
+            settings: Settings {
+                model: self.model_info.slug.clone(),
+                reasoning_effort: self.config.model_reasoning_effort.clone(),
+                developer_instructions: self.collaboration_mode_developer_instructions.clone(),
+            },
+        }
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
@@ -167,22 +178,6 @@ impl TurnContext {
             #[allow(deprecated)]
             &self.cwd,
         )
-    }
-
-    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        if self.model_info.supports_reasoning_summaries {
-            self.reasoning_effort
-                .clone()
-                .or_else(|| self.model_info.default_reasoning_level.clone())
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
-        self.effective_reasoning_effort()
-            .map(|effort| effort.to_string())
-            .unwrap_or_else(|| "default".to_string())
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -220,29 +215,24 @@ impl TurnContext {
             .iter()
             .map(|preset| preset.effort.clone())
             .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort.clone()
-        {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
+        let reasoning_effort =
+            if let Some(current_reasoning_effort) = self.config.model_reasoning_effort.clone() {
+                if supported_reasoning_levels.contains(&current_reasoning_effort) {
+                    Some(current_reasoning_effort)
+                } else {
+                    supported_reasoning_levels
+                        .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                        .cloned()
+                        .or_else(|| model_info.default_reasoning_level.clone())
+                }
             } else {
                 supported_reasoning_levels
                     .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
                     .cloned()
                     .or_else(|| model_info.default_reasoning_level.clone())
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .cloned()
-                .or_else(|| model_info.default_reasoning_level.clone())
-        };
+            };
         config.model_reasoning_effort = reasoning_effort.clone();
 
-        let collaboration_mode = self.collaboration_mode.with_updates(
-            Some(model.clone()),
-            Some(reasoning_effort.clone()),
-            /*developer_instructions*/ None,
-        );
         let available_models = models_manager
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await;
@@ -259,7 +249,6 @@ impl TurnContext {
                 .clone()
                 .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
-            reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
@@ -271,7 +260,10 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
-            collaboration_mode,
+            mode: self.mode,
+            collaboration_mode_developer_instructions: self
+                .collaboration_mode_developer_instructions
+                .clone(),
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
@@ -350,7 +342,7 @@ impl TurnContext {
             .then_some(file_system_sandbox_policy)
     }
 
-    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+    pub(crate) fn to_turn_context_item(&self, step_context: &StepContext) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
@@ -368,11 +360,18 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,
-            collaboration_mode: Some(self.collaboration_mode.clone()),
+            collaboration_mode: Some(CollaborationMode {
+                mode: self.mode,
+                settings: Settings {
+                    model: self.model_info.slug.clone(),
+                    reasoning_effort: step_context.reasoning_effort.clone(),
+                    developer_instructions: self.collaboration_mode_developer_instructions.clone(),
+                },
+            }),
             multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
+            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self, step_context),
             realtime_active: Some(self.realtime_active),
-            effort: self.reasoning_effort.clone(),
+            effort: step_context.effective_reasoning_effort(),
             summary: ReasoningSummaryConfig::Auto,
         }
     }
@@ -485,7 +484,7 @@ impl Session {
         sub_id: String,
         skills_snapshot: HostSkillsSnapshot,
     ) -> TurnContext {
-        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+        let collaboration_mode = &session_configuration.collaboration_mode;
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
@@ -537,7 +536,6 @@ impl Session {
             model_info,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
-            reasoning_effort,
             reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
@@ -549,7 +547,11 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            collaboration_mode: session_configuration.collaboration_mode.clone(),
+            mode: collaboration_mode.mode,
+            collaboration_mode_developer_instructions: collaboration_mode
+                .settings
+                .developer_instructions
+                .clone(),
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),

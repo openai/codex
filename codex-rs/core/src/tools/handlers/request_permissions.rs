@@ -95,6 +95,7 @@ impl RequestPermissionsHandler {
         let response = session
             .request_permissions_for_environment(
                 &turn,
+                &step_context,
                 call_id,
                 args,
                 turn_environment.selection(),

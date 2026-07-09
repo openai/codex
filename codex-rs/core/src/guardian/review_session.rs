@@ -44,6 +44,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
 use crate::session::Codex;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_config::types::McpServerConfig;
 use codex_features::Feature;
@@ -75,6 +76,7 @@ pub(crate) enum GuardianReviewSessionOutcome {
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
+    pub(crate) step_context: Arc<StepContext>,
     pub(crate) spawn_config: Config,
     pub(crate) request: GuardianApprovalRequest,
     pub(crate) retry_reason: Option<String>,
@@ -296,12 +298,14 @@ impl GuardianReviewSessionManager {
         &self,
         parent_session: Arc<Session>,
         parent_turn: Arc<TurnContext>,
+        step_context: Arc<StepContext>,
     ) -> BoxFuture<'_, anyhow::Result<()>> {
         // Boxing breaks the Session::new -> Guardian -> Session::new future recursion.
         Box::pin(async move {
-            let spawn_config = guardian_review_session_config(&parent_session, &parent_turn)
-                .await?
-                .spawn_config;
+            let spawn_config =
+                guardian_review_session_config(&parent_session, &parent_turn, &step_context)
+                    .await?
+                    .spawn_config;
             let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
                 &spawn_config,
                 parent_session.user_instructions().await,
@@ -311,6 +315,7 @@ impl GuardianReviewSessionManager {
             let review_session = spawn_guardian_review_session(
                 &parent_session,
                 &parent_turn,
+                Arc::clone(&step_context),
                 spawn_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -396,6 +401,7 @@ impl GuardianReviewSessionManager {
                         Box::pin(spawn_guardian_review_session(
                             &params.parent_session,
                             &params.parent_turn,
+                            Arc::clone(&params.step_context),
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -607,6 +613,7 @@ impl GuardianReviewSessionManager {
             Box::pin(spawn_guardian_review_session(
                 &params.parent_session,
                 &params.parent_turn,
+                Arc::clone(&params.step_context),
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -649,6 +656,7 @@ impl GuardianReviewSessionManager {
 async fn spawn_guardian_review_session(
     parent_session: &Arc<Session>,
     parent_turn: &Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
@@ -668,6 +676,7 @@ async fn spawn_guardian_review_session(
         parent_session.services.models_manager.clone(),
         Arc::clone(parent_session),
         Arc::clone(parent_turn),
+        step_context,
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -1217,9 +1226,13 @@ mod tests {
         )
         .expect("guardian config");
 
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+
         GuardianReviewSessionParams {
             parent_session: Arc::new(session),
-            parent_turn: Arc::new(turn),
+            parent_turn: Arc::clone(&turn),
+            step_context,
             spawn_config,
             request: GuardianApprovalRequest::Shell {
                 id: "shell-1".to_string(),

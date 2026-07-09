@@ -9,6 +9,7 @@ use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -70,13 +71,11 @@ fn build_collaboration_mode_update_item(
     }
 
     let prev = previous?;
-    if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
+    let collaboration_mode = next.collaboration_mode();
+    if prev.collaboration_mode.as_ref() != Some(&collaboration_mode) {
         // If the next mode has empty developer instructions, this returns None and we emit no
         // update, so prior collaboration instructions remain in the prompt history.
-        Some(
-            CollaborationModeInstructions::from_collaboration_mode(&next.collaboration_mode)?
-                .render(),
-        )
+        Some(CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)?.render())
     } else {
         None
     }
@@ -85,8 +84,10 @@ fn build_collaboration_mode_update_item(
 fn build_multi_agent_mode_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
+    step_context: &StepContext,
 ) -> Option<String> {
-    let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(next);
+    let effective_multi_agent_mode =
+        crate::session::multi_agents::effective_multi_agent_mode(next, step_context);
     let previous = previous?;
     if previous.multi_agent_mode == effective_multi_agent_mode {
         return None;
@@ -241,6 +242,7 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
+    step_context: &StepContext,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
@@ -254,7 +256,7 @@ pub(crate) fn build_settings_update_items(
         build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
-        build_multi_agent_mode_update_item(previous, next),
+        build_multi_agent_mode_update_item(previous, next, step_context),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]

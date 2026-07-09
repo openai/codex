@@ -166,6 +166,8 @@ pub(crate) async fn run_turn(
 
     // run_turn owns the step used to seed context and make the first sampling request.
     let first_step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    sess.set_active_step_context(Arc::clone(&first_step_context))
+        .await;
     // Keep the exact model-visible state used by this turn and its inline compactions.
     let (mut world_state, display_roots) = tokio::join!(
         sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
@@ -204,7 +206,8 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
+    track_turn_resolved_config_analytics(&sess, &turn_context, &input, first_step_context.clone())
+        .await;
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
@@ -247,7 +250,12 @@ pub(crate) async fn run_turn(
         // Capture once so context, advertised tools, and tool calls share one request view.
         let step_context = match next_step_context.take() {
             Some(step_context) => step_context,
-            None => sess.capture_step_context(Arc::clone(&turn_context)).await,
+            None => {
+                let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+                sess.set_active_step_context(Arc::clone(&step_context))
+                    .await;
+                step_context
+            }
         };
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
@@ -744,6 +752,7 @@ async fn track_turn_resolved_config_analytics(
     sess: &Session,
     turn_context: &TurnContext,
     input: &[TurnInput],
+    first_step_context: Arc<StepContext>,
 ) {
     let thread_config = {
         let state = sess.state.lock().await;
@@ -777,7 +786,7 @@ async fn track_turn_resolved_config_analytics(
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
-            reasoning_effort: turn_context.reasoning_effort.clone(),
+            reasoning_effort: first_step_context.reasoning_effort.clone(),
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
                 .config
@@ -787,7 +796,7 @@ async fn track_turn_resolved_config_analytics(
             approval_policy: turn_context.approval_policy.value(),
             approvals_reviewer: turn_context.config.approvals_reviewer,
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
-            collaboration_mode: turn_context.collaboration_mode.mode,
+            collaboration_mode: turn_context.mode,
             personality: turn_context.personality,
             workspace_kind: turn_context.turn_metadata_state.workspace_kind(),
             is_first_turn,
@@ -808,6 +817,8 @@ async fn run_pre_sampling_compact(
     if token_status.token_limit_reached {
         // Pre-turn compaction runs before run_turn creates the normal sampling step.
         let step_context = sess.capture_step_context(Arc::clone(turn_context)).await;
+        sess.set_active_step_context(Arc::clone(&step_context))
+            .await;
         run_auto_compact(
             sess,
             step_context,
@@ -1020,6 +1031,7 @@ async fn run_auto_compact(
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
+            Arc::clone(&step_context),
             initial_context_injection,
             reason,
             phase,
@@ -1158,6 +1170,7 @@ async fn run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            step_context.clone(),
             Arc::clone(&turn_store),
             client_session,
             responses_metadata,
@@ -1928,6 +1941,7 @@ async fn try_run_sampling_request(
     tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
@@ -1939,7 +1953,7 @@ async fn try_run_sampling_request(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
         sandbox_policy = &turn_context.sandbox_policy(),
-        effort = turn_context.reasoning_effort,
+        effort = step_context.effective_reasoning_effort_for_tracing(),
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
@@ -1959,7 +1973,7 @@ async fn try_run_sampling_request(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort.clone(),
+            step_context.effective_reasoning_effort(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,
@@ -1979,8 +1993,8 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
-    let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
-    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let reasoning_effort = step_context.effective_reasoning_effort_for_tracing();
+    let plan_mode = turn_context.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let defer_streamed_turn_items_for_contributors =

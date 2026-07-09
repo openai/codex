@@ -81,7 +81,7 @@ pub(crate) async fn run_remote_compact_task(
         trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+        collaboration_mode_kind: turn_context.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
@@ -260,6 +260,7 @@ async fn run_remote_compact_task_inner_impl(
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
         compaction_turn_context.as_ref(),
+        step_context.as_ref(),
         new_history,
         &initial_context_injection,
     )
@@ -268,7 +269,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(compaction_turn_context.to_turn_context_item())
+            Some(compaction_turn_context.to_turn_context_item(step_context))
         }
     };
     let compacted_item = CompactedItem {
@@ -304,14 +305,20 @@ async fn run_remote_compact_task_inner_impl(
 pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
+    step_context: &StepContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess, turn_context, initial_context_injection).await;
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess,
+        turn_context,
+        step_context,
+        initial_context_injection,
+    )
+    .await;
 
     compacted_history.retain(should_keep_compacted_history_item);
     (

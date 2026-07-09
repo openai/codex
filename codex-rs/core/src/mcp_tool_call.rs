@@ -395,7 +395,7 @@ async fn handle_approved_mcp_tool_call(
         let result = async {
             let rewritten_arguments = rewrite?;
             let request_meta =
-                build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+                build_mcp_tool_call_request_meta(step_context, &server, call_id, metadata);
             execute_mcp_tool_call(
                 sess,
                 step_context,
@@ -1081,18 +1081,19 @@ async fn custom_mcp_tool_approval_mode(
 }
 
 fn build_mcp_tool_call_request_meta(
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
+    let turn_context = step_context.turn.as_ref();
     let mut request_meta = serde_json::Map::new();
 
     if let Some(turn_metadata) = turn_context
         .turn_metadata_state
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
             model: turn_context.model_info.slug.as_str(),
-            reasoning_effort: turn_context.effective_reasoning_effort(),
+            reasoning_effort: step_context.effective_reasoning_effort(),
         })
     {
         request_meta.insert(
@@ -1274,6 +1275,7 @@ async fn maybe_request_mcp_tool_approval(
         let decision = review_approval_request(
             sess,
             turn_context,
+            Arc::clone(step_context),
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             /*retry_reason*/ None,

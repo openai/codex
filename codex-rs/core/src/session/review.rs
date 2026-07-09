@@ -70,7 +70,6 @@ pub(super) async fn spawn_review_thread(
     let auth_manager_for_context = auth_manager.clone();
     let provider_for_context = provider.clone();
     let session_telemetry_for_context = session_telemetry.clone();
-    let reasoning_effort = per_turn_config.model_reasoning_effort.clone();
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
@@ -114,7 +113,6 @@ pub(super) async fn spawn_review_thread(
         model_info: model_info.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
-        reasoning_effort,
         reasoning_summary,
         session_source,
         parent_thread_id: parent_turn_context.parent_thread_id,
@@ -126,7 +124,10 @@ pub(super) async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
-        collaboration_mode: parent_turn_context.collaboration_mode.clone(),
+        mode: parent_turn_context.mode,
+        collaboration_mode_developer_instructions: parent_turn_context
+            .collaboration_mode_developer_instructions
+            .clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),

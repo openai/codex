@@ -3,6 +3,7 @@ use crate::agent::status::is_final;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
@@ -108,6 +109,7 @@ fn required_state_db(
 async fn build_runner_options(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    step_context: &StepContext,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
     let multi_agent_version = turn.multi_agent_version;
@@ -124,7 +126,7 @@ async fn build_runner_options(
     }
     let max_concurrency = normalize_concurrency(requested_concurrency, agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
-    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
+    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref(), step_context)?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,

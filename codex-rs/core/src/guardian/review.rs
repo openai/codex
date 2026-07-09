@@ -25,6 +25,7 @@ use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::util::backoff;
@@ -275,6 +276,7 @@ pub(crate) async fn record_guardian_denial_for_test(
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -359,6 +361,7 @@ async fn run_guardian_review(
     let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
         turn.clone(),
+        step_context.clone(),
         request,
         retry_reason.clone(),
         schema,
@@ -594,6 +597,7 @@ async fn run_guardian_review(
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -603,6 +607,7 @@ pub(crate) async fn review_approval_request(
     Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        step_context,
         review_id,
         request,
         retry_reason,
@@ -615,6 +620,7 @@ pub(crate) async fn review_approval_request(
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -624,6 +630,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        step_context,
         review_id,
         request,
         retry_reason,
@@ -636,6 +643,7 @@ pub(crate) async fn review_approval_request_with_cancel(
 pub(crate) fn spawn_approval_request_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
@@ -654,6 +662,7 @@ pub(crate) fn spawn_approval_request_review(
         let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
             &turn,
+            step_context,
             review_id,
             request,
             retry_reason,
@@ -678,6 +687,7 @@ pub(super) struct GuardianReviewSessionConfig {
 pub(super) async fn guardian_review_session_config(
     session: &Session,
     turn: &TurnContext,
+    step_context: &StepContext,
 ) -> anyhow::Result<GuardianReviewSessionConfig> {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
@@ -722,7 +732,8 @@ pub(super) async fn guardian_review_session_config(
                 .supported_reasoning_levels
                 .iter()
                 .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            turn.reasoning_effort
+            step_context
+                .reasoning_effort
                 .clone()
                 .or_else(|| turn.model_info.default_reasoning_level.clone()),
         );
@@ -768,13 +779,19 @@ pub(super) async fn guardian_review_session_config(
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let session_config = match guardian_review_session_config(session.as_ref(), turn.as_ref()).await
+    let session_config = match guardian_review_session_config(
+        session.as_ref(),
+        turn.as_ref(),
+        step_context.as_ref(),
+    )
+    .await
     {
         Ok(session_config) => session_config,
         Err(err) => {
@@ -790,6 +807,7 @@ async fn run_guardian_review_session_before_deadline(
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
+                step_context,
                 spawn_config: session_config.spawn_config,
                 request,
                 retry_reason,
@@ -862,6 +880,7 @@ async fn run_guardian_review_session_before_deadline(
 pub(super) async fn run_guardian_review_session_with_retry(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
@@ -875,6 +894,7 @@ pub(super) async fn run_guardian_review_session_with_retry(
         let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
             Arc::clone(&session),
             Arc::clone(&turn),
+            Arc::clone(&step_context),
             request.clone(),
             retry_reason.clone(),
             schema.clone(),

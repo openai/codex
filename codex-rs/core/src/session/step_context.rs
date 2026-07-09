@@ -12,6 +12,7 @@ use tokio::sync::OnceCell;
 #[derive(Debug)]
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Capability roots bound to ready environments in this exact step.
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
@@ -24,6 +25,24 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    pub(crate) fn effective_reasoning_effort(
+        &self,
+    ) -> Option<codex_protocol::openai_models::ReasoningEffort> {
+        if self.turn.model_info.supports_reasoning_summaries {
+            self.reasoning_effort
+                .clone()
+                .or_else(|| self.turn.model_info.default_reasoning_level.clone())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+        self.effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
     pub(crate) fn new(
         turn: Arc<TurnContext>,
         environments: TurnEnvironmentSnapshot,
@@ -31,8 +50,10 @@ impl StepContext {
         mcp: Arc<McpRuntimeSnapshot>,
         loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
     ) -> Self {
+        let reasoning_effort = turn.config.model_reasoning_effort.clone();
         Self {
             turn,
+            reasoning_effort,
             environments,
             selected_capability_roots,
             mcp,

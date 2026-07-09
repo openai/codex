@@ -32,8 +32,13 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         let session = session.clone_session();
+        let step_context = session.capture_step_context(Arc::clone(&ctx)).await;
+        session
+            .set_active_step_context(Arc::clone(&step_context))
+            .await;
         if ctx.config.features.enabled(Feature::TokenBudget) {
-            crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;
+            crate::compact_token_budget::run_manual_compact_task(session, step_context, ctx)
+                .await?;
             return Ok(None);
         }
 
@@ -73,7 +78,7 @@ impl SessionTask for CompactTask {
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }];
-            crate::compact::run_compact_task(session.clone(), ctx, input).await
+            crate::compact::run_compact_task(session.clone(), ctx, step_context, input).await
         };
         if let Err(err @ CodexErr::TurnAborted) = result {
             return Err(err);

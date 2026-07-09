@@ -588,11 +588,12 @@ async fn review_guardian_mcp_elicitation(
     session: Arc<Session>,
     request: ElicitationReviewRequest,
 ) -> anyhow::Result<Option<ElicitationResponse>> {
-    let Some((turn_context, _cancellation_token)) =
-        session.active_turn_context_and_cancellation_token().await
+    let Some((step_context, _cancellation_token)) =
+        session.active_step_context_and_cancellation_token().await
     else {
         return Ok(None);
     };
+    let turn_context = Arc::clone(&step_context.turn);
 
     let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
         turn_context.config.as_ref(),
@@ -624,6 +625,7 @@ async fn review_guardian_mcp_elicitation(
     let decision = crate::guardian::review_approval_request(
         &session,
         &turn_context,
+        step_context,
         review_id.clone(),
         guardian_request,
         /*retry_reason*/ None,

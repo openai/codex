@@ -251,13 +251,21 @@ async fn schedule_startup_prewarm_inner(
         prewarm_started_at.elapsed(),
         /*status*/ None,
     );
+    let step_context = session
+        .capture_step_context(Arc::clone(&startup_turn_context))
+        .await;
     if routes_approval_to_guardian(&startup_turn_context) {
         let guardian_session = Arc::clone(&session);
         let guardian_parent_turn = Arc::clone(&startup_turn_context);
+        let guardian_step_context = Arc::clone(&step_context);
         drop(tokio::spawn(async move {
             if let Err(err) = guardian_session
                 .guardian_review_session
-                .initialize(Arc::clone(&guardian_session), guardian_parent_turn)
+                .initialize(
+                    Arc::clone(&guardian_session),
+                    guardian_parent_turn,
+                    guardian_step_context,
+                )
                 .await
             {
                 warn!("failed to initialize guardian review session: {err:#}");
@@ -267,9 +275,6 @@ async fn schedule_startup_prewarm_inner(
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
     // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
-    let step_context = session
-        .capture_step_context(Arc::clone(&startup_turn_context))
-        .await;
     let startup_router = built_tools(
         session.as_ref(),
         step_context.as_ref(),
@@ -310,7 +315,7 @@ async fn schedule_startup_prewarm_inner(
             &startup_prompt,
             &startup_turn_context.model_info,
             &startup_turn_context.session_telemetry,
-            startup_turn_context.reasoning_effort.clone(),
+            step_context.effective_reasoning_effort(),
             startup_turn_context.reasoning_summary,
             startup_turn_context.config.service_tier.clone(),
             &responses_metadata,

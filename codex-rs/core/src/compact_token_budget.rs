@@ -24,6 +24,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 /// observe the same lifecycle as local or remote compaction.
 pub(crate) async fn run_manual_compact_task(
     sess: Arc<Session>,
+    step_context: Arc<StepContext>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
@@ -31,14 +32,20 @@ pub(crate) async fn run_manual_compact_task(
         trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+        collaboration_mode_kind: turn_context.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
     // Manual compaction runs outside run_turn, so it captures its own current step.
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
-    run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Manual).await
+    run_compact_task_inner(
+        &sess,
+        &turn_context,
+        &step_context,
+        world_state,
+        CompactionTrigger::Manual,
+    )
+    .await
 }
 
 /// Runs token-budget inline auto-compaction as a normal compaction lifecycle.
@@ -58,12 +65,20 @@ pub(crate) async fn run_inline_auto_compact_task(
             Arc::new(sess.build_world_state_for_step(&step_context).await)
         }
     };
-    run_compact_task_inner(&sess, turn_context, world_state, CompactionTrigger::Auto).await
+    run_compact_task_inner(
+        &sess,
+        turn_context,
+        &step_context,
+        world_state,
+        CompactionTrigger::Auto,
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     world_state: Arc<WorldState>,
     trigger: CompactionTrigger,
 ) -> CodexResult<()> {
@@ -76,7 +91,7 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    sess.start_new_context_window(turn_context.as_ref(), world_state)
+    sess.start_new_context_window(turn_context.as_ref(), world_state, step_context.as_ref())
         .await;
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;

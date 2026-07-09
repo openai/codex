@@ -214,7 +214,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
                 item,
-                turn_context.collaboration_mode.mode == ModeKind::Plan,
+                turn_context.mode == ModeKind::Plan,
             )
         },
         |facts| facts.defers_mailbox_delivery_to_next_turn,
@@ -408,7 +408,7 @@ pub(crate) async fn handle_output_item_done(
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
 
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.

@@ -36,6 +36,7 @@ impl SpawnAgentsOnCsvHandler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             payload,
             ..
         } = invocation;
@@ -49,7 +50,7 @@ impl SpawnAgentsOnCsvHandler {
             }
         };
 
-        handle(session, turn, arguments)
+        handle(session, turn, step_context, arguments)
             .await
             .map(boxed_tool_output)
     }
@@ -69,6 +70,7 @@ impl CoreToolRuntime for SpawnAgentsOnCsvHandler {
 pub async fn handle(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
@@ -182,7 +184,14 @@ pub async fn handle(
         })?;
 
     let requested_concurrency = args.max_concurrency.or(args.max_workers);
-    let options = match build_runner_options(&session, &turn, requested_concurrency).await {
+    let options = match build_runner_options(
+        &session,
+        &turn,
+        step_context.as_ref(),
+        requested_concurrency,
+    )
+    .await
+    {
         Ok(options) => options,
         Err(err) => {
             let error_message = err.to_string();
