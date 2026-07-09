@@ -6,7 +6,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod approval_coordinator;
 mod apps;
 mod client;
 mod client_common;

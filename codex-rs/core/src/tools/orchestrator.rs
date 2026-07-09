@@ -6,8 +6,8 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
-use crate::approval_coordinator::ApprovalCoordinator;
-use crate::approval_coordinator::ApprovalReviewer;
+use super::approvals::ApprovalReviewer;
+use super::approvals::resolve_tool_apporval;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
@@ -519,7 +519,7 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        ApprovalCoordinator::resolve_tool(
+        resolve_tool_apporval(
             tool,
             req,
             permission_request_run_id,
@@ -528,8 +528,7 @@ impl ToolOrchestrator {
             reviewer,
             otel,
         )
-        .await?
-        .into_tool_result()
+        .await
     }
 }
 

@@ -126,7 +126,7 @@ pub(crate) struct ApprovalCtx<'a> {
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
-pub(crate) type ApprovalAction = crate::approval_coordinator::ApprovalAction;
+pub(crate) type ApprovalAction = super::approvals::ApprovalAction;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionRequestPayload {
