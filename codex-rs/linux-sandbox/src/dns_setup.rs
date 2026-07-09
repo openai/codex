@@ -9,6 +9,7 @@ use rustix::thread::capability_is_in_bounding_set;
 use rustix::thread::clear_ambient_capability_set;
 use rustix::thread::remove_capability_from_bounding_set;
 use rustix::thread::set_capabilities;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::io::Seek;
@@ -16,13 +17,14 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
 
 const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
 const LOADER_ENV_KEYS: &[&str] = &["LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD"];
 
-pub(crate) type LoaderEnvironment = Vec<(String, String)>;
+pub(crate) type LoaderEnvironment = Vec<(Vec<u8>, Vec<u8>)>;
 
 #[derive(Debug)]
 pub(crate) struct ResolvConfMount {
@@ -73,14 +75,7 @@ pub(crate) fn capture_loader_environment() -> LoaderEnvironment {
     LOADER_ENV_KEYS
         .iter()
         .filter_map(|&key| {
-            std::env::var_os(key).map(|value| {
-                (
-                    key.to_string(),
-                    value
-                        .into_string()
-                        .unwrap_or_else(|_| panic!("{key} must contain valid UTF-8")),
-                )
-            })
+            std::env::var_os(key).map(|value| (key.as_bytes().to_vec(), value.into_vec()))
         })
         .collect()
 }
@@ -88,7 +83,7 @@ pub(crate) fn capture_loader_environment() -> LoaderEnvironment {
 pub(crate) fn restore_loader_environment(environment: LoaderEnvironment) {
     for (key, value) in environment {
         // SAFETY: the setup process is single-threaded and has dropped all capabilities.
-        unsafe { std::env::set_var(key, value) };
+        unsafe { std::env::set_var(OsString::from_vec(key), OsString::from_vec(value)) };
     }
 }
 
@@ -98,9 +93,6 @@ pub(crate) fn append_bwrap_args(bwrap_args: &mut BwrapArgs, mount: ResolvConfMou
         .iter()
         .position(|arg| arg == "--")
         .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
-    let Some(parent) = mount.path.parent() else {
-        panic!("resolver configuration path has no parent");
-    };
     let fd = mount.file.as_raw_fd().to_string();
     bwrap_args.args.splice(
         separator..separator,
@@ -114,8 +106,6 @@ pub(crate) fn append_bwrap_args(bwrap_args: &mut BwrapArgs, mount: ResolvConfMou
                 "CAP_NET_BIND_SERVICE".to_string(),
                 "--cap-add".to_string(),
                 "CAP_SETPCAP".to_string(),
-                "--dir".to_string(),
-                parent.to_string_lossy().into_owned(),
                 "--perms".to_string(),
                 "444".to_string(),
                 "--ro-bind-data".to_string(),

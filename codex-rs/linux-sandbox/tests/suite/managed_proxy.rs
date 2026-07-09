@@ -120,6 +120,15 @@ async fn managed_proxy_skip_reason() -> Option<String> {
     None
 }
 
+async fn command_available(command: &str) -> bool {
+    Command::new("bash")
+        .args(["-c", "command -v \"$1\" >/dev/null", "--", command])
+        .status()
+        .await
+        .expect("command probe should execute")
+        .success()
+}
+
 async fn run_linux_sandbox_direct(
     command: &[&str],
     permission_profile: &PermissionProfile,
@@ -271,14 +280,7 @@ async fn managed_proxy_mode_denies_af_unix_socket_but_allows_socketpair() {
         return;
     }
 
-    let python_available = Command::new("bash")
-        .arg("-c")
-        .arg("command -v python3 >/dev/null")
-        .status()
-        .await
-        .expect("python3 probe should execute")
-        .success();
-    if !python_available {
+    if !command_available("python3").await {
         eprintln!("skipping managed proxy AF_UNIX test: python3 is unavailable");
         return;
     }

@@ -41,6 +41,10 @@ fn unsets_loader_environment_before_inner_command() {
             "{key} must be unset before the privileged DNS setup command"
         );
     }
+    assert!(
+        !setup_args.windows(2).any(|args| args == ["--dir", "/etc"]),
+        "DNS setup must not shadow an existing resolver parent directory"
+    );
 }
 
 #[test]

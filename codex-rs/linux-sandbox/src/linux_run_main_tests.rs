@@ -477,6 +477,17 @@ fn managed_proxy_inner_command_includes_route_spec() {
 }
 
 #[test]
+fn loader_environment_round_trips_non_utf8_values() {
+    let environment = vec![(b"LD_PRELOAD".to_vec(), b"\xffloader.so".to_vec())];
+
+    assert_eq!(
+        parse_loader_environment(Some(&serialize_loader_environment(&environment)))
+            .expect("loader environment should deserialize"),
+        Some(environment)
+    );
+}
+
+#[test]
 fn inner_command_includes_permission_profile_flag() {
     let permission_profile = read_only_permission_profile();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
