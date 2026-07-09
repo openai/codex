@@ -21,6 +21,8 @@ use crate::client::LazyRemoteExecServerClient;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsGetMetadataBatchParams;
+use crate::protocol::FsGetMetadataBatchResult;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
@@ -152,14 +154,61 @@ impl RemoteFileSystem {
             })
             .await
             .map_err(map_remote_error)?;
-        Ok(FileMetadata {
-            is_directory: response.is_directory,
-            is_file: response.is_file,
-            is_symlink: response.is_symlink,
-            size: response.size,
-            created_at_ms: response.created_at_ms,
-            modified_at_ms: response.modified_at_ms,
-        })
+        Ok(file_metadata_from_response(response))
+    }
+
+    async fn get_metadata_batch(
+        &self,
+        paths: &[PathUri],
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<FileSystemResult<FileMetadata>>> {
+        trace!(path_count = paths.len(), "remote fs get_metadata_batch");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let response = match client
+            .fs_get_metadata_batch(FsGetMetadataBatchParams {
+                paths: paths.to_vec(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(ExecServerError::Server {
+                code: METHOD_NOT_FOUND_ERROR_CODE,
+                ..
+            }) => {
+                let mut results = Vec::with_capacity(paths.len());
+                for path in paths {
+                    results.push(self.get_metadata(path, sandbox).await);
+                }
+                return Ok(results);
+            }
+            Err(error) => return Err(map_remote_error(error)),
+        };
+        if response.results.len() != paths.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "remote fs/getMetadataBatch returned {} results for {} paths",
+                    response.results.len(),
+                    paths.len()
+                ),
+            ));
+        }
+        Ok(response
+            .results
+            .into_iter()
+            .map(|result| match result {
+                FsGetMetadataBatchResult::Metadata { metadata } => {
+                    Ok(file_metadata_from_response(metadata))
+                }
+                FsGetMetadataBatchResult::Error { error } => {
+                    Err(map_remote_error(ExecServerError::Server {
+                        code: error.code,
+                        message: error.message,
+                    }))
+                }
+            })
+            .collect())
     }
 
     async fn read_directory(
@@ -313,6 +362,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::get_metadata(self, path, sandbox))
     }
 
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FileMetadata>>> {
+        Box::pin(RemoteFileSystem::get_metadata_batch(self, paths, sandbox))
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -362,6 +419,17 @@ fn remote_sandbox_context(
     sandbox
         .cloned()
         .map(FileSystemSandboxContext::drop_cwd_if_unused)
+}
+
+fn file_metadata_from_response(response: crate::protocol::FsGetMetadataResponse) -> FileMetadata {
+    FileMetadata {
+        is_directory: response.is_directory,
+        is_file: response.is_file,
+        is_symlink: response.is_symlink,
+        size: response.size,
+        created_at_ms: response.created_at_ms,
+        modified_at_ms: response.modified_at_ms,
+    }
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {

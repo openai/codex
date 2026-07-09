@@ -115,6 +115,52 @@ async fn file_system_get_metadata_reports_files_and_directories(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_get_metadata_batch_preserves_order_and_errors(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let file_path = tmp.path().join("note.txt");
+    let missing_path = tmp.path().join("missing.txt");
+    let directory_path = tmp.path().join("notes");
+    std::fs::write(&file_path, "hello")?;
+    std::fs::create_dir(&directory_path)?;
+    let paths = [&file_path, &missing_path, &directory_path]
+        .into_iter()
+        .map(PathUri::from_host_native_path)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let expected_file = file_system
+        .get_metadata(&paths[0], /*sandbox*/ None)
+        .await?;
+    let expected_directory = file_system
+        .get_metadata(&paths[2], /*sandbox*/ None)
+        .await?;
+
+    let results = file_system
+        .get_metadata_batch(&paths, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    let actual = results
+        .into_iter()
+        .map(|result| result.map_err(|error| error.kind()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            Ok(expected_file),
+            Err(std::io::ErrorKind::NotFound),
+            Ok(expected_directory),
+        ]
+    );
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_create_directory_creates_nested_directories(
     implementation: FileSystemImplementation,
 ) -> Result<()> {

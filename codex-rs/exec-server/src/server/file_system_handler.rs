@@ -11,6 +11,7 @@ use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
+use crate::protocol::FS_GET_METADATA_BATCH_MAX_PATHS;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -20,6 +21,9 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataBatchParams;
+use crate::protocol::FsGetMetadataBatchResponse;
+use crate::protocol::FsGetMetadataBatchResult;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsOpenParams;
@@ -169,6 +173,38 @@ impl FileSystemHandler {
         })
     }
 
+    pub(crate) async fn get_metadata_batch(
+        &self,
+        params: FsGetMetadataBatchParams,
+    ) -> Result<FsGetMetadataBatchResponse, JSONRPCErrorError> {
+        if params.paths.len() > FS_GET_METADATA_BATCH_MAX_PATHS {
+            return Err(invalid_request(format!(
+                "metadata batch must not exceed {FS_GET_METADATA_BATCH_MAX_PATHS} paths"
+            )));
+        }
+        let mut results = Vec::with_capacity(params.paths.len());
+        for path in params.paths {
+            let result = self
+                .file_system
+                .get_metadata(&path, params.sandbox.as_ref())
+                .await
+                .map(|metadata| FsGetMetadataResponse {
+                    is_directory: metadata.is_directory,
+                    is_file: metadata.is_file,
+                    is_symlink: metadata.is_symlink,
+                    size: metadata.size,
+                    created_at_ms: metadata.created_at_ms,
+                    modified_at_ms: metadata.modified_at_ms,
+                })
+                .map_err(map_fs_error);
+            match result {
+                Ok(metadata) => results.push(FsGetMetadataBatchResult::Metadata { metadata }),
+                Err(error) => results.push(FsGetMetadataBatchResult::Error { error }),
+            }
+        }
+        Ok(FsGetMetadataBatchResponse { results })
+    }
+
     pub(crate) async fn canonicalize(
         &self,
         params: FsCanonicalizeParams,
@@ -274,6 +310,8 @@ mod tests {
 
     use super::*;
     use crate::FileSystemSandboxContext;
+    use crate::protocol::FS_GET_METADATA_BATCH_MAX_PATHS;
+    use crate::protocol::FsGetMetadataBatchParams;
     use crate::protocol::FsReadFileParams;
     use crate::protocol::FsWriteFileParams;
 
@@ -342,4 +380,31 @@ mod tests {
             assert_eq!(response.data_base64, STANDARD.encode("ok"));
         }
     }
+    #[tokio::test]
+    async fn metadata_batch_rejects_too_many_paths_before_dispatch() {
+        let handler = FileSystemHandler::new(
+            ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("runtime paths"),
+        );
+        let path = PathUri::from_host_native_path(std::env::current_dir().expect("current dir"))
+            .expect("current dir URI");
+
+        let error = handler
+            .get_metadata_batch(FsGetMetadataBatchParams {
+                paths: vec![path; FS_GET_METADATA_BATCH_MAX_PATHS + 1],
+                sandbox: None,
+            })
+            .await
+            .expect_err("oversized metadata batch should fail");
+
+        assert_eq!(error.code, -32600);
+        assert_eq!(
+            error.message,
+            format!("metadata batch must not exceed {FS_GET_METADATA_BATCH_MAX_PATHS} paths")
+        );
+    }
+
 }

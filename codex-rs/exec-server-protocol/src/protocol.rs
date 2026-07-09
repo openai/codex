@@ -11,6 +11,7 @@ use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::JSONRPCErrorError;
 use crate::ProcessId;
 
 pub const INITIALIZE_METHOD: &str = "initialize";
@@ -31,6 +32,7 @@ pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_GET_METADATA_BATCH_METHOD: &str = "fs/getMetadataBatch";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_WALK_METHOD: &str = "fs/walk";
@@ -342,6 +344,32 @@ pub struct FsGetMetadataResponse {
     pub modified_at_ms: i64,
 }
 
+/// Maximum number of paths accepted by one `fs/getMetadataBatch` request.
+pub const FS_GET_METADATA_BATCH_MAX_PATHS: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchParams {
+    /// Paths are evaluated and returned in this order.
+    pub paths: Vec<PathUri>,
+    /// One sandbox context shared by every path in the batch.
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FsGetMetadataBatchResult {
+    Metadata { metadata: FsGetMetadataResponse },
+    Error { error: JSONRPCErrorError },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchResponse {
+    /// One result for each requested path, in request order.
+    pub results: Vec<FsGetMetadataBatchResult>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
@@ -571,6 +599,7 @@ mod tests {
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
     use super::ExecParams;
+    use super::FsGetMetadataBatchResponse;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use super::InitializeResponse;
@@ -690,6 +719,22 @@ mod tests {
             "sandbox": native_path_sandbox,
         }))
         .expect_err("native absolute sandbox cwd should not deserialize as a URI");
+    }
+
+    #[test]
+    fn metadata_batch_error_result_round_trips() {
+        let serialized = serde_json::json!({
+            "results": [{
+                "type": "error",
+                "error": { "code": -32004, "message": "missing" },
+            }],
+        });
+        let response = serde_json::from_value::<FsGetMetadataBatchResponse>(serialized.clone())
+            .expect("deserialize metadata batch");
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize metadata batch"),
+            serialized
+        );
     }
 
     #[test]

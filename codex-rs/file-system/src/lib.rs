@@ -306,6 +306,24 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
+    /// Reads metadata for multiple paths, preserving request order and per-path errors.
+    ///
+    /// Implementations with an optimized batch transport can override this method. The default
+    /// preserves compatibility by issuing the existing single-path operation for each path.
+    fn get_metadata_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FileMetadata>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(paths.len());
+            for path in paths {
+                results.push(self.get_metadata(path, sandbox).await);
+            }
+            Ok(results)
+        })
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
