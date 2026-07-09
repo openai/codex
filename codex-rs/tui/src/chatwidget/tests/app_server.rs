@@ -1,6 +1,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+const SAFETY_BUFFERING_HEADER_TEXT: &str =
+    "Our systems are thinking a bit more about this request before responding.";
+
 fn thread_settings_for_test(
     model: &str,
     thread_id: ThreadId,
@@ -136,7 +139,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
         }
     };
     assert_eq!(opened_url, "https://help.openai.com/en/articles/20001326");
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -157,7 +160,10 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     assert_eq!(event_turn_id, turn_id);
     assert_eq!(model, "faster-model");
     assert_matches!(turn, Op::UserTurn { .. });
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(
+        !render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Press enter to confirm or esc to go back")
+    );
 }
 
 #[tokio::test]
@@ -177,11 +183,11 @@ async fn safety_buffering_remains_visible_until_turn_completes() {
     chat.on_agent_message_delta("Visible response".to_string());
 
     assert!(!chat.can_retry_safety_buffered_turn(turn_id));
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
 
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 }
 
 #[tokio::test]
@@ -218,7 +224,10 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
     assert_eq!(render_popup(&chat), popup);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(
+        !render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Press enter to confirm or esc to go back")
+    );
 }
 
 #[tokio::test]
@@ -248,14 +257,14 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
         )),
         Some(ReplayKind::ResumeInitialMessages),
     );
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     let mut hidden = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(hidden.clone()),
         /*replay_kind*/ None,
     );
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
     hidden.show_buffering_ui = false;
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(hidden),
@@ -269,7 +278,7 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
             .details(),
         None
     );
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 }
 
 #[tokio::test]
