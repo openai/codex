@@ -619,6 +619,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     }
 
     let config_snapshot = pending.config_snapshot;
+    let sandbox = config_snapshot.sandbox_policy().into();
     let cwd = config_snapshot.cwd().clone();
     let ThreadConfigSnapshot {
         model,
@@ -626,7 +627,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        permission_profile,
         active_permission_profile,
         workspace_roots,
         reasoning_effort,
@@ -634,7 +634,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         ..
     } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
     let session_id = conversation.session_configured().session_id.to_string();

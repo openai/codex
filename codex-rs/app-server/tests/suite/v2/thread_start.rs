@@ -16,6 +16,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition;
 use codex_app_server_protocol::TextRange;
@@ -533,6 +534,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
         .await?;
@@ -545,11 +547,19 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let ThreadStartResponse {
         cwd: response_cwd,
         runtime_workspace_roots,
+        sandbox,
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd, cwd.abs());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
+        panic!("expected workspace-write sandbox");
+    };
+    assert!(
+        writable_roots.contains(&extra_root.abs().canonicalize()?),
+        "legacy sandbox projection should include the runtime workspace root"
+    );
 
     let environment_root = cwd.join("environment-root");
     std::fs::create_dir_all(&environment_root)?;
@@ -559,6 +569,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
             environments: Some(vec![environment]),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
         .await?;
@@ -569,9 +580,17 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     .await??;
     let ThreadStartResponse {
         runtime_workspace_roots,
+        sandbox,
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
     assert_eq!(runtime_workspace_roots, vec![environment_root.abs()]);
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
+        panic!("expected workspace-write sandbox");
+    };
+    assert!(
+        writable_roots.contains(&environment_root.abs().canonicalize()?),
+        "legacy sandbox projection should include the environment workspace root"
+    );
 
     Ok(())
 }
@@ -626,6 +645,10 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
 
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_before = std::fs::read_to_string(&config_path)?;
+    let workspace = TempDir::new()?;
+    let workspace = workspace.path().to_path_buf().abs();
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -635,12 +658,11 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
-                    codex_home.path().to_path_buf(),
-                )?
-                .into(),
+                cwd: workspace.into(),
                 runtime_workspace_roots: None,
             }]),
             ..Default::default()
@@ -656,6 +678,7 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "unknown turn environment id `missing`");
+    assert_eq!(std::fs::read_to_string(config_path)?, config_before);
 
     Ok(())
 }

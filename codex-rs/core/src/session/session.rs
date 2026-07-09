@@ -198,7 +198,7 @@ impl SessionConfiguration {
             service_tier: self.service_tier.clone(),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            permission_profile: self.permission_profile(),
+            permission_profile: self.materialized_permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             environments: self.environments.clone(),
             workspace_roots: self.primary_workspace_roots(),
