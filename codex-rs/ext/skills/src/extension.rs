@@ -123,6 +123,7 @@ where
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                         mcp_resources: session_store.get::<McpResourceClient>(),
+                        host_capabilities: config.host_capabilities.clone(),
                     },
                     &thread_state,
                 )
@@ -160,6 +161,7 @@ where
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: false,
                         mcp_resources: input.session_store.get::<McpResourceClient>(),
+                        host_capabilities: config.host_capabilities.clone(),
                     },
                 )
                 .await;
@@ -231,6 +233,7 @@ where
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
+                host_capabilities: config.host_capabilities.clone(),
             };
             let mut catalog = self.list_skills(query, &thread_state).await;
             if let Some(executor_skills) = turn_store.get::<ExecutorSkillsStepState>() {

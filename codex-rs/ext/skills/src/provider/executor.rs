@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_core_plugins::ExecutorPluginProvider;
 use codex_core_skills::loader::EnvironmentSkillMetadata;
 use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_exec_server::EnvironmentManager;
@@ -26,6 +27,7 @@ use crate::provider::SkillSearchRequest;
 #[derive(Clone, Debug)]
 pub struct ExecutorSkillProvider {
     environment_manager: Arc<EnvironmentManager>,
+    plugin_provider: ExecutorPluginProvider,
     restriction_product: Option<Product>,
 }
 
@@ -35,6 +37,7 @@ impl ExecutorSkillProvider {
         restriction_product: Option<Product>,
     ) -> Self {
         Self {
+            plugin_provider: ExecutorPluginProvider::new(Arc::clone(&environment_manager)),
             environment_manager,
             restriction_product,
         }
@@ -46,7 +49,26 @@ impl SkillProvider for ExecutorSkillProvider {
         Box::pin(async move {
             let mut catalog = SkillCatalog::default();
             for selected_root in query.executor_roots {
-                let selected_root_id = selected_root.id;
+                let selected_root_id = selected_root.id.clone();
+                let required_host_capabilities = match self
+                    .plugin_provider
+                    .resolve_bound(&selected_root)
+                    .await
+                {
+                    Ok(Some(plugin)) => plugin
+                        .plugin()
+                        .manifest()
+                        .requires
+                        .host_capabilities
+                        .clone(),
+                    Ok(None) => Vec::new(),
+                    Err(err) => {
+                        catalog.warnings.push(format!(
+                            "Selected capability root `{selected_root_id}` could not be resolved as a plugin: {err}"
+                        ));
+                        continue;
+                    }
+                };
                 let CapabilityRootLocation::Environment {
                     environment_id,
                     path,
@@ -55,9 +77,12 @@ impl SkillProvider for ExecutorSkillProvider {
                     SkillAuthority::new(SkillSourceKind::Executor, selected_root_id.clone());
                 let Some(environment) = self.environment_manager.get_environment(&environment_id)
                 else {
-                    catalog.warnings.push(format!(
-                        "Selected capability root `{selected_root_id}` references unavailable environment `{environment_id}`."
-                    ));
+                    catalog.extend_warnings_with_host_requirements(
+                        vec![format!(
+                            "Selected capability root `{selected_root_id}` references unavailable environment `{environment_id}`."
+                        )],
+                        &required_host_capabilities,
+                    );
                     continue;
                 };
                 let file_system = environment.get_filesystem();
@@ -67,13 +92,17 @@ impl SkillProvider for ExecutorSkillProvider {
                     self.restriction_product,
                 )
                 .await;
-                catalog.warnings.extend(outcome.warnings);
+                catalog.extend_warnings_with_host_requirements(
+                    outcome.warnings,
+                    &required_host_capabilities,
+                );
                 for skill in outcome.skills {
                     catalog.push_entry(catalog_entry_from_skill(
                         &skill,
                         authority.clone(),
                         &selected_root_id,
                         &environment_id,
+                        &required_host_capabilities,
                     ));
                 }
             }
@@ -133,6 +162,7 @@ fn catalog_entry_from_skill(
     authority: SkillAuthority,
     selected_root_id: &str,
     environment_id: &str,
+    required_host_capabilities: &[String],
 ) -> SkillCatalogEntry {
     let skill_path = skill.path_to_skills_md.inferred_native_path_string();
     let normalized_path = match skill.path_to_skills_md.infer_path_convention() {
@@ -156,7 +186,8 @@ fn catalog_entry_from_skill(
     )
     .with_short_description(skill.short_description.clone())
     .with_display_path(display_path)
-    .with_dependencies(skill.dependencies.clone());
+    .with_dependencies(skill.dependencies.clone())
+    .with_required_host_capabilities(required_host_capabilities.to_vec());
 
     if skill.allows_implicit_invocation() {
         entry

@@ -3988,6 +3988,7 @@ dependencies = [
 name = "codex-skills-extension"
 version = "0.0.0"
 dependencies = [
+ "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
  "codex-extension-api",

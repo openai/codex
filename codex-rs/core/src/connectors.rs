@@ -50,6 +50,7 @@ struct AccessibleConnectorsCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
+    host_capabilities: crate::config::HostCapabilities,
 }
 
 #[derive(Clone)]
@@ -359,6 +360,7 @@ fn accessible_connectors_cache_key(
         account_id,
         chatgpt_user_id,
         is_workspace_account,
+        host_capabilities: config.host_capabilities.clone(),
     }
 }
 

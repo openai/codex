@@ -66,6 +66,8 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
+const HOST_CAPABILITY_INLINE_VISUALIZATION: &str = "codex.inline_visualization";
+const HOST_CAPABILITY_SESSION_OWNED_IAB: &str = "browser.session_owned_iab";
 
 fn unrestricted_config_layer_stack() -> ConfigLayerStack {
     ConfigLayerStack::default()
@@ -746,6 +748,72 @@ fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
     toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
 }
 
+fn write_host_capability_projection_plugin(codex_home: &Path) -> std::path::PathBuf {
+    let plugin_root = codex_home.join("plugins/cache/test/sample/local");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "requires": {
+    "hostCapabilities": [
+      "codex.inline_visualization",
+      "browser.session_owned_iab"
+    ]
+  }
+}"#,
+    );
+    write_file(
+        &plugin_root.join("skills/sample/SKILL.md"),
+        "---\nname: sample\ndescription: sample skill\n---\n",
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample-mcp": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{
+  "apps": {
+    "sample-app": {
+      "id": "connector_sample"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    plugin_root
+}
+
+fn set_host_capabilities(config: &mut PluginsConfigInput, capabilities: &[&str]) {
+    config.host_capabilities = capabilities
+        .iter()
+        .map(|capability| (*capability).to_string())
+        .collect();
+}
+
 async fn load_plugins_from_config(
     config_toml: &str,
     codex_home: &Path,
@@ -864,6 +932,8 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             ),
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
+            required_host_capabilities: Vec::new(),
+            missing_host_capabilities: Vec::new(),
             skill_roots: vec![plugin_root.join("skills").abs()],
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
@@ -920,6 +990,145 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
     assert_eq!(
         outcome.effective_apps(),
         vec![AppConnectorId("connector_example".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn plugin_host_capability_projection_is_all_of_and_reprojects_cached_plugins() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = write_host_capability_projection_plugin(codex_home.path());
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+    );
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+
+    let unavailable = manager.plugins_for_config(&config).await;
+    let assert_unavailable = |outcome: &PluginLoadOutcome, missing_host_capabilities: &[&str]| {
+        let plugin = &outcome.plugins()[0];
+        assert!(plugin.enabled);
+        assert_eq!(plugin.error, None);
+        assert_eq!(
+            plugin.missing_host_capabilities,
+            missing_host_capabilities
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            plugin.required_host_capabilities,
+            vec![
+                HOST_CAPABILITY_INLINE_VISUALIZATION.to_string(),
+                HOST_CAPABILITY_SESSION_OWNED_IAB.to_string(),
+            ]
+        );
+        assert_eq!(plugin.skill_roots, vec![plugin_root.join("skills").abs()]);
+        assert_eq!(
+            plugin.apps,
+            vec![app_declaration("sample-app", "connector_sample")]
+        );
+        assert_eq!(plugin.hook_sources.len(), 1);
+        assert_eq!(
+            plugin.mcp_servers.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from(["sample-mcp".to_string()])
+        );
+        assert!(outcome.effective_skill_roots().is_empty());
+        assert!(outcome.effective_mcp_servers().is_empty());
+        assert!(outcome.effective_apps().is_empty());
+        assert!(outcome.effective_plugin_hook_sources().is_empty());
+        assert!(outcome.capability_summaries().is_empty());
+    };
+    assert_unavailable(
+        &unavailable,
+        &[
+            HOST_CAPABILITY_INLINE_VISUALIZATION,
+            HOST_CAPABILITY_SESSION_OWNED_IAB,
+        ],
+    );
+
+    fs::remove_dir_all(&plugin_root).expect("remove plugin after raw load is cached");
+    set_host_capabilities(&mut config, &[HOST_CAPABILITY_INLINE_VISUALIZATION]);
+    let partially_supported = manager.plugins_for_config(&config).await;
+    assert_unavailable(&partially_supported, &[HOST_CAPABILITY_SESSION_OWNED_IAB]);
+
+    set_host_capabilities(
+        &mut config,
+        &[
+            HOST_CAPABILITY_INLINE_VISUALIZATION,
+            HOST_CAPABILITY_SESSION_OWNED_IAB,
+        ],
+    );
+    let supported = manager.plugins_for_config(&config).await;
+    assert!(supported.plugins()[0].missing_host_capabilities.is_empty());
+    assert!(supported.plugins()[0].is_active());
+    assert_eq!(
+        supported.effective_skill_roots(),
+        vec![plugin_root.join("skills").abs()]
+    );
+    assert_eq!(
+        sorted_effective_mcp_server_names(&supported),
+        vec!["sample-mcp".to_string()]
+    );
+    assert_eq!(
+        supported.effective_apps(),
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
+    assert_eq!(supported.effective_plugin_hook_sources().len(), 1);
+    assert_eq!(
+        supported.capability_summaries(),
+        &[PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: vec!["sample-mcp".to_string()],
+            app_connector_ids: vec![AppConnectorId("connector_sample".to_string())],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_without_host_capability_requirements_remains_active() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join("skills/sample/SKILL.md"),
+        "---\nname: sample\ndescription: sample skill\n---\n",
+    );
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+        /*auth_mode*/ None,
+    )
+    .await;
+
+    assert!(outcome.plugins()[0].required_host_capabilities.is_empty());
+    assert!(outcome.plugins()[0].missing_host_capabilities.is_empty());
+    assert!(outcome.plugins()[0].is_active());
+    assert_eq!(
+        outcome.effective_skill_roots(),
+        vec![plugin_root.join("skills").abs()]
+    );
+    assert_eq!(
+        outcome.capability_summaries(),
+        &[PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }]
     );
 }
 
@@ -1906,6 +2115,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         version: None,
         description: None,
         keywords: Vec::new(),
+        requires: crate::manifest::PluginManifestRequirements::default(),
         paths: crate::manifest::PluginManifestPaths {
             skills: vec![
                 plugin_root.join("skills"),
@@ -2145,6 +2355,8 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             manifest_description: None,
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
+            required_host_capabilities: Vec::new(),
+            missing_host_capabilities: Vec::new(),
             skill_roots: Vec::new(),
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: false,
@@ -2320,6 +2532,8 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         manifest_description: None,
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
+        required_host_capabilities: Vec::new(),
+        missing_host_capabilities: Vec::new(),
         skill_roots: Vec::new(),
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,
@@ -5873,4 +6087,38 @@ async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
         "hooks/hooks.json"
     );
     assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn plugin_hooks_for_layer_stack_applies_host_capability_requirements() {
+    let codex_home = TempDir::new().unwrap();
+    write_host_capability_projection_plugin(codex_home.path());
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+    );
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let unavailable = manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+    assert_eq!(unavailable, PluginHookLoadOutcome::default());
+
+    set_host_capabilities(
+        &mut config,
+        &[
+            HOST_CAPABILITY_INLINE_VISUALIZATION,
+            HOST_CAPABILITY_SESSION_OWNED_IAB,
+        ],
+    );
+    let supported = manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+    assert_eq!(supported.hook_sources.len(), 1);
+    assert_eq!(
+        supported.hook_sources[0].source_relative_path,
+        "hooks/hooks.json"
+    );
+    assert_eq!(supported.hook_load_warnings, Vec::<String>::new());
 }

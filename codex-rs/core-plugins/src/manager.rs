@@ -110,6 +110,7 @@ pub struct PluginsConfigInput {
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
+    pub host_capabilities: HashSet<String>,
 }
 
 impl PluginsConfigInput {
@@ -124,6 +125,7 @@ impl PluginsConfigInput {
             plugins_enabled,
             remote_plugin_enabled,
             chatgpt_base_url,
+            host_capabilities: HashSet::new(),
         }
     }
 }
@@ -361,7 +363,8 @@ pub struct PluginsManager {
         RwLock<HashMap<RecommendedPluginsCacheKey, Arc<OnceCell<RecommendedPluginsMode>>>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
-    // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
+    // Keep the cache auth- and host-capability-independent so runtime changes only need to
+    // resolve capabilities again.
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
     tool_suggest_metadata_cache: ToolSuggestMetadataCache,
@@ -554,7 +557,7 @@ impl PluginsManager {
             remote_global_catalog_active,
         );
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
-            return self.resolve_loaded_plugins_for_auth(plugins);
+            return self.resolve_loaded_plugins_for_runtime(plugins, &config.host_capabilities);
         }
 
         let Ok(_load_permit) = self.loaded_plugins_load_semaphore.acquire().await else {
@@ -562,7 +565,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         };
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
-            return self.resolve_loaded_plugins_for_auth(plugins);
+            return self.resolve_loaded_plugins_for_runtime(plugins, &config.host_capabilities);
         }
         let cache_generation = self.loaded_plugins_cache_generation();
         let plugin_skill_snapshots = PluginSkillSnapshots::for_plugin_load();
@@ -582,12 +585,17 @@ impl PluginsManager {
             plugins.clone(),
             plugin_skill_snapshots,
         );
-        self.resolve_loaded_plugins_for_auth(plugins)
+        self.resolve_loaded_plugins_for_runtime(plugins, &config.host_capabilities)
     }
 
-    fn resolve_loaded_plugins_for_auth(&self, mut plugins: Vec<LoadedPlugin>) -> PluginLoadOutcome {
+    fn resolve_loaded_plugins_for_runtime(
+        &self,
+        mut plugins: Vec<LoadedPlugin>,
+        host_capabilities: &HashSet<String>,
+    ) -> PluginLoadOutcome {
         let auth_mode = self.auth_mode();
         for plugin in &mut plugins {
+            plugin.apply_host_capabilities(host_capabilities);
             let plugin_active = plugin.is_active();
             apply_app_mcp_routing_policy(
                 &mut plugin.apps,
@@ -660,7 +668,7 @@ impl PluginsManager {
             self.remote_global_catalog_active(config),
         )
         .await;
-        self.resolve_loaded_plugins_for_auth(plugins)
+        self.resolve_loaded_plugins_for_runtime(plugins, &config.host_capabilities)
     }
 
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
@@ -677,6 +685,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.remote_global_catalog_active(config),
+            &config.host_capabilities,
         )
         .await
     }
@@ -1683,12 +1692,13 @@ impl PluginsManager {
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         skill_config_rules: &SkillConfigRules,
-    ) -> Result<PluginCapabilitySummary, MarketplaceError> {
+        host_capabilities: &HashSet<String>,
+    ) -> Result<Option<PluginCapabilitySummary>, MarketplaceError> {
         let fragment = self
             .tool_suggest_metadata_cache
             .metadata_for_plugin(marketplace_name, plugin, self.restriction_product)
             .await?;
-        Ok(fragment.project(skill_config_rules, self.auth_mode()))
+        Ok(fragment.project(skill_config_rules, self.auth_mode(), host_capabilities))
     }
 
     pub async fn read_plugin_for_config(

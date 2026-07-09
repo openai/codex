@@ -78,13 +78,26 @@ impl SkillsThreadState {
         mut query: SkillListQuery,
     ) -> SkillCatalog {
         let roots = std::mem::take(&mut query.executor_roots);
+        let host_capabilities = query.host_capabilities.clone();
         let mut catalog = SkillCatalog::default();
         for root in roots {
             query.executor_roots = vec![root.clone()];
-            catalog.extend(
-                self.executor_root_catalog(providers, root, query.clone())
-                    .await,
-            );
+            let mut root_catalog = self
+                .executor_root_catalog(providers, root, query.clone())
+                .await;
+            root_catalog
+                .entries
+                .retain(|entry| entry.host_requirements_satisfied_by(&host_capabilities));
+            for gated_warnings in std::mem::take(&mut root_catalog.host_capability_gated_warnings) {
+                if gated_warnings
+                    .required_host_capabilities
+                    .iter()
+                    .all(|capability| host_capabilities.contains(capability))
+                {
+                    root_catalog.warnings.extend(gated_warnings.warnings);
+                }
+            }
+            catalog.extend(root_catalog);
         }
         catalog
     }

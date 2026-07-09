@@ -16,6 +16,7 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
+pub type PluginManifestRequirements = codex_plugin::manifest::PluginManifestRequirements;
 
 pub(crate) type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
@@ -30,6 +31,8 @@ struct RawPluginManifest {
     description: Option<String>,
     #[serde(default)]
     keywords: Vec<String>,
+    #[serde(default)]
+    requires: RawPluginManifestRequirements,
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
@@ -42,6 +45,13 @@ struct RawPluginManifest {
     hooks: Option<RawPluginManifestHooks>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPluginManifestRequirements {
+    #[serde(default)]
+    host_capabilities: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -162,6 +172,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
+        requires,
         skills,
         mcp_servers,
         apps,
@@ -177,6 +188,17 @@ pub(crate) fn parse_plugin_manifest_uri(
         let version = version.trim();
         (!version.is_empty()).then(|| version.to_string())
     });
+    let mut host_capabilities = Vec::new();
+    for capability in requires.host_capabilities {
+        let capability = capability.trim();
+        if !capability.is_empty()
+            && !host_capabilities
+                .iter()
+                .any(|existing| existing == capability)
+        {
+            host_capabilities.push(capability.to_string());
+        }
+    }
     let interface = interface.and_then(|interface| {
         let RawPluginManifestInterface {
             display_name,
@@ -257,6 +279,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
+        requires: codex_plugin::manifest::PluginManifestRequirements { host_capabilities },
         paths: codex_plugin::manifest::PluginManifestPaths {
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
@@ -519,6 +542,7 @@ mod tests {
     use codex_plugin::manifest::PluginManifestInterface;
     use codex_plugin::manifest::PluginManifestMcpServers;
     use codex_plugin::manifest::PluginManifestPaths;
+    use codex_plugin::manifest::PluginManifestRequirements;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -706,6 +730,42 @@ mod tests {
     }
 
     #[test]
+    fn plugin_manifest_normalizes_required_host_capabilities() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{
+  "name": "demo-plugin",
+  "requires": {
+    "hostCapabilities": [
+      " codex.inline_visualization ",
+      "",
+      "codex.code_mode",
+      "codex.inline_visualization",
+      " codex.code_mode ",
+      "   "
+    ]
+  }
+}"#,
+        )
+        .expect("write manifest");
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(
+            manifest.requires,
+            PluginManifestRequirements {
+                host_capabilities: vec![
+                    "codex.inline_visualization".to_string(),
+                    "codex.code_mode".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn plugin_manifest_uses_alternate_discoverable_path() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
@@ -714,6 +774,9 @@ mod tests {
             r#"{
   "name": "demo-plugin",
   "version": " 2.0.0 ",
+  "requires": {
+    "hostCapabilities": ["codex.inline_visualization"]
+  },
   "interface": {
     "displayName": "Fallback Plugin"
   }
@@ -723,6 +786,10 @@ mod tests {
         let manifest = load_manifest(&plugin_root);
 
         assert_eq!(manifest.version, Some("2.0.0".to_string()));
+        assert_eq!(
+            manifest.requires.host_capabilities,
+            vec!["codex.inline_visualization".to_string()]
+        );
         assert_eq!(
             manifest
                 .interface
@@ -773,17 +840,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_and_executor_sources_parse_the_same_manifest() {
+    async fn host_and_executor_sources_parse_the_same_manifest_with_requirements() {
         let temp_dir = tempdir().expect("tempdir");
         let plugin_root = temp_dir.path().join("demo-plugin");
-        write_manifest(
-            &plugin_root,
-            Some(" 1.2.3 "),
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
             r#"{
+  "name": "demo-plugin",
+  "version": " 1.2.3 ",
+  "requires": {
+    "hostCapabilities": ["codex.inline_visualization"]
+  },
+  "interface": {
     "displayName": "Demo Plugin",
     "composerIcon": "./assets/icon.svg"
-  }"#,
-        );
+  }
+}"#,
+        )
+        .expect("write manifest");
         let plugin_root =
             AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
         let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
@@ -819,6 +894,12 @@ mod tests {
         )
         .expect("valid expected descriptor");
 
+        assert_eq!(
+            executor_plugin.manifest().requires,
+            PluginManifestRequirements {
+                host_capabilities: vec!["codex.inline_visualization".to_string()],
+            }
+        );
         assert_eq!(executor_plugin, expected_plugin);
     }
 
@@ -853,6 +934,7 @@ mod tests {
                 version: None,
                 description: None,
                 keywords: Vec::new(),
+                requires: PluginManifestRequirements::default(),
                 paths: PluginManifestPaths {
                     skills: vec![plugin_root.join("skills").expect("skills URI")],
                     mcp_servers: Some(PluginManifestMcpServers::Path(

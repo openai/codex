@@ -116,10 +116,11 @@ impl PluginsManager {
                         &marketplace_name,
                         &plugin,
                         &skill_config_rules,
+                        &input.plugins.host_capabilities,
                     )
                     .await
                 {
-                    Ok(plugin) => {
+                    Ok(Some(plugin)) => {
                         discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                             id: plugin.config_name,
                             remote_plugin_id: None,
@@ -134,6 +135,7 @@ impl PluginsManager {
                                 .collect(),
                         });
                     }
+                    Ok(None) => {}
                     Err(err) => {
                         warn!("failed to load discoverable plugin suggestion {plugin_id}: {err:#}")
                     }

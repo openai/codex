@@ -158,6 +158,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
                 "lint-fix/SKILL.md",
             )],
             warnings: Vec::new(),
+            ..Default::default()
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: Some(Arc::clone(&list_calls)),
@@ -336,6 +337,196 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
 }
 
 #[tokio::test]
+async fn selected_executor_skills_require_all_host_capabilities_after_caching() -> TestResult {
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: vec![
+                test_entry(
+                    SkillSourceKind::Executor,
+                    "env-1",
+                    "executor/visualize",
+                    "visualize/SKILL.md",
+                )
+                .with_required_host_capabilities(vec![
+                    "codex.inline_visualization".to_string(),
+                    "codex.code_mode".to_string(),
+                ]),
+            ],
+            warnings: Vec::new(),
+            host_capability_gated_warnings: vec![
+                codex_skills_extension::catalog::HostCapabilityGatedWarnings {
+                    required_host_capabilities: vec![
+                        "codex.inline_visualization".to_string(),
+                        "codex.code_mode".to_string(),
+                    ],
+                    warnings: vec!["gated plugin skill warning".to_string()],
+                },
+            ],
+        },
+        read_requests: Arc::new(Mutex::new(Vec::new())),
+        list_calls: Some(Arc::clone(&list_calls)),
+        fail_first_list: false,
+    });
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "visualize".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: PathUri::parse("file:///skills/visualize").expect("skill root URI"),
+        },
+    }];
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let turn_environment = TurnEnvironmentSelection {
+        environment_id: "env-1".to_string(),
+        cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+    };
+
+    let unsupported_turn_store = ExtensionData::new("turn-1");
+    let unsupported = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: std::slice::from_ref(&turn_environment),
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &unsupported_turn_store,
+        })
+        .await;
+    assert!(
+        unsupported[0]
+            .render_diff(PreviousWorldStateSection::Absent)
+            .is_none()
+    );
+    assert!(unsupported[0].snapshot()["body"].is_null());
+    let unsupported_fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: Vec::new(),
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &unsupported_turn_store,
+        )
+        .await;
+    assert!(unsupported_fragments.is_empty());
+    assert!(matches!(
+        event_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    let mut partial_config = config.clone();
+    partial_config.host_capabilities = ["codex.inline_visualization".to_string()].into();
+    registry.config_contributors()[0].on_config_changed(
+        &session_store,
+        &thread_store,
+        &config,
+        &partial_config,
+    );
+    let partial_turn_store = ExtensionData::new("turn-2");
+    let partially_supported = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-2",
+            environments: std::slice::from_ref(&turn_environment),
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &partial_turn_store,
+        })
+        .await;
+    assert!(partially_supported[0].snapshot()["body"].is_null());
+    let partially_supported_fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-2".to_string(),
+                user_input: Vec::new(),
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &partial_turn_store,
+        )
+        .await;
+    assert!(partially_supported_fragments.is_empty());
+    assert!(matches!(
+        event_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    let mut supported_config = partial_config.clone();
+    supported_config.host_capabilities = [
+        "codex.code_mode".to_string(),
+        "codex.inline_visualization".to_string(),
+    ]
+    .into();
+    registry.config_contributors()[0].on_config_changed(
+        &session_store,
+        &thread_store,
+        &partial_config,
+        &supported_config,
+    );
+    let supported_turn_store = ExtensionData::new("turn-3");
+    let supported = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-3",
+            environments: &[turn_environment],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &supported_turn_store,
+        })
+        .await;
+    assert!(
+        supported[0].snapshot()["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("visualize"))
+    );
+    let supported_fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-3".to_string(),
+                user_input: Vec::new(),
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &supported_turn_store,
+        )
+        .await;
+    assert!(supported_fragments.is_empty());
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+        panic!("expected gated warning for supported plugin");
+    };
+    assert_eq!(warning.message, "gated plugin skill warning");
+    assert_eq!(1, list_calls.load(Ordering::Relaxed));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn default_context_truncates_catalog_descriptions() -> TestResult {
     let description = "x".repeat(1_025);
     let mut entry = test_entry(
@@ -350,6 +541,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
             catalog: SkillCatalog {
                 entries: vec![entry],
                 warnings: Vec::new(),
+                ..Default::default()
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: None,
@@ -400,6 +592,7 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
             catalog: SkillCatalog {
                 entries: vec![entry],
                 warnings: Vec::new(),
+                ..Default::default()
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: None,
@@ -470,6 +663,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
                     "skill://orchestrator/first/SKILL.md",
                 )],
                 warnings: Vec::new(),
+                ..Default::default()
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: Some(Arc::clone(&list_calls)),
@@ -551,6 +745,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                 })
                 .collect(),
             warnings: Vec::new(),
+            ..Default::default()
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
@@ -651,6 +846,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
                 .hidden_from_prompt(),
             ],
             warnings: Vec::new(),
+            ..Default::default()
         },
         read_requests: Arc::clone(&read_requests),
         list_calls: None,
@@ -781,6 +977,7 @@ struct TestConfig {
     include_instructions: bool,
     bundled_skills_enabled: bool,
     orchestrator_skills_enabled: bool,
+    host_capabilities: std::collections::BTreeSet<String>,
 }
 
 fn default_config() -> TestConfig {
@@ -788,6 +985,7 @@ fn default_config() -> TestConfig {
         include_instructions: true,
         bundled_skills_enabled: true,
         orchestrator_skills_enabled: true,
+        host_capabilities: Default::default(),
     }
 }
 
@@ -796,6 +994,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         bundled_skills_enabled: config.bundled_skills_enabled,
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        host_capabilities: config.host_capabilities.clone(),
     }
 }
 

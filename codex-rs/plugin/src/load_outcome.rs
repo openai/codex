@@ -21,6 +21,8 @@ pub struct LoadedPlugin<M> {
     pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
+    pub required_host_capabilities: Vec<String>,
+    pub missing_host_capabilities: Vec<String>,
     pub skill_roots: Vec<AbsolutePathBuf>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub has_enabled_skills: bool,
@@ -33,11 +35,20 @@ pub struct LoadedPlugin<M> {
 
 impl<M> LoadedPlugin<M> {
     pub fn is_active(&self) -> bool {
-        self.enabled && self.error.is_none()
+        self.enabled && self.error.is_none() && self.missing_host_capabilities.is_empty()
     }
 
     pub fn display_name(&self) -> &str {
         self.manifest_name.as_deref().unwrap_or(&self.config_name)
+    }
+
+    pub fn apply_host_capabilities(&mut self, host_capabilities: &HashSet<String>) {
+        self.missing_host_capabilities = self
+            .required_host_capabilities
+            .iter()
+            .filter(|capability| !host_capabilities.contains(*capability))
+            .cloned()
+            .collect::<Vec<_>>();
     }
 }
 
@@ -232,6 +243,8 @@ mod tests {
             manifest_description: None,
             root: test_path(config_name),
             enabled: true,
+            required_host_capabilities: Vec::new(),
+            missing_host_capabilities: Vec::new(),
             skill_roots,
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,

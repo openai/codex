@@ -1279,6 +1279,16 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "hostCapabilities": {
+          "description": "Host features available to runtime plugins on this connection.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "mcpServerOpenaiFormElicitation": {
           "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
           "type": "boolean"

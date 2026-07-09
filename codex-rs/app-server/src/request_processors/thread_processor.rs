@@ -451,17 +451,17 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
             request_id,
             params,
-            app_server_client_name,
-            app_server_client_version,
+            app_server_client_info,
             supports_openai_form_elicitation,
+            host_capabilities,
             request_context,
         )
         .await
@@ -482,16 +482,16 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
             params,
-            app_server_client_name,
-            app_server_client_version,
+            app_server_client_info,
             supports_openai_form_elicitation,
+            host_capabilities,
         )
         .await
         .map(|()| None)
@@ -501,16 +501,16 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadForkParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
-            app_server_client_name,
-            app_server_client_version,
+            app_server_client_info,
             supports_openai_form_elicitation,
+            host_capabilities,
         )
         .await
         .map(|()| None)
@@ -629,8 +629,9 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_compact_start_inner(request_id, params)
+        self.thread_compact_start_inner(request_id, params, host_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -802,19 +803,13 @@ impl ThreadRequestProcessor {
 
     async fn set_app_server_client_info(
         thread: &CodexThread,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
     ) -> Result<(), JSONRPCErrorError> {
-        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
-            app_server_client_name.as_deref(),
-            app_server_client_version.as_deref(),
-        );
+        let AppServerClientInfo { name, version } = app_server_client_info;
+        let mcp_elicitations_auto_deny =
+            xcode_26_4_mcp_elicitations_auto_deny(name.as_deref(), version.as_deref());
         thread
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(name, version, mcp_elicitations_auto_deny)
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
@@ -931,9 +926,9 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -985,6 +980,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        typesafe_overrides.host_capabilities = host_capabilities;
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -1007,8 +1003,7 @@ impl ThreadRequestProcessor {
                 listener_task_context,
                 config_manager,
                 request_id,
-                app_server_client_name,
-                app_server_client_version,
+                app_server_client_info,
                 supports_openai_form_elicitation,
                 config,
                 typesafe_overrides,
@@ -1084,8 +1079,7 @@ impl ThreadRequestProcessor {
         listener_task_context: ListenerTaskContext,
         config_manager: ConfigManager,
         request_id: ConnectionRequestId,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
@@ -1254,12 +1248,7 @@ impl ThreadRequestProcessor {
             Some("ready"),
         );
 
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await?;
+        Self::set_app_server_client_info(thread.as_ref(), app_server_client_info).await?;
 
         let instruction_sources = thread.legacy_instruction_sources().await;
         let config_snapshot = thread
@@ -1821,10 +1810,18 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<ThreadCompactStartResponse, JSONRPCErrorError> {
         let ThreadCompactStartParams { thread_id } = params;
 
-        let (_, thread) = self.load_thread(&thread_id).await?;
+        let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "start compaction",
+        )
+        .await?;
         self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
             .await
             .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
@@ -2627,30 +2624,35 @@ impl ThreadRequestProcessor {
     pub(crate) async fn try_attach_thread_listener(
         &self,
         thread_id: ThreadId,
-        connection_ids: Vec<ConnectionId>,
+        connections: Vec<(ConnectionId, HostCapabilities)>,
     ) {
-        let mut raw_events_enabled = false;
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            let config_snapshot = thread.config_snapshot().await;
-            let loaded_thread = build_thread_from_snapshot(
-                thread_id,
-                thread.session_configured().session_id.to_string(),
-                &config_snapshot,
-                thread.rollout_path(),
-            );
-            self.thread_watch_manager.upsert_thread(loaded_thread).await;
-            if let Some(parent_thread_id) = config_snapshot.parent_thread_id {
-                raw_events_enabled = self
-                    .thread_state_manager
-                    .thread_state(parent_thread_id)
-                    .await
-                    .lock()
-                    .await
-                    .experimental_raw_events;
-            }
-        }
+        let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+            return;
+        };
+        let config_snapshot = thread.config_snapshot().await;
+        let thread_host_capabilities = config_snapshot.host_capabilities.clone();
+        let loaded_thread = build_thread_from_snapshot(
+            thread_id,
+            thread.session_configured().session_id.to_string(),
+            &config_snapshot,
+            thread.rollout_path(),
+        );
+        self.thread_watch_manager.upsert_thread(loaded_thread).await;
+        let raw_events_enabled = if let Some(parent_thread_id) = config_snapshot.parent_thread_id {
+            self.thread_state_manager
+                .thread_state(parent_thread_id)
+                .await
+                .lock()
+                .await
+                .experimental_raw_events
+        } else {
+            false
+        };
 
-        for connection_id in connection_ids {
+        for (connection_id, host_capabilities) in connections {
+            if host_capabilities != thread_host_capabilities {
+                continue;
+            }
             log_listener_attach_result(
                 self.ensure_conversation_listener(thread_id, connection_id, raw_events_enabled)
                     .await,
@@ -2665,9 +2667,9 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2697,7 +2699,7 @@ impl ThreadRequestProcessor {
             return Ok(());
         }
         let redact_resume_payloads =
-            should_redact_thread_resume_payloads(app_server_client_name.as_deref());
+            should_redact_thread_resume_payloads(app_server_client_info.name.as_deref());
 
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -2710,8 +2712,8 @@ impl ThreadRequestProcessor {
             .resume_running_thread(
                 &request_id,
                 &params,
-                app_server_client_name.clone(),
-                app_server_client_version.clone(),
+                &app_server_client_info,
+                &host_capabilities,
             )
             .await
         {
@@ -2782,6 +2784,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        typesafe_overrides.host_capabilities = host_capabilities;
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -2822,12 +2825,9 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
-                if let Err(err) = Self::set_app_server_client_info(
-                    codex_thread.as_ref(),
-                    app_server_client_name,
-                    app_server_client_version,
-                )
-                .await
+                if let Err(err) =
+                    Self::set_app_server_client_info(codex_thread.as_ref(), app_server_client_info)
+                        .await
                 {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
@@ -3008,8 +3008,8 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: &AppServerClientInfo,
+        host_capabilities: &HostCapabilities,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -3069,6 +3069,12 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            if &config_snapshot.host_capabilities != host_capabilities {
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {existing_thread_id} with different host capabilities: requested={host_capabilities:?} active={:?}",
+                    config_snapshot.host_capabilities
+                )));
+            }
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
@@ -3113,7 +3119,7 @@ impl ThreadRequestProcessor {
                 );
             }
             let redact_resume_payloads =
-                should_redact_thread_resume_payloads(app_server_client_name.as_deref());
+                should_redact_thread_resume_payloads(app_server_client_info.name.as_deref());
             let history_items = source_thread
                 .history
                 .take()
@@ -3136,8 +3142,7 @@ impl ThreadRequestProcessor {
             .await?;
             Self::set_app_server_client_info(
                 existing_thread.as_ref(),
-                app_server_client_name,
-                app_server_client_version,
+                app_server_client_info.clone(),
             )
             .await?;
 
@@ -3435,9 +3440,9 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadForkParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3529,6 +3534,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        typesafe_overrides.host_capabilities = host_capabilities;
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
@@ -3567,12 +3573,7 @@ impl ThreadRequestProcessor {
                 err => internal_error(format!("error forking thread: {err}")),
             })?;
 
-        Self::set_app_server_client_info(
-            forked_thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await?;
+        Self::set_app_server_client_info(forked_thread.as_ref(), app_server_client_info).await?;
         if session_configured.rollout_path.is_some()
             && let Some(name) = source_thread_name.clone()
         {

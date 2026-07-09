@@ -156,17 +156,17 @@ impl TurnRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: TurnStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
             request_id,
             params,
-            app_server_client_name,
-            app_server_client_version,
+            app_server_client_info,
             /*supports_openai_form_elicitation*/ supports_openai_form_elicitation,
+            host_capabilities,
         )
         .await
         .map(|response| Some(response.into()))
@@ -175,8 +175,9 @@ impl TurnRequestProcessor {
     pub(crate) async fn thread_inject_items(
         &self,
         params: ThreadInjectItemsParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_inject_items_response_inner(params)
+        self.thread_inject_items_response_inner(params, host_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -195,9 +196,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
-        self.turn_steer_inner(request_id, params)
+        self.turn_steer_inner(request_id, params, host_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -216,8 +218,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_start_inner(request_id, params)
+        self.thread_realtime_start_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -226,8 +229,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendAudioParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_audio_inner(request_id, params)
+        self.thread_realtime_append_audio_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -236,8 +240,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendTextParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_text_inner(request_id, params)
+        self.thread_realtime_append_text_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -246,8 +251,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendSpeechParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_speech_inner(request_id, params)
+        self.thread_realtime_append_speech_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -256,8 +262,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStopParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_stop_inner(request_id, params)
+        self.thread_realtime_stop_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -277,8 +284,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.review_start_inner(request_id, params)
+        self.review_start_inner(request_id, params, host_capabilities)
             .await
             .map(|()| None)
     }
@@ -443,9 +451,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: TurnStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
         supports_openai_form_elicitation: bool,
+        host_capabilities: HostCapabilities,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
@@ -453,6 +461,13 @@ impl TurnRequestProcessor {
                 .inspect_err(|error| {
                     self.track_error_response(&request_id, error, /*error_type*/ None);
                 })?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "start a turn",
+        )
+        .await?;
         self.ensure_direct_input_allowed(&request_id, thread.as_ref())
             .await?;
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
@@ -463,15 +478,11 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await
-        .inspect_err(|error| {
-            self.track_error_response(&request_id, error, /*error_type*/ None);
-        })?;
+        Self::set_app_server_client_info(thread.as_ref(), app_server_client_info)
+            .await
+            .inspect_err(|error| {
+                self.track_error_response(&request_id, error, /*error_type*/ None);
+            })?;
         thread
             .set_openai_form_elicitation_support(supports_openai_form_elicitation)
             .await
@@ -802,8 +813,16 @@ impl TurnRequestProcessor {
     async fn thread_inject_items_response_inner(
         &self,
         params: ThreadInjectItemsParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "inject items",
+        )
+        .await?;
 
         let items = params
             .items
@@ -829,19 +848,13 @@ impl TurnRequestProcessor {
 
     async fn set_app_server_client_info(
         thread: &CodexThread,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        app_server_client_info: AppServerClientInfo,
     ) -> Result<(), JSONRPCErrorError> {
-        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
-            app_server_client_name.as_deref(),
-            app_server_client_version.as_deref(),
-        );
+        let AppServerClientInfo { name, version } = app_server_client_info;
+        let mcp_elicitations_auto_deny =
+            xcode_26_4_mcp_elicitations_auto_deny(name.as_deref(), version.as_deref());
         thread
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(name, version, mcp_elicitations_auto_deny)
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
@@ -850,13 +863,21 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<TurnSteerResponse, JSONRPCErrorError> {
-        let (_, thread) = self
-            .load_thread(&params.thread_id)
-            .await
-            .inspect_err(|error| {
-                self.track_error_response(request_id, error, /*error_type*/ None);
-            })?;
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(request_id, error, /*error_type*/ None);
+                })?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "steer a turn",
+        )
+        .await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
 
@@ -959,8 +980,16 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         thread_id: &str,
+        host_capabilities: &HostCapabilities,
     ) -> Result<Option<(ThreadId, Arc<CodexThread>)>, JSONRPCErrorError> {
         let (thread_id, thread) = self.load_thread(thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            host_capabilities,
+            "use realtime",
+        )
+        .await?;
 
         match self
             .ensure_conversation_listener(
@@ -990,9 +1019,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id, &host_capabilities)
             .await?
         else {
             return Ok(None);
@@ -1034,9 +1064,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendAudioParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ThreadRealtimeAppendAudioResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id, &host_capabilities)
             .await?
         else {
             return Ok(None);
@@ -1061,9 +1092,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendTextParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ThreadRealtimeAppendTextResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id, &host_capabilities)
             .await?
         else {
             return Ok(None);
@@ -1089,9 +1121,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeAppendSpeechParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ThreadRealtimeAppendSpeechResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id, &host_capabilities)
             .await?
         else {
             return Ok(None);
@@ -1114,9 +1147,10 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStopParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ThreadRealtimeStopResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id, &host_capabilities)
             .await?
         else {
             return Ok(None);
@@ -1216,7 +1250,7 @@ impl TurnRequestProcessor {
                 ))
             })?;
 
-        let mut config = self.config.as_ref().clone();
+        let mut config = parent_thread.config().await.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
@@ -1309,6 +1343,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,
@@ -1317,6 +1352,13 @@ impl TurnRequestProcessor {
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
+        ensure_thread_host_capabilities(
+            parent_thread_id,
+            parent_thread.as_ref(),
+            &host_capabilities,
+            "start a review",
+        )
+        .await?;
         let (review_request, display_text) = Self::review_request_from_target(target)?;
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {

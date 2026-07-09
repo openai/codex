@@ -73,6 +73,7 @@ impl SkillToolContext {
                             include_bundled_skills: false,
                             include_orchestrator_skills: true,
                             mcp_resources: self.mcp_resources.clone(),
+                            host_capabilities: self.thread_state.config().host_capabilities,
                         }),
                     )
                     .await

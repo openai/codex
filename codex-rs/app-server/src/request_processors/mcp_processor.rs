@@ -27,9 +27,11 @@ impl McpRequestProcessor {
 
     pub(crate) async fn mcp_server_oauth_login(
         &self,
+        request_id: &ConnectionRequestId,
         params: McpServerOauthLoginParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.mcp_server_oauth_login_response(params)
+        self.mcp_server_oauth_login_response(request_id, params, host_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -37,8 +39,9 @@ impl McpRequestProcessor {
     pub(crate) async fn mcp_server_refresh(
         &self,
         params: Option<()>,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.mcp_server_refresh_response(params)
+        self.mcp_server_refresh_response(params, host_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -47,8 +50,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_mcp_server_status(request_id, params)
+        self.list_mcp_server_status(request_id, params, host_capabilities)
             .await
             .map(|()| None)
     }
@@ -57,8 +61,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.read_mcp_resource(request_id, params)
+        self.read_mcp_resource(request_id, params, host_capabilities)
             .await
             .map(|()| None)
     }
@@ -67,8 +72,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.call_mcp_server_tool(request_id, params)
+        self.call_mcp_server_tool(request_id, params, host_capabilities)
             .await
             .map(|()| None)
     }
@@ -76,6 +82,7 @@ impl McpRequestProcessor {
     async fn mcp_server_refresh_response(
         &self,
         _params: Option<()>,
+        _host_capabilities: HostCapabilities,
     ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
         crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
             .await
@@ -111,7 +118,9 @@ impl McpRequestProcessor {
 
     async fn mcp_server_oauth_login_response(
         &self,
+        request_id: &ConnectionRequestId,
         params: McpServerOauthLoginParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
         let McpServerOauthLoginParams {
             name,
@@ -123,12 +132,20 @@ impl McpRequestProcessor {
         let auth = self.auth_manager.auth().await;
         let (mcp_config, runtime_context) = match thread_id.as_deref() {
             Some(thread_id) => {
-                let (_, thread) = self.load_thread(thread_id).await?;
+                let (thread_id, thread) = self.load_thread(thread_id).await?;
+                ensure_thread_host_capabilities(
+                    thread_id,
+                    thread.as_ref(),
+                    &host_capabilities,
+                    "start MCP OAuth login",
+                )
+                .await?;
                 let runtime = thread.current_mcp_runtime().await;
                 (runtime.config().clone(), runtime.runtime_context().clone())
             }
             None => {
-                let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                config.host_capabilities = host_capabilities;
                 let mcp_config = self
                     .thread_manager
                     .mcp_manager()
@@ -200,6 +217,7 @@ impl McpRequestProcessor {
         let authorization_url = handle.authorization_url().to_string();
         let notification_name = name.clone();
         let notification_thread_id = thread_id;
+        let notification_connection_id = request_id.connection_id;
         let outgoing = Arc::clone(&self.outgoing);
 
         tokio::spawn(async move {
@@ -216,7 +234,12 @@ impl McpRequestProcessor {
                     error,
                 },
             );
-            outgoing.send_server_notification(notification).await;
+            outgoing
+                .send_server_notification_to_connections(
+                    &[notification_connection_id],
+                    notification,
+                )
+                .await;
         });
 
         Ok(McpServerOauthLoginResponse { authorization_url })
@@ -226,22 +249,35 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
         let (config, thread) = match params.thread_id.as_deref() {
             Some(thread_id) => {
-                let (_, thread) = self.load_thread(thread_id).await?;
+                let (thread_id, thread) = self.load_thread(thread_id).await?;
+                ensure_thread_host_capabilities(
+                    thread_id,
+                    thread.as_ref(),
+                    &host_capabilities,
+                    "list MCP server status",
+                )
+                .await?;
                 let thread_config = thread.config().await;
-                let config = self
+                let mut config = self
                     .config_manager
                     .load_latest_config_for_thread(thread_config.as_ref())
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                config.host_capabilities = host_capabilities.clone();
                 (config, Some(thread))
             }
-            None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
+            None => {
+                let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                config.host_capabilities = host_capabilities;
+                (config, None)
+            }
         };
         let mcp_manager = self.thread_manager.mcp_manager();
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
@@ -387,6 +423,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
@@ -396,7 +433,14 @@ impl McpRequestProcessor {
         } = params;
 
         if let Some(thread_id) = thread_id {
-            let (_, thread) = self.load_thread(&thread_id).await?;
+            let (thread_id, thread) = self.load_thread(&thread_id).await?;
+            ensure_thread_host_capabilities(
+                thread_id,
+                thread.as_ref(),
+                &host_capabilities,
+                "read an MCP resource",
+            )
+            .await?;
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
@@ -406,7 +450,8 @@ impl McpRequestProcessor {
             return Ok(());
         }
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        config.host_capabilities = host_capabilities;
         let mcp_manager = self.thread_manager.mcp_manager();
         let mcp_config = mcp_manager.runtime_config(&config).await;
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
@@ -456,11 +501,19 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
-        let (_, thread) = self.load_thread(&thread_id).await?;
-        let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
+        let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "call an MCP tool",
+        )
+        .await?;
+        let meta = with_mcp_tool_call_thread_id_meta(params.meta, &params.thread_id);
         let request_id = request_id.clone();
 
         tokio::spawn(async move {

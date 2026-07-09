@@ -34,6 +34,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+const HOST_CAPABILITY_INLINE_VISUALIZATION: &str = "codex.inline_visualization";
+const HOST_CAPABILITY_SESSION_OWNED_IAB: &str = "browser.session_owned_iab";
+
 #[tokio::test]
 async fn returns_fallback_plugins_when_remote_disabled_for_codex_auth() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -287,6 +290,63 @@ source = "/tmp/{marketplace_name}"
             app_connector_ids: Vec::new(),
             ..expected
         }]
+    );
+}
+
+#[tokio::test]
+async fn reprojects_cached_configured_and_fallback_plugins_for_host_capabilities() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["sample", "slack"]);
+    let write_required_manifests = |required_capability: &str| {
+        for plugin_name in ["sample", "slack"] {
+            write_file(
+                &curated_root.join(format!("plugins/{plugin_name}/.codex-plugin/plugin.json")),
+                &format!(
+                    r#"{{
+  "name": "{plugin_name}",
+  "description": "Plugin that includes skills, MCP servers, and app connectors",
+  "requires": {{
+    "hostCapabilities": ["{required_capability}"]
+  }}
+}}"#
+                ),
+            );
+        }
+    };
+    write_required_manifests(HOST_CAPABILITY_INLINE_VISUALIZATION);
+
+    let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let configured_plugin_id = "sample@openai-curated";
+
+    let unsupported = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins.clone(), &[configured_plugin_id], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(unsupported, Vec::new());
+
+    write_required_manifests(HOST_CAPABILITY_SESSION_OWNED_IAB);
+    plugins
+        .host_capabilities
+        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION.to_string());
+    let supported = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[configured_plugin_id], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(
+        supported
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "sample@openai-curated".to_string(),
+            "slack@openai-curated".to_string(),
+        ]
     );
 }
 

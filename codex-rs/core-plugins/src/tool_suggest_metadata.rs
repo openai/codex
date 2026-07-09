@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -30,8 +31,9 @@ type ToolSuggestMetadataEntry = Result<Arc<ToolSuggestMetadataFragment>, String>
 
 /// Source-derived plugin metadata cached for tool suggestions.
 ///
-/// `PluginsManager` clears these entries alongside its loaded-plugin cache. Current skill config
-/// and auth routing are projected after each lookup and are not part of this cache.
+/// `PluginsManager` clears these entries alongside its loaded-plugin cache. Current skill
+/// configuration, runtime host capabilities, and auth routing are projected after each lookup and
+/// are not part of this cache.
 pub(crate) struct ToolSuggestMetadataCache {
     state: RwLock<ToolSuggestMetadataCacheState>,
     load_semaphore: Semaphore,
@@ -53,6 +55,7 @@ pub(crate) struct ToolSuggestMetadataFragment {
     config_name: String,
     display_name: String,
     description: Option<String>,
+    required_host_capabilities: Vec<String>,
     mcp_server_names: Vec<String>,
     app_declarations: Vec<AppDeclaration>,
     skill_inventory: Option<PluginSkillInventory>,
@@ -63,7 +66,16 @@ impl ToolSuggestMetadataFragment {
         &self,
         skill_config_rules: &SkillConfigRules,
         auth_mode: Option<AuthMode>,
-    ) -> PluginCapabilitySummary {
+        host_capabilities: &HashSet<String>,
+    ) -> Option<PluginCapabilitySummary> {
+        if self
+            .required_host_capabilities
+            .iter()
+            .any(|capability| !host_capabilities.contains(capability))
+        {
+            return None;
+        }
+
         let mut app_declarations = self.app_declarations.clone();
         let mut mcp_servers = self
             .mcp_server_names
@@ -82,7 +94,7 @@ impl ToolSuggestMetadataFragment {
         let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
 
-        PluginCapabilitySummary {
+        Some(PluginCapabilitySummary {
             config_name: self.config_name.clone(),
             display_name: self.display_name.clone(),
             description: self.description.clone(),
@@ -92,7 +104,7 @@ impl ToolSuggestMetadataFragment {
                 .is_some_and(|inventory| inventory.has_enabled_skills(skill_config_rules)),
             mcp_server_names,
             app_connector_ids: app_connector_ids_from_declarations(&app_declarations),
-        }
+        })
     }
 }
 
@@ -200,6 +212,7 @@ async fn load_plugin_metadata(
             description: prompt_safe_plugin_description(Some(
                 &remote_plugin_install_required_description(&plugin.source),
             )),
+            required_host_capabilities: Vec::new(),
             mcp_server_names: Vec::new(),
             app_declarations: Vec::new(),
             skill_inventory: None,
@@ -231,6 +244,7 @@ async fn load_plugin_metadata(
         config_name: plugin.id.clone(),
         display_name: plugin.name.clone(),
         description: prompt_safe_plugin_description(manifest.description.as_deref()),
+        required_host_capabilities: manifest.requires.host_capabilities,
         mcp_server_names,
         app_declarations,
         skill_inventory: Some(skill_inventory),

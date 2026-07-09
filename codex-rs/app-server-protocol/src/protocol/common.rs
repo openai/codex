@@ -2209,6 +2209,7 @@ mod tests {
                     experimental_api: true,
                     request_attestation: true,
                     mcp_server_openai_form_elicitation: true,
+                    host_capabilities: Some(vec!["codex.inline_visualization".to_string()]),
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -2231,6 +2232,7 @@ mod tests {
                         "experimentalApi": true,
                         "requestAttestation": true,
                         "mcpServerOpenaiFormElicitation": true,
+                        "hostCapabilities": ["codex.inline_visualization"],
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -2258,6 +2260,7 @@ mod tests {
                     "experimentalApi": true,
                     "requestAttestation": true,
                     "mcpServerOpenaiFormElicitation": true,
+                    "hostCapabilities": ["codex.inline_visualization"],
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -2280,6 +2283,7 @@ mod tests {
                         experimental_api: true,
                         request_attestation: true,
                         mcp_server_openai_form_elicitation: true,
+                        host_capabilities: Some(vec!["codex.inline_visualization".to_string()]),
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),

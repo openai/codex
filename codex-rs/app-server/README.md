@@ -93,6 +93,19 @@ App-server then advertises the downstream `openai/form` MCP extension for
 threads started, resumed, or forked by that connection. Clients that cannot
 handle the request envelope omit the field or set it to `false`.
 
+Clients declare host features available to runtime plugins with
+`initialize.params.capabilities.hostCapabilities`. Capability names are opaque
+compatibility signals, not authorization grants; omitted or `null`
+capabilities are treated as an empty set. The capability set is fixed for the
+lifetime of a loaded thread, so clients must use the same set when resuming or
+starting turns on that thread.
+
+Plugin manifests declare all-of host requirements with
+`{"requires":{"hostCapabilities":["codex.inline_visualization"]}}`. A plugin
+whose requirements are not satisfied remains installed and manageable, but its
+skills, MCP servers, apps, hooks, and model-facing summaries are excluded from
+that runtime.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If

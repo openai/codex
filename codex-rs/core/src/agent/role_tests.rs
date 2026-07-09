@@ -181,6 +181,7 @@ async fn apply_role_preserves_unspecified_keys() {
     .await;
     config.codex_linux_sandbox_exe = Some(PathBuf::from("/tmp/codex-linux-sandbox"));
     config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
+    config.host_capabilities = ["codex.inline_visualization".to_string()].into();
     let role_path = write_role_config(
         &home,
         "effort-only.toml",
@@ -202,6 +203,10 @@ async fn apply_role_preserves_unspecified_keys() {
 
     assert_eq!(config.model.as_deref(), Some("base-model"));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        config.host_capabilities,
+        ["codex.inline_visualization".to_string()].into()
+    );
     assert_eq!(
         config.codex_linux_sandbox_exe,
         Some(PathBuf::from("/tmp/codex-linux-sandbox"))

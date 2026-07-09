@@ -205,6 +205,7 @@ mod reload {
     ) -> ConfigOverrides {
         ConfigOverrides {
             cwd: Some(config.cwd.to_path_buf()),
+            host_capabilities: config.host_capabilities.clone(),
             model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
             service_tier: preserve_current_service_tier.then(|| config.service_tier.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),

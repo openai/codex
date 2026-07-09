@@ -178,8 +178,9 @@ pub async fn load_plugin_hooks_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     remote_global_catalog_active: bool,
+    host_capabilities: &HashSet<String>,
 ) -> PluginHookLoadOutcome {
-    let plugins = load_plugins_from_layer_stack_with_scope(
+    let mut plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
@@ -187,6 +188,9 @@ pub async fn load_plugin_hooks_from_layer_stack(
         PluginLoadScope::HooksOnly,
     )
     .await;
+    for plugin in &mut plugins {
+        plugin.apply_host_capabilities(host_capabilities);
+    }
     PluginHookLoadOutcome {
         hook_sources: plugins
             .iter()
@@ -764,6 +768,8 @@ async fn load_plugin(
         manifest_description: None,
         root,
         enabled: plugin.enabled,
+        required_host_capabilities: Vec::new(),
+        missing_host_capabilities: Vec::new(),
         skill_roots: Vec::new(),
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,
@@ -804,6 +810,7 @@ async fn load_plugin(
 
     let manifest_paths = &manifest.paths;
     loaded_plugin.plugin_namespace = Some(manifest.name.clone());
+    loaded_plugin.required_host_capabilities = manifest.requires.host_capabilities.clone();
     match scope {
         PluginLoadScope::AllCapabilities {
             restriction_product,

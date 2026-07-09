@@ -10,8 +10,16 @@ pub struct PluginManifest<Resource> {
     pub version: Option<String>,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    pub requires: PluginManifestRequirements,
     pub paths: PluginManifestPaths<Resource>,
     pub interface: Option<PluginManifestInterface<Resource>>,
+}
+
+/// Host capabilities required for a plugin to contribute runtime resources.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginManifestRequirements {
+    /// Every listed capability must be advertised by the host.
+    pub host_capabilities: Vec<String>,
 }
 
 /// Component resources declared by a plugin manifest.
@@ -100,6 +108,7 @@ impl<Resource> PluginManifest<Resource> {
             version,
             description,
             keywords,
+            requires,
             paths,
             interface,
         } = self;
@@ -176,6 +185,7 @@ impl<Resource> PluginManifest<Resource> {
             version,
             description,
             keywords,
+            requires,
             paths: PluginManifestPaths {
                 skills: skills
                     .into_iter()

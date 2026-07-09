@@ -147,6 +147,104 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
     Ok(())
 }
 
+#[tokio::test]
+async fn selected_plugin_contributions_require_all_host_capabilities_after_caching() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let plugin_root = tempfile::tempdir()?;
+    std::fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.path().join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "gated-plugin",
+  "requires": {
+    "hostCapabilities": ["codex.inline_visualization", "codex.code_mode"]
+  },
+  "apps": "./apps.json",
+  "interface": {"displayName": "Gated Plugin"}
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.path().join(".mcp.json"),
+        r#"{"mcpServers":{"gated":{"command":"gated-command"}}}"#,
+    )?;
+    std::fs::write(
+        plugin_root.path().join("apps.json"),
+        r#"{"apps":{"demo":{"id":"connector_demo"}}}"#,
+    )?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_executor_plugins(
+        &mut builder,
+        Arc::new(EnvironmentManager::default_for_tests()),
+    );
+    let registry = builder.build();
+    let mut thread_init = ExtensionDataInit::new();
+    thread_init.insert(vec![SelectedCapabilityRoot {
+        id: "selected-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            path: PathUri::from_host_native_path(plugin_root.path())?,
+        },
+    }]);
+    let thread_store = ExtensionData::new_with_init("test-thread", thread_init.clone());
+    let available_environment_ids = vec![LOCAL_ENVIRONMENT_ID.to_string()];
+    let contributor = &registry.mcp_server_contributors()[0];
+
+    let unsupported = contributor
+        .contribute(McpServerContributionContext::for_step(
+            &config,
+            &thread_init,
+            &thread_store,
+            "test_originator",
+            &available_environment_ids,
+        ))
+        .await;
+    assert!(unsupported.is_empty());
+
+    config.host_capabilities = ["codex.inline_visualization".to_string()].into();
+    let partially_supported = contributor
+        .contribute(McpServerContributionContext::for_step(
+            &config,
+            &thread_init,
+            &thread_store,
+            "test_originator",
+            &available_environment_ids,
+        ))
+        .await;
+    assert!(partially_supported.is_empty());
+
+    config.host_capabilities = [
+        "codex.code_mode".to_string(),
+        "codex.inline_visualization".to_string(),
+    ]
+    .into();
+    let supported = contributor
+        .contribute(McpServerContributionContext::for_step(
+            &config,
+            &thread_init,
+            &thread_store,
+            "test_originator",
+            &available_environment_ids,
+        ))
+        .await;
+    assert_eq!(supported.len(), 2);
+    assert!(matches!(
+        &supported[0],
+        McpServerContribution::SelectedPlugin { name, .. } if name == "gated"
+    ));
+    assert!(matches!(
+        &supported[1],
+        McpServerContribution::SelectedPluginPackage { connector_ids, .. }
+            if connector_ids.as_slice() == ["connector_demo"]
+    ));
+
+    Ok(())
+}
+
 async fn selected_plugin_contributions(
     config: &Config,
     plugin_root: &std::path::Path,

@@ -1069,6 +1069,7 @@ mod tests {
             client_version: "test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
+            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         })

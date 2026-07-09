@@ -17,6 +17,7 @@ use codex_plugin::ResolvedPlugin;
 use codex_plugin::manifest::PluginManifest;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_plugin::manifest::PluginManifestPaths;
+use codex_plugin::manifest::PluginManifestRequirements;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
@@ -400,6 +401,7 @@ fn resolved_plugin(
             version: None,
             description: None,
             keywords: Vec::new(),
+            requires: PluginManifestRequirements::default(),
             paths: PluginManifestPaths {
                 skills: Vec::new(),
                 mcp_servers,
