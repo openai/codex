@@ -33,8 +33,8 @@ use crate::server::EffectiveMcpServer;
 use crate::server::McpServerLaunch;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
-use crate::tools::declared_openai_file_input_optional_fields;
 use crate::tools::filter_tools;
+use crate::tools::supported_openai_file_input_optional_fields;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -622,7 +622,7 @@ fn prepare_codex_apps_tools_for_model(
 ) -> Vec<ToolInfo> {
     for tool in &mut tools {
         tool.openai_file_input_optional_fields =
-            declared_openai_file_input_optional_fields(&tool.tool);
+            supported_openai_file_input_optional_fields(&tool.tool);
         tool.tool = tool_with_model_visible_input_schema(&tool.tool);
         let plugin_names = match tool.connector_id.as_deref() {
             Some(connector_id) => {

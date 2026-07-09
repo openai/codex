@@ -17,9 +17,9 @@ use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
-use crate::tools::declared_openai_file_input_optional_fields;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
+use crate::tools::supported_openai_file_input_optional_fields;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
@@ -280,7 +280,7 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
 }
 
 #[test]
-fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
+fn supported_openai_file_input_optional_fields_follow_payload_schemas() {
     let mut tool = Tool::new(
         "upload".to_string(),
         "Upload files".to_string(),
@@ -294,7 +294,8 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
                             "download_url": {"type": "string"},
                             "file_id": {"type": "string"},
                             "file_name": {"type": "string"}
-                        }
+                        },
+                        "additionalProperties": false
                     }
                 },
                 "properties": {
@@ -303,7 +304,8 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
                         "properties": {
                             "download_url": {"type": "string"},
                             "file_id": {"type": "string"}
-                        }
+                        },
+                        "additionalProperties": false
                     },
                     "drive_import": {
                         "type": "object",
@@ -312,7 +314,8 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
                             "file_id": {"type": "string"},
                             "mime_type": {"type": "string"},
                             "file_name": {"type": "string"}
-                        }
+                        },
+                        "additionalProperties": false
                     },
                     "attachments": {
                         "anyOf": [
@@ -354,6 +357,33 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
                             "file_id": {"type": "string"},
                             "mime_type": {"type": "string"},
                             "uri": {"type": "string"}
+                        },
+                        "additionalProperties": false
+                    },
+                    "open_file": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"}
+                        }
+                    },
+                    "explicitly_open_file": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"}
+                        },
+                        "additionalProperties": true
+                    },
+                    "items_only_files": {
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "download_url": {"type": "string"},
+                                "file_id": {"type": "string"},
+                                "file_name": {"type": "string"}
+                            },
+                            "additionalProperties": false
                         }
                     }
                 }
@@ -371,6 +401,9 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
                 "attachments",
                 "referenced_file",
                 "custom_file",
+                "open_file",
+                "explicitly_open_file",
+                "items_only_files",
                 "missing_file"
             ]
         })
@@ -380,16 +413,31 @@ fn declared_openai_file_input_optional_fields_follow_payload_schemas() {
     ));
 
     assert_eq!(
-        declared_openai_file_input_optional_fields(&tool),
+        supported_openai_file_input_optional_fields(&tool),
         HashMap::from([
             ("photoshop_image".to_string(), Vec::new()),
             (
                 "drive_import".to_string(),
                 vec!["mime_type".to_string(), "file_name".to_string()]
             ),
-            ("attachments".to_string(), vec!["mime_type".to_string()]),
+            (
+                "attachments".to_string(),
+                vec!["mime_type".to_string(), "file_name".to_string()]
+            ),
             ("referenced_file".to_string(), vec!["file_name".to_string()]),
             ("custom_file".to_string(), vec!["mime_type".to_string()]),
+            (
+                "open_file".to_string(),
+                vec!["mime_type".to_string(), "file_name".to_string()]
+            ),
+            (
+                "explicitly_open_file".to_string(),
+                vec!["mime_type".to_string(), "file_name".to_string()]
+            ),
+            (
+                "items_only_files".to_string(),
+                vec!["file_name".to_string()]
+            ),
             ("missing_file".to_string(), Vec::new()),
         ])
     );

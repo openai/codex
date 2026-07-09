@@ -273,7 +273,7 @@ struct OpenAiFileSchemaInfo {
     accepts_file_name: bool,
 }
 
-pub(crate) fn declared_openai_file_input_optional_fields(
+pub(crate) fn supported_openai_file_input_optional_fields(
     tool: &Tool,
 ) -> HashMap<String, Vec<String>> {
     let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
@@ -330,18 +330,30 @@ fn openai_file_schema_info(
             }
         }
 
-        if schema.get("type").and_then(JsonValue::as_str) == Some("array") {
+        if schema.get("type").and_then(JsonValue::as_str) == Some("array")
+            || schema.contains_key("items")
+        {
             if let Some(items) = schema.get("items") {
                 pending.push(items);
             }
             continue;
         }
 
-        let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) else {
+        let properties = schema.get("properties").and_then(JsonValue::as_object);
+        let is_object_schema = schema.get("type").and_then(JsonValue::as_str) == Some("object")
+            || properties.is_some()
+            || schema.contains_key("additionalProperties");
+        if !is_object_schema {
             continue;
-        };
-        info.accepts_mime_type |= properties.contains_key("mime_type");
-        info.accepts_file_name |= properties.contains_key("file_name");
+        }
+        let accepts_additional_properties = !matches!(
+            schema.get("additionalProperties"),
+            Some(JsonValue::Bool(false) | JsonValue::Object(_))
+        );
+        info.accepts_mime_type |= accepts_additional_properties
+            || properties.is_some_and(|properties| properties.contains_key("mime_type"));
+        info.accepts_file_name |= accepts_additional_properties
+            || properties.is_some_and(|properties| properties.contains_key("file_name"));
     }
 
     info
