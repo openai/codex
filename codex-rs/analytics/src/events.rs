@@ -15,6 +15,7 @@ use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallRequested;
+use crate::facts::PluginScriptLifecycleStatus;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -68,6 +69,7 @@ pub(crate) enum TrackEventRequest {
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
     Goal(Box<CodexGoalEventRequest>),
+    PluginScriptLifecycle(Box<CodexPluginScriptLifecycleEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
@@ -844,6 +846,35 @@ pub(crate) struct CodexGoalEventParams {
 pub(crate) struct CodexGoalEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexGoalEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginScriptLifecycleEventParams {
+    pub(crate) version: u32,
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) plugin_id: String,
+    pub(crate) execution_id: String,
+    pub(crate) script_path: String,
+    pub(crate) timestamp: String,
+    pub(crate) status: PluginScriptLifecycleStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) skill_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginScriptLifecycleEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexPluginScriptLifecycleEventParams,
 }
 
 #[derive(Serialize)]

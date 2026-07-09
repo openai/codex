@@ -29,6 +29,8 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginInstallFailedEventRequest;
 use crate::events::CodexPluginInstallFailedMetadata;
 use crate::events::CodexPluginInstallRequestedEventRequest;
+use crate::events::CodexPluginScriptLifecycleEventParams;
+use crate::events::CodexPluginScriptLifecycleEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -73,6 +75,7 @@ use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexGoalEvent;
+use crate::facts::CodexPluginScriptLifecycleEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
@@ -226,6 +229,16 @@ impl<'a> AnalyticsDropSite<'a> {
             event_name: "goal",
             thread_id: &input.thread_id,
             turn_id: input.turn_id.as_deref(),
+            review_id: None,
+            item_id: None,
+        }
+    }
+
+    fn plugin_script_lifecycle(input: &'a CodexPluginScriptLifecycleEvent) -> Self {
+        Self {
+            event_name: "plugin script lifecycle",
+            thread_id: &input.thread_id,
+            turn_id: Some(&input.turn_id),
             review_id: None,
             item_id: None,
         }
@@ -505,6 +518,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::Goal(input) => {
                     self.ingest_goal(*input, out);
+                }
+                CustomAnalyticsFact::PluginScriptLifecycle(input) => {
+                    self.ingest_plugin_script_lifecycle(*input, out).await;
                 }
                 CustomAnalyticsFact::GuardianReview(input) => {
                     self.ingest_guardian_review(*input, out);
@@ -1431,6 +1447,60 @@ impl AnalyticsReducer {
                 thread_metadata.parent_thread_id.clone(),
             ),
         })));
+    }
+
+    async fn ingest_plugin_script_lifecycle(
+        &mut self,
+        input: CodexPluginScriptLifecycleEvent,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some((connection_state, thread_state, thread_metadata)) =
+            self.thread_context_or_warn(AnalyticsDropSite::plugin_script_lifecycle(&input))
+        else {
+            return;
+        };
+        let skill_id = if let Some(skill) = input.skill.as_ref() {
+            let repo_root = get_git_repo_root(skill.skill_path.as_path());
+            let repo_url = if let Some(root) = repo_root.as_ref() {
+                collect_git_info(root)
+                    .await
+                    .and_then(|info| info.repository_url)
+            } else {
+                None
+            };
+            Some(skill_id_for_local_skill(
+                repo_url.as_deref(),
+                repo_root.as_deref(),
+                skill.skill_path.as_path(),
+                skill.skill_name.as_str(),
+            ))
+        } else {
+            None
+        };
+        out.push(TrackEventRequest::PluginScriptLifecycle(Box::new(
+            CodexPluginScriptLifecycleEventRequest {
+                event_type: "codex_plugin_lifecycle_event",
+                event_params: CodexPluginScriptLifecycleEventParams {
+                    version: 1,
+                    thread_id: input.thread_id,
+                    session_id: thread_metadata.session_id.clone(),
+                    turn_id: input.turn_id,
+                    app_server_client: thread_state.app_server_client(connection_state),
+                    runtime: connection_state.runtime.clone(),
+                    thread_source: thread_metadata.thread_source.clone(),
+                    subagent_source: thread_metadata.subagent_source.clone(),
+                    parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                    plugin_id: input.plugin_id,
+                    execution_id: input.execution_id,
+                    script_path: input.script_path,
+                    timestamp: input.timestamp,
+                    status: input.status,
+                    duration_ms: input.duration_ms,
+                    exit_code: input.exit_code,
+                    skill_id,
+                },
+            },
+        )));
     }
 
     fn ingest_guardian_review_completed(

@@ -48,6 +48,7 @@ use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexErrKind;
+use crate::facts::CodexPluginScriptLifecycleEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -67,6 +68,8 @@ use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginInstallRequestedPlugin;
 use crate::facts::PluginInstallSource;
+use crate::facts::PluginScriptLifecycleStatus;
+use crate::facts::PluginScriptSkill;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -3499,6 +3502,123 @@ async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
         payload[0]["event_params"]["plugin_id"],
         json!("sample@test")
     );
+}
+
+#[tokio::test]
+async fn reducer_enriches_plugin_script_lifecycle_events_without_sensitive_paths() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: true,
+                        request_attestation: false,
+                        opt_out_notification_methods: None,
+                        mcp_server_openai_form_elicitation: false,
+                    }),
+                },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                response: Box::new(sample_thread_start_response(
+                    "thread-1", /*ephemeral*/ false, "gpt-5",
+                )),
+                thread_originator: None,
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
+
+    let sensitive_skill_path =
+        PathBuf::from("/Users/private/.codex/plugins/cache/openai/sample/skills/doc/SKILL.md");
+    let skill = PluginScriptSkill {
+        skill_name: "sample:doc".to_string(),
+        skill_path: sensitive_skill_path.clone(),
+    };
+    let expected_skill_id = skill_id_for_local_skill(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        sensitive_skill_path.as_path(),
+        "sample:doc",
+    );
+    for (status, duration_ms, exit_code) in [
+        (PluginScriptLifecycleStatus::Started, None, None),
+        (PluginScriptLifecycleStatus::Completed, Some(42), Some(0)),
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::PluginScriptLifecycle(Box::new(
+                    CodexPluginScriptLifecycleEvent {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        plugin_id: "sample@openai-curated".to_string(),
+                        execution_id: "execution-1".to_string(),
+                        script_path: "scripts/run.py".to_string(),
+                        timestamp: "2026-06-12T17:39:31.000Z".to_string(),
+                        status,
+                        duration_ms,
+                        exit_code,
+                        skill: Some(skill.clone()),
+                    },
+                ))),
+                &mut events,
+            )
+            .await;
+    }
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().map(Vec::len), Some(2));
+    let started = &payload[0];
+    let completed = &payload[1];
+    assert_eq!(started["event_type"], "codex_plugin_lifecycle_event");
+    assert_eq!(started["event_params"]["version"], 1);
+    assert_eq!(started["event_params"]["thread_id"], "thread-1");
+    assert_eq!(started["event_params"]["session_id"], "session-thread-1");
+    assert_eq!(started["event_params"]["turn_id"], "turn-1");
+    assert_eq!(
+        started["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_ORIGINATOR
+    );
+    assert_eq!(
+        started["event_params"]["plugin_id"],
+        "sample@openai-curated"
+    );
+    assert_eq!(started["event_params"]["execution_id"], "execution-1");
+    assert_eq!(started["event_params"]["script_path"], "scripts/run.py");
+    assert_eq!(
+        started["event_params"]["timestamp"],
+        "2026-06-12T17:39:31.000Z"
+    );
+    assert_eq!(started["event_params"]["status"], "started");
+    assert_eq!(started["event_params"]["skill_id"], expected_skill_id);
+    assert!(started["event_params"].get("duration_ms").is_none());
+    assert!(started["event_params"].get("exit_code").is_none());
+
+    assert_eq!(completed["event_params"]["status"], "completed");
+    assert_eq!(completed["event_params"]["duration_ms"], 42);
+    assert_eq!(completed["event_params"]["exit_code"], 0);
+    assert_eq!(completed["event_params"]["skill_id"], expected_skill_id);
+    let serialized = payload.to_string();
+    assert!(!serialized.contains("/Users/private"));
+    assert!(!serialized.contains("SKILL.md"));
 }
 
 #[tokio::test]
