@@ -20,6 +20,7 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub write_roots_override: Option<&'a [PathBuf]>,
     pub deny_read_paths_override: &'a [AbsolutePathBuf],
     pub deny_write_paths_override: &'a [AbsolutePathBuf],
+    pub after_spawn: Option<Box<dyn FnOnce() + Send>>,
 }
 
 mod windows_impl {
@@ -115,6 +116,7 @@ mod windows_impl {
             write_roots_override,
             deny_read_paths_override,
             deny_write_paths_override,
+            after_spawn,
         } = request;
         let permissions =
             ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
@@ -223,6 +225,9 @@ mod windows_impl {
                     )
                 },
             )?;
+            if let Some(after_spawn) = after_spawn {
+                after_spawn();
+            }
             let (pipe_write, mut pipe_read) = transport.into_files();
             let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation)?;
 

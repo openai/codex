@@ -6,6 +6,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use crate::run_windows_sandbox_capture_with_filesystem_overrides;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
@@ -425,7 +426,9 @@ fn legacy_capture_powershell_emits_output() {
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
     let permission_profile = PermissionProfile::workspace_write();
-    let result = run_windows_sandbox_capture(
+    let spawned = Arc::new(AtomicBool::new(false));
+    let spawned_for_callback = Arc::clone(&spawned);
+    let result = run_windows_sandbox_capture_with_filesystem_overrides(
         &permission_profile,
         workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
@@ -439,9 +442,15 @@ fn legacy_capture_powershell_emits_output() {
         HashMap::new(),
         Some(10_000),
         /*cancellation*/ None,
+        /*additional_deny_read_paths*/ &[],
+        /*additional_deny_write_paths*/ &[],
         /*use_private_desktop*/ true,
+        Some(Box::new(move || {
+            spawned_for_callback.store(true, Ordering::SeqCst);
+        })),
     )
     .expect("run legacy capture powershell");
+    assert!(spawned.load(Ordering::SeqCst));
     println!("capture pwsh exit_code={}", result.exit_code);
     println!("capture pwsh timed_out={}", result.timed_out);
     let stdout = String::from_utf8_lossy(&result.stdout);
