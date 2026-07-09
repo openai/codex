@@ -329,6 +329,7 @@ mod tests {
     use crate::server::session_registry::SessionRegistry;
 
     #[test]
+    #[serial_test::serial(exec_server_tracing)]
     fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()

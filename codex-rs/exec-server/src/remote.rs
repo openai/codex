@@ -711,6 +711,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(exec_server_tracing)]
     async fn register_environment_posts_with_auth_provider_headers() {
         let provider = SdkTracerProvider::builder().build();
         let tracer = provider.tracer("exec-server-test");
