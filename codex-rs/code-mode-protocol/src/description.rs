@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use crate::PUBLIC_TOOL_NAME;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+// Expose one nested recursive shape, then fall back to `unknown` on the next
+// occurrence so generated tool declarations remain finite.
+const MAX_LOCAL_REF_EXPANSIONS_PER_PATH: usize = 2;
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
 To find one, filter `ALL_TOOLS` by `name` and `description`."#;
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
@@ -442,7 +445,7 @@ fn render_tool_heading(global_name: &str, raw_name: &str) -> String {
 }
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
-    render_json_schema_to_typescript_inner(schema)
+    JsonSchemaTypeRenderer::new(schema).render(schema)
 }
 
 fn mcp_structured_content_schema(output_schema: Option<&JsonValue>) -> Option<&JsonValue> {
@@ -486,134 +489,303 @@ fn mcp_structured_content_schema(output_schema: Option<&JsonValue>) -> Option<&J
     )
 }
 
-fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
-    match schema {
-        JsonValue::Bool(true) => "unknown".to_string(),
-        JsonValue::Bool(false) => "never".to_string(),
-        JsonValue::Object(map) => {
-            if let Some(value) = map.get("const") {
-                return render_json_schema_literal(value);
-            }
+struct JsonSchemaTypeRenderer<'a> {
+    root: &'a JsonValue,
+    active_local_ref_expansions: BTreeMap<String, usize>,
+}
 
-            if let Some(values) = map.get("enum").and_then(JsonValue::as_array) {
-                let rendered = values
+impl<'a> JsonSchemaTypeRenderer<'a> {
+    fn new(root: &'a JsonValue) -> Self {
+        Self {
+            root,
+            active_local_ref_expansions: BTreeMap::new(),
+        }
+    }
+
+    fn render(&mut self, schema: &JsonValue) -> String {
+        match schema {
+            JsonValue::Bool(true) => "unknown".to_string(),
+            JsonValue::Bool(false) => "never".to_string(),
+            JsonValue::Object(map) => self.render_map(map),
+            _ => "unknown".to_string(),
+        }
+    }
+
+    fn render_map(&mut self, map: &serde_json::Map<String, JsonValue>) -> String {
+        if map.contains_key("$ref") {
+            return self.render_ref(map);
+        }
+
+        if let Some(value) = map.get("const") {
+            return render_json_schema_literal(value);
+        }
+
+        if let Some(values) = map.get("enum").and_then(JsonValue::as_array) {
+            let rendered = values
+                .iter()
+                .map(render_json_schema_literal)
+                .collect::<Vec<_>>();
+            if !rendered.is_empty() {
+                return rendered.join(" | ");
+            }
+        }
+
+        for key in ["anyOf", "oneOf"] {
+            if let Some(variants) = map.get(key).and_then(JsonValue::as_array) {
+                let rendered = variants
                     .iter()
-                    .map(render_json_schema_literal)
+                    .map(|variant| self.render(variant))
+                    .collect::<Vec<_>>();
+                if !rendered.is_empty() {
+                    return rendered.join(" | ");
+                }
+            }
+        }
+
+        if let Some(variants) = map.get("allOf").and_then(JsonValue::as_array) {
+            let rendered = variants
+                .iter()
+                .map(|variant| self.render(variant))
+                .collect::<Vec<_>>();
+            if !rendered.is_empty() {
+                return rendered.join(" & ");
+            }
+        }
+
+        if let Some(schema_type) = map.get("type") {
+            if let Some(types) = schema_type.as_array() {
+                let rendered = types
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(|schema_type| self.render_type_keyword(map, schema_type))
                     .collect::<Vec<_>>();
                 if !rendered.is_empty() {
                     return rendered.join(" | ");
                 }
             }
 
-            for key in ["anyOf", "oneOf"] {
-                if let Some(variants) = map.get(key).and_then(JsonValue::as_array) {
-                    let rendered = variants
-                        .iter()
-                        .map(render_json_schema_to_typescript_inner)
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
+            if let Some(schema_type) = schema_type.as_str() {
+                return self.render_type_keyword(map, schema_type);
             }
-
-            if let Some(variants) = map.get("allOf").and_then(JsonValue::as_array) {
-                let rendered = variants
-                    .iter()
-                    .map(render_json_schema_to_typescript_inner)
-                    .collect::<Vec<_>>();
-                if !rendered.is_empty() {
-                    return rendered.join(" & ");
-                }
-            }
-
-            if let Some(schema_type) = map.get("type") {
-                if let Some(types) = schema_type.as_array() {
-                    let rendered = types
-                        .iter()
-                        .filter_map(JsonValue::as_str)
-                        .map(|schema_type| render_json_schema_type_keyword(map, schema_type))
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
-
-                if let Some(schema_type) = schema_type.as_str() {
-                    return render_json_schema_type_keyword(map, schema_type);
-                }
-            }
-
-            if map.contains_key("properties")
-                || map.contains_key("additionalProperties")
-                || map.contains_key("required")
-            {
-                return render_json_schema_object(map);
-            }
-
-            if map.contains_key("items") || map.contains_key("prefixItems") {
-                return render_json_schema_array(map);
-            }
-
-            "unknown".to_string()
         }
-        _ => "unknown".to_string(),
-    }
-}
 
-fn render_json_schema_type_keyword(
-    map: &serde_json::Map<String, JsonValue>,
-    schema_type: &str,
-) -> String {
-    match schema_type {
-        "string" => "string".to_string(),
-        "number" | "integer" => "number".to_string(),
-        "boolean" => "boolean".to_string(),
-        "null" => "null".to_string(),
-        "array" => render_json_schema_array(map),
-        "object" => render_json_schema_object(map),
-        _ => "unknown".to_string(),
-    }
-}
+        if map.contains_key("properties")
+            || map.contains_key("additionalProperties")
+            || map.contains_key("required")
+        {
+            return self.render_object(map);
+        }
 
-fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String {
-    if let Some(items) = map.get("items") {
-        let item_type = render_json_schema_to_typescript_inner(items);
-        return format!("Array<{item_type}>");
+        if map.contains_key("items") || map.contains_key("prefixItems") {
+            return self.render_array(map);
+        }
+
+        "unknown".to_string()
     }
 
-    if let Some(items) = map.get("prefixItems").and_then(JsonValue::as_array) {
-        let item_types = items
-            .iter()
-            .map(render_json_schema_to_typescript_inner)
-            .collect::<Vec<_>>();
-        if !item_types.is_empty() {
-            return format!("[{}]", item_types.join(", "));
+    fn render_ref(&mut self, map: &serde_json::Map<String, JsonValue>) -> String {
+        let referenced_type = map
+            .get("$ref")
+            .and_then(JsonValue::as_str)
+            .and_then(|reference| {
+                let pointer = reference.strip_prefix('#')?;
+                if !pointer.is_empty() && !pointer.starts_with('/') {
+                    return None;
+                }
+                let active_expansions = self
+                    .active_local_ref_expansions
+                    .get(pointer)
+                    .copied()
+                    .unwrap_or_default();
+                if active_expansions >= MAX_LOCAL_REF_EXPANSIONS_PER_PATH {
+                    return Some("unknown".to_string());
+                }
+                self.active_local_ref_expansions
+                    .insert(pointer.to_string(), active_expansions + 1);
+
+                let root = self.root;
+                let target = if pointer.is_empty() {
+                    Some(root)
+                } else {
+                    root.pointer(pointer)
+                };
+                let rendered = target.map(|target| self.render(target));
+                if active_expansions == 0 {
+                    self.active_local_ref_expansions.remove(pointer);
+                } else {
+                    self.active_local_ref_expansions
+                        .insert(pointer.to_string(), active_expansions);
+                }
+                rendered
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let mut siblings = map.clone();
+        siblings.remove("$ref");
+        siblings.remove("$defs");
+        siblings.remove("definitions");
+        if !has_renderable_schema_keywords(&siblings) {
+            return referenced_type;
+        }
+
+        let sibling_type = self.render_map(&siblings);
+        match (referenced_type.as_str(), sibling_type.as_str()) {
+            ("unknown", _) => sibling_type,
+            (_, "unknown") => referenced_type,
+            _ => format!("({referenced_type}) & ({sibling_type})"),
         }
     }
 
-    "unknown[]".to_string()
-}
+    fn render_type_keyword(
+        &mut self,
+        map: &serde_json::Map<String, JsonValue>,
+        schema_type: &str,
+    ) -> String {
+        match schema_type {
+            "string" => "string".to_string(),
+            "number" | "integer" => "number".to_string(),
+            "boolean" => "boolean".to_string(),
+            "null" => "null".to_string(),
+            "array" => self.render_array(map),
+            "object" => self.render_object(map),
+            _ => "unknown".to_string(),
+        }
+    }
 
-fn append_additional_properties_line(
-    lines: &mut Vec<String>,
-    map: &serde_json::Map<String, JsonValue>,
-    properties: &serde_json::Map<String, JsonValue>,
-    line_prefix: &str,
-) {
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let property_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
+    fn render_array(&mut self, map: &serde_json::Map<String, JsonValue>) -> String {
+        if let Some(items) = map.get("items") {
+            let item_type = self.render(items);
+            return format!("Array<{item_type}>");
+        }
+
+        if let Some(items) = map.get("prefixItems").and_then(JsonValue::as_array) {
+            let item_types = items
+                .iter()
+                .map(|item| self.render(item))
+                .collect::<Vec<_>>();
+            if !item_types.is_empty() {
+                return format!("[{}]", item_types.join(", "));
+            }
+        }
+
+        "unknown[]".to_string()
+    }
+
+    fn append_additional_properties_line(
+        &mut self,
+        lines: &mut Vec<String>,
+        map: &serde_json::Map<String, JsonValue>,
+        properties: &serde_json::Map<String, JsonValue>,
+        line_prefix: &str,
+    ) {
+        if let Some(additional_properties) = map.get("additionalProperties") {
+            let property_type = match additional_properties {
+                JsonValue::Bool(true) => Some("unknown".to_string()),
+                JsonValue::Bool(false) => None,
+                value => Some(self.render(value)),
+            };
+
+            if let Some(property_type) = property_type {
+                lines.push(format!("{line_prefix}[key: string]: {property_type};"));
+            }
+        } else if properties.is_empty() {
+            lines.push(format!("{line_prefix}[key: string]: unknown;"));
+        }
+    }
+
+    fn render_object_property(
+        &mut self,
+        name: &str,
+        value: &JsonValue,
+        required: &[&str],
+    ) -> String {
+        let optional = if required.iter().any(|required_name| required_name == &name) {
+            ""
+        } else {
+            "?"
         };
-
-        if let Some(property_type) = property_type {
-            lines.push(format!("{line_prefix}[key: string]: {property_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push(format!("{line_prefix}[key: string]: unknown;"));
+        let property_name = render_json_schema_property_name(name);
+        let property_type = self.render(value);
+        format!("{property_name}{optional}: {property_type};")
     }
+
+    fn render_object(&mut self, map: &serde_json::Map<String, JsonValue>) -> String {
+        let required = map
+            .get("required")
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let properties = map
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut sorted_properties = properties.iter().collect::<Vec<_>>();
+        sorted_properties.sort_unstable_by_key(|(name_a, _)| *name_a);
+        if sorted_properties
+            .iter()
+            .any(|(_, value)| has_property_description(value))
+        {
+            let mut lines = vec!["{".to_string()];
+            for (name, value) in sorted_properties {
+                if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
+                    for description_line in description
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                    {
+                        lines.push(format!("  // {description_line}"));
+                    }
+                }
+
+                lines.push(format!(
+                    "  {}",
+                    self.render_object_property(name, value, &required)
+                ));
+            }
+
+            self.append_additional_properties_line(&mut lines, map, &properties, "  ");
+            lines.push("}".to_string());
+            return lines.join("\n");
+        }
+
+        let mut lines = sorted_properties
+            .into_iter()
+            .map(|(name, value)| self.render_object_property(name, value, &required))
+            .collect::<Vec<_>>();
+
+        self.append_additional_properties_line(&mut lines, map, &properties, "");
+
+        if lines.is_empty() {
+            return "{}".to_string();
+        }
+
+        format!("{{ {} }}", lines.join(" "))
+    }
+}
+
+fn has_renderable_schema_keywords(map: &serde_json::Map<String, JsonValue>) -> bool {
+    [
+        "const",
+        "enum",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "type",
+        "properties",
+        "additionalProperties",
+        "required",
+        "items",
+        "prefixItems",
+    ]
+    .iter()
+    .any(|key| map.contains_key(*key))
 }
 
 fn has_property_description(value: &JsonValue) -> bool {
@@ -621,77 +793,6 @@ fn has_property_description(value: &JsonValue) -> bool {
         .get("description")
         .and_then(JsonValue::as_str)
         .is_some_and(|description| !description.is_empty())
-}
-
-fn render_json_schema_object_property(name: &str, value: &JsonValue, required: &[&str]) -> String {
-    let optional = if required.iter().any(|required_name| required_name == &name) {
-        ""
-    } else {
-        "?"
-    };
-    let property_name = render_json_schema_property_name(name);
-    let property_type = render_json_schema_to_typescript_inner(value);
-    format!("{property_name}{optional}: {property_type};")
-}
-
-fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
-    let required = map
-        .get("required")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let properties = map
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by_key(|(name_a, _)| *name_a);
-    if sorted_properties
-        .iter()
-        .any(|(_, value)| has_property_description(value))
-    {
-        let mut lines = vec!["{".to_string()];
-        for (name, value) in sorted_properties {
-            if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
-                for description_line in description
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                {
-                    lines.push(format!("  // {description_line}"));
-                }
-            }
-
-            lines.push(format!(
-                "  {}",
-                render_json_schema_object_property(name, value, &required)
-            ));
-        }
-
-        append_additional_properties_line(&mut lines, map, &properties, "  ");
-        lines.push("}".to_string());
-        return lines.join("\n");
-    }
-
-    let mut lines = sorted_properties
-        .into_iter()
-        .map(|(name, value)| render_json_schema_object_property(name, value, &required))
-        .collect::<Vec<_>>();
-
-    append_additional_properties_line(&mut lines, map, &properties, "");
-
-    if lines.is_empty() {
-        return "{}".to_string();
-    }
-
-    format!("{{ {} }}", lines.join(" "))
 }
 
 fn render_json_schema_property_name(name: &str) -> String {
@@ -716,6 +817,7 @@ mod tests {
     use super::build_exec_tool_description;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
+    use super::render_json_schema_to_typescript;
     use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
@@ -852,6 +954,131 @@ mod tests {
   forecast: string;
 }>;"#
         ));
+    }
+
+    #[test]
+    fn renders_local_refs_with_a_cycle_safe_boolean_prefix() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "clauses": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/Boolean~1Clause~0v1" }
+                }
+            },
+            "required": ["clauses"],
+            "additionalProperties": false,
+            "$defs": {
+                "Boolean/Clause~v1": {
+                    "type": "object",
+                    "properties": {
+                        "occur": { "type": "string", "enum": ["must", "should"] },
+                        "query": {
+                            "$ref": "#/$defs/Query",
+                            "description": "Use a nested group for parenthesized expressions."
+                        }
+                    },
+                    "required": ["occur", "query"],
+                    "additionalProperties": false
+                },
+                "Query": {
+                    "oneOf": [
+                        { "$ref": "#/$defs/Leaf" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "clauses": {
+                                    "type": "array",
+                                    "items": { "$ref": "#/$defs/Boolean~1Clause~0v1" }
+                                }
+                            },
+                            "required": ["clauses"],
+                            "additionalProperties": false
+                        }
+                    ]
+                },
+                "Leaf": {
+                    "type": "object",
+                    "properties": {
+                        "field": { "type": "string", "enum": ["A", "B", "C"] },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["field", "value"],
+                    "additionalProperties": false
+                }
+            }
+        });
+
+        assert_eq!(
+            render_json_schema_to_typescript(&schema),
+            r#"{ clauses: Array<{
+  occur: "must" | "should";
+  // Use a nested group for parenthesized expressions.
+  query: { field: "A" | "B" | "C"; value: string; } | { clauses: Array<{
+  occur: "must" | "should";
+  // Use a nested group for parenthesized expressions.
+  query: { field: "A" | "B" | "C"; value: string; } | { clauses: Array<unknown>; };
+}>; };
+}>; }"#
+        );
+    }
+
+    #[test]
+    fn code_mode_types_structured_content_result_refs() {
+        let definition = ToolDefinition {
+            name: "mcp__sample__search".to_string(),
+            tool_name: ToolName::namespaced("mcp__sample__", "search"),
+            description: "Search".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+            output_schema: Some(mcp_call_tool_result_schema(json!({
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": { "$ref": "#/definitions/Result~1item~0v1" }
+                    }
+                },
+                "required": ["results"],
+                "additionalProperties": false,
+                "definitions": {
+                    "Result/item~v1": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "score": { "type": "number" }
+                        },
+                        "required": ["id", "score"],
+                        "additionalProperties": false
+                    }
+                }
+            }))),
+        };
+
+        let description = augment_tool_definition(definition).description;
+        assert!(description.contains(
+            "mcp__sample__search(args: {}): Promise<CallToolResult<{ results: Array<{ id: string; score: number; }>; }>>;"
+        ));
+    }
+
+    #[test]
+    fn local_ref_sibling_constraints_are_intersected() {
+        let schema = json!({
+            "$ref": "#/$defs/Label",
+            "enum": ["A"],
+            "$defs": {
+                "Label": { "type": "string" }
+            }
+        });
+
+        assert_eq!(
+            render_json_schema_to_typescript(&schema),
+            r#"(string) & ("A")"#
+        );
     }
 
     #[test]
