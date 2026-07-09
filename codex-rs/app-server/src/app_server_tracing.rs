@@ -13,9 +13,11 @@ use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCRequest;
+use codex_app_server_protocol::RequestId;
 use codex_otel::set_parent_from_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_otel::traceparent_context_from_env;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
 use tracing::Span;
 use tracing::field;
@@ -79,6 +81,34 @@ pub(crate) fn typed_request_span(
     );
 
     attach_parent_context(&span, &method, request.id(), /*parent_trace*/ None);
+    span
+}
+
+pub(crate) fn server_request_span(
+    method: &str,
+    request_id: &RequestId,
+    target_count: Option<usize>,
+    thread_id: Option<&ThreadId>,
+) -> Span {
+    let thread_id = thread_id.map(ToString::to_string);
+    let span = info_span!(
+        "app_server.server_request",
+        otel.kind = "client",
+        otel.name = method,
+        rpc.system = "jsonrpc",
+        rpc.method = method,
+        rpc.request_id = %request_id,
+        rpc.result = field::Empty,
+        rpc.error_code = field::Empty,
+        app_server.target_count = field::Empty,
+        codex.thread.id = thread_id.as_deref().unwrap_or(""),
+    );
+    if let Some(target_count) = target_count {
+        span.record(
+            "app_server.target_count",
+            i64::try_from(target_count).unwrap_or(i64::MAX),
+        );
+    }
     span
 }
 

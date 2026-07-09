@@ -42,6 +42,8 @@ pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorEr
 enum RpcResult {
     Success,
     Error,
+    Cancelled,
+    SendFailed,
     Disconnected,
     Replaced,
 }
@@ -51,6 +53,8 @@ impl RpcResult {
         match self {
             Self::Success => "success",
             Self::Error => "error",
+            Self::Cancelled => "cancelled",
+            Self::SendFailed => "send_failed",
             Self::Disconnected => "disconnected",
             Self::Replaced => "replaced",
         }
@@ -142,6 +146,25 @@ struct PendingCallbackEntry {
     callback: oneshot::Sender<ClientRequestResult>,
     thread_id: Option<ThreadId>,
     request: ServerRequest,
+    span: Span,
+}
+
+impl PendingCallbackEntry {
+    fn record_result(&self, result: RpcResult) {
+        self.span.record("rpc.result", result.as_str());
+    }
+
+    fn record_error(&self, error: &JSONRPCErrorError) {
+        self.record_result(RpcResult::Error);
+        self.span.record("rpc.error_code", error.code);
+    }
+
+    fn record_cancelled(&self, error: Option<&JSONRPCErrorError>) {
+        self.record_result(RpcResult::Cancelled);
+        if let Some(error) = error {
+            self.span.record("rpc.error_code", error.code);
+        }
+    }
 }
 
 impl ThreadScopedOutgoingMessageSender {
@@ -324,18 +347,29 @@ impl OutgoingMessageSender {
         let id = self.next_request_id();
         let outgoing_message_id = id.clone();
         let request = request.request_with_id(outgoing_message_id.clone());
+        let method = request.method();
+        let request_span = crate::app_server_tracing::server_request_span(
+            method.as_str(),
+            &outgoing_message_id,
+            connection_ids.map(<[ConnectionId]>::len),
+            thread_id.as_ref(),
+        );
 
         let (tx_approve, rx_approve) = oneshot::channel();
         {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.insert(
+            if let Some(replaced) = request_id_to_callback.insert(
                 id,
                 PendingCallbackEntry {
                     callback: tx_approve,
                     thread_id,
                     request: request.clone(),
+                    span: request_span.clone(),
                 },
-            );
+            ) {
+                replaced.record_result(RpcResult::Replaced);
+                warn!("replaced unresolved server request callback");
+            }
         }
 
         let outgoing_message = OutgoingMessage::Request(request.clone());
@@ -374,6 +408,7 @@ impl OutgoingMessageSender {
         };
 
         if let Err(err) = send_result {
+            request_span.record("rpc.result", RpcResult::SendFailed.as_str());
             warn!("failed to send request {outgoing_message_id:?} to client: {err:?}");
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback.remove(&outgoing_message_id);
@@ -407,6 +442,7 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, entry)) => {
+                entry.record_result(RpcResult::Success);
                 let completed_at_ms = now_unix_timestamp_ms();
                 if let Ok(response) = entry.request.response_from_result(result.clone())
                     && !matches!(response, ServerResponse::PermissionsRequestApproval { .. })
@@ -429,6 +465,7 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, entry)) => {
+                entry.record_error(&error);
                 warn!("client responded with error for {id:?}: {error:?}");
                 self.analytics_events_client
                     .track_server_request_aborted(now_unix_timestamp_ms(), id.clone());
@@ -444,7 +481,8 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
         let entry = self.take_request_callback(id).await;
-        if let Some((request_id, _entry)) = entry {
+        if let Some((request_id, entry)) = entry {
+            entry.record_cancelled(/*error*/ None);
             self.analytics_events_client
                 .track_server_request_aborted(now_unix_timestamp_ms(), request_id);
             true
@@ -463,6 +501,7 @@ impl OutgoingMessageSender {
         };
 
         for entry in entries {
+            entry.record_cancelled(error.as_ref());
             self.analytics_events_client
                 .track_server_request_aborted(now_unix_timestamp_ms(), entry.request.id().clone());
             if let Some(error) = error.as_ref()
@@ -521,6 +560,7 @@ impl OutgoingMessageSender {
         };
 
         for entry in entries {
+            entry.record_cancelled(error.as_ref());
             self.analytics_events_client
                 .track_server_request_aborted(now_unix_timestamp_ms(), entry.request.id().clone());
             if let Some(error) = error.as_ref()

@@ -1212,13 +1212,14 @@ macro_rules! server_request_definitions {
         ),* $(,)?
     ) => {
         /// Request initiated from the server and sent to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Display, JsonSchema, TS)]
         #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
         pub enum ServerRequest {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -1232,6 +1233,10 @@ macro_rules! server_request_definitions {
                 match self {
                     $(Self::$variant { request_id, .. } => request_id,)*
                 }
+            }
+
+            pub fn method(&self) -> String {
+                self.to_string()
             }
 
             pub fn response_from_result(

@@ -12,11 +12,15 @@ use app_test_support::write_mock_responses_config_toml;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -30,6 +34,7 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use opentelemetry::global;
@@ -301,6 +306,27 @@ fn span_attr<'a>(span: &'a SpanData, key: &str) -> Option<&'a str> {
             opentelemetry::Value::String(value) => Some(value.as_str()),
             _ => None,
         })
+}
+
+fn span_attr_i64(span: &SpanData, key: &str) -> Option<i64> {
+    span.attributes
+        .iter()
+        .find(|kv| kv.key.as_str() == key)
+        .and_then(|kv| match &kv.value {
+            opentelemetry::Value::I64(value) => Some(*value),
+            _ => None,
+        })
+}
+
+fn find_rpc_span<'a>(spans: &'a [SpanData], kind: SpanKind, method: &str) -> &'a SpanData {
+    spans
+        .iter()
+        .find(|span| {
+            span.span_kind == kind
+                && span_attr(span, "rpc.system") == Some("jsonrpc")
+                && span_attr(span, "rpc.method") == Some(method)
+        })
+        .unwrap_or_else(|| panic!("missing {kind:?} span for rpc.method={method}"))
 }
 
 fn find_rpc_span_with_trace<'a>(
@@ -714,6 +740,84 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         Some("success")
     );
     assert_span_descends_from(&spans, core_turn_span, server_request_span);
+    harness.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
+async fn server_request_span_records_terminal_outcomes() -> Result<()> {
+    let harness = TracingHarness::new().await?;
+    let outgoing = Arc::clone(&harness.processor.outgoing);
+    let connection_ids = [TEST_CONNECTION_ID];
+    let thread_id = ThreadId::new();
+
+    harness.reset_tracing();
+    let (error_id, _error_rx) = outgoing
+        .send_request_to_connections(
+            Some(&connection_ids),
+            ServerRequestPayload::CurrentTimeRead(CurrentTimeReadParams {
+                thread_id: thread_id.to_string(),
+            }),
+            Some(thread_id),
+        )
+        .await;
+    let expected_error = JSONRPCErrorError {
+        code: -32_042,
+        message: "clock unavailable".to_string(),
+        data: None,
+    };
+    harness
+        .processor
+        .process_error(JSONRPCError {
+            error: expected_error.clone(),
+            id: error_id.clone(),
+        })
+        .await;
+    let error_spans = wait_for_exported_spans(harness.tracing, |spans| {
+        spans.iter().any(|span| {
+            span.span_kind == SpanKind::Client
+                && span_attr(span, "rpc.method") == Some("currentTime/read")
+                && span_attr(span, "rpc.result") == Some("error")
+        })
+    })
+    .await;
+    let error_span = find_rpc_span(&error_spans, SpanKind::Client, "currentTime/read");
+    assert_eq!(error_span.name.as_ref(), "currentTime/read");
+    assert_eq!(span_attr(error_span, "rpc.result"), Some("error"));
+    let thread_id_string = thread_id.to_string();
+    assert_eq!(
+        span_attr_i64(error_span, "app_server.target_count"),
+        Some(1)
+    );
+    assert_eq!(
+        span_attr(error_span, "codex.thread.id"),
+        Some(thread_id_string.as_str())
+    );
+    assert_eq!(
+        span_attr_i64(error_span, "rpc.error_code"),
+        Some(expected_error.code)
+    );
+
+    harness.reset_tracing();
+    let (cancelled_id, _cancelled_rx) = outgoing
+        .send_request_to_connections(
+            Some(&connection_ids),
+            ServerRequestPayload::CurrentTimeRead(CurrentTimeReadParams {
+                thread_id: thread_id.to_string(),
+            }),
+            Some(thread_id),
+        )
+        .await;
+    assert!(outgoing.cancel_request(&cancelled_id).await);
+    let _ = wait_for_exported_spans(harness.tracing, |spans| {
+        spans
+            .iter()
+            .any(|span| span_attr(span, "rpc.result") == Some("cancelled"))
+    })
+    .await;
+
     harness.shutdown().await;
 
     Ok(())

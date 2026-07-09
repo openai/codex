@@ -75,7 +75,7 @@ async fn request_attestation_header_value_with_timeout(
         .send_request_to_connections(
             Some(&connection_ids),
             ServerRequestPayload::AttestationGenerate(AttestationGenerateParams {}),
-            /*thread_id*/ None,
+            Some(thread_id),
         )
         .await;
 
