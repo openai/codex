@@ -530,7 +530,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
@@ -550,6 +550,28 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
 
     assert_eq!(response_cwd, cwd.abs());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
+
+    let environment_root = cwd.join("environment-root");
+    std::fs::create_dir_all(&environment_root)?;
+    let mut environment = mcp.auto_env_params()?;
+    environment.runtime_workspace_roots = Some(vec![environment_root.abs().into()]);
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            runtime_workspace_roots: Some(vec![extra_root.abs()]),
+            environments: Some(vec![environment]),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        runtime_workspace_roots,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(runtime_workspace_roots, vec![environment_root.abs()]);
 
     Ok(())
 }

@@ -2712,7 +2712,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn turn_environment_workspace_roots_override_and_default_to_cwd() -> Result<()> {
+async fn turn_start_permission_profile_rebinds_runtime_workspace_roots_between_turns() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -2720,19 +2721,12 @@ async fn turn_environment_workspace_roots_override_and_default_to_cwd() -> Resul
     std::fs::create_dir(&codex_home)?;
     let old_root = tmp.path().join("old-root");
     let new_root = tmp.path().join("new-root");
-    let fallback_root = tmp.path().join("fallback-root");
     std::fs::create_dir(&old_root)?;
     std::fs::create_dir(&new_root)?;
-    std::fs::create_dir(&fallback_root)?;
     let old_root_text = old_root.to_string_lossy().into_owned();
     let new_root_text = new_root.to_string_lossy().into_owned();
-    let fallback_root_text = fallback_root.to_string_lossy().into_owned();
     let old_root = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(old_root)?;
     let new_root = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(new_root)?;
-    let fallback_root =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(fallback_root)?;
-    let environment_cwd =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -2801,12 +2795,7 @@ stream_max_retries = 0
                 text: "select dev profile".to_string(),
                 text_elements: Vec::new(),
             }],
-            runtime_workspace_roots: Some(vec![fallback_root.clone()]),
-            environments: Some(vec![TurnEnvironmentParams {
-                environment_id: "local".to_string(),
-                cwd: environment_cwd.clone().into(),
-                runtime_workspace_roots: Some(vec![old_root.into()]),
-            }]),
+            runtime_workspace_roots: Some(vec![old_root]),
             permissions: Some("dev".to_string()),
             ..Default::default()
         })
@@ -2831,11 +2820,6 @@ stream_max_retries = 0
                 text_elements: Vec::new(),
             }],
             runtime_workspace_roots: Some(vec![new_root]),
-            environments: Some(vec![TurnEnvironmentParams {
-                environment_id: "local".to_string(),
-                cwd: fallback_root.into(),
-                runtime_workspace_roots: None,
-            }]),
             ..Default::default()
         })
         .await?;
@@ -2865,19 +2849,15 @@ stream_max_retries = 0
     let first_permissions = latest_permissions_instructions(&requests[0]);
     assert!(first_permissions.contains(&old_root_text));
     assert!(
-        !first_permissions.contains(&fallback_root_text),
-        "environment roots should override the turn-level fallback"
+        !first_permissions.contains(&new_root_text),
+        "first turn should materialize the initial runtime workspace root"
     );
 
     let second_permissions = latest_permissions_instructions(&requests[1]);
-    assert!(second_permissions.contains(&fallback_root_text));
+    assert!(second_permissions.contains(&new_root_text));
     assert!(
         !second_permissions.contains(&old_root_text),
-        "omitted environment roots should not retain the previous environment roots"
-    );
-    assert!(
-        !second_permissions.contains(&new_root_text),
-        "explicit environments should ignore top-level roots"
+        "second turn should rebind :workspace_roots to the updated runtime workspace root"
     );
 
     Ok(())
