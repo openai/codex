@@ -1,8 +1,10 @@
 use super::PACKAGE_METADATA_FILENAME;
 use super::PATH_DIRNAME;
 use super::RESOURCES_DIRNAME;
+use super::is_default_files_request;
 use super::real_rg_path;
 use pretty_assertions::assert_eq;
+use std::ffi::OsString;
 use std::fs;
 use tempfile::TempDir;
 
@@ -34,4 +36,14 @@ fn rejects_executable_outside_package_path() {
     let error = real_rg_path(&executable).expect_err("unpackaged shim must fail");
 
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[test]
+fn only_exact_default_files_request_uses_inventory() {
+    assert!(is_default_files_request(&[OsString::from("--files")]));
+    assert!(!is_default_files_request(&[
+        OsString::from("--files"),
+        OsString::from("-0")
+    ]));
+    assert!(!is_default_files_request(&[OsString::from("--hidden")]));
 }
