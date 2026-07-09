@@ -2974,8 +2974,10 @@ async fn guardian_review_session_config_clears_legacy_notify() {
 #[tokio::test]
 async fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config().await;
-    let mut parent_network = NetworkProxyConfig::default();
-    parent_network.enabled = true;
+    let mut parent_network = NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    };
     parent_network.set_allowed_domains(vec!["parent.example".to_string()]);
     parent_config.permissions.network = Some(
         NetworkProxySpec::from_config_and_constraints(
@@ -2986,8 +2988,10 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         .expect("parent network proxy spec"),
     );
 
-    let mut live_network = NetworkProxyConfig::default();
-    live_network.enabled = true;
+    let mut live_network = NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    };
     live_network.set_allowed_domains(vec!["github.com".to_string()]);
 
     let guardian_config = build_guardian_review_session_config_for_test(
