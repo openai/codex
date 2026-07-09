@@ -417,6 +417,7 @@ async fn mount_streamable_http_json_rpc(
         searchable,
         include_app_only_tool,
         tools_list_behavior,
+        tool_call_delay,
     )
     .await;
 }
