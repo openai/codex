@@ -111,7 +111,7 @@ impl InputQueue {
             active_turn
                 .task
                 .as_ref()
-                .is_some_and(|task| task.turn_context.sub_id == sub_id)
+                .is_some_and(|task| task.step_context.turn.sub_id == sub_id)
                 .then(|| Arc::clone(&active_turn.turn_state))
         })
     }

@@ -2041,8 +2041,8 @@ impl Session {
         active
             .as_ref()
             .and_then(|turn| turn.task.as_ref())
-            .filter(|task| task.turn_context.sub_id == sub_id)
-            .map(|task| Arc::clone(&task.turn_context))
+            .filter(|task| task.step_context.turn.sub_id == sub_id)
+            .map(|task| Arc::clone(&task.step_context.turn))
     }
 
     async fn active_turn_context_and_cancellation_token(
@@ -2051,7 +2051,18 @@ impl Session {
         let active = self.active_turn.lock().await;
         let task = active.as_ref()?.task.as_ref()?;
         Some((
-            Arc::clone(&task.turn_context),
+            Arc::clone(&task.step_context.turn),
+            task.cancellation_token.child_token(),
+        ))
+    }
+
+    async fn active_step_context_and_cancellation_token(
+        &self,
+    ) -> Option<(Arc<StepContext>, CancellationToken)> {
+        let active = self.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        Some((
+            Arc::clone(&task.step_context),
             task.cancellation_token.child_token(),
         ))
     }
@@ -3856,7 +3867,7 @@ impl Session {
         let Some(active_task) = active_turn.task.as_ref() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
-        let active_turn_id = &active_task.turn_context.sub_id;
+        let active_turn_id = &active_task.step_context.turn.sub_id;
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3892,7 +3903,8 @@ impl Session {
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
             active_task
-                .turn_context
+                .step_context
+                .turn
                 .turn_metadata_state
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }

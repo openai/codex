@@ -77,12 +77,21 @@ impl StepContext {
                 &selected_capability_roots,
             )
             .await;
-        Arc::new(Self::new(
+        let step_context = Arc::new(Self::new(
             Arc::clone(&self.turn),
             environments,
             selected_capability_roots,
             mcp,
             loaded_agents_md,
-        ))
+        ));
+
+        let mut active = session.active_turn.lock().await;
+        if let Some(task) = active.as_mut().and_then(|turn| turn.task.as_mut())
+            && task.step_context.turn.sub_id == step_context.turn.sub_id
+        {
+            task.step_context = Arc::clone(&step_context);
+        }
+
+        step_context
     }
 }

@@ -364,6 +364,7 @@ impl Session {
         self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
+        let step_context = self.capture_step_context(Arc::clone(&turn_context));
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -442,7 +443,7 @@ impl Session {
             kind: task_kind,
             task,
             cancellation_token,
-            turn_context: Arc::clone(&turn_context),
+            step_context,
             turn_extension_data,
             _agent_execution_guard: agent_execution_guard,
             _timer: timer,
@@ -496,7 +497,9 @@ impl Session {
         if let Some(mut active_turn) = self.take_active_turn().await {
             let task = active_turn.task.take();
             aborted_turn = task.is_some();
-            turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
+            turn_context = task
+                .as_ref()
+                .map(|task| Arc::clone(&task.step_context.turn));
             if let Some(task) = task {
                 self.handle_task_abort(task, reason.clone()).await;
             }
@@ -529,7 +532,7 @@ impl Session {
             if active
                 .as_ref()
                 .and_then(|active_turn| active_turn.task.as_ref())
-                .is_some_and(|task| task.turn_context.sub_id == turn_id)
+                .is_some_and(|task| task.step_context.turn.sub_id == turn_id)
             {
                 active.take()
             } else {
@@ -541,7 +544,9 @@ impl Session {
         };
 
         let task = active_turn.task.take();
-        let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
+        let turn_context = task
+            .as_ref()
+            .map(|task| Arc::clone(&task.step_context.turn));
         if let Some(task) = task {
             self.handle_task_abort(task, reason.clone()).await;
         }
@@ -827,14 +832,15 @@ impl Session {
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
-        let sub_id = task.turn_context.sub_id.clone();
+        let sub_id = task.step_context.turn.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
-        task.turn_context
+        task.step_context
+            .turn
             .turn_metadata_state
             .cancel_git_enrichment_task();
         let session_task = task.task;
@@ -854,19 +860,19 @@ impl Session {
             Arc::clone(&task.turn_extension_data),
         ));
         session_task
-            .abort(session_ctx, Arc::clone(&task.turn_context))
+            .abort(session_ctx, Arc::clone(&task.step_context.turn))
             .await;
 
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config_and_version(
-                    task.turn_context.config.as_ref(),
-                    task.turn_context.multi_agent_version,
+                    task.step_context.turn.config.as_ref(),
+                    task.step_context.turn.multi_agent_version,
                 ),
             )
         {
             self.record_conversation_items(
-                task.turn_context.as_ref(),
+                task.step_context.turn.as_ref(),
                 std::slice::from_ref(&marker),
             )
             .await;
@@ -878,28 +884,30 @@ impl Session {
         }
 
         let (completed_at, duration_ms) = task
-            .turn_context
+            .step_context
+            .turn
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
-                turn_id: task.turn_context.sub_id.clone(),
-                profile: task.turn_context.turn_timing_state.complete_profile(),
+                turn_id: task.step_context.turn.sub_id.clone(),
+                profile: task.step_context.turn.turn_timing_state.complete_profile(),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
+            turn_id: Some(task.step_context.turn.sub_id.clone()),
             reason,
             completed_at,
             duration_ms,
         });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(task.step_context.turn.as_ref(), event)
+            .await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
             .await
-            .clear_turn(&task.turn_context.sub_id);
+            .clear_turn(&task.step_context.turn.sub_id);
         // Regular items were flushed before this terminal event was appended; buffering
         // thread writers may not flush it without another explicit barrier.
         if let Err(err) = self.flush_rollout().await {

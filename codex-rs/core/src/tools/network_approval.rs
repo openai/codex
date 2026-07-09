@@ -482,7 +482,7 @@ impl NetworkApprovalService {
         active_turn
             .as_ref()
             .and_then(|turn| turn.task.as_ref())
-            .map(|task| Arc::clone(&task.turn_context))
+            .map(|task| Arc::clone(&task.step_context.turn))
     }
 
     fn format_network_target(protocol: &str, host: &str, port: u16) -> String {
