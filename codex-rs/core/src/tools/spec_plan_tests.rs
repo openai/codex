@@ -941,31 +941,42 @@ async fn request_plugin_install_requires_all_discovery_features() {
         ]);
     }
 
-    for tool_suggest_candidates in [
-        None,
-        Some(ToolSuggestCandidates {
-            tools: Vec::new(),
-            presentation: ToolSuggestPresentation::RecommendationContext,
-        }),
-    ] {
-        let plan = probe_with(
-            |turn| {
-                set_features(
-                    turn,
-                    &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
-                );
-            },
-            ToolPlanInputs {
-                tool_suggest_candidates,
-                ..ToolPlanInputs::default()
-            },
-        )
-        .await;
-        plan.assert_visible_lacks(&[
-            "list_available_plugins_to_install",
-            "request_plugin_install",
-        ]);
-    }
+    let no_candidates = probe_with(
+        |turn| {
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: None,
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    no_candidates.assert_visible_lacks(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+
+    let empty_recommendations = probe_with(
+        |turn| {
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(ToolSuggestCandidates {
+                tools: Vec::new(),
+                presentation: ToolSuggestPresentation::RecommendationContext,
+            }),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    empty_recommendations.assert_visible_lacks(&["list_available_plugins_to_install"]);
+    empty_recommendations.assert_visible_contains(&["request_plugin_install"]);
 
     let enabled = probe_with(
         |turn| {

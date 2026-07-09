@@ -772,9 +772,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
 
     if tool_suggest_enabled(turn_context)
-        && let Some(candidates) = context
-            .tool_suggest_candidates
-            .filter(|candidates| !candidates.tools.is_empty())
+        && let Some(candidates) = context.tool_suggest_candidates.filter(|candidates| {
+            candidates.presentation
+                == crate::tools::router::ToolSuggestPresentation::RecommendationContext
+                || !candidates.tools.is_empty()
+        })
     {
         if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
             planned_tools.add(ListAvailablePluginsToInstallHandler::new(
