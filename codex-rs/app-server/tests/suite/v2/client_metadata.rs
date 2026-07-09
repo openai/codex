@@ -209,7 +209,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
 }
 
 #[tokio::test]
-async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2() -> Result<()> {
+async fn review_start_uses_regular_turn_metadata_for_thread_fork_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let review_payload = serde_json::json!({
@@ -271,7 +271,8 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
     )
     .await??;
     let ReviewStartResponse {
-        review_thread_id, ..
+        turn,
+        review_thread_id,
     } = to_response::<ReviewStartResponse>(review_resp)?;
     assert_eq!(review_thread_id, thread.id);
 
@@ -287,27 +288,16 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
         .as_deref()
         .map(parse_json_header)
         .expect("x-codex-turn-metadata header should be present");
+    assert_eq!(request.header("x-openai-subagent"), None);
     assert_eq!(
-        request.header("x-openai-subagent").as_deref(),
-        Some("review")
+        metadata["forked_from_thread_id"].as_str(),
+        Some(source_thread_id.as_str())
     );
-    assert!(metadata.get("forked_from_thread_id").is_none());
     assert_eq!(
-        metadata["parent_thread_id"].as_str(),
+        metadata["thread_id"].as_str(),
         Some(review_thread_id.as_str())
     );
-    let review_request_thread_id = metadata["thread_id"]
-        .as_str()
-        .expect("review request thread_id should be present");
-    assert!(review_request_thread_id != review_thread_id.as_str());
-    assert_eq!(
-        request
-            .header("x-codex-window-id")
-            .as_deref()
-            .and_then(|window_id| window_id.split_once(':').map(|(thread_id, _)| thread_id)),
-        Some(review_request_thread_id)
-    );
-    assert!(metadata["turn_id"].as_str().is_some());
+    assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
 
     Ok(())
 }

@@ -1,15 +1,21 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -21,6 +27,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -89,6 +97,8 @@ async fn review_start_runs_regular_turn_with_review_agent_skill() -> Result<()> 
     assert!(prompt.contains("$review-agent"));
     assert!(prompt.contains("1234567deadbeef"));
     assert!(prompt.contains("Tidy UI colors"));
+    assert!(prompt.contains("close_agent"));
+    assert!(prompt.contains("review could not be started"));
 
     let skill_fragments = user_messages
         .iter()
@@ -97,6 +107,8 @@ async fn review_start_runs_regular_turn_with_review_agent_skill() -> Result<()> 
     assert_eq!(skill_fragments.len(), 1);
     assert!(skill_fragments[0].contains("<name>review-agent</name>"));
     assert!(skill_fragments[0].contains("Do not modify files"));
+    assert!(skill_fragments[0].contains("git merge-base HEAD"));
+    assert!(skill_fragments[0].contains("git diff <merge-base-sha>"));
 
     assert_eq!(
         turn.items,
@@ -109,6 +121,177 @@ async fn review_start_runs_regular_turn_with_review_agent_skill() -> Result<()> 
             }],
         }]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "TODO(owenlin0): flaky"]
+async fn review_start_exec_approval_item_id_matches_command_execution_item() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "git".to_string(),
+                "rev-parse".to_string(),
+                "HEAD".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "review-call-1",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id,
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::Commit {
+                sha: "1234567deadbeef".to_string(),
+                title: Some("Check review approvals".to_string()),
+            },
+        })
+        .await?;
+    let review_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
+    let turn_id = turn.id.clone();
+    assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
+    assert_eq!(
+        turn.items,
+        vec![ThreadItem::UserMessage {
+            id: turn_id.clone(),
+            client_id: None,
+            content: vec![V2UserInput::Text {
+                text: "commit 1234567: Check review approvals".to_string(),
+                text_elements: Vec::new(),
+            }],
+        }]
+    );
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request");
+    };
+    assert_eq!(params.item_id, "review-call-1");
+    assert_eq!(params.turn_id, turn_id);
+
+    let mut command_item_id = None;
+    for _ in 0..10 {
+        let item_started: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("item/started"),
+        )
+        .await??;
+        let started: ItemStartedNotification =
+            serde_json::from_value(item_started.params.expect("params must be present"))?;
+        if let ThreadItem::CommandExecution { id, .. } = started.item {
+            command_item_id = Some(id);
+            break;
+        }
+    }
+    let command_item_id = command_item_id.expect("did not observe command execution item");
+    assert_eq!(command_item_id, params.item_id);
+
+    mcp.send_response(
+        request_id,
+        serde_json::json!({ "decision": codex_protocol::protocol::ReviewDecision::Approved }),
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_start_rejects_inline_delivery_during_active_turn() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]))
+    .set_delay(Duration::from_secs(2));
+    let _response_mock = responses::mount_response_once(&server, response).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Keep this turn active".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id,
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::Custom {
+                instructions: "Review this".to_string(),
+            },
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "review/start with inline delivery requires an idle thread"
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
@@ -153,7 +336,14 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 #[cfg_attr(target_os = "windows", ignore = "flaky on windows CI")]
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let review_payload = json!({
+        "findings": [],
+        "overall_correctness": "ok",
+        "overall_explanation": "detached review",
+        "overall_confidence_score": 0.5
+    })
+    .to_string();
+    let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -188,22 +378,6 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
 
     assert_eq!(turn.status, TurnStatus::InProgress);
     assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
-    let [ThreadItem::UserMessage { content, .. }] = turn.items.as_slice() else {
-        panic!("expected synthesized review user message");
-    };
-    let [
-        V2UserInput::Text {
-            text,
-            text_elements,
-        },
-    ] = content.as_slice()
-    else {
-        panic!("expected synthesized review text");
-    };
-    assert!(text.contains("Spawn one sub-agent"));
-    assert!(text.contains("$review-agent"));
-    assert!(text.ends_with("Review target:\ndetached review"));
-    assert!(text_elements.is_empty());
     assert_ne!(
         review_thread_id, thread_id,
         "detached review should run on a different thread"
@@ -363,13 +537,21 @@ async fn materialize_thread_rollout(mcp: &mut TestAppServer, thread_id: &str) ->
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml_with_approval_policy(codex_home, server_uri, "never")
+}
+
+fn create_config_toml_with_approval_policy(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
 model = "mock-model"
-approval_policy = "never"
+approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"

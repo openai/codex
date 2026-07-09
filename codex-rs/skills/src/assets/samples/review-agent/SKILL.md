@@ -18,6 +18,13 @@ comments.
    finding the first issue.
 4. Check the relevant tests and call sites to confirm that each finding is real and actionable.
 
+For a base-branch review, compare the changes that would actually merge rather than diffing
+directly against the branch tip. Resolve the comparison ref to the branch's upstream when that
+upstream exists and is ahead of the local branch; otherwise use the local branch. Run
+`git merge-base HEAD <comparison-ref>`, then inspect `git diff <merge-base-sha>`. If the local
+branch cannot be resolved, try its configured upstream explicitly before reporting that the target
+is unavailable.
+
 Flag an issue only when all of these are true:
 
 - It affects correctness, security, performance, or maintainability in a meaningful way.

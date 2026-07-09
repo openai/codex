@@ -390,7 +390,7 @@ impl TurnRequestProcessor {
         };
 
         Ok(format!(
-            "Spawn one sub-agent with the current conversation context. Tell it to use the ${REVIEW_AGENT_SKILL_NAME} skill to review the target below. The sub-agent must perform the review itself and must not delegate to other agents. Wait for it to finish, then return its complete response as your final answer. Do not perform the review yourself.\n\nReview target:\n{target}"
+            "Spawn one sub-agent with the current conversation context. Tell it to use the ${REVIEW_AGENT_SKILL_NAME} skill to review the target below. The sub-agent must perform the review itself and must not delegate to other agents. Wait for it to finish and save its complete response. If close_agent is available, close the sub-agent after saving its response. Then return the saved response as your final answer. If spawning a sub-agent is unavailable, stop and explain that the review could not be started. Do not perform the review yourself.\n\nReview target:\n{target}"
         ))
     }
 
@@ -1318,11 +1318,33 @@ impl TurnRequestProcessor {
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        self.ensure_direct_input_allowed(request_id, parent_thread.as_ref())
-            .await?;
+        let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
+        let bundled_skills_enabled = match &delivery {
+            CoreReviewDelivery::Inline => parent_thread.config().await.bundled_skills_enabled(),
+            CoreReviewDelivery::Detached => self.config.bundled_skills_enabled(),
+        };
+        if !bundled_skills_enabled {
+            return Err(invalid_request(
+                "review/start requires the bundled review-agent skill, but bundled skills are disabled",
+            ));
+        }
         let prompt = Self::review_prompt_from_target(target)?;
-        match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
+        match delivery {
             CoreReviewDelivery::Inline => {
+                self.ensure_direct_input_allowed(request_id, parent_thread.as_ref())
+                    .await?;
+                let thread_state = self
+                    .thread_state_manager
+                    .thread_state(parent_thread_id)
+                    .await;
+                let has_active_turn = thread_state.lock().await.active_turn_snapshot().is_some();
+                if has_active_turn
+                    || matches!(parent_thread.agent_status().await, AgentStatus::Running)
+                {
+                    return Err(invalid_request(
+                        "review/start with inline delivery requires an idle thread",
+                    ));
+                }
                 self.start_inline_review(request_id, parent_thread, &prompt, thread_id)
                     .await?;
             }

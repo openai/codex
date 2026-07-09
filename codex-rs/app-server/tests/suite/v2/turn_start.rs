@@ -38,6 +38,10 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
@@ -3712,7 +3716,8 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
 }
 
 #[tokio::test]
-async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
+async fn direct_input_to_multi_agent_v2_subagent_is_rejected_but_detached_review_is_allowed()
+-> Result<()> {
     const CHILD_PROMPT: &str = "child: do work";
     const PARENT_PROMPT: &str = "spawn a child and continue";
     const SPAWN_CALL_ID: &str = "spawn-call-direct-input-rejection";
@@ -3825,7 +3830,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
 
     let direct_steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
-            thread_id: child_thread_id,
+            thread_id: child_thread_id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "direct app-server steer".to_string(),
@@ -3843,6 +3848,25 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     .await??;
     assert_eq!(direct_steer_error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(direct_steer_error.error.message, ERROR_MESSAGE);
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id: child_thread_id.clone(),
+            delivery: Some(ReviewDelivery::Detached),
+            target: ReviewTarget::Custom {
+                instructions: "Review the child history".to_string(),
+            },
+        })
+        .await?;
+    let review_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    let ReviewStartResponse {
+        review_thread_id, ..
+    } = to_response(review_resp)?;
+    assert_ne!(review_thread_id, child_thread_id);
 
     Ok(())
 }
