@@ -16,11 +16,26 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     inner: reqwest::Client,
+    request_logging: RequestLogging,
 }
 
 impl HttpClient {
     pub fn new(inner: reqwest::Client) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            request_logging: RequestLogging::Enabled,
+        }
+    }
+
+    /// Creates a client that suppresses request URL and response-header diagnostics.
+    ///
+    /// Use this for authentication endpoints whose URLs or headers may contain credentials that
+    /// are redacted by the caller above the HTTP transport boundary.
+    pub(crate) fn new_without_request_logging(inner: reqwest::Client) -> Self {
+        Self {
+            inner,
+            request_logging: RequestLogging::Disabled,
+        }
     }
 
     pub fn get<U>(&self, url: U) -> RequestBuilder
@@ -42,8 +57,19 @@ impl HttpClient {
         U: IntoUrl,
     {
         let url_str = url.as_str().to_string();
-        RequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
+        RequestBuilder::new(
+            self.inner.request(method.clone(), url),
+            method,
+            url_str,
+            self.request_logging,
+        )
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestLogging {
+    Enabled,
+    Disabled,
 }
 
 #[must_use = "requests are not sent unless `send` is awaited"]
@@ -52,14 +78,21 @@ pub struct RequestBuilder {
     builder: reqwest::RequestBuilder,
     method: Method,
     url: String,
+    request_logging: RequestLogging,
 }
 
 impl RequestBuilder {
-    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
+    fn new(
+        builder: reqwest::RequestBuilder,
+        method: Method,
+        url: String,
+        request_logging: RequestLogging,
+    ) -> Self {
         Self {
             builder,
             method,
             url,
+            request_logging,
         }
     }
 
@@ -68,6 +101,7 @@ impl RequestBuilder {
             builder: f(self.builder),
             method: self.method,
             url: self.url,
+            request_logging: self.request_logging,
         }
     }
 
@@ -115,26 +149,30 @@ impl RequestBuilder {
 
         match self.builder.headers(headers).send().await {
             Ok(response) => {
-                tracing::debug!(
-                    method = %self.method,
-                    url = %self.url,
-                    status = %response.status(),
-                    headers = ?response.headers(),
-                    version = ?response.version(),
-                    "Request completed"
-                );
+                if self.request_logging == RequestLogging::Enabled {
+                    tracing::debug!(
+                        method = %self.method,
+                        url = %self.url,
+                        status = %response.status(),
+                        headers = ?response.headers(),
+                        version = ?response.version(),
+                        "Request completed"
+                    );
+                }
 
                 Ok(response)
             }
             Err(error) => {
-                let status = error.status();
-                tracing::debug!(
-                    method = %self.method,
-                    url = %self.url,
-                    status = status.map(|s| s.as_u16()),
-                    error = %error,
-                    "Request failed"
-                );
+                if self.request_logging == RequestLogging::Enabled {
+                    let status = error.status();
+                    tracing::debug!(
+                        method = %self.method,
+                        url = %self.url,
+                        status = status.map(|s| s.as_u16()),
+                        error = %error,
+                        "Request failed"
+                    );
+                }
                 Err(error)
             }
         }
