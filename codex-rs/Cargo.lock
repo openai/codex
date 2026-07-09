@@ -3346,6 +3346,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
+ "http 1.4.0",
  "jsonwebtoken",
  "keyring",
  "once_cell",
