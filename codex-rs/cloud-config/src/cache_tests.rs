@@ -44,7 +44,7 @@ fn valid_signed_payload() -> CloudConfigBundleCacheSignedPayload {
     CloudConfigBundleCacheSignedPayload {
         version: CLOUD_CONFIG_BUNDLE_CACHE_VERSION,
         cached_at,
-        expires_at: cached_at + ChronoDuration::minutes(15),
+        expires_at: cached_at + ChronoDuration::hours(24),
         chatgpt_user_id: Some("user-12345".to_string()),
         account_id: Some("account-12345".to_string()),
         bundle: test_bundle(),
@@ -83,7 +83,7 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
             .expect("parse cache");
     assert!(
         cache_file.signed_payload.expires_at
-            <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(15)
+            <= cache_file.signed_payload.cached_at + ChronoDuration::hours(24)
     );
     assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
     assert_eq!(
@@ -103,7 +103,11 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
         .await
         .expect("load cache");
     assert_eq!(loaded_cache.signed_payload, cache_file.signed_payload);
-    assert!(loaded_cache.refresh_in <= CLOUD_CONFIG_BUNDLE_CACHE_TTL);
+    assert!(matches!(
+        loaded_cache.freshness,
+        CacheFreshness::Fresh { refresh_in }
+            if refresh_in <= CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL
+    ));
 }
 
 #[tokio::test]
@@ -196,13 +200,29 @@ async fn load_rejects_expired_cache() {
 }
 
 #[tokio::test]
-async fn load_rejects_cache_older_than_ttl_even_when_expiry_is_later() {
+async fn load_returns_stale_cache_after_refresh_interval() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let mut signed_payload = valid_signed_payload();
     signed_payload.cached_at =
         Utc::now() - ChronoDuration::minutes(15) - ChronoDuration::seconds(1);
-    signed_payload.expires_at = Utc::now() + ChronoDuration::minutes(15);
+    signed_payload.expires_at = Utc::now() + ChronoDuration::hours(23);
+    write_cache_file(&cache, &signed_cache_file(signed_payload));
+
+    let loaded_cache = cache
+        .load(Some("user-12345"), Some("account-12345"))
+        .await
+        .expect("load stale cache");
+    assert_eq!(loaded_cache.freshness, CacheFreshness::Stale);
+}
+
+#[tokio::test]
+async fn load_rejects_cache_older_than_hard_ttl_even_when_expiry_is_later() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let mut signed_payload = valid_signed_payload();
+    signed_payload.cached_at = Utc::now() - ChronoDuration::hours(24) - ChronoDuration::seconds(1);
+    signed_payload.expires_at = Utc::now() + ChronoDuration::hours(1);
     write_cache_file(&cache, &signed_cache_file(signed_payload));
 
     assert_eq!(
@@ -212,7 +232,7 @@ async fn load_rejects_cache_older_than_ttl_even_when_expiry_is_later() {
 }
 
 #[tokio::test]
-async fn load_uses_ttl_cap_for_refresh_delay() {
+async fn load_uses_refresh_interval_cap_for_refresh_delay() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let now = Utc::now();
@@ -226,8 +246,11 @@ async fn load_uses_ttl_cap_for_refresh_delay() {
         .await
         .expect("load cache");
 
-    assert!(loaded_cache.refresh_in <= Duration::from_secs(10 * 60));
-    assert!(loaded_cache.refresh_in >= Duration::from_secs(10 * 60 - 5));
+    let CacheFreshness::Fresh { refresh_in } = loaded_cache.freshness else {
+        panic!("cache should be fresh");
+    };
+    assert!(refresh_in <= Duration::from_secs(10 * 60));
+    assert!(refresh_in >= Duration::from_secs(10 * 60 - 5));
 }
 
 #[tokio::test]

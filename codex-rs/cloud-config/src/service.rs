@@ -6,6 +6,7 @@
 use crate::backend::BundleClient;
 use crate::backend::BundleRequestError;
 use crate::backend::RetryableFailureKind;
+use crate::cache::CacheFreshness;
 use crate::cache::CacheLoadStatus;
 use crate::cache::CacheLockAttempt;
 use crate::cache::CloudConfigBundleCache;
@@ -84,6 +85,18 @@ enum CacheRefreshSchedule {
     ContinueAfter(Duration),
 }
 
+enum CachedBundle {
+    Fresh(LoadedBundle),
+    Fallback(LoadedBundle),
+    Miss,
+}
+
+#[derive(Clone, Copy)]
+enum StaleCachePolicy {
+    FallbackOnError,
+    RefreshRequired,
+}
+
 enum UnauthorizedRecoveryAction {
     RetrySameAttempt,
     RetryNextAttempt,
@@ -123,7 +136,7 @@ where
         let _timer =
             codex_otel::start_global_timer("codex.cloud_config_bundle.fetch.duration_ms", &[]);
         let started_at = Instant::now();
-        let load_result = timeout(self.timeout, async {
+        let load_result = match timeout(self.timeout, async {
             let Some(auth) = self.auth_manager.auth().await else {
                 return Ok(StartupLoad::Inactive);
             };
@@ -131,29 +144,35 @@ where
                 return Ok(StartupLoad::Inactive);
             }
 
-            self.load_bundle(auth, "startup")
+            self.load_bundle(auth, "startup", StaleCachePolicy::FallbackOnError)
                 .await
                 .map(StartupLoad::Active)
         })
         .await
-        .inspect_err(|_| {
-            let message = format!(
-                "Timed out waiting for cloud config bundle after {}s",
-                self.timeout.as_secs()
-            );
-            tracing::error!("{message}");
-            emit_load_metric("startup", "error", /*bundle*/ None);
-        })
-        .map_err(|_| {
-            CloudConfigBundleLoadError::new(
-                CloudConfigBundleLoadErrorCode::Timeout,
-                /*status_code*/ None,
-                format!(
-                    "timed out waiting for cloud config bundle after {}s",
-                    self.timeout.as_secs()
-                ),
-            )
-        })?;
+        {
+            Ok(load_result) => load_result,
+            Err(_) => {
+                let fallback = self.load_cached_fallback_for_current_auth().await;
+                if let Some(loaded) = fallback {
+                    tracing::warn!(
+                        path = %self.cache.path().display(),
+                        "Timed out refreshing cloud config bundle; using cached fallback"
+                    );
+                    Ok(StartupLoad::Active(loaded))
+                } else {
+                    let message = format!(
+                        "timed out waiting for cloud config bundle after {}s",
+                        self.timeout.as_secs()
+                    );
+                    tracing::error!("{message}");
+                    Err(CloudConfigBundleLoadError::new(
+                        CloudConfigBundleLoadErrorCode::Timeout,
+                        /*status_code*/ None,
+                        message,
+                    ))
+                }
+            }
+        };
 
         let result = match load_result {
             Ok(result) => result,
@@ -188,7 +207,7 @@ where
         Ok(result)
     }
 
-    async fn load_valid_cached_bundle(&self, auth: &CodexAuth) -> Option<LoadedBundle> {
+    async fn load_cached_bundle(&self, auth: &CodexAuth) -> CachedBundle {
         let (chatgpt_user_id, account_id) = auth_identity(auth);
         match self
             .cache
@@ -206,22 +225,39 @@ where
                     );
                     self.cache
                         .log_load_status(&CacheLoadStatus::CacheInvalidBundle);
-                    None
+                    CachedBundle::Miss
                 } else {
-                    tracing::info!(
-                        path = %self.cache.path().display(),
-                        "Using cached cloud config bundle"
-                    );
-                    Some(LoadedBundle {
-                        bundle: optional_bundle(loaded_cache.signed_payload.bundle),
-                        refresh_in: loaded_cache.refresh_in,
-                    })
+                    let bundle = optional_bundle(loaded_cache.signed_payload.bundle);
+                    match loaded_cache.freshness {
+                        CacheFreshness::Fresh { refresh_in } => {
+                            tracing::info!(
+                                path = %self.cache.path().display(),
+                                "Using cached cloud config bundle"
+                            );
+                            CachedBundle::Fresh(LoadedBundle { bundle, refresh_in })
+                        }
+                        CacheFreshness::Stale => CachedBundle::Fallback(LoadedBundle {
+                            bundle,
+                            refresh_in: CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_RETRY_INTERVAL,
+                        }),
+                    }
                 }
             }
             Err(cache_load_status) => {
                 self.cache.log_load_status(&cache_load_status);
-                None
+                CachedBundle::Miss
             }
+        }
+    }
+
+    async fn load_cached_fallback_for_current_auth(&self) -> Option<LoadedBundle> {
+        let auth = self.auth_manager.auth_cached()?;
+        if !cloud_config_eligible_auth(&auth) {
+            return None;
+        }
+        match self.load_cached_bundle(&auth).await {
+            CachedBundle::Fresh(loaded) | CachedBundle::Fallback(loaded) => Some(loaded),
+            CachedBundle::Miss => None,
         }
     }
 
@@ -229,10 +265,15 @@ where
         &self,
         auth: CodexAuth,
         trigger: &'static str,
+        stale_cache_policy: StaleCachePolicy,
     ) -> Result<LoadedBundle, CloudConfigBundleLoadError> {
         loop {
-            if let Some(loaded) = self.load_valid_cached_bundle(&auth).await {
-                return Ok(loaded);
+            // Fresh cache entries satisfy the load immediately. A soft-stale
+            // entry continues through coordination and a blocking fetch; only
+            // startup may use it after that refresh fails.
+            match self.load_cached_bundle(&auth).await {
+                CachedBundle::Fresh(loaded) => return Ok(loaded),
+                CachedBundle::Fallback(_) | CachedBundle::Miss => {}
             }
 
             // This is a cross-process single-flight lock, not a cache-file
@@ -241,11 +282,12 @@ where
             match self.cache.try_acquire_lock().await {
                 Ok(CacheLockAttempt::Acquired(_cache_lock)) => {
                     // Close the race between the cache read and lock acquisition.
-                    if let Some(loaded) = self.load_valid_cached_bundle(&auth).await {
-                        return Ok(loaded);
+                    match self.load_cached_bundle(&auth).await {
+                        CachedBundle::Fresh(loaded) => return Ok(loaded),
+                        CachedBundle::Fallback(_) | CachedBundle::Miss => {}
                     }
                     return self
-                        .fetch_remote_bundle_and_update_cache_with_retries(auth, trigger)
+                        .fetch_remote_bundle_with_fallback(auth, trigger, stale_cache_policy)
                         .await;
                 }
                 Ok(CacheLockAttempt::Contended) => {
@@ -258,10 +300,44 @@ where
                         "Failed to acquire cloud config bundle cache lock; fetching without coordination"
                     );
                     return self
-                        .fetch_remote_bundle_and_update_cache_with_retries(auth, trigger)
+                        .fetch_remote_bundle_with_fallback(auth, trigger, stale_cache_policy)
                         .await;
                 }
             }
+        }
+    }
+
+    async fn fetch_remote_bundle_with_fallback(
+        &self,
+        auth: CodexAuth,
+        trigger: &'static str,
+        stale_cache_policy: StaleCachePolicy,
+    ) -> Result<LoadedBundle, CloudConfigBundleLoadError> {
+        match self
+            .fetch_remote_bundle_and_update_cache_with_retries(auth, trigger)
+            .await
+        {
+            Ok(loaded) => Ok(loaded),
+            Err(err)
+                if matches!(stale_cache_policy, StaleCachePolicy::FallbackOnError)
+                    && err.code() != CloudConfigBundleLoadErrorCode::Auth =>
+            {
+                // Auth recovery may have changed identities during the fetch.
+                // Re-read the cache against the current identity before using it.
+                let fallback = self.load_cached_fallback_for_current_auth().await;
+                match fallback {
+                    Some(loaded) => {
+                        tracing::warn!(
+                            path = %self.cache.path().display(),
+                            error = %err,
+                            "Failed to refresh cloud config bundle; using cached fallback"
+                        );
+                        Ok(loaded)
+                    }
+                    None => Err(err),
+                }
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -547,7 +623,10 @@ where
             return CacheRefreshSchedule::Stop;
         }
 
-        match self.load_bundle(auth, "refresh").await {
+        match self
+            .load_bundle(auth, "refresh", StaleCachePolicy::RefreshRequired)
+            .await
+        {
             Ok(loaded) => {
                 emit_load_metric("refresh", "success", loaded.bundle.as_ref());
                 publisher.publish(Ok(loaded.bundle));
