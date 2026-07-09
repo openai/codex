@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
+use crate::default_client::HttpClient;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use sha2::Digest;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -156,6 +157,26 @@ impl HttpClientFactory {
             self.outbound_proxy_policy,
             resolve_system_proxy,
         )
+    }
+
+    /// Builds an HTTP client for a concrete outbound route.
+    pub fn build_client(
+        &self,
+        request_url: &str,
+        route_class: ClientRouteClass,
+    ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+        self.build_reqwest_client(reqwest::Client::builder(), request_url, route_class)
+            .map(HttpClient::new)
+    }
+
+    /// Builds a route-aware client without request URL or response-header diagnostics.
+    pub fn build_client_without_request_logging(
+        &self,
+        request_url: &str,
+        route_class: ClientRouteClass,
+    ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+        self.build_reqwest_client(reqwest::Client::builder(), request_url, route_class)
+            .map(HttpClient::new_without_request_logging)
     }
 
     /// Builds a reqwest client for a concrete outbound route.

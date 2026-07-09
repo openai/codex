@@ -2,6 +2,41 @@ use super::sanitize_user_agent;
 use super::*;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::io;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tracing_subscriber::layer::SubscriberExt;
+
+#[derive(Clone)]
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
+    type Writer = TestLogSink;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogSink {
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl Write for TestLogSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.lock().expect("log buffer lock").extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 #[test]
 fn test_get_codex_user_agent() {
@@ -87,6 +122,60 @@ async fn test_create_client_sets_default_headers() {
     assert_eq!(residency_header.to_str().unwrap(), "us");
 
     set_default_client_residency_requirement(/*enforce_residency*/ None);
+}
+
+#[tokio::test]
+async fn raw_auth_client_does_not_log_sensitive_request_or_response_data() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-sensitive-response", "response-secret-value"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let authority = server
+        .uri()
+        .strip_prefix("http://")
+        .expect("wiremock URI should use HTTP")
+        .to_string();
+    let endpoint = format!(
+        "http://auth-user:password-secret-value@{authority}/token?client_secret=query-secret-value"
+    );
+    let client = create_raw_auth_client(&endpoint, /*auth_route_config*/ None)
+        .expect("raw auth client should build");
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(TestLogWriter {
+                buffer: Arc::clone(&buffer),
+            }),
+    );
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::debug!("log capture sentinel");
+
+    let response = client
+        .get(&endpoint)
+        .send()
+        .await
+        .expect("raw auth request should succeed");
+    assert!(response.status().is_success());
+
+    let logs = String::from_utf8(buffer.lock().expect("log buffer lock").clone())
+        .expect("logs should be UTF-8");
+    assert!(logs.contains("log capture sentinel"));
+    assert!(!logs.contains("password-secret-value"));
+    assert!(!logs.contains("query-secret-value"));
+    assert!(!logs.contains("response-secret-value"));
 }
 
 #[test]
