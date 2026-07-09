@@ -60,9 +60,38 @@ class InstallShTest(unittest.TestCase):
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
 
+    def test_compact_metadata_is_independent_of_field_order(self) -> None:
+        result, requests = run_installer(
+            "latest", metadata_json=release_metadata(compact=True, reorder=True)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/openai/codex/releases/latest",
+                "https://github.com/openai/codex/releases/download/"
+                f"rust-v{VERSION}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {VERSION}", result.stdout)
+
+    def test_json_like_strings_and_nested_fields_do_not_define_assets(self) -> None:
+        result, requests = run_installer(
+            VERSION, metadata_json=legacy_release_metadata_with_decoys()
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(requests), 2)
+        self.assertIn("/codex-npm-", requests[1])
+        self.assertNotIn("codex-package_SHA256SUMS", requests[1])
+
 
 def run_installer(
-    release: str, *, metadata_failure: bool = False
+    release: str,
+    *,
+    metadata_failure: bool = False,
+    metadata_json: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -108,7 +137,9 @@ def run_installer(
                 "CODEX_NON_INTERACTIVE": "1",
                 "CODEX_RELEASE": release,
                 "CODEX_TEST_METADATA_FAILURE": "1" if metadata_failure else "0",
-                "CODEX_TEST_METADATA_JSON": release_metadata(),
+                "CODEX_TEST_METADATA_JSON": (
+                    metadata_json if metadata_json is not None else release_metadata()
+                ),
                 "CODEX_TEST_REQUEST_LOG": str(request_log),
                 "HOME": str(root / "home"),
                 "PATH": f"{bin_dir}:/usr/bin:/bin",
@@ -130,12 +161,13 @@ def run_installer(
         return result, requests
 
 
-def release_metadata() -> str:
+def release_metadata(*, compact: bool = False, reorder: bool = False) -> str:
     assets = [
-        {
-            "name": f"codex-package-{target}.tar.gz",
-            "digest": f"sha256:{'a' * 64}",
-        }
+        asset_metadata(
+            f"codex-package-{target}.tar.gz",
+            f"sha256:{'a' * 64}",
+            reorder=reorder,
+        )
         for target in (
             "aarch64-apple-darwin",
             "x86_64-apple-darwin",
@@ -144,14 +176,48 @@ def release_metadata() -> str:
         )
     ]
     assets.append(
-        {
-            "name": "codex-package_SHA256SUMS",
-            "digest": f"sha256:{'b' * 64}",
-        }
+        asset_metadata(
+            "codex-package_SHA256SUMS",
+            f"sha256:{'b' * 64}",
+            reorder=reorder,
+        )
     )
+    separators = (",", ":") if compact else None
     return json.dumps(
-        {"tag_name": f"rust-v{VERSION}", "assets": assets},
-        indent=2,
+        {"assets": assets, "body": "braces: { } [ ]", "tag_name": f"rust-v{VERSION}"},
+        indent=None if compact else 2,
+        separators=separators,
+    )
+
+
+def asset_metadata(name: str, digest: str, *, reorder: bool) -> dict[str, str]:
+    if reorder:
+        return {"digest": digest, "name": name}
+    return {"name": name, "digest": digest}
+
+
+def legacy_release_metadata_with_decoys() -> str:
+    fake_digest = f"sha256:{'0' * 64}"
+    assets = [
+        {
+            "metadata": {
+                "name": "codex-package-x86_64-unknown-linux-musl.tar.gz",
+                "digest": fake_digest,
+            },
+            "digest": f"sha256:{'c' * 64}",
+            "name": f"codex-npm-{target}-{VERSION}.tgz",
+        }
+        for target in ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")
+    ]
+    return json.dumps(
+        {
+            "body": (
+                f'fake: {{"name":"codex-package_SHA256SUMS","digest":"{fake_digest}"}}'
+            ),
+            "assets": assets,
+            "tag_name": f"rust-v{VERSION}",
+        },
+        separators=(",", ":"),
     )
 
 
