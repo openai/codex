@@ -154,8 +154,9 @@ impl ChatWidget {
         self.bottom_pane
             .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
 
-        let mut header =
-            vec![Box::new(Line::from(SAFETY_BUFFERING_HEADER).bold()) as Box<dyn Renderable>];
+        let mut header = vec![Box::new(
+            Paragraph::new(Line::from(SAFETY_BUFFERING_HEADER).bold()).wrap(Wrap { trim: false }),
+        ) as Box<dyn Renderable>];
         if can_offer_retry {
             header.push(Box::new(
                 Paragraph::new(Line::from(SAFETY_BUFFERING_MESSAGE_WITH_RETRY).dim())
