@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::time::Duration;
 
 use crate::AuthProvider;
@@ -37,14 +38,18 @@ pub enum OpenAiFileError {
         size_bytes: u64,
         limit_bytes: u64,
     },
-    #[error("failed to send OpenAI file request to {url}: {source}")]
+    #[error("failed to send OpenAI file {operation} request to {url} ({kind}): {detail}")]
     Request {
+        operation: &'static str,
         url: String,
+        kind: &'static str,
+        detail: String,
         #[source]
         source: reqwest::Error,
     },
-    #[error("OpenAI file request to {url} failed with status {status}: {body}")]
+    #[error("OpenAI file {operation} request to {url} failed with status {status}: {body}")]
     UnexpectedStatus {
+        operation: &'static str,
         url: String,
         status: StatusCode,
         body: String,
@@ -59,6 +64,21 @@ pub enum OpenAiFileError {
     UploadNotReady { file_id: String },
     #[error("OpenAI file upload for `{file_id}` failed: {message}")]
     UploadFailed { file_id: String, message: String },
+}
+
+impl OpenAiFileError {
+    pub fn is_retryable_upload_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Request {
+                operation: "upload",
+                ..
+            } | Self::UnexpectedStatus {
+                operation: "upload",
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -105,22 +125,20 @@ pub async fn upload_openai_file(
         }))
         .send()
         .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: create_url.clone(),
-            source,
-        })?;
+        .map_err(|source| request_error("create", &create_url, source))?;
     let create_status = create_response.status();
     let create_body = create_response.text().await.unwrap_or_default();
     if !create_status.is_success() {
         return Err(OpenAiFileError::UnexpectedStatus {
-            url: create_url,
+            operation: "create",
+            url: redacted_url(&create_url),
             status: create_status,
             body: create_body,
         });
     }
     let create_payload: CreateFileResponse =
         serde_json::from_str(&create_body).map_err(|source| OpenAiFileError::Decode {
-            url: create_url.clone(),
+            url: redacted_url(&create_url),
             source,
         })?;
 
@@ -132,15 +150,13 @@ pub async fn upload_openai_file(
         .body(reqwest::Body::wrap_stream(contents))
         .send()
         .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: create_payload.upload_url.clone(),
-            source,
-        })?;
+        .map_err(|source| request_error("upload", &create_payload.upload_url, source))?;
     let upload_status = upload_response.status();
     let upload_body = upload_response.text().await.unwrap_or_default();
     if !upload_status.is_success() {
         return Err(OpenAiFileError::UnexpectedStatus {
-            url: create_payload.upload_url.clone(),
+            operation: "upload",
+            url: redacted_url(&create_payload.upload_url),
             status: upload_status,
             body: upload_body,
         });
@@ -157,22 +173,20 @@ pub async fn upload_openai_file(
             .json(&serde_json::json!({}))
             .send()
             .await
-            .map_err(|source| OpenAiFileError::Request {
-                url: finalize_url.clone(),
-                source,
-            })?;
+            .map_err(|source| request_error("finalize", &finalize_url, source))?;
         let finalize_status = finalize_response.status();
         let finalize_body = finalize_response.text().await.unwrap_or_default();
         if !finalize_status.is_success() {
             return Err(OpenAiFileError::UnexpectedStatus {
-                url: finalize_url.clone(),
+                operation: "finalize",
+                url: redacted_url(&finalize_url),
                 status: finalize_status,
                 body: finalize_body,
             });
         }
         let finalize_payload: DownloadLinkResponse =
             serde_json::from_str(&finalize_body).map_err(|source| OpenAiFileError::Decode {
-                url: finalize_url.clone(),
+                url: redacted_url(&finalize_url),
                 source,
             })?;
 
@@ -210,6 +224,54 @@ pub async fn upload_openai_file(
             }
         }
     }
+}
+
+fn request_error(operation: &'static str, url: &str, source: reqwest::Error) -> OpenAiFileError {
+    let kind = if source.is_timeout() {
+        "timeout"
+    } else if source.is_connect() {
+        "connect"
+    } else if source.is_body() {
+        "body"
+    } else if source.is_request() {
+        "request"
+    } else {
+        "transport"
+    };
+    let mut details = Vec::new();
+    let mut cause = source.source();
+    while let Some(current) = cause {
+        let message = current.to_string();
+        if details.last() != Some(&message) {
+            details.push(message);
+        }
+        cause = current.source();
+    }
+    let detail = if details.is_empty() {
+        kind.to_string()
+    } else {
+        details.join(": ")
+    };
+
+    OpenAiFileError::Request {
+        operation,
+        url: redacted_url(url),
+        kind,
+        detail,
+        source,
+    }
+}
+
+fn redacted_url(url: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(url) else {
+        return url
+            .split_once('?')
+            .map_or(url, |(base, _)| base)
+            .to_string();
+    };
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
 }
 
 fn authorized_request(
@@ -270,6 +332,14 @@ mod tests {
 
     fn base_url_for(server: &MockServer) -> String {
         format!("{}/backend-api", server.uri())
+    }
+
+    #[test]
+    fn redacted_url_removes_presigned_query() {
+        assert_eq!(
+            redacted_url("https://files.example/upload/raw?se=soon&sig=secret"),
+            "https://files.example/upload/raw"
+        );
     }
 
     #[tokio::test]
