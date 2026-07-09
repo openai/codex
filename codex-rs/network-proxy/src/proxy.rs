@@ -6,6 +6,8 @@ use crate::credential_broker::BROKERED_CREDENTIALS_ENV_KEY;
 use crate::credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::runtime::BlockedRequest;
+use crate::runtime::BlockedRequestArgs;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::ConfigState;
 use crate::runtime::unix_socket_permissions_supported;
@@ -237,6 +239,7 @@ impl NetworkProxyBuilder {
             )?)),
             reserved_listeners,
             policy_decider: self.policy_decider,
+            blocked_request_observer: self.blocked_request_observer,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
             execution_scope: None,
         })
@@ -375,6 +378,7 @@ pub struct NetworkProxy {
     runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
     execution_scope: Option<Arc<ExecutionScope>>,
 }
@@ -687,6 +691,7 @@ impl NetworkProxy {
     /// Returns the policy decider with this proxy's execution attribution attached.
     pub fn remote_policy_decider(&self) -> Option<Arc<dyn NetworkPolicyDecider>> {
         let decider = self.policy_decider.clone()?;
+        let blocked_request_observer = self.blocked_request_observer.clone();
         let environment_id = self
             .execution_scope
             .as_ref()
@@ -697,9 +702,18 @@ impl NetworkProxy {
             .map(|scope| scope.execution_id.clone());
         Some(Arc::new(move |mut request: crate::NetworkPolicyRequest| {
             let decider = Arc::clone(&decider);
+            let blocked_request_observer = blocked_request_observer.clone();
             request.environment_id = request.environment_id.or_else(|| environment_id.clone());
             request.execution_id = request.execution_id.or_else(|| execution_id.clone());
-            async move { decider.decide(request).await }
+            async move {
+                let decision = decider.decide(request.clone()).await;
+                if let Some(observer) = blocked_request_observer
+                    && let Some(blocked) = remote_blocked_request(&request, &decision)
+                {
+                    observer.on_blocked_request(blocked).await;
+                }
+                decision
+            }
         }))
     }
 
@@ -1051,6 +1065,33 @@ impl NetworkProxy {
     }
 }
 
+fn remote_blocked_request(
+    request: &crate::NetworkPolicyRequest,
+    decision: &crate::NetworkDecision,
+) -> Option<BlockedRequest> {
+    let crate::NetworkDecision::Deny {
+        reason,
+        source,
+        decision,
+    } = decision
+    else {
+        return None;
+    };
+    let mut blocked = BlockedRequest::new(BlockedRequestArgs {
+        host: request.host.clone(),
+        reason: reason.clone(),
+        client: request.client_addr.clone(),
+        method: request.method.clone(),
+        mode: None,
+        protocol: request.protocol.as_policy_protocol().to_string(),
+        decision: Some(decision.as_str().to_string()),
+        source: Some(source.as_str().to_string()),
+        port: Some(request.port),
+    });
+    blocked.execution_id = request.execution_id.clone();
+    Some(blocked)
+}
+
 pub struct NetworkProxyHandle {
     http_task: Option<JoinHandle<Result<()>>>,
     socks_task: Option<JoinHandle<Result<()>>>,
@@ -1193,6 +1234,58 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             Some((Some("remote".to_string()), Some("execution-1".to_string())))
         );
+    }
+
+    #[tokio::test]
+    async fn remote_policy_decider_reports_denials_to_blocked_request_observer() {
+        let captured = Arc::new(Mutex::new(None));
+        let captured_for_observer = Arc::clone(&captured);
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let proxy = NetworkProxy::builder()
+            .state(state)
+            .policy_decider(|_request: crate::NetworkPolicyRequest| async {
+                NetworkDecision::deny("not_allowed")
+            })
+            .blocked_request_observer(move |blocked: BlockedRequest| {
+                let captured = Arc::clone(&captured_for_observer);
+                async move {
+                    *captured
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(blocked);
+                }
+            })
+            .build()
+            .await
+            .expect("build proxy");
+        let scoped = proxy
+            .for_execution("remote", "execution-1", "attribution-token".to_string())
+            .expect("scope proxy to execution");
+        let decider = scoped.remote_policy_decider().expect("remote decider");
+        let request = crate::NetworkPolicyRequest::new(crate::NetworkPolicyRequestArgs {
+            protocol: crate::NetworkProtocol::HttpsConnect,
+            host: "blocked.example".to_string(),
+            port: 443,
+            environment_id: None,
+            client_addr: None,
+            method: Some("CONNECT".to_string()),
+            command: None,
+            exec_policy_hint: None,
+        });
+
+        assert_eq!(
+            decider.decide(request).await,
+            NetworkDecision::deny("not_allowed")
+        );
+        let blocked = captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("blocked request");
+        assert_eq!(blocked.host, "blocked.example");
+        assert_eq!(blocked.execution_id.as_deref(), Some("execution-1"));
+        assert_eq!(blocked.decision.as_deref(), Some("deny"));
     }
 
     #[tokio::test]

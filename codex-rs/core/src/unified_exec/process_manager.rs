@@ -18,6 +18,7 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::sandboxing::ExecNetworkPolicyDecider;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
@@ -917,6 +918,7 @@ impl UnifiedExecProcessManager {
         attempt: &SandboxAttempt<'_>,
         network: Option<&NetworkProxy>,
         network_proxy_launch: Option<codex_network_proxy::RemoteNetworkProxyLaunchConfig>,
+        network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         environment_id: Option<&str>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         tty: bool,
@@ -931,9 +933,7 @@ impl UnifiedExecProcessManager {
         }
         .map_err(ToolError::Codex)?;
         request.exec_server_network_proxy = network_proxy_launch;
-        if remote {
-            request.network = network.cloned();
-        }
+        request.network_policy_decider = network_policy_decider.map(ExecNetworkPolicyDecider::new);
         request.exec_server_env_config = exec_server_env_config;
         self.open_session_with_prepared_exec_env(
             process_id,
@@ -1059,14 +1059,10 @@ impl UnifiedExecProcessManager {
 
             let backend = environment.get_exec_backend();
             let params = exec_server_params_for_request(process_id, request, tty);
-            let started = match request
-                .network
-                .as_ref()
-                .and_then(NetworkProxy::remote_policy_decider)
-            {
+            let started = match request.network_policy_decider.as_ref() {
                 Some(decider) => {
                     backend
-                        .start_with_network_policy_decider(params, decider)
+                        .start_with_network_policy_decider(params, decider.get())
                         .await
                 }
                 None => backend.start(params).await,

@@ -205,10 +205,14 @@ pub trait ExecBackend: Send + Sync {
 
     fn start_with_network_policy_decider(
         &self,
-        params: ExecParams,
+        _params: ExecParams,
         _decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider>,
     ) -> ExecBackendFuture<'_> {
-        self.start(params)
+        Box::pin(async {
+            Err(ExecServerError::Protocol(
+                "exec backend does not support remote network policy decisions".to_string(),
+            ))
+        })
     }
 }
 

@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
@@ -94,6 +95,7 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NETWORK_POLICY_DECISION_TIMEOUT;
 use crate::protocol::NETWORK_POLICY_REQUEST_METHOD;
 use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::NetworkPolicyRequestNotification;
@@ -169,6 +171,7 @@ pub(crate) struct SessionState {
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    network_policy_decisions_cancelled: CancellationToken,
 }
 
 #[derive(Default)]
@@ -880,6 +883,7 @@ impl SessionState {
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
             network_policy_decider,
+            network_policy_decisions_cancelled: CancellationToken::new(),
         }
     }
 
@@ -936,6 +940,9 @@ impl SessionState {
             ordered_events.last_published_seq = next_seq;
             ordered_events.exit_published |= matches!(&event, ExecProcessEvent::Exited { .. });
             let is_closed = matches!(&event, ExecProcessEvent::Closed { .. });
+            if matches!(&event, ExecProcessEvent::Exited { .. }) || is_closed {
+                self.network_policy_decisions_cancelled.cancel();
+            }
             ordered_events.closed_published |= is_closed;
             published_closed |= is_closed;
             self.events.publish(event);
@@ -944,6 +951,7 @@ impl SessionState {
     }
 
     fn set_failure(&self, message: String) {
+        self.network_policy_decisions_cancelled.cancel();
         let mut ordered_events = self
             .ordered_events
             .lock()
@@ -1123,6 +1131,7 @@ impl Inner {
         let mut next_sessions = sessions.as_ref().clone();
         next_sessions.remove(process_id);
         self.sessions.store(Arc::new(next_sessions));
+        expected.network_policy_decisions_cancelled.cancel();
     }
 
     fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
@@ -1233,15 +1242,29 @@ async fn handle_server_notification(
         NETWORK_POLICY_REQUEST_METHOD => {
             let params: NetworkPolicyRequestNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let decider = inner
-                .get_session(&params.process_id)
-                .and_then(|session| session.network_policy_decider.clone());
+            let (decider, cancellation) = inner.get_session(&params.process_id).map_or_else(
+                || (None, CancellationToken::new()),
+                |session| {
+                    (
+                        session.network_policy_decider.clone(),
+                        session.network_policy_decisions_cancelled.clone(),
+                    )
+                },
+            );
             let inner = Arc::clone(inner);
             tokio::spawn(async move {
-                let decision = match decider {
-                    Some(decider) => decider.decide(params.request).await,
-                    None => NetworkDecision::deny("not_allowed"),
+                let decision = tokio::select! {
+                    _ = cancellation.cancelled() => return,
+                    decision = timeout(NETWORK_POLICY_DECISION_TIMEOUT, async {
+                        match decider {
+                            Some(decider) => decider.decide(params.request).await,
+                            None => NetworkDecision::deny("not_allowed"),
+                        }
+                    }) => decision.unwrap_or_else(|_| NetworkDecision::deny("not_allowed")),
                 };
+                if cancellation.is_cancelled() {
+                    return;
+                }
                 let response = NetworkPolicyDecisionNotification {
                     request_id: params.request_id,
                     process_id: params.process_id,

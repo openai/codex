@@ -79,7 +79,7 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         ENVIRONMENT_INFO_METHOD,
         |handler: Arc<ExecServerHandler>, _params: ()| async move { handler.environment_info() },
     );
-    router.request(
+    router.concurrent_request(
         EXEC_READ_METHOD,
         |handler: Arc<ExecServerHandler>, params: ReadParams| async move {
             handler.exec_read(params).await

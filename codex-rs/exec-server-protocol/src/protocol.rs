@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
@@ -28,6 +29,7 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const NETWORK_POLICY_REQUEST_METHOD: &str = "network/policyRequest";
 pub const NETWORK_POLICY_DECISION_METHOD: &str = "network/policyDecision";
+pub const NETWORK_POLICY_DECISION_TIMEOUT: Duration = Duration::from_secs(30);
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_OPEN_METHOD: &str = "fs/open";

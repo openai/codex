@@ -257,10 +257,9 @@ impl LocalProcess {
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
         let network_policy_decider = params
-            .managed_network
+            .network_proxy
             .as_ref()
-            .and_then(|context| context.proxy_config.as_ref())
-            .is_some_and(|config| config.request_policy_decisions)
+            .is_some_and(|launch| launch.proxy.request_policy_decisions)
             .then(|| {
                 self.inner
                     .network_policy_decisions
@@ -661,6 +660,18 @@ impl LocalProcess {
 impl ExecBackend for LocalProcess {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_> {
         Box::pin(LocalProcess::start(self, params))
+    }
+
+    fn start_with_network_policy_decider(
+        &self,
+        _params: ExecParams,
+        _decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider>,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(async {
+            Err(ExecServerError::Protocol(
+                "local exec backend does not accept a remote network policy decider".to_string(),
+            ))
+        })
     }
 }
 

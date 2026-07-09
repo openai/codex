@@ -323,6 +323,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             req.network.as_ref(),
             launch_sandbox_permissions,
         ));
+        let network_policy_decider = environment_is_remote
+            .then(|| managed_network.and_then(NetworkProxy::remote_policy_decider))
+            .flatten();
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         let (env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
@@ -484,6 +487,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 attempt,
                 managed_network,
                 network_proxy_launch,
+                network_policy_decider,
                 /*environment_id*/ Some(&req.turn_environment.environment_id),
                 req.exec_server_env_config.clone(),
                 req.tty,

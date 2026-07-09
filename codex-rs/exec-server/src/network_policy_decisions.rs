@@ -2,30 +2,66 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::Duration;
 
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::ProcessId;
+use crate::protocol::NETWORK_POLICY_DECISION_TIMEOUT;
 use crate::protocol::NETWORK_POLICY_REQUEST_METHOD;
 use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::NetworkPolicyRequestNotification;
 use crate::rpc::RpcNotificationSender;
 
-#[derive(Default)]
 pub(crate) struct NetworkPolicyDecisionRelay {
     pending: Mutex<HashMap<String, PendingNetworkPolicyDecision>>,
+    decision_timeout: Duration,
+    max_pending: usize,
 }
+
+const MAX_PENDING_NETWORK_POLICY_DECISIONS: usize = 256;
 
 struct PendingNetworkPolicyDecision {
     process_id: ProcessId,
     response_tx: oneshot::Sender<NetworkDecision>,
 }
 
+struct PendingNetworkPolicyDecisionGuard<'a> {
+    relay: &'a NetworkPolicyDecisionRelay,
+    request_id: String,
+}
+
+impl Drop for PendingNetworkPolicyDecisionGuard<'_> {
+    fn drop(&mut self) {
+        self.relay.fail(&self.request_id);
+    }
+}
+
+impl Default for NetworkPolicyDecisionRelay {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            decision_timeout: NETWORK_POLICY_DECISION_TIMEOUT,
+            max_pending: MAX_PENDING_NETWORK_POLICY_DECISIONS,
+        }
+    }
+}
+
 impl NetworkPolicyDecisionRelay {
+    #[cfg(test)]
+    fn with_limits(decision_timeout: Duration, max_pending: usize) -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            decision_timeout,
+            max_pending,
+        }
+    }
+
     pub(crate) fn decider(
         self: &Arc<Self>,
         process_id: ProcessId,
@@ -78,16 +114,26 @@ impl NetworkPolicyDecisionRelay {
     ) -> NetworkDecision {
         let request_id = Uuid::new_v4().to_string();
         let (response_tx, response_rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
+        {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending.len() >= self.max_pending {
+                return NetworkDecision::deny("not_allowed");
+            }
+            pending.insert(
                 request_id.clone(),
                 PendingNetworkPolicyDecision {
                     process_id: process_id.clone(),
                     response_tx,
                 },
             );
+        }
+        let _pending = PendingNetworkPolicyDecisionGuard {
+            relay: self,
+            request_id: request_id.clone(),
+        };
         let notification = NetworkPolicyRequestNotification {
             request_id: request_id.clone(),
             process_id,
@@ -98,20 +144,19 @@ impl NetworkPolicyDecisionRelay {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
         else {
-            self.fail(&request_id);
             return NetworkDecision::deny("not_allowed");
         };
-        if notifications
-            .notify(NETWORK_POLICY_REQUEST_METHOD, &notification)
-            .await
-            .is_err()
-        {
-            self.fail(&request_id);
-            return NetworkDecision::deny("not_allowed");
-        }
-        response_rx
-            .await
-            .unwrap_or_else(|_| NetworkDecision::deny("not_allowed"))
+        timeout(self.decision_timeout, async {
+            notifications
+                .notify(NETWORK_POLICY_REQUEST_METHOD, &notification)
+                .await
+                .ok()?;
+            response_rx.await.ok()
+        })
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| NetworkDecision::deny("not_allowed"))
     }
 
     fn fail(&self, request_id: &str) {

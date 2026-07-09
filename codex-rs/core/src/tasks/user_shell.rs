@@ -232,6 +232,7 @@ pub(crate) async fn execute_user_shell_command(
         exec_server_enforce_managed_network: false,
         exec_server_managed_network: None,
         exec_server_network_proxy: None,
+        network_policy_decider: None,
     };
 
     let stdout_stream = Some(StdoutStream {

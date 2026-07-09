@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -115,6 +116,7 @@ impl RpcNotificationSender {
 
 pub(crate) struct RpcRouter<S> {
     request_routes: HashMap<&'static str, RequestRoute<S>>,
+    concurrent_request_routes: HashSet<&'static str>,
     notification_routes: HashMap<&'static str, NotificationRoute<S>>,
 }
 
@@ -122,6 +124,7 @@ impl<S> Default for RpcRouter<S> {
     fn default() -> Self {
         Self {
             request_routes: HashMap::new(),
+            concurrent_request_routes: HashSet::new(),
             notification_routes: HashMap::new(),
         }
     }
@@ -199,6 +202,17 @@ where
         );
     }
 
+    pub(crate) fn concurrent_request<P, R, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        R: Serialize + Send + 'static,
+        F: Fn(Arc<S>, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request(method, handler);
+        self.concurrent_request_routes.insert(method);
+    }
+
     pub(crate) fn notification<P, F, Fut>(&mut self, method: &'static str, handler: F)
     where
         P: DeserializeOwned + Send + 'static,
@@ -225,6 +239,10 @@ where
         self.request_routes
             .get_key_value(method)
             .map(|(&method, route)| (method, route))
+    }
+
+    pub(crate) fn request_runs_concurrently(&self, method: &str) -> bool {
+        self.concurrent_request_routes.contains(method)
     }
 
     pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {

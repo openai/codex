@@ -62,6 +62,25 @@ fn network_policy_relay() -> (
     )
 }
 
+fn bounded_network_policy_relay(
+    decision_timeout: Duration,
+    max_pending: usize,
+) -> (
+    Arc<NetworkPolicyDecisionRelay>,
+    Arc<RwLock<Option<RpcNotificationSender>>>,
+    mpsc::Receiver<RpcServerOutboundMessage>,
+) {
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+    (
+        Arc::new(NetworkPolicyDecisionRelay::with_limits(
+            decision_timeout,
+            max_pending,
+        )),
+        Arc::new(RwLock::new(Some(RpcNotificationSender::new(outgoing_tx)))),
+        outgoing_rx,
+    )
+}
+
 fn request_decision(
     relay: &Arc<NetworkPolicyDecisionRelay>,
     notifications: &Arc<RwLock<Option<RpcNotificationSender>>>,
@@ -195,4 +214,117 @@ async fn process_exit_fails_only_its_decisions() {
         })
         .expect("resolve remaining process decision");
     assert_eq!(await_decision(decision_b).await, NetworkDecision::Allow);
+}
+
+#[tokio::test]
+async fn pending_decisions_are_capacity_bounded() {
+    let (relay, notifications, mut outgoing_rx) =
+        bounded_network_policy_relay(Duration::from_secs(1), /*max_pending*/ 1);
+    let process_id = ProcessId::from("network-decision-capacity");
+    let first = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "first.example.com",
+    );
+    let first_request = next_network_policy_request(&mut outgoing_rx).await;
+
+    let second = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "second.example.com",
+    );
+    assert_eq!(
+        await_decision(second).await,
+        NetworkDecision::deny("not_allowed")
+    );
+    assert!(
+        timeout(Duration::from_millis(20), outgoing_rx.recv())
+            .await
+            .is_err(),
+        "a rejected request must not emit a notification"
+    );
+
+    relay
+        .resolve(NetworkPolicyDecisionNotification {
+            request_id: first_request.request_id,
+            process_id,
+            decision: NetworkDecision::Allow,
+        })
+        .expect("resolve first network policy decision");
+    assert_eq!(await_decision(first).await, NetworkDecision::Allow);
+}
+
+#[tokio::test]
+async fn pending_decisions_time_out_and_release_capacity() {
+    let (relay, notifications, mut outgoing_rx) =
+        bounded_network_policy_relay(Duration::from_millis(20), /*max_pending*/ 1);
+    let process_id = ProcessId::from("network-decision-timeout");
+    let timed_out = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "timeout.example.com",
+    );
+    let timed_out_request = next_network_policy_request(&mut outgoing_rx).await;
+    assert_eq!(
+        await_decision(timed_out).await,
+        NetworkDecision::deny("not_allowed")
+    );
+    relay
+        .resolve(NetworkPolicyDecisionNotification {
+            request_id: timed_out_request.request_id,
+            process_id: process_id.clone(),
+            decision: NetworkDecision::Allow,
+        })
+        .expect("late decisions are ignored");
+
+    let next = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "next.example.com",
+    );
+    let next_request = next_network_policy_request(&mut outgoing_rx).await;
+    relay
+        .resolve(NetworkPolicyDecisionNotification {
+            request_id: next_request.request_id,
+            process_id,
+            decision: NetworkDecision::Allow,
+        })
+        .expect("resolve next network policy decision");
+    assert_eq!(await_decision(next).await, NetworkDecision::Allow);
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_decision_releases_capacity() {
+    let (relay, notifications, mut outgoing_rx) =
+        bounded_network_policy_relay(Duration::from_secs(1), /*max_pending*/ 1);
+    let process_id = ProcessId::from("network-decision-cancelled");
+    let cancelled = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "cancelled.example.com",
+    );
+    next_network_policy_request(&mut outgoing_rx).await;
+    cancelled.abort();
+    let _ = cancelled.await;
+
+    let next = request_decision(
+        &relay,
+        &notifications,
+        process_id.clone(),
+        "next.example.com",
+    );
+    let next_request = next_network_policy_request(&mut outgoing_rx).await;
+    relay
+        .resolve(NetworkPolicyDecisionNotification {
+            request_id: next_request.request_id,
+            process_id,
+            decision: NetworkDecision::Allow,
+        })
+        .expect("resolve next network policy decision");
+    assert_eq!(await_decision(next).await, NetworkDecision::Allow);
 }
