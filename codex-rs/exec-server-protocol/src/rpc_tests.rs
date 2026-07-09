@@ -61,6 +61,19 @@ fn accepts_large_scalar_payload() -> serde_json::Result<()> {
 }
 
 #[test]
+fn rejects_duplicate_object_keys() {
+    let error = serde_json::from_str::<JSONRPCMessage>(r#"{"method":"safe","method":"dangerous"}"#)
+        .expect_err("duplicate JSON object keys should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate JSON object key `method`"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn rejects_compact_array_heap_amplification() {
     const REPRO_VALUE_COUNT: usize = 2_097_137;
     const REPRO_MESSAGE_BYTES: usize = 4_194_303;

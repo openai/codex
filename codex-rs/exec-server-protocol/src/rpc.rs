@@ -184,6 +184,11 @@ impl<'de> Visitor<'de> for BoundedValueVisitor<'_> {
     {
         let mut values = Map::new();
         while let Some(key) = object.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key `{key}`"
+                )));
+            }
             let value = object.next_value_seed(BoundedValueSeed {
                 remaining: &mut *self.remaining,
             })?;
