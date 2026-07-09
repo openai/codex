@@ -45,6 +45,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -1256,11 +1257,14 @@ async fn thread_start_does_not_wait_for_optional_http_mcp_auth_discovery() -> Re
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let mcp_addr = listener.local_addr()?;
+    let (connection_started_tx, connection_started_rx) = oneshot::channel();
     let blackhole_server = tokio::spawn(async move {
-        let mut connections = Vec::new();
-        while let Ok((connection, _)) = listener.accept().await {
-            connections.push(connection);
-        }
+        let Ok((connection, _)) = listener.accept().await else {
+            return;
+        };
+        let _ = connection_started_tx.send(());
+        let _connection = connection;
+        std::future::pending::<()>().await;
     });
 
     let codex_home = TempDir::new()?;
@@ -1280,16 +1284,20 @@ async fn thread_start_does_not_wait_for_optional_http_mcp_auth_discovery() -> Re
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        std::time::Duration::from_secs(3),
+    timeout(DEFAULT_READ_TIMEOUT, connection_started_rx)
+        .await
+        .context("optional HTTP MCP never attempted a connection")??;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await
-    .context("thread/start waited for optional HTTP MCP auth discovery")??;
+    .context("thread/start waited for optional HTTP MCP auth discovery");
+    blackhole_server.abort();
+    let response: JSONRPCResponse = response??;
     let response: ThreadStartResponse = to_response(response)?;
 
     assert!(!response.thread.id.is_empty());
-    blackhole_server.abort();
     Ok(())
 }
 
