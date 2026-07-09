@@ -30,6 +30,8 @@ use tokio::io::BufReader;
 use tokio::io::BufWriter;
 
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
+// Match the existing serialized JSON-RPC message ceiling used by Noise and
+// WebSocket transports so stdio has the same per-message bound.
 const MAX_STDIO_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
 const STDIO_TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 #[cfg(test)]
