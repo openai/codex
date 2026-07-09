@@ -992,6 +992,23 @@ async fn patch_activity_prevents_cancelled_turn_prompt_restore() {
 }
 
 #[tokio::test]
+async fn ctrl_c_interrupts_turn_pending_start_instead_of_quitting() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.submit_user_message(UserMessage::from("commit"));
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+    assert!(chat.input_queue.user_turn_pending_start);
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AppEvent::Exit(_)));
+    }
+}
+
+#[tokio::test]
 async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);

@@ -480,9 +480,10 @@ impl ChatWidget {
         self.bottom_pane.show_quit_shortcut_hint(key);
     }
 
-    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    // A submitted turn waiting for TurnStarted is cancellable too; otherwise an immediate Ctrl+C
+    // is misclassified as an idle quit.
     fn is_cancellable_work_active(&self) -> bool {
-        self.bottom_pane.is_task_running() || self.review.is_review_mode
+        self.is_user_turn_pending_or_running() || self.review.is_review_mode
     }
 
     fn pause_active_goal_for_interrupt(&self) {
