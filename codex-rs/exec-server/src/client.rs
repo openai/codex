@@ -645,6 +645,17 @@ impl ExecServerClient {
         self.call(FS_COPY_METHOD, &params).await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.client.process.start",
+        level = "info",
+        skip_all,
+        fields(
+            otel.name = "codex.exec_server.client.process.start",
+            otel.kind = "internal",
+            codex.crate = "codex_exec_server",
+            codex.boundary = "client_process_start",
+        )
+    )]
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,

@@ -405,6 +405,17 @@ impl UnifiedExecProcessManager {
         }
     }
 
+    #[tracing::instrument(
+        name = "codex.core.unified_exec.exec_command",
+        level = "info",
+        skip_all,
+        fields(
+            otel.name = "codex.core.unified_exec.exec_command",
+            otel.kind = "internal",
+            codex.crate = "codex_core",
+            codex.boundary = "exec_command",
+        )
+    )]
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
