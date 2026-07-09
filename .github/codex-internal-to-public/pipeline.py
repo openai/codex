@@ -637,16 +637,16 @@ def read_metadata(path: Path) -> PublishMetadata:
 
 
 def fetch_branch(branch: str) -> None:
-    result = run(
+    args = ["git", "fetch", "--no-tags"]
+    if output(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        args.append("--unshallow")
+    args.extend(
         [
-            "git",
-            "fetch",
-            "--no-tags",
             "origin",
             f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
-        ],
-        check=False,
+        ]
     )
+    result = run(args, check=False)
     if result.returncode != 0:
         raise RuntimeError(
             f"Unable to fetch {branch}. If it has not been created yet, follow the "

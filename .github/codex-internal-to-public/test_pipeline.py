@@ -29,8 +29,9 @@ class PipelineIntegrationTest(unittest.TestCase):
             fixture = create_repository_fixture(root)
             runner_temp = root / "runner-temp"
             runner_temp.mkdir()
+            prepare_repo = shallow_clone(fixture.repo, root / "prepare-repo")
 
-            run_pipeline(fixture.repo, runner_temp, "prepare")
+            run_pipeline(prepare_repo, runner_temp, "prepare")
 
             metadata = (runner_temp / "publish-metadata.json").read_text(
                 encoding="utf-8"
@@ -40,7 +41,8 @@ class PipelineIntegrationTest(unittest.TestCase):
             (runner_temp / "public-commit-message.md").write_text(
                 "Describe the public change\n\nPublic details.\n", encoding="utf-8"
             )
-            run_pipeline(fixture.repo, runner_temp, "publish")
+            publish_repo = shallow_clone(fixture.repo, root / "publish-repo")
+            run_pipeline(publish_repo, runner_temp, "publish")
 
             fetch_ready(fixture.repo)
             ready = git_output(
@@ -808,6 +810,28 @@ def fetch_ready(repo: Path) -> None:
         "origin",
         f"+refs/heads/{pipeline.READY_BRANCH}:refs/remotes/origin/{pipeline.READY_BRANCH}",
     )
+
+
+def shallow_clone(source_repo: Path, destination: Path) -> Path:
+    remote = Path(git_output(source_repo, "remote", "get-url", "origin")).resolve()
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--branch",
+            pipeline.CANDIDATE_BRANCH,
+            "--depth=1",
+            remote.as_uri(),
+            destination.as_posix(),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    is_shallow = git_output(destination, "rev-parse", "--is-shallow-repository")
+    if is_shallow != "true":
+        raise RuntimeError(f"expected a shallow test clone, got {is_shallow}")
+    return destination
 
 
 def git_path_exists(repo: Path, revision: str, path: Path) -> bool:
