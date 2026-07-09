@@ -1053,7 +1053,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
                 id: ctx.call_id.to_string(),
                 command: Vec::new(),
                 #[allow(deprecated)]
-                cwd: ctx.turn.cwd.clone(),
+                cwd: PathUri::from_abs_path(&ctx.turn.cwd),
                 sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: None,

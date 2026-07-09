@@ -8,6 +8,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::flat_tool_name;
@@ -18,10 +19,90 @@ use crate::tools::sandboxing::ToolRuntime;
 use codex_config::types::ApprovalsReviewer;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_path_uri::PathUri;
 
-pub(super) type ApprovalAction = crate::guardian::GuardianApprovalRequest;
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ApprovalAction {
+    Shell {
+        id: String,
+        command: Vec<String>,
+        cwd: PathUri,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+        justification: Option<String>,
+    },
+    ExecCommand {
+        id: String,
+        command: Vec<String>,
+        cwd: PathUri,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+        justification: Option<String>,
+        tty: bool,
+    },
+    ApplyPatch {
+        id: String,
+        cwd: PathUri,
+        files: Vec<PathUri>,
+        patch: String,
+    },
+}
+
+impl ApprovalAction {
+    fn into_guardian_request(self) -> std::io::Result<crate::guardian::GuardianApprovalRequest> {
+        Ok(match self {
+            Self::Shell {
+                id,
+                command,
+                cwd,
+                sandbox_permissions,
+                additional_permissions,
+                justification,
+            } => crate::guardian::GuardianApprovalRequest::Shell {
+                id,
+                command,
+                cwd: cwd.to_abs_path()?,
+                sandbox_permissions,
+                additional_permissions,
+                justification,
+            },
+            Self::ExecCommand {
+                id,
+                command,
+                cwd,
+                sandbox_permissions,
+                additional_permissions,
+                justification,
+                tty,
+            } => crate::guardian::GuardianApprovalRequest::ExecCommand {
+                id,
+                command,
+                cwd: cwd.to_abs_path()?,
+                sandbox_permissions,
+                additional_permissions,
+                justification,
+                tty,
+            },
+            Self::ApplyPatch {
+                id,
+                cwd,
+                files,
+                patch,
+            } => crate::guardian::GuardianApprovalRequest::ApplyPatch {
+                id,
+                cwd: cwd.to_abs_path()?,
+                files: files
+                    .into_iter()
+                    .map(|path| path.to_abs_path())
+                    .collect::<std::io::Result<Vec<_>>>()?,
+                patch,
+            },
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ApprovalReviewer {
@@ -113,7 +194,10 @@ where
     let resolution = match reviewer {
         ApprovalReviewer::Guardian => {
             let review_id = new_guardian_review_id();
-            let action = match tool.approval_action(req, &ctx) {
+            let action = match tool
+                .approval_action(req, &ctx)
+                .and_then(ApprovalAction::into_guardian_request)
+            {
                 Ok(action) => action,
                 Err(err) => {
                     tracing::error!(%err, "failed to build automatic approval action");

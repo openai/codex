@@ -224,7 +224,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Ok(ApprovalAction::ExecCommand {
             id: ctx.call_id.to_string(),
             command: req.command.clone(),
-            cwd: req.cwd.to_abs_path()?,
+            cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
             justification: req.justification.clone(),
