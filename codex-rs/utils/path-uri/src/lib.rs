@@ -263,22 +263,48 @@ impl PathUri {
         if self.0.host_str() != base.0.host_str() {
             return false;
         }
-
-        let Some(path_segments) = containment_path_segments(
-            &self.0,
-            self.infer_path_convention()
-                .unwrap_or(PathConvention::Posix),
-        ) else {
+        let Some(convention) = self.infer_path_convention() else {
             return false;
         };
-        let Some(base_segments) = containment_path_segments(
-            &base.0,
-            base.infer_path_convention()
-                .unwrap_or(PathConvention::Posix),
-        ) else {
+        if base.infer_path_convention() != Some(convention) {
+            return false;
+        }
+
+        let Some(path_segments) = containment_path_segments(&self.0, convention) else {
+            return false;
+        };
+        let Some(base_segments) = containment_path_segments(&base.0, convention) else {
             return false;
         };
         path_segments.starts_with(&base_segments)
+    }
+
+    /// Returns this path relative to `base` using `/` as the separator.
+    ///
+    /// Both paths are compared lexically in URI space, without consulting the
+    /// host filesystem. `None` is returned when the paths use different native
+    /// conventions or authorities, when this path is outside `base`, or when an
+    /// encoded native separator makes containment ambiguous.
+    pub fn relative_path_from(&self, base: &Self) -> Option<String> {
+        if self == base {
+            return Some(String::new());
+        }
+
+        let convention = self.infer_path_convention()?;
+        if base.infer_path_convention()? != convention || self.0.host_str() != base.0.host_str() {
+            return None;
+        }
+
+        let path_segments = containment_path_segments(&self.0, convention)?;
+        let base_segments = containment_path_segments(&base.0, convention)?;
+        let relative_segments = path_segments.strip_prefix(base_segments.as_slice())?;
+        Some(
+            relative_segments
+                .iter()
+                .map(|segment| decode_uri_path(segment))
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
     }
 
     /// Lexically resolves native absolute or relative path text against this URI.

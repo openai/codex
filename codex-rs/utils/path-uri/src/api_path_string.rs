@@ -30,7 +30,7 @@ use ts_rs::TS;
 /// `String` and is instead encouraged to convert through [`PathUri`] or
 /// [`AbsolutePathBuf`]. Relative path text remains valid until an operation
 /// such as [`Self::to_path_uri`] requires an absolute path.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
 pub struct LegacyAppPathString(String);
@@ -74,6 +74,28 @@ impl LegacyAppPathString {
         convention: PathConvention,
     ) -> Result<PathUri, LegacyAppPathStringError> {
         PathUri::from_absolute_native_path(&self.0, convention).ok_or_else(|| {
+            LegacyAppPathStringError::InvalidNativePath {
+                path: self.0.clone(),
+                convention: Some(convention),
+            }
+        })
+    }
+
+    /// Parses this API string as an absolute path native to the current host.
+    ///
+    /// Host-specific path namespaces are normalized before the path is converted
+    /// to a URI. Relative and foreign-platform paths are rejected.
+    pub fn to_host_path_uri(&self) -> Result<PathUri, LegacyAppPathStringError> {
+        self.to_path_uri(PathConvention::native())
+    }
+
+    /// Parses this API string as an absolute path native to the current host.
+    ///
+    /// Host-specific path namespaces are normalized. Relative and
+    /// foreign-platform paths are rejected.
+    pub fn to_host_abs_path(&self) -> Result<AbsolutePathBuf, LegacyAppPathStringError> {
+        let convention = PathConvention::native();
+        self.to_path_uri(convention)?.to_abs_path().map_err(|_| {
             LegacyAppPathStringError::InvalidNativePath {
                 path: self.0.clone(),
                 convention: Some(convention),
