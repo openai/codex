@@ -1,5 +1,6 @@
 mod app_mcp_routing;
 mod discoverable;
+mod hook_trust;
 pub mod installed_marketplaces;
 pub mod loader;
 mod manager;
@@ -39,6 +40,10 @@ pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpSe
 pub use app_mcp_routing::apps_route_available;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
+pub use hook_trust::PluginHookTrustError;
+pub use hook_trust::installed_plugin_hook_trust_entries;
+pub use hook_trust::installed_plugin_hook_trust_is_current;
+pub use hook_trust::trust_installed_plugin_hooks;
 pub use loader::PluginHookLoadOutcome;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;

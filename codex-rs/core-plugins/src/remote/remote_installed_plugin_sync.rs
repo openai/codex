@@ -10,9 +10,14 @@ use super::RemotePluginServiceConfig;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins_for_scope_with_download_url;
 use super::remote_plugin_canonical_marketplace_name;
+use super::remote_plugin_hooks_are_auto_trusted;
+use crate::hook_trust::selected_user_config_path;
+use crate::installed_plugin_hook_trust_entries;
+use crate::installed_plugin_hook_trust_is_current;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
+use codex_config::ConfigLayerStack;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
 use std::collections::BTreeMap;
@@ -38,6 +43,8 @@ static REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT: OnceLock<
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RemoteInstalledPluginBundleSyncOutcome {
     pub installed_plugin_ids: Vec<String>,
+    pub trusted_hook_plugin_ids: Vec<String>,
+    pub reinstalled_for_hook_trust_plugin_ids: Vec<String>,
     pub removed_cache_plugin_ids: Vec<String>,
     pub failed_remote_plugin_ids: Vec<String>,
 }
@@ -45,6 +52,10 @@ pub struct RemoteInstalledPluginBundleSyncOutcome {
 impl RemoteInstalledPluginBundleSyncOutcome {
     pub fn changed_local_cache(&self) -> bool {
         !self.installed_plugin_ids.is_empty() || !self.removed_cache_plugin_ids.is_empty()
+    }
+
+    pub fn changed_effective_plugins(&self) -> bool {
+        self.changed_local_cache() || !self.trusted_hook_plugin_ids.is_empty()
     }
 }
 
@@ -82,6 +93,7 @@ pub struct RemotePluginCacheMutationGuard {
 pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
+    config_layer_stack: ConfigLayerStack,
     auth: Option<CodexAuth>,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
@@ -96,17 +108,24 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     }
 
     tokio::spawn(async move {
-        let result =
-            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
+        let result = sync_remote_installed_plugin_bundles_once_with_hook_trust(
+            codex_home,
+            &config,
+            Some(&auth),
+            Some(&config_layer_stack),
+        )
+        .await;
         match result {
             Ok(outcome) => {
-                if outcome.changed_local_cache()
+                if outcome.changed_effective_plugins()
                     && let Some(on_local_cache_changed) = on_local_cache_changed
                 {
                     on_local_cache_changed();
                 }
                 info!(
                     installed_plugin_ids = ?outcome.installed_plugin_ids,
+                    trusted_hook_plugin_ids = ?outcome.trusted_hook_plugin_ids,
+                    reinstalled_for_hook_trust_plugin_ids = ?outcome.reinstalled_for_hook_trust_plugin_ids,
                     removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
                     failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
                     "completed remote installed plugin bundle sync"
@@ -127,6 +146,18 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     codex_home: PathBuf,
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
+    sync_remote_installed_plugin_bundles_once_with_hook_trust(
+        codex_home, config, auth, /*config_layer_stack*/ None,
+    )
+    .await
+}
+
+async fn sync_remote_installed_plugin_bundles_once_with_hook_trust(
+    codex_home: PathBuf,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    config_layer_stack: Option<&ConfigLayerStack>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let global = async {
@@ -181,11 +212,26 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             ),
         ]);
     let mut installed_plugin_ids = BTreeSet::new();
+    let mut trusted_hook_plugin_ids = BTreeSet::new();
+    let mut reinstalled_for_hook_trust_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
+    let mut pending_trust_updates = BTreeMap::<String, String>::new();
+    let mut pending_trust_remote_plugin_ids = BTreeSet::new();
+    let mut pending_trust_local_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in [global, workspace, user] {
+    for (scope, installed_plugins) in [global, workspace, user] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
+            if plugin.scope != scope {
+                warn!(
+                    remote_plugin_id = %plugin.id,
+                    requested_scope = ?scope,
+                    returned_scope = ?plugin.scope,
+                    "skipping remote installed plugin returned for the wrong scope"
+                );
+                failed_remote_plugin_ids.insert(plugin.id);
+                continue;
+            }
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
             installed_plugin_names_by_marketplace
                 .entry(marketplace_name.clone())
@@ -211,7 +257,12 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 .as_deref()
                 .map(str::trim)
                 .filter(|version| !version.is_empty());
-            if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+            let auto_trust_hooks =
+                config_layer_stack.is_some() && remote_plugin_hooks_are_auto_trusted(&plugin);
+            let same_version =
+                store.active_plugin_version(&plugin_id).as_deref() == release_version;
+            let mut reinstall_for_hook_trust = false;
+            if same_version {
                 if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
                     warn!(
                         remote_plugin_id = %plugin.id,
@@ -221,8 +272,42 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                         "failed to persist identity for cached remote installed plugin"
                     );
                     failed_remote_plugin_ids.insert(plugin.id);
+                    continue;
                 }
-                continue;
+                if auto_trust_hooks
+                    && let (Some(config_layer_stack), Some(installed_path)) =
+                        (config_layer_stack, store.active_plugin_root(&plugin_id))
+                {
+                    match installed_plugin_hook_trust_entries(
+                        codex_home.as_path(),
+                        &plugin_id,
+                        &installed_path,
+                    ) {
+                        Ok(entries)
+                            if installed_plugin_hook_trust_is_current(
+                                config_layer_stack,
+                                &entries,
+                            ) =>
+                        {
+                            continue;
+                        }
+                        Ok(_) => {
+                            reinstall_for_hook_trust = true;
+                        }
+                        Err(err) => {
+                            warn!(
+                                remote_plugin_id = %plugin.id,
+                                plugin = %plugin.name,
+                                marketplace = %marketplace_name,
+                                error = %err,
+                                "reinstalling remote plugin whose cached hooks could not be verified"
+                            );
+                            reinstall_for_hook_trust = true;
+                        }
+                    }
+                } else {
+                    continue;
+                }
             }
 
             let bundle = match crate::remote_bundle::validate_remote_plugin_bundle(
@@ -254,7 +339,36 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             .await
             {
                 Ok(result) => {
-                    installed_plugin_ids.insert(result.plugin_id.as_key());
+                    let local_plugin_id = result.plugin_id.as_key();
+                    installed_plugin_ids.insert(local_plugin_id.clone());
+                    if reinstall_for_hook_trust {
+                        reinstalled_for_hook_trust_plugin_ids.insert(local_plugin_id.clone());
+                    }
+                    if auto_trust_hooks {
+                        match installed_plugin_hook_trust_entries(
+                            codex_home.as_path(),
+                            &result.plugin_id,
+                            &result.installed_path,
+                        ) {
+                            Ok(entries) => {
+                                for entry in entries {
+                                    pending_trust_updates.insert(entry.key, entry.current_hash);
+                                }
+                                pending_trust_remote_plugin_ids.insert(plugin.id.clone());
+                                pending_trust_local_plugin_ids.insert(local_plugin_id);
+                            }
+                            Err(err) => {
+                                warn!(
+                                    remote_plugin_id = %plugin.id,
+                                    plugin = %plugin.name,
+                                    marketplace = %marketplace_name,
+                                    error = %err,
+                                    "failed to discover freshly installed remote plugin hooks for automatic trust"
+                                );
+                                failed_remote_plugin_ids.insert(plugin.id.clone());
+                            }
+                        }
+                    }
                 }
                 Err(err) => {
                     warn!(
@@ -270,17 +384,46 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         }
     }
 
+    let codex_home_for_cleanup = codex_home.clone();
     let removed_cache_plugin_ids = tokio::task::spawn_blocking(move || {
         remove_stale_remote_plugin_caches(
-            codex_home.as_path(),
+            codex_home_for_cleanup.as_path(),
             &installed_plugin_names_by_marketplace,
         )
     })
     .await?
     .map_err(RemoteInstalledPluginBundleSyncError::CacheRemove)?;
 
+    if !pending_trust_updates.is_empty() {
+        if let Some(config_layer_stack) = config_layer_stack {
+            let config_path = selected_user_config_path(codex_home.as_path(), config_layer_stack);
+            match codex_config::upsert_hook_trusted_hashes(
+                config_path.as_path(),
+                pending_trust_updates.into_iter().collect(),
+            )
+            .await
+            {
+                Ok(()) => trusted_hook_plugin_ids.extend(pending_trust_local_plugin_ids),
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "failed to persist automatic trust for remote plugin hooks"
+                    );
+                    failed_remote_plugin_ids.extend(pending_trust_remote_plugin_ids);
+                }
+            }
+        } else {
+            warn!("automatic hook trust updates had no user config layer stack");
+            failed_remote_plugin_ids.extend(pending_trust_remote_plugin_ids);
+        }
+    }
+
     Ok(RemoteInstalledPluginBundleSyncOutcome {
         installed_plugin_ids: installed_plugin_ids.into_iter().collect(),
+        trusted_hook_plugin_ids: trusted_hook_plugin_ids.into_iter().collect(),
+        reinstalled_for_hook_trust_plugin_ids: reinstalled_for_hook_trust_plugin_ids
+            .into_iter()
+            .collect(),
         removed_cache_plugin_ids,
         failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
     })

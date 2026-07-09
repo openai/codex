@@ -209,6 +209,9 @@ pub struct RemotePluginDetail {
     pub app_ids: Vec<String>,
     pub app_templates: Vec<RemoteAppTemplate>,
     pub mcp_servers: Vec<String>,
+    /// Whether Codex may write ordinary user hook trust for this authenticated
+    /// remote plugin after successfully materializing its bundle.
+    pub auto_trust_hooks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -599,6 +602,16 @@ fn workspace_plugin_discoverability(
             plugin.id
         ))
     })
+}
+
+fn remote_plugin_hooks_are_auto_trusted(plugin: &RemotePluginDirectoryItem) -> bool {
+    match plugin.scope {
+        RemotePluginScope::User => true,
+        RemotePluginScope::Workspace => {
+            plugin.discoverability == Some(RemotePluginShareDiscoverability::Listed)
+        }
+        RemotePluginScope::Global => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1262,6 +1275,7 @@ async fn build_remote_plugin_detail(
     mcp_servers.sort_unstable();
     mcp_servers.dedup();
 
+    let auto_trust_hooks = remote_plugin_hooks_are_auto_trusted(&plugin);
     Ok(RemotePluginDetail {
         marketplace_name,
         marketplace_display_name: scope.marketplace_display_name().to_string(),
@@ -1290,6 +1304,7 @@ async fn build_remote_plugin_detail(
             })
             .collect(),
         mcp_servers,
+        auto_trust_hooks,
     })
 }
 
@@ -1891,7 +1906,14 @@ async fn fetch_plugin_detail(
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
-    send_and_decode(request, &url).await
+    let plugin: RemotePluginDirectoryItem = send_and_decode(request, &url).await?;
+    if plugin.id != plugin_id {
+        return Err(RemotePluginCatalogError::UnexpectedPluginId {
+            expected: plugin_id.to_string(),
+            actual: plugin.id,
+        });
+    }
+    Ok(plugin)
 }
 
 fn remote_plugin_skill_detail_url(

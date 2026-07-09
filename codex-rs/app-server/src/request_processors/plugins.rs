@@ -492,8 +492,26 @@ impl PluginRequestProcessor {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_service().clear_cache();
-            if thread_manager.list_thread_ids().await.is_empty() {
+            let thread_ids = thread_manager.list_thread_ids().await;
+            if thread_ids.is_empty() {
                 return;
+            }
+            match config_manager
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await
+            {
+                Ok(config) => {
+                    for thread_id in thread_ids {
+                        let Ok(thread) = thread_manager.get_thread(thread_id).await else {
+                            continue;
+                        };
+                        thread.refresh_runtime_config(config.clone()).await;
+                    }
+                }
+                Err(err) => warn!(
+                    error = %err,
+                    "failed to reload user config after effective plugins changed"
+                ),
             }
             crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
         });
@@ -1645,6 +1663,54 @@ impl PluginRequestProcessor {
             );
             remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin")
         })?;
+
+        let auto_trust_hooks = if remote_detail.auto_trust_hooks {
+            match codex_core_plugins::remote::fetch_remote_plugin_detail_with_download_urls(
+                &remote_plugin_service_config,
+                auth.as_ref(),
+                &actual_remote_marketplace_name,
+                &remote_plugin_id,
+            )
+            .await
+            {
+                Ok(current_detail) => current_detail.auto_trust_hooks,
+                Err(err) => {
+                    warn!(
+                        remote_plugin_id = %remote_plugin_id,
+                        plugin = %remote_plugin_name,
+                        marketplace = %actual_remote_marketplace_name,
+                        error = %err,
+                        "remote plugin installed, but hook auto-trust eligibility could not be revalidated"
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        if auto_trust_hooks {
+            match codex_core_plugins::trust_installed_plugin_hooks(
+                config.codex_home.as_path(),
+                &config.config_layer_stack,
+                &result.plugin_id,
+                &result.installed_path,
+            )
+            .await
+            {
+                Ok(entries) if !entries.is_empty() => self.on_effective_plugins_changed(),
+                Ok(_) => {}
+                Err(err) => {
+                    warn!(
+                        remote_plugin_id = %remote_plugin_id,
+                        plugin = %remote_plugin_name,
+                        marketplace = %actual_remote_marketplace_name,
+                        error = %err,
+                        "remote plugin installed, but automatic hook trust could not be persisted"
+                    );
+                }
+            }
+        }
 
         self.thread_manager
             .plugins_manager()

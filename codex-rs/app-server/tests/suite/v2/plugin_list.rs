@@ -6,6 +6,8 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::HookTrustStatus;
+use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
@@ -1612,6 +1614,112 @@ async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> 
     assert!(installed_path.join("skills/plan-work/SKILL.md").is_file());
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("linear@openai-curated-remote"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_sync_backfills_listed_workspace_plugin_hook_trust_once() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_installed_plugin_with_hook(
+        &codex_home,
+        "workspace-directory",
+        "linear",
+        "1.2.3",
+        "echo locally modified",
+    )?;
+
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        "linear",
+        remote_plugin_bundle_tar_gz_bytes_with_hook("linear", "echo trusted remote")?,
+    )
+    .await;
+    let mut workspace_installed: serde_json::Value = serde_json::from_str(
+        &remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true),
+    )?;
+    workspace_installed["plugins"][0]["scope"] = serde_json::json!("WORKSPACE");
+    workspace_installed["plugins"][0]["discoverability"] = serde_json::json!("LISTED");
+    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
+    mount_remote_installed_plugins(
+        &server,
+        "WORKSPACE",
+        &serde_json::to_string(&workspace_installed)?,
+    )
+    .await;
+    mount_empty_user_installed_plugins(&server).await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_plugin_startup_tasks()
+        .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    wait_for_config_to_contain(codex_home.path(), "trusted_hash").await?;
+    let installed_hook = codex_home
+        .path()
+        .join("plugins/cache/workspace-directory/linear/1.2.3/hooks/hooks.json");
+    assert!(std::fs::read_to_string(installed_hook)?.contains("echo trusted remote"));
+    wait_for_remote_plugin_request_count(&server, "/bundles/linear.tar.gz", 1).await?;
+
+    let hooks_request_id = mcp
+        .send_raw_request(
+            "hooks/list",
+            Some(serde_json::json!({"cwds": [codex_home.path()]})),
+        )
+        .await?;
+    let hooks: HooksListResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(hooks_request_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(hooks.data.len(), 1);
+    assert_eq!(hooks.data[0].hooks.len(), 1);
+    assert_eq!(
+        hooks.data[0].hooks[0].trust_status,
+        HookTrustStatus::Trusted
+    );
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let _: PluginInstalledResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+    wait_for_remote_installed_scope_request_count(&server, "WORKSPACE", 2).await?;
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path().ends_with("/bundles/linear.tar.gz"))
+            .count(),
+        1,
+        "trusted same-version plugin should not be downloaded again"
+    );
     Ok(())
 }
 
@@ -3786,19 +3894,45 @@ async fn wait_for_remote_plugin_request_count(
 }
 
 async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &str) -> Result<()> {
+    wait_for_remote_installed_scope_request_count(server, scope, 1).await
+}
+
+async fn wait_for_remote_installed_scope_request_count(
+    server: &MockServer,
+    scope: &str,
+    expected_count: usize,
+) -> Result<()> {
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = server.received_requests().await else {
                 bail!("wiremock did not record requests");
             };
-            if requests.iter().any(|request| {
-                request.method == "GET"
-                    && request.url.path().ends_with("/ps/plugins/installed")
-                    && request
-                        .url
-                        .query_pairs()
-                        .any(|(name, value)| name == "scope" && value == scope)
-            }) {
+            let request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "GET"
+                        && request.url.path().ends_with("/ps/plugins/installed")
+                        && request
+                            .url
+                            .query_pairs()
+                            .any(|(name, value)| name == "scope" && value == scope)
+                })
+                .count();
+            if request_count >= expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+async fn wait_for_config_to_contain(codex_home: &std::path::Path, needle: &str) -> Result<()> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let config = std::fs::read_to_string(codex_home.join("config.toml"))?;
+            if config.contains(needle) {
                 return Ok::<(), anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4163,6 +4297,33 @@ fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Result<Vec<u8>> {
     Ok(tar.into_inner()?.finish()?)
 }
 
+fn remote_plugin_bundle_tar_gz_bytes_with_hook(
+    plugin_name: &str,
+    command: &str,
+) -> Result<Vec<u8>> {
+    let manifest = format!(r#"{{"name":"{plugin_name}","hooks":"./hooks/hooks.json"}}"#);
+    let hooks = format!(
+        r#"{{"hooks":{{"PreToolUse":[{{"matcher":"^shell$","hooks":[{{"type":"command","command":"{command}"}}]}}]}}}}"#
+    );
+    let encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    for (path, contents, mode) in [
+        (
+            ".codex-plugin/plugin.json",
+            manifest.as_bytes(),
+            /*mode*/ 0o644,
+        ),
+        ("hooks/hooks.json", hooks.as_bytes(), /*mode*/ 0o644),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(mode);
+        header.set_cksum();
+        tar.append_data(&mut header, path, contents)?;
+    }
+    Ok(tar.into_inner()?.finish()?)
+}
+
 fn write_installed_plugin(
     codex_home: &TempDir,
     marketplace_name: &str,
@@ -4188,6 +4349,34 @@ fn write_installed_plugin_with_version(
     std::fs::write(
         plugin_root.join("plugin.json"),
         format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
+    Ok(())
+}
+
+fn write_installed_plugin_with_hook(
+    codex_home: &TempDir,
+    marketplace_name: &str,
+    plugin_name: &str,
+    plugin_version: &str,
+    command: &str,
+) -> Result<()> {
+    write_installed_plugin_with_version(codex_home, marketplace_name, plugin_name, plugin_version)?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join(plugin_version);
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}","hooks":"./hooks/hooks.json"}}"#),
+    )?;
+    std::fs::create_dir_all(plugin_root.join("hooks"))?;
+    std::fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        format!(
+            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"^shell$","hooks":[{{"type":"command","command":"{command}"}}]}}]}}}}"#
+        ),
     )?;
     Ok(())
 }

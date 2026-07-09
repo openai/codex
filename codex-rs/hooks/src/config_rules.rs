@@ -16,6 +16,31 @@ use codex_config::TomlValue;
 pub fn hook_states_from_stack(
     config_layer_stack: Option<&ConfigLayerStack>,
 ) -> HashMap<String, HookStateToml> {
+    hook_states_from_stack_with_sources(config_layer_stack, |source| {
+        matches!(
+            source,
+            ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
+        )
+    })
+}
+
+/// Build persisted hook state from user config layers only.
+///
+/// Unlike [`hook_states_from_stack`], this excludes ephemeral session-flag
+/// overrides and is suitable for background reconciliation against durable
+/// user preferences.
+pub fn persisted_user_hook_states_from_stack(
+    config_layer_stack: Option<&ConfigLayerStack>,
+) -> HashMap<String, HookStateToml> {
+    hook_states_from_stack_with_sources(config_layer_stack, |source| {
+        matches!(source, ConfigLayerSource::User { .. })
+    })
+}
+
+fn hook_states_from_stack_with_sources(
+    config_layer_stack: Option<&ConfigLayerStack>,
+    include_source: impl Fn(&ConfigLayerSource) -> bool,
+) -> HashMap<String, HookStateToml> {
     let Some(config_layer_stack) = config_layer_stack else {
         return HashMap::new();
     };
@@ -25,10 +50,7 @@ pub fn hook_states_from_stack(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ true,
     ) {
-        if !matches!(
-            layer.name,
-            ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
-        ) {
+        if !include_source(&layer.name) {
             continue;
         }
 
@@ -154,6 +176,52 @@ mod tests {
                 HookStateToml {
                     enabled: Some(false),
                     trusted_hash: Some("sha256:trusted".to_string()),
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn persisted_user_hook_states_excludes_session_flags() {
+        let key = "file:/tmp/hooks.json:pre_tool_use:0:0";
+        let stack = ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: test_path_buf("/tmp/config.toml").abs(),
+                        profile: None,
+                    },
+                    config_with_hook_state(
+                        key,
+                        HookStateToml {
+                            enabled: Some(false),
+                            trusted_hash: Some("sha256:user".to_string()),
+                        },
+                    ),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    config_with_hook_state(
+                        key,
+                        HookStateToml {
+                            enabled: Some(true),
+                            trusted_hash: Some("sha256:session".to_string()),
+                        },
+                    ),
+                ),
+            ],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("config layer stack");
+
+        assert_eq!(
+            persisted_user_hook_states_from_stack(Some(&stack)),
+            HashMap::from([(
+                key.to_string(),
+                HookStateToml {
+                    enabled: Some(false),
+                    trusted_hash: Some("sha256:user".to_string()),
                 },
             )])
         );

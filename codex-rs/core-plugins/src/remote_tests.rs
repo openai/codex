@@ -96,6 +96,30 @@ fn unknown_installation_policy_source_maps_to_none() {
     assert_eq!(summary.install_policy_source, None);
 }
 
+#[test]
+fn hook_auto_trust_is_limited_to_user_and_listed_workspace_plugins() {
+    let mut plugin = directory_plugin("plugin-linear", "linear");
+
+    plugin.scope = RemotePluginScope::User;
+    assert!(remote_plugin_hooks_are_auto_trusted(&plugin));
+
+    plugin.scope = RemotePluginScope::Workspace;
+    plugin.discoverability = Some(RemotePluginShareDiscoverability::Listed);
+    assert!(remote_plugin_hooks_are_auto_trusted(&plugin));
+
+    for discoverability in [
+        RemotePluginShareDiscoverability::Private,
+        RemotePluginShareDiscoverability::Unlisted,
+    ] {
+        plugin.discoverability = Some(discoverability);
+        assert!(!remote_plugin_hooks_are_auto_trusted(&plugin));
+    }
+
+    plugin.scope = RemotePluginScope::Global;
+    plugin.discoverability = None;
+    assert!(!remote_plugin_hooks_are_auto_trusted(&plugin));
+}
+
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
     RemotePluginDirectoryItem {
         id: id.to_string(),

@@ -998,6 +998,7 @@ impl PluginsManager {
         crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
             self.codex_home.clone(),
             remote_plugin_service_config(config),
+            config.config_layer_stack.clone(),
             auth,
             Some(on_local_cache_changed),
         );

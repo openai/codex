@@ -8,6 +8,13 @@ pub struct PluginHookDeclaration {
     pub event_name: HookEventName,
 }
 
+/// Persisted trust identity for one supported executable plugin command hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginHookTrustEntry {
+    pub key: String,
+    pub current_hash: String,
+}
+
 /// Return the hook handlers declared by plugin bundles without projecting live runtime state.
 pub fn plugin_hook_declarations(hook_sources: &[PluginHookSource]) -> Vec<PluginHookDeclaration> {
     let mut declarations = Vec::new();
@@ -30,6 +37,26 @@ pub fn plugin_hook_declarations(hook_sources: &[PluginHookSource]) -> Vec<Plugin
     }
 
     declarations
+}
+
+/// Return trust identities for supported executable plugin command hooks.
+///
+/// This projects runtime discovery results so filtering, platform command
+/// selection, normalization, and hashing stay identical to hook execution.
+pub fn plugin_hook_trust_entries(hook_sources: &[PluginHookSource]) -> Vec<PluginHookTrustEntry> {
+    crate::engine::discovery::discover_handlers(
+        /*config_layer_stack*/ None,
+        hook_sources.to_vec(),
+        /*plugin_hook_load_warnings*/ Vec::new(),
+        /*bypass_hook_trust*/ false,
+    )
+    .hook_entries
+    .into_iter()
+    .map(|entry| PluginHookTrustEntry {
+        key: entry.key,
+        current_hash: entry.current_hash,
+    })
+    .collect()
 }
 
 pub(crate) fn plugin_hook_key_source(plugin_id: &str, source_relative_path: &str) -> String {
@@ -97,5 +124,56 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn trust_entries_include_only_supported_executable_command_hooks() {
+        let plugin_root = test_path_buf("/tmp/plugin").abs();
+        let source_path = plugin_root.join("hooks/hooks.json");
+        let entries = plugin_hook_trust_entries(&[PluginHookSource {
+            plugin_id: PluginId::parse("demo@test").expect("plugin id"),
+            plugin_root: plugin_root.clone(),
+            plugin_data_root: plugin_root.join("data"),
+            source_path,
+            source_relative_path: "hooks/hooks.json".to_string(),
+            hooks: HookEventsToml {
+                pre_tool_use: vec![MatcherGroup {
+                    matcher: Some("^Bash$".to_string()),
+                    hooks: vec![
+                        HookHandlerConfig::Command {
+                            command: "echo supported".to_string(),
+                            command_windows: None,
+                            timeout_sec: None,
+                            r#async: false,
+                            status_message: None,
+                        },
+                        HookHandlerConfig::Command {
+                            command: "echo async".to_string(),
+                            command_windows: None,
+                            timeout_sec: None,
+                            r#async: true,
+                            status_message: None,
+                        },
+                        HookHandlerConfig::Command {
+                            command: "   ".to_string(),
+                            command_windows: None,
+                            timeout_sec: None,
+                            r#async: false,
+                            status_message: None,
+                        },
+                        HookHandlerConfig::Prompt {},
+                        HookHandlerConfig::Agent {},
+                    ],
+                }],
+                ..Default::default()
+            },
+        }]);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].key,
+            "demo@test:hooks/hooks.json:pre_tool_use:0:0"
+        );
+        assert!(!entries[0].current_hash.is_empty());
     }
 }

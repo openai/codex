@@ -306,6 +306,67 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
 }
 
 #[tokio::test]
+async fn user_remote_plugin_install_auto_trusts_bundled_hooks() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_hook("linear")?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail_for_scope(
+        &server,
+        REMOTE_PLUGIN_ID,
+        "1.2.3",
+        Some(&bundle_url),
+        "USER",
+        /*discoverability*/ None,
+    )
+    .await;
+    mount_empty_remote_installed_plugins_for_scope(&server, "USER").await;
+    mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: PluginInstallResponse = to_response(response)?;
+
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(
+        codex_home.path().join("config.toml"),
+    )?)?;
+    let hook_state = config
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table)
+        .expect("automatic hook trust state");
+    let (hook_key, state) = hook_state.iter().next().expect("trusted plugin hook");
+    assert_eq!(
+        hook_key,
+        "linear@created-by-me-remote:hooks/hooks.json:pre_tool_use:0:0"
+    );
+    assert!(
+        state
+            .get("trusted_hash")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -2283,6 +2344,54 @@ async fn mount_remote_plugin_detail_with_options(
     install_policy: &str,
     app_manifest: Option<serde_json::Value>,
 ) {
+    mount_remote_plugin_detail_for_scope_with_options(
+        server,
+        remote_plugin_id,
+        release_version,
+        bundle_download_url,
+        status,
+        install_policy,
+        app_manifest,
+        "GLOBAL",
+        /*discoverability*/ None,
+    )
+    .await;
+}
+
+async fn mount_remote_plugin_detail_for_scope(
+    server: &MockServer,
+    remote_plugin_id: &str,
+    release_version: &str,
+    bundle_download_url: Option<&str>,
+    scope: &str,
+    discoverability: Option<&str>,
+) {
+    mount_remote_plugin_detail_for_scope_with_options(
+        server,
+        remote_plugin_id,
+        release_version,
+        bundle_download_url,
+        PluginAvailability::Available,
+        "AVAILABLE",
+        /*app_manifest*/ None,
+        scope,
+        discoverability,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mount_remote_plugin_detail_for_scope_with_options(
+    server: &MockServer,
+    remote_plugin_id: &str,
+    release_version: &str,
+    bundle_download_url: Option<&str>,
+    status: PluginAvailability,
+    install_policy: &str,
+    app_manifest: Option<serde_json::Value>,
+    scope: &str,
+    discoverability: Option<&str>,
+) {
     let status = match status {
         PluginAvailability::Available => "ENABLED",
         PluginAvailability::DisabledByAdmin => "DISABLED_BY_ADMIN",
@@ -2293,11 +2402,15 @@ async fn mount_remote_plugin_detail_with_options(
     let app_manifest_field = app_manifest
         .map(|manifest| format!(r#"    "app_manifest": {manifest},"#))
         .unwrap_or_default();
+    let discoverability_field = discoverability
+        .map(|value| format!(r#"  "discoverability": "{value}","#))
+        .unwrap_or_default();
     let detail_body = format!(
         r#"{{
   "id": "{remote_plugin_id}",
   "name": "linear",
-  "scope": "GLOBAL",
+  "scope": "{scope}",
+{discoverability_field}
   "installation_policy": "{install_policy}",
   "authentication_policy": "ON_USE",
   "status": "{status}",
@@ -2327,9 +2440,13 @@ async fn mount_remote_plugin_detail_with_options(
 }
 
 async fn mount_empty_remote_installed_plugins(server: &MockServer) {
+    mount_empty_remote_installed_plugins_for_scope(server, "GLOBAL").await;
+}
+
+async fn mount_empty_remote_installed_plugins_for_scope(server: &MockServer, scope: &str) {
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
-        .and(query_param("scope", "GLOBAL"))
+        .and(query_param("scope", scope))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
@@ -2613,6 +2730,38 @@ fn remote_plugin_bundle_tar_gz_bytes_with_entries(
     app_manifest: Option<&str>,
     mcp_config: Option<&str>,
 ) -> Result<Vec<u8>> {
+    remote_plugin_bundle_tar_gz_bytes_with_entries_and_hook(
+        plugin_manifest,
+        app_manifest,
+        mcp_config,
+        /*hook_config*/ None,
+    )
+}
+
+fn remote_plugin_bundle_tar_gz_bytes_with_hook(plugin_name: &str) -> Result<Vec<u8>> {
+    let manifest = format!(r#"{{"name":"{plugin_name}","hooks":"./hooks/hooks.json"}}"#);
+    let hook_config = r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^shell$",
+      "hooks": [{"type": "command", "command": "echo trusted"}]
+    }]
+  }
+}"#;
+    remote_plugin_bundle_tar_gz_bytes_with_entries_and_hook(
+        &manifest,
+        /*app_manifest*/ None,
+        /*mcp_config*/ None,
+        Some(hook_config),
+    )
+}
+
+fn remote_plugin_bundle_tar_gz_bytes_with_entries_and_hook(
+    plugin_manifest: &str,
+    app_manifest: Option<&str>,
+    mcp_config: Option<&str>,
+    hook_config: Option<&str>,
+) -> Result<Vec<u8>> {
     let skill = "# Plan Work\n\nTrack work in Linear.\n";
     let encoder = GzEncoder::new(Vec::new(), Compression::default());
     let mut tar = tar::Builder::new(encoder);
@@ -2633,6 +2782,13 @@ fn remote_plugin_bundle_tar_gz_bytes_with_entries(
     }
     if let Some(mcp_config) = mcp_config {
         entries.push((".mcp.json", mcp_config.as_bytes(), /*mode*/ 0o644));
+    }
+    if let Some(hook_config) = hook_config {
+        entries.push((
+            "hooks/hooks.json",
+            hook_config.as_bytes(),
+            /*mode*/ 0o644,
+        ));
     }
     for (path, contents, mode) in entries {
         let mut header = tar::Header::new_gnu();
