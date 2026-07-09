@@ -234,8 +234,11 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let prepared = prepare_exec_request(
+            &params,
+            child_env(&params, self.runtime_paths.as_ref()),
+            self.runtime_paths.as_ref(),
+        )?;
         let (program, args) = prepared
             .command
             .split_first()
@@ -573,14 +576,21 @@ impl LocalProcess {
     }
 }
 
-fn child_env(params: &ExecParams) -> HashMap<String, String> {
-    let Some(env_policy) = &params.env_policy else {
-        return params.env.clone();
+fn child_env(
+    params: &ExecParams,
+    runtime_paths: Option<&ExecServerRuntimePaths>,
+) -> HashMap<String, String> {
+    let mut env = if let Some(env_policy) = &params.env_policy {
+        let policy = shell_environment_policy(env_policy);
+        let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
+        env.extend(params.env.clone());
+        env
+    } else {
+        params.env.clone()
     };
-
-    let policy = shell_environment_policy(env_policy);
-    let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
-    env.extend(params.env.clone());
+    if let Some(runtime_paths) = runtime_paths {
+        runtime_paths.apply_to_env(&mut env);
+    }
     env
 }
 
@@ -1090,7 +1100,7 @@ mod tests {
         let params = test_exec_params(HashMap::from([("ONLY_THIS".to_string(), "1".to_string())]));
 
         assert_eq!(
-            child_env(&params),
+            child_env(&params, /*runtime_paths*/ None),
             HashMap::from([("ONLY_THIS".to_string(), "1".to_string())])
         );
     }
@@ -1117,7 +1127,7 @@ mod tests {
             expected.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
         }
 
-        assert_eq!(child_env(&params), expected);
+        assert_eq!(child_env(&params, /*runtime_paths*/ None), expected);
     }
 
     #[tokio::test]

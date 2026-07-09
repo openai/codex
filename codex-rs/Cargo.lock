@@ -2910,6 +2910,7 @@ dependencies = [
  "codex-exec-server-protocol",
  "codex-file-system",
  "codex-http-client",
+ "codex-install-context",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -3809,6 +3810,14 @@ dependencies = [
  "serde_json",
  "tiny_http",
  "zeroize",
+]
+
+[[package]]
+name = "codex-rg"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]

@@ -56,7 +56,16 @@ def build_package_dir(
         bin_dir / f"codex-code-mode-host{spec.exe_suffix}",
         is_windows=spec.is_windows,
     )
-    copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
+    copy_executable(
+        inputs.rg_shim_bin,
+        path_dir / spec.rg_name,
+        is_windows=spec.is_windows,
+    )
+    copy_executable(
+        inputs.rg_bin,
+        resources_dir / spec.rg_name,
+        is_windows=spec.is_windows,
+    )
 
     if inputs.zsh_bin is not None:
         copy_executable(
@@ -137,6 +146,7 @@ def validate_package_dir(
         Path("bin") / variant.entrypoint_name(spec),
         Path("bin") / f"codex-code-mode-host{spec.exe_suffix}",
         Path("codex-path") / spec.rg_name,
+        Path("codex-resources") / spec.rg_name,
     ]
     executable_files = list(required_files)
 

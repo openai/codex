@@ -83,6 +83,7 @@ members = [
     "rollout-trace",
     "rmcp-client",
     "responses-api-proxy",
+    "rg-shim",
     "response-debug-context",
     "sandboxing",
     "stdio-to-uds",

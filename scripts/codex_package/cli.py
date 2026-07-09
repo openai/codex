@@ -132,6 +132,14 @@ def parse_args() -> argparse.Namespace:
             "scripts/codex_package/rg."
         ),
     )
+    parser.add_argument(
+        "--rg-shim-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt Codex ripgrep shim. If omitted, the shim is "
+            "built with Cargo."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -161,6 +169,11 @@ def main() -> int:
             "prebuilt code-mode host executable",
             "--code-mode-host-bin",
         ),
+        rg_shim_bin=resolve_optional_input_path(
+            args.rg_shim_bin,
+            "prebuilt Codex ripgrep shim",
+            "--rg-shim-bin",
+        ),
         bwrap_bin=resolve_optional_input_path(
             args.bwrap_bin,
             "prebuilt Linux bwrap executable",
@@ -181,6 +194,7 @@ def main() -> int:
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
+        rg_shim_bin=source_outputs.rg_shim_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
         zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest),
         bwrap_bin=source_outputs.bwrap_bin,

@@ -20,10 +20,15 @@ class PackageLayoutTest(unittest.TestCase):
             root = Path(temp_dir)
             package_dir = root / "package"
             package_dir.mkdir()
+            rg_shim = touch_executable(root / "codex-rg")
+            rg_shim.write_text("shim", encoding="utf-8")
+            rg = touch_executable(root / "rg")
+            rg.write_text("ripgrep", encoding="utf-8")
             inputs = PackageInputs(
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
-                rg_bin=touch_executable(root / "rg"),
+                rg_shim_bin=rg_shim,
+                rg_bin=rg,
                 zsh_bin=None,
                 bwrap_bin=touch_executable(root / "bwrap"),
                 codex_command_runner_bin=None,
@@ -45,6 +50,14 @@ class PackageLayoutTest(unittest.TestCase):
             )
 
             self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())
+            self.assertEqual(
+                (package_dir / "codex-path" / "rg").read_text(encoding="utf-8"),
+                "shim",
+            )
+            self.assertEqual(
+                (package_dir / "codex-resources" / "rg").read_text(encoding="utf-8"),
+                "ripgrep",
+            )
 
 
 def touch_executable(path: Path) -> Path:
