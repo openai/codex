@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -44,6 +45,10 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn standalone_web_search_round_trips_output() -> Result<()> {
     let call_id = "web-run-1";
+    let client_metadata = HashMap::from([(
+        "client-metadata-key".to_string(),
+        "client-metadata-value".to_string(),
+    )]);
     let server = responses::start_mock_server().await;
     mount_search_response(&server).await;
 
@@ -105,6 +110,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
                 text: "Search the web".to_string(),
                 text_elements: Vec::new(),
             }],
+            responsesapi_client_metadata: Some(client_metadata.clone()),
             ..Default::default()
         })
         .await?;
@@ -144,7 +150,10 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         "standalone web search should replace hosted web search"
     );
 
-    let search_body = search_request_body(&server).await?;
+    let search_request = search_request(&server).await?;
+    let search_body = search_request
+        .body_json::<Value>()
+        .context("search request body should be JSON")?;
     assert_eq!(search_body["model"], json!("mock-model"));
     assert_eq!(
         search_body["commands"],
@@ -168,6 +177,18 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
             "role": "user",
             "content": [{"type": "input_text", "text": "Search the web"}],
         }))
+    );
+    let turn_metadata_header = search_request
+        .headers
+        .get("x-codex-turn-metadata")
+        .context("standalone search should include x-codex-turn-metadata")?
+        .to_str()
+        .context("x-codex-turn-metadata should be valid ASCII")?;
+    let turn_metadata: Value = serde_json::from_str(turn_metadata_header)
+        .context("x-codex-turn-metadata should be valid JSON")?;
+    assert_eq!(
+        turn_metadata["client-metadata-key"],
+        json!("client-metadata-value")
     );
 
     assert_eq!(
@@ -285,16 +306,15 @@ fn has_hosted_web_search(body: &Value) -> bool {
         })
 }
 
-async fn search_request_body(server: &MockServer) -> Result<Value> {
-    server
+async fn search_request(server: &MockServer) -> Result<wiremock::Request> {
+    let requests = server
         .received_requests()
         .await
-        .context("failed to fetch received requests")?
+        .context("failed to fetch received requests")?;
+    requests
         .into_iter()
         .find(|request| request.url.path() == "/api/codex/alpha/search")
-        .context("expected standalone search request")?
-        .body_json()
-        .context("search request body should be JSON")
+        .context("expected standalone search request")
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
