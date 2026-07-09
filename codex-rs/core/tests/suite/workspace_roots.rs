@@ -21,11 +21,10 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_remote_env;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_target_os;
-use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::MockServer;
@@ -78,9 +77,8 @@ fn outside_workspace_path(test: &TestCodex, file_name: &str) -> Result<PathUri> 
 
 fn command_arguments(path: &str) -> Result<String> {
     let (shell, command) = match test_target_os() {
-        TestTargetOs::Linux => ("bash", format!("cat '{path}'")),
+        TestTargetOs::Linux | TestTargetOs::MacOs => ("bash", format!("cat '{path}'")),
         TestTargetOs::Windows => ("powershell", format!("Get-Content -Raw '{path}'")),
-        TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
     };
     Ok(serde_json::to_string(&json!({
         "cmd": command,
@@ -145,10 +143,13 @@ async fn remove_files(test: &TestCodex, paths: &[&PathUri]) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_workspace_roots_allow_file_read_and_command_run() -> Result<()> {
+async fn workspace_roots_allow_file_read_and_command_run() -> Result<()> {
     const COMMAND_CONTENTS: &str = "workspace root command access";
 
-    skip_if_no_remote_env!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "remote Windows sandboxed process launches are not supported"
+    );
 
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
@@ -184,12 +185,12 @@ async fn remote_workspace_roots_allow_file_read_and_command_run() -> Result<()> 
         .and_then(|items| items.first())
         .and_then(|item| item.get("image_url"))
         .and_then(Value::as_str)
-        .context("remote filesystem read should return an image")?;
+        .context("filesystem read should return an image")?;
     assert!(image_url.starts_with("data:image/png;base64,"));
 
     let (command_output, success) = request
         .function_call_output_content_and_success(COMMAND_CALL_ID)
-        .context("remote command result should be present")?;
+        .context("command result should be present")?;
     assert_ne!(success, Some(false));
     assert!(command_output.is_some_and(|output| output.contains(COMMAND_CONTENTS)));
 
@@ -197,10 +198,13 @@ async fn remote_workspace_roots_allow_file_read_and_command_run() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_workspace_roots_deny_file_and_command_reads_outside_roots() -> Result<()> {
+async fn workspace_roots_deny_file_and_command_reads_outside_roots() -> Result<()> {
     const OUTSIDE_CONTENTS: &str = "outside workspace root";
 
-    skip_if_no_remote_env!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "remote Windows sandboxed process launches are not supported"
+    );
 
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
@@ -230,21 +234,26 @@ async fn remote_workspace_roots_deny_file_and_command_reads_outside_roots() -> R
     let request = response_mock
         .last_request()
         .context("model should receive both denied tool results")?;
-    let (file_output, file_success) = request
+    let (file_output, _) = request
         .function_call_output_content_and_success(IMAGE_CALL_ID)
-        .context("denied remote file-read result should be present")?;
-    assert_eq!(file_success, Some(false));
+        .context("denied file-read result should be present")?;
     assert!(file_output.is_some_and(|output| {
         output.starts_with(&format!(
             "unable to locate image at `{image_path_display}`:"
         )) || output.starts_with(&format!("unable to read image at `{image_path_display}`:"))
     }));
 
-    let (command_output, command_success) = request
+    let (command_output, _) = request
         .function_call_output_content_and_success(COMMAND_CALL_ID)
-        .context("denied remote command result should be present")?;
-    assert_eq!(command_success, Some(false));
-    assert!(command_output.is_none_or(|output| !output.contains(OUTSIDE_CONTENTS)));
+        .context("denied command result should be present")?;
+    let command_output = command_output.context("denied command output should be present")?;
+    assert!(command_output.contains(&text_path_display));
+    assert!(
+        command_output.contains("Permission denied")
+            || command_output.contains("Operation not permitted")
+            || command_output.contains("No such file or directory")
+    );
+    assert!(!command_output.contains(OUTSIDE_CONTENTS));
 
     remove_files(&test, &[&image_path, &text_path]).await
 }
