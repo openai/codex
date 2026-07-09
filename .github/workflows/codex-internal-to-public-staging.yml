@@ -1,4 +1,4 @@
-name: Codex Internal To Public Staging
+name: Generate public commit message
 
 on:
   push:
