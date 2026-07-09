@@ -341,6 +341,7 @@ pub struct NetworkToml {
     pub enable_socks5: Option<bool>,
     pub socks_url: Option<String>,
     pub enable_socks5_udp: Option<bool>,
+    pub enable_dns: Option<bool>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
@@ -514,6 +515,9 @@ impl NetworkToml {
         }
         if let Some(enable_socks5_udp) = self.enable_socks5_udp {
             config.enable_socks5_udp = enable_socks5_udp;
+        }
+        if let Some(enable_dns) = self.enable_dns {
+            config.enable_dns = enable_dns;
         }
         if let Some(allow_upstream_proxy) = self.allow_upstream_proxy {
             config.allow_upstream_proxy = allow_upstream_proxy;

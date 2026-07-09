@@ -225,12 +225,13 @@ impl NetworkProxyBuilder {
                     managed_http_addr,
                     managed_socks_addr,
                     current_cfg.enable_socks5,
+                    current_cfg.enable_dns,
                 )
                 .context("reserve managed loopback proxy listeners")?;
                 #[cfg(not(target_os = "windows"))]
                 let reserved = reserve_loopback_ephemeral_listeners(
                     current_cfg.enable_socks5,
-                    /*reserve_dns_listener*/ true,
+                    current_cfg.enable_dns,
                 )
                 .context("reserve managed loopback proxy listeners")?;
                 let http_addr = reserved.http_addr()?;
@@ -302,19 +303,22 @@ fn reserve_windows_managed_listeners(
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     reserve_socks_listener: bool,
+    reserve_dns_listener: bool,
 ) -> Result<ReservedListenerSet> {
     let http_addr = windows_managed_loopback_addr(http_addr);
     let socks_addr = windows_managed_loopback_addr(socks_addr);
 
-    match try_reserve_windows_managed_listeners(http_addr, socks_addr, reserve_socks_listener) {
+    match try_reserve_windows_managed_listeners(
+        http_addr,
+        socks_addr,
+        reserve_socks_listener,
+        reserve_dns_listener,
+    ) {
         Ok(listeners) => Ok(listeners),
         Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
             warn!("managed Windows proxy ports are busy; falling back to ephemeral loopback ports");
-            reserve_loopback_ephemeral_listeners(
-                reserve_socks_listener,
-                /*reserve_dns_listener*/ true,
-            )
-            .context("reserve fallback loopback proxy listeners")
+            reserve_loopback_ephemeral_listeners(reserve_socks_listener, reserve_dns_listener)
+                .context("reserve fallback loopback proxy listeners")
         }
         Err(err) => Err(err).context("reserve Windows managed proxy listeners"),
     }
@@ -325,6 +329,7 @@ fn try_reserve_windows_managed_listeners(
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     reserve_socks_listener: bool,
+    reserve_dns_listener: bool,
 ) -> std::io::Result<ReservedListenerSet> {
     let http_listener = StdTcpListener::bind(http_addr)?;
     let socks_listener = if reserve_socks_listener {
@@ -332,7 +337,11 @@ fn try_reserve_windows_managed_listeners(
     } else {
         None
     };
-    let dns_listener = Some(StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?);
+    let dns_listener = if reserve_dns_listener {
+        Some(StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?)
+    } else {
+        None
+    };
     Ok(ReservedListenerSet::new(
         http_listener,
         socks_listener,
@@ -975,6 +984,10 @@ impl NetworkProxy {
             new_state.config.enable_socks5_udp == current_cfg.enable_socks5_udp,
             "cannot update network.enable_socks5_udp on a running proxy"
         );
+        anyhow::ensure!(
+            new_state.config.enable_dns == current_cfg.enable_dns,
+            "cannot update network.enable_dns on a running proxy"
+        );
 
         let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config)?;
         self.state.replace_config_state(new_state).await?;
@@ -1222,6 +1235,7 @@ mod tests {
         let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig {
             proxy_url: format!("http://{http_addr}"),
             socks_url: format!("http://{socks_addr}"),
+            enable_dns: true,
             ..NetworkProxyConfig::default()
         }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
@@ -1281,8 +1295,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_proxy_builder_does_not_reserve_dns_listener_by_default() -> Result<()> {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig {
+            enabled: true,
+            ..NetworkProxyConfig::default()
+        }));
+        let proxy = NetworkProxy::builder().state(state).build().await?;
+
+        let prepared =
+            proxy.prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
+
+        assert_eq!(proxy.dns_addr, None);
+        assert_eq!(prepared.env.get(DNS_PROXY_ENV_KEY), None);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig {
+            enabled: true,
+            enable_dns: true,
+            ..NetworkProxyConfig::default()
+        }));
         let proxy = NetworkProxy::builder().state(state).build().await?;
         let handle = proxy.run().await?;
 
@@ -1469,6 +1503,7 @@ mod tests {
             SocketAddr::from(([127, 0, 0, 1], busy_port)),
             SocketAddr::from(([127, 0, 0, 1], 48081)),
             /*reserve_socks_listener*/ false,
+            /*reserve_dns_listener*/ true,
         )
         .unwrap();
 

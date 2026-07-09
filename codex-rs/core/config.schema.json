@@ -1932,6 +1932,9 @@
           },
           "type": "object"
         },
+        "enable_dns": {
+          "type": "boolean"
+        },
         "enable_socks5": {
           "type": "boolean"
         },
@@ -1997,6 +2000,9 @@
         },
         "domains": {
           "$ref": "#/definitions/NetworkDomainPermissionsToml"
+        },
+        "enable_dns": {
+          "type": "boolean"
         },
         "enable_socks5": {
           "type": "boolean"

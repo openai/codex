@@ -468,11 +468,23 @@ fn managed_proxy_inner_command_includes_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+        loader_environment: None,
         command: vec!["/bin/true".to_string()],
     });
 
     assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
     assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
+}
+
+#[test]
+fn loader_environment_round_trips_non_utf8_values() {
+    let environment = vec![(b"LD_PRELOAD".to_vec(), b"\xffloader.so".to_vec())];
+
+    assert_eq!(
+        parse_loader_environment(Some(&serialize_loader_environment(&environment)))
+            .expect("loader environment should deserialize"),
+        Some(environment)
+    );
 }
 
 #[test]
@@ -484,6 +496,7 @@ fn inner_command_includes_permission_profile_flag() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        loader_environment: None,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -503,6 +516,7 @@ fn non_managed_inner_command_omits_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        loader_environment: None,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -519,6 +533,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             permission_profile: &permission_profile,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
+            loader_environment: None,
             command: vec!["/bin/true".to_string()],
         })
     });
