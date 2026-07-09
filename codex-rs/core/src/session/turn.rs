@@ -785,7 +785,7 @@ async fn track_turn_resolved_config_analytics(
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
-            reasoning_effort: first_step_context.turn.reasoning_effort.clone(),
+            reasoning_effort: first_step_context.reasoning_effort.clone(),
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
                 .config
@@ -1971,7 +1971,7 @@ async fn try_run_sampling_request(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
         sandbox_policy = &turn_context.sandbox_policy(),
-        effort = step_context.turn.reasoning_effort,
+        effort = step_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
@@ -1991,7 +1991,7 @@ async fn try_run_sampling_request(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            step_context.turn.reasoning_effort.clone(),
+            step_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,
@@ -2011,7 +2011,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
-    let reasoning_effort = step_context.turn.effective_reasoning_effort_for_tracing();
+    let reasoning_effort = step_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));

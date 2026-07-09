@@ -191,7 +191,6 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -242,7 +241,6 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1296,7 +1294,6 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1386,7 +1383,6 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             multi_agent_mode: None,
             realtime_active: Some(turn_context.realtime_active),
             effort: test_step_context(turn_context.clone())
-                .turn
                 .reasoning_effort
                 .clone(),
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1422,7 +1418,6 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1553,7 +1548,6 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1679,7 +1673,6 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1852,7 +1845,6 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,

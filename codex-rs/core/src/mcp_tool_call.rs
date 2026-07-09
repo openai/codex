@@ -1092,7 +1092,7 @@ fn build_mcp_tool_call_request_meta(
         .turn_metadata_state
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
             model: turn_context.model_info.slug.as_str(),
-            reasoning_effort: step_context.turn.effective_reasoning_effort(),
+            reasoning_effort: step_context.effective_reasoning_effort(),
         })
     {
         request_meta.insert(

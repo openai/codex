@@ -1208,7 +1208,7 @@ mod tests {
         let turn = Arc::new(turn);
         let step_context = StepContext::for_test(Arc::clone(&turn));
         let model = turn.model_info.slug.clone();
-        let reasoning_effort = step_context.turn.reasoning_effort.clone();
+        let reasoning_effort = step_context.reasoning_effort.clone();
         let reasoning_summary = turn.reasoning_summary;
         let personality = turn.personality;
         #[allow(deprecated)]

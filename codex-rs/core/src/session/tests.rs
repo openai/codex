@@ -3108,7 +3108,6 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: test_step_context(turn_context.clone())
-            .turn
             .reasoning_effort
             .clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -3993,10 +3992,13 @@ async fn includes_timed_out_message() {
 #[tokio::test]
 async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
-    turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
+    Arc::make_mut(&mut turn_context.config).model_reasoning_effort =
+        Some(codex_protocol::openai_models::ReasoningEffort::Minimal);
     let updated = turn_context
         .with_model("gpt-5.4".to_string(), &session.services.models_manager)
         .await;
+    let updated = Arc::new(updated);
+    let updated_step = test_step_context(updated.clone());
     let expected_model_info = session
         .services
         .models_manager
@@ -4010,16 +4012,16 @@ async fn turn_context_with_model_updates_model_fields() {
     assert_eq!(updated.collaboration_mode().model(), "gpt-5.4");
     assert_eq!(updated.model_info, expected_model_info);
     assert_eq!(
-        updated.reasoning_effort,
-        Some(ReasoningEffortConfig::Medium)
+        updated_step.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::Medium)
     );
     assert_eq!(
         updated.collaboration_mode().reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
+        Some(codex_protocol::openai_models::ReasoningEffort::Medium)
     );
     assert_eq!(
         updated.config.model_reasoning_effort,
-        Some(ReasoningEffortConfig::Medium)
+        Some(codex_protocol::openai_models::ReasoningEffort::Medium)
     );
 }
 

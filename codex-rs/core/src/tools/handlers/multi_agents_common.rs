@@ -184,7 +184,6 @@ fn build_agent_shared_config(step_context: &StepContext) -> Result<Config, Funct
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.info().clone();
     config.model_reasoning_effort = step_context
-        .turn
         .reasoning_effort
         .clone()
         .or_else(|| turn.model_info.default_reasoning_level.clone());

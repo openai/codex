@@ -73,7 +73,6 @@ pub(super) async fn spawn_review_thread(
     let auth_manager_for_context = auth_manager.clone();
     let provider_for_context = provider.clone();
     let session_telemetry_for_context = session_telemetry.clone();
-    let reasoning_effort = per_turn_config.model_reasoning_effort.clone();
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
@@ -117,7 +116,6 @@ pub(super) async fn spawn_review_thread(
         model_info: model_info.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
-        reasoning_effort,
         reasoning_summary,
         session_source,
         history_mode: parent_turn_context.history_mode,

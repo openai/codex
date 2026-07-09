@@ -96,7 +96,7 @@ fn approval_metadata(
 fn mcp_turn_metadata_context(step_context: &StepContext) -> McpTurnMetadataContext<'_> {
     McpTurnMetadataContext {
         model: step_context.turn.model_info.slug.as_str(),
-        reasoning_effort: step_context.turn.effective_reasoning_effort(),
+        reasoning_effort: step_context.effective_reasoning_effort(),
     }
 }
 
@@ -1118,7 +1118,6 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
             .get("reasoning_effort")
             .and_then(serde_json::Value::as_str),
         step_context
-            .turn
             .effective_reasoning_effort()
             .map(|effort| effort.to_string())
             .as_deref()

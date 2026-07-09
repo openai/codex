@@ -51,7 +51,7 @@ pub(crate) fn effective_multi_agent_mode(step_context: &StepContext) -> Option<M
         .multi_agent_mode_hint_text
     {
         Some(hint_text) => MultiAgentMode::Custom(hint_text.clone()),
-        None => match step_context.turn.effective_reasoning_effort() {
+        None => match step_context.effective_reasoning_effort() {
             Some(ReasoningEffort::Ultra) => MultiAgentMode::Proactive,
             _ => MultiAgentMode::ExplicitRequestOnly,
         },
