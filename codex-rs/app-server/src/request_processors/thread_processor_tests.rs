@@ -766,7 +766,7 @@ mod thread_processor_behavior_tests {
             workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
-            extra_config: None,
+            extra_config: None, // copybara:strip-for-public
             reasoning_effort: None,
             reasoning_summary: None,
             personality: None,

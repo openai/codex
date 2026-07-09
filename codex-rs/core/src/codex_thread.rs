@@ -38,7 +38,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
-use codex_thread_store::ExtraConfig;
+use codex_thread_store::ExtraConfig; // copybara:strip-for-public
 use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
 use codex_thread_store::ThreadMetadataPatch;
@@ -70,7 +70,7 @@ pub struct ThreadConfigSnapshot {
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
-    pub extra_config: Option<ExtraConfig>,
+    pub extra_config: Option<ExtraConfig>, // copybara:strip-for-public
     pub reasoning_effort: Option<ReasoningEffort>,
     pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
