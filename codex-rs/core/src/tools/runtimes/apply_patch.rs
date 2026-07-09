@@ -219,8 +219,8 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRuntime {
-    fn turn_environment<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a TurnEnvironment> {
-        Some(&req.turn_environment)
+    fn workspace_roots<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a [PathUri]> {
+        Some(req.turn_environment.workspace_roots())
     }
 
     fn sandbox_cwd<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a PathUri> {

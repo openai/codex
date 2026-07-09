@@ -8,7 +8,6 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -395,7 +394,7 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
-    fn turn_environment<'a>(&self, _req: &'a Req) -> Option<&'a TurnEnvironment> {
+    fn workspace_roots<'a>(&self, _req: &'a Req) -> Option<&'a [PathUri]> {
         None
     }
 

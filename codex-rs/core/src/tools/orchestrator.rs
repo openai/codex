@@ -13,7 +13,6 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
-use crate::session::turn_context::TurnEnvironment;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -267,9 +266,13 @@ impl ToolOrchestrator {
             .cloned()
             .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
         let workspace_roots = tool
-            .turn_environment(req)
-            .or_else(|| turn_ctx.environments.primary())
-            .map(TurnEnvironment::workspace_roots)
+            .workspace_roots(req)
+            .or_else(|| {
+                turn_ctx
+                    .environments
+                    .primary()
+                    .map(|environment| environment.workspace_roots())
+            })
             .unwrap_or_default();
         let permissions = workspace_roots
             .iter()
