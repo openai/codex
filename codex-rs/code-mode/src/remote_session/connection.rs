@@ -1,3 +1,5 @@
+use std::fmt;
+use std::io;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -45,6 +47,39 @@ mod reader;
 
 const IPC_CHANNEL_CAPACITY: usize = 128;
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(super) enum ConnectionError {
+    HostProgramNotFound(String),
+    Other(String),
+}
+
+impl ConnectionError {
+    fn from_spawn(host_program: &Path, error: io::Error) -> Self {
+        let message = format!(
+            "failed to spawn code-mode host {}: {error}",
+            host_program.display()
+        );
+        if error.kind() == io::ErrorKind::NotFound {
+            Self::HostProgramNotFound(message)
+        } else {
+            Self::Other(message)
+        }
+    }
+
+    pub(super) fn host_program_not_found(&self) -> bool {
+        matches!(self, Self::HostProgramNotFound(_))
+    }
+}
+
+impl fmt::Display for ConnectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HostProgramNotFound(message) | Self::Other(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
 
 pub(super) struct Connection {
     command_tx: mpsc::Sender<DriverCommand>,
@@ -96,7 +131,7 @@ impl Drop for CallerCancellation {
 }
 
 impl Connection {
-    pub(super) async fn spawn(host_program: &Path) -> Result<Self, String> {
+    pub(super) async fn spawn(host_program: &Path) -> Result<Self, ConnectionError> {
         let mut command = Command::new(host_program);
         #[cfg(unix)]
         command.process_group(0);
@@ -106,12 +141,7 @@ impl Connection {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|err| {
-                format!(
-                    "failed to spawn code-mode host {}: {err}",
-                    host_program.display()
-                )
-            })?;
+            .map_err(|error| ConnectionError::from_spawn(host_program, error))?;
 
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
@@ -132,11 +162,11 @@ impl Connection {
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "spawned code-mode host has no stdin".to_string())?;
+            .ok_or_else(|| ConnectionError::Other("spawned code-mode host has no stdin".into()))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| "spawned code-mode host has no stdout".to_string())?;
+            .ok_or_else(|| ConnectionError::Other("spawned code-mode host has no stdout".into()))?;
         let mut reader = FramedReader::new(stdout);
         let mut writer = FramedWriter::new(stdin);
         let handshake = async {
@@ -174,12 +204,14 @@ impl Connection {
             Ok(result) => result,
             Err(_) => {
                 kill_and_reap(&mut child).await;
-                return Err("timed out negotiating with the code-mode host".to_string());
+                return Err(ConnectionError::Other(
+                    "timed out negotiating with the code-mode host".into(),
+                ));
             }
         };
         if let Err(err) = handshake_result {
             kill_and_reap(&mut child).await;
-            return Err(err);
+            return Err(ConnectionError::Other(err));
         }
 
         let (command_tx, command_rx) = mpsc::channel(IPC_CHANNEL_CAPACITY);

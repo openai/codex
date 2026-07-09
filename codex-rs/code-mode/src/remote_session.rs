@@ -22,6 +22,7 @@ use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use self::connection::Connection;
+use self::connection::ConnectionError;
 use self::connection::RemoteSession;
 use self::connection::SessionCleanup;
 use crate::NoopCodeModeSessionDelegate;
@@ -36,6 +37,7 @@ type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 pub struct ProcessOwnedCodeModeSessionProvider {
     host_program: PathBuf,
     process_host: StdMutex<Option<Arc<OwnedProcessHost>>>,
+    use_in_process: AtomicBool,
 }
 
 impl ProcessOwnedCodeModeSessionProvider {
@@ -43,6 +45,7 @@ impl ProcessOwnedCodeModeSessionProvider {
         Self {
             host_program,
             process_host: StdMutex::new(None),
+            use_in_process: AtomicBool::new(false),
         }
     }
 
@@ -72,8 +75,25 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
-        let session = ProcessOwnedCodeModeSession::with_process_host(delegate, self.process_host());
         Box::pin(async move {
+            if self.use_in_process.load(Ordering::Acquire) {
+                let session: Arc<dyn CodeModeSession> =
+                    Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
+                return Ok(session);
+            }
+
+            let process_host = self.process_host();
+            match process_host.connection().await {
+                Ok(_) => {}
+                Err(error) if error.host_program_not_found() => {
+                    self.use_in_process.store(true, Ordering::Release);
+                    let session: Arc<dyn CodeModeSession> =
+                        Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
+                    return Ok(session);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+            let session = ProcessOwnedCodeModeSession::with_process_host(delegate, process_host);
             session.connection().await?;
             let session: Arc<dyn CodeModeSession> = Arc::new(session);
             Ok(session)
@@ -98,16 +118,14 @@ impl OwnedProcessHost {
         }
     }
 
-    async fn connection(&self) -> Result<Arc<Connection>, String> {
+    async fn connection(&self) -> Result<Arc<Connection>, ConnectionError> {
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
 
-        let _spawn_permit = self
-            .spawn_permit
-            .acquire()
-            .await
-            .map_err(|_| "code-mode host spawn coordinator closed".to_string())?;
+        let _spawn_permit = self.spawn_permit.acquire().await.map_err(|_| {
+            ConnectionError::Other("code-mode host spawn coordinator closed".into())
+        })?;
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
@@ -284,7 +302,7 @@ impl SessionInner {
                     cleanup,
                 })
             }
-            Err(err) => Err(err),
+            Err(err) => Err(err.to_string()),
         };
         {
             let mut state = self
