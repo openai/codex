@@ -120,6 +120,14 @@ pub const CONTEXT_WINDOW_GUIDANCE_OPEN_TAG: &str = "<context_window_guidance>";
 pub const CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG: &str = "</context_window_guidance>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+/// Removes the model-context prefix from a user message before displaying it.
+pub fn strip_user_message_prefix(text: &str) -> &str {
+    match text.find(USER_MESSAGE_BEGIN) {
+        Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
+        None => text.trim(),
+    }
+}
+
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
 // identifiers.
 #[derive(Debug, Clone, PartialEq)]
@@ -2294,6 +2302,23 @@ pub struct UserMessageEvent {
     pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
+/// Returns the user-facing preview text for a user message.
+pub fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
+    let message = strip_user_message_prefix(user.message.as_str());
+    if !message.is_empty() {
+        return Some(message.to_string());
+    }
+    if user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || !user.local_images.is_empty()
+    {
+        return Some("[Image]".to_string());
+    }
+    None
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
@@ -2591,11 +2616,11 @@ impl InitialHistory {
 
     pub fn get_history_mode(&self, default_history_mode: ThreadHistoryMode) -> ThreadHistoryMode {
         match self {
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                default_history_mode
-            }
-            InitialHistory::Resumed(_) => self
-                .get_resumed_session_meta()
+            InitialHistory::New | InitialHistory::Cleared => default_history_mode,
+            // Forks copy their source rollout items as-is, so they must keep
+            // the source format instead of converting to the destination default.
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => self
+                .get_session_meta()
                 .map(|meta| meta.history_mode)
                 .unwrap_or(default_history_mode),
         }
@@ -3194,6 +3219,8 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_policy: SandboxPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
@@ -5780,13 +5807,13 @@ mod tests {
     }
 
     #[test]
-    fn resumed_history_uses_persisted_history_mode() -> Result<()> {
+    fn copied_history_uses_persisted_history_mode() -> Result<()> {
         let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")?;
         let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
-                history_mode: ThreadHistoryMode::Paginated,
+                history_mode: ThreadHistoryMode::Legacy,
                 ..SessionMeta::default()
             },
             git: None,
@@ -5798,11 +5825,12 @@ mod tests {
         });
 
         assert_eq!(
-            history.get_history_mode(ThreadHistoryMode::Legacy),
-            ThreadHistoryMode::Paginated
+            history.get_history_mode(ThreadHistoryMode::Paginated),
+            ThreadHistoryMode::Legacy
         );
         assert_eq!(
-            InitialHistory::Forked(vec![session_meta]).get_history_mode(ThreadHistoryMode::Legacy),
+            InitialHistory::Forked(vec![session_meta])
+                .get_history_mode(ThreadHistoryMode::Paginated),
             ThreadHistoryMode::Legacy
         );
         assert_eq!(
@@ -5939,6 +5967,7 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             permission_profile: None,
             network: Some(TurnContextNetworkItem {

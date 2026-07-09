@@ -720,8 +720,7 @@ if (!tool) {
             "exec".to_string(),
             "wait".to_string(),
             "request_user_input".to_string(),
-            "web_search".to_string(),
-            "image_generation".to_string()
+            "web_search".to_string()
         ]
     );
 
@@ -2880,7 +2879,7 @@ async fn code_mode_resizes_explicit_original_image() -> Result<()> {
         &server,
         "use exec to return a large original-detail image",
         &code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
         |_| {},
     )
     .await?;
@@ -2950,7 +2949,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
+        .with_model("gpt-5.4")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
         });
@@ -3044,7 +3043,7 @@ image(imageItem);
         &server,
         "use exec to call the rmcp image scenario tool and emit its image output",
         code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
     )
     .await?;
 

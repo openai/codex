@@ -11,12 +11,6 @@ pub struct WebSearchToolOptions<'a> {
     pub web_search_tool_type: WebSearchToolType,
 }
 
-pub fn create_image_generation_tool(output_format: &str) -> ToolSpec {
-    ToolSpec::ImageGeneration {
-        output_format: output_format.to_string(),
-    }
-}
-
 pub fn create_web_search_tool(options: WebSearchToolOptions<'_>) -> Option<ToolSpec> {
     let (external_web_access, indexed_web_access) = match options.web_search_mode {
         Some(WebSearchMode::Cached) => (false, None),

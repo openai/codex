@@ -47,6 +47,7 @@ use codex_config::McpServerAuth;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
@@ -141,6 +142,7 @@ impl McpConnectionManager {
         supports_openai_form_elicitation: bool,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
+        codex_apps_auth_manager: Option<Arc<AuthManager>>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
         elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
         elicitation_router: ElicitationRequestRouter,
@@ -163,9 +165,14 @@ impl McpConnectionManager {
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
-        let chatgpt_auth_provider = auth
+        let static_chatgpt_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
+        let codex_apps_auth_provider = codex_apps_auth_manager.and_then(|auth_manager| {
+            auth.filter(|auth| auth.uses_codex_backend()).map(|auth| {
+                codex_model_provider::auth_provider_from_auth_manager(auth_manager, auth)
+            })
+        });
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()
@@ -200,13 +207,24 @@ impl McpConnectionManager {
                 codex_apps_tools_cache
                     .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
             });
+            // The reserved Codex Apps registration follows the shared
+            // AuthManager across refreshes. In the hosted-plugin path, this
+            // is the ChatGPT /ps/mcp connection. User-configured MCP
+            // registrations keep their existing configured auth path.
+            let chatgpt_auth_provider = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                codex_apps_auth_provider
+                    .clone()
+                    .or_else(|| static_chatgpt_auth_provider.clone())
+            } else {
+                static_chatgpt_auth_provider.clone()
+            };
             // If Codex Apps has an env bearer token, that is its auth path. Do
             // not also attach the ambient CodexAuth provider.
             let runtime_auth_provider =
                 if server_name == CODEX_APPS_MCP_SERVER_NAME && uses_env_bearer_token {
                     None
                 } else {
-                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone())
+                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider)
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),

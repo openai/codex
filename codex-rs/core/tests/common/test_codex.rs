@@ -128,14 +128,26 @@ pub struct TestEnv {
 
 impl TestEnv {
     pub async fn local() -> Result<Self> {
+        Self::local_with_exec_server_url(/*exec_server_url*/ None).await
+    }
+
+    /// Builds a host-local test environment, optionally using the provided
+    /// exec-server URL instead of the normal implicit local executor.
+    pub async fn local_with_exec_server_url(exec_server_url: Option<String>) -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
+        let selection = match exec_server_url {
+            Some(_) => TurnEnvironmentSelection {
+                environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+            },
+            None => local(cwd.clone()),
+        };
         let environment =
-            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
-        let selection = local(cwd.clone());
+            codex_exec_server::Environment::create_for_tests(exec_server_url.clone())?;
         Ok(Self {
             environment,
-            exec_server_url: None,
+            exec_server_url,
             cwd,
             selection,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
@@ -728,6 +740,9 @@ impl TestCodexBuilder {
         } else {
             load_default_config_for_test(home).await
         };
+        // Keep generic tests stable when the bundled catalog default changes. Tests that need a
+        // specific model can still override this with a config mutator.
+        config.model = Some("gpt-5.5".to_string());
         config.cwd = cwd_override;
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {

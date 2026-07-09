@@ -56,6 +56,7 @@ use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -293,14 +294,13 @@ impl RealtimeE2eHarness {
 
         let mut mcp = TestAppServer::builder()
             .with_codex_home(codex_home.path())
-            .without_auto_env()
             .build()
             .await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
         let thread_start_request_id = mcp
-            .send_thread_start_request(ThreadStartParams::default())
+            .send_thread_start_request_with_auto_env(ThreadStartParams::default())
             .await?;
         let thread_start_response: JSONRPCResponse = timeout(
             DEFAULT_TIMEOUT,
@@ -1173,7 +1173,6 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2520,6 +2519,11 @@ async fn websocket_v2_background_agent_progress_is_sent_before_function_output()
 
 #[tokio::test]
 async fn websocket_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
+    // TODO(anp): Remove after delegated shell commands resolve target-native cwd in remote environments.
+    skip_if_remote!(
+        Ok(()),
+        "delegated shell command cwd is only materialized on the host"
+    );
     skip_if_no_network!(Ok(()));
 
     // Phase 1: keep the two mocked OpenAI conversations explicit. The realtime sideband only

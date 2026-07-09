@@ -67,6 +67,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -255,6 +256,24 @@ fn assign_missing_response_item_ids_assigns_additional_tools_ids() {
     let items = Session::assign_missing_response_item_ids(items);
 
     assert!(items[0].id().is_some_and(|id| id.starts_with("at_")));
+}
+
+#[tokio::test]
+async fn paginated_turn_context_assigns_missing_response_item_ids_without_feature() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.history_mode = ThreadHistoryMode::Paginated;
+    let response_item = user_message("hello");
+
+    let items = session.prepare_conversation_items_for_history(
+        &turn_context,
+        std::slice::from_ref(&response_item),
+    );
+
+    assert!(
+        items[0]
+            .id()
+            .is_some_and(|item_id| item_id.starts_with("msg_"))
+    );
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -1254,7 +1273,7 @@ async fn get_base_instructions_no_user_content() {
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
-            slug: "gpt-5.3-codex",
+            slug: "gpt-5.5",
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
@@ -3082,6 +3101,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: None,
         sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
         network: None,
@@ -4150,6 +4170,10 @@ fn text_block(s: &str) -> serde_json::Value {
 async fn build_test_config(codex_home: &Path) -> Config {
     ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            model: Some("gpt-5.5".to_string()),
+            ..Default::default()
+        })
         .build()
         .await
         .expect("load default test config")
@@ -8553,49 +8577,6 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_hint_is_emp
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_default_image_save_location_with_image_history() {
-    let (session, turn_context) = make_session_and_context().await;
-    session
-        .replace_history(
-            vec![ResponseItem::ImageGenerationCall {
-                id: Some("ig-test".to_string()),
-                status: "completed".to_string(),
-                revised_prompt: Some("a tiny blue square".to_string()),
-                result: "Zm9v".to_string(),
-                internal_chat_message_metadata_passthrough: None,
-            }],
-            /*reference_context_item*/ None,
-        )
-        .await;
-    let turn_context = Arc::new(turn_context);
-
-    let initial_context = build_initial_context(&session, &turn_context).await;
-    let developer_texts = developer_input_texts(&initial_context);
-    assert!(
-        !developer_texts
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "expected initial context to omit image save instructions even with image history, got {developer_texts:?}"
-    );
-}
-
-#[tokio::test]
-async fn build_initial_context_omits_default_image_save_location_without_image_history() {
-    let (session, turn_context) = make_session_and_context().await;
-    let turn_context = Arc::new(turn_context);
-
-    let initial_context = build_initial_context(&session, &turn_context).await;
-    let developer_texts = developer_input_texts(&initial_context);
-
-    assert!(
-        !developer_texts
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "expected initial context to omit image save instructions without image history, got {developer_texts:?}"
-    );
-}
-
-#[tokio::test]
 async fn build_initial_context_trims_skill_metadata_from_context_window_budget() {
     let (session, mut turn_context) = make_session_and_context().await;
     let mut outcome = SkillLoadOutcome::default();
@@ -8800,102 +8781,6 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
         EventMsg::Warning(WarningEvent { message })
             if message == "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
     ));
-}
-
-#[tokio::test]
-async fn handle_output_item_done_records_image_save_history_message() {
-    let (session, turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let turn_context = Arc::new(turn_context);
-    let call_id = "ig_history_records_message";
-    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        call_id,
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-    let item = ResponseItem::ImageGenerationCall {
-        id: Some(call_id.to_string()),
-        status: "completed".to_string(),
-        revised_prompt: Some("a tiny blue square".to_string()),
-        result: "Zm9v".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-
-    let mut ctx = HandleOutputCtx {
-        sess: Arc::clone(&session),
-        turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
-            turn_context.sub_id.clone(),
-        )),
-        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
-        cancellation_token: CancellationToken::new(),
-    };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should succeed");
-
-    let history = session.clone_history().await;
-    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        "<image_id>",
-    );
-    let image_output_dir = image_output_path
-        .parent()
-        .expect("generated image path should have a parent");
-    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
-        crate::context::ImageGenerationInstructions::new(
-            image_output_dir.display(),
-            image_output_path.display(),
-        ),
-    );
-    let expected = vec![image_message, item];
-    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
-    assert_eq!(
-        std::fs::read(&expected_saved_path).expect("saved file"),
-        b"foo"
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-}
-
-#[tokio::test]
-async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
-    let (session, turn_context) = make_session_and_context().await;
-    let session = Arc::new(session);
-    let turn_context = Arc::new(turn_context);
-    let call_id = "ig_history_no_message";
-    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.thread_id.to_string(),
-        call_id,
-    );
-    let _ = std::fs::remove_file(&expected_saved_path);
-    let item = ResponseItem::ImageGenerationCall {
-        id: Some(call_id.to_string()),
-        status: "completed".to_string(),
-        revised_prompt: Some("broken payload".to_string()),
-        result: "_-8".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-
-    let mut ctx = HandleOutputCtx {
-        sess: Arc::clone(&session),
-        turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
-            turn_context.sub_id.clone(),
-        )),
-        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
-        cancellation_token: CancellationToken::new(),
-    };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should still complete");
-
-    let history = session.clone_history().await;
-    let expected = vec![item];
-    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
-    assert!(!expected_saved_path.exists());
 }
 
 #[tokio::test]
