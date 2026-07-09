@@ -277,6 +277,76 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_streamed_reasoning_id_is_reused_for_completion() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let mut reasoning_added = ev_reasoning_item_added("unused", &[]);
+    reasoning_added["item"]
+        .as_object_mut()
+        .expect("reasoning item")
+        .remove("id");
+    let mut reasoning_done = ev_reasoning_item("unused", &["Consider inputs"], &[]);
+    reasoning_done["item"]
+        .as_object_mut()
+        .expect("reasoning item")
+        .remove("id");
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            reasoning_added,
+            reasoning_done,
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "explain your reasoning".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let started_id = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::Reasoning(item),
+            ..
+        }) => Some(item.id.clone()),
+        _ => None,
+    })
+    .await;
+    let completed_id = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::Reasoning(item),
+            ..
+        }) => Some(item.id.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert!(started_id.starts_with("rs_"));
+    assert_eq!(started_id, completed_id);
+    response_mock.single_request();
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

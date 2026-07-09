@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
@@ -115,13 +116,15 @@ pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
-    let canonical_items = persisted_rollout_items(params.items.as_slice());
-    if canonical_items.is_empty() {
+    // LocalThreadStore rejects paginated threads before opening a writer.
+    let persisted_items =
+        persisted_rollout_items(params.items.as_slice(), ThreadHistoryMode::Legacy);
+    if persisted_items.is_empty() {
         return Ok(());
     }
     let recorder = store.live_recorder(params.thread_id).await?;
     recorder
-        .record_canonical_items(canonical_items.as_slice())
+        .record_canonical_items(persisted_items.as_slice())
         .await
         .map_err(thread_store_io_error)?;
     // LiveThread applies metadata immediately after append_items returns. Wait for the local

@@ -694,6 +694,7 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
         let live_thread = LiveThread::resume(
             store,
+            ThreadHistoryMode::Legacy,
             ResumeThreadParams {
                 thread_id,
                 rollout_path: Some(rollout_path),
@@ -748,6 +749,7 @@ mod tests {
             .expect("external session file");
         let live_thread = LiveThread::resume(
             store,
+            ThreadHistoryMode::Legacy,
             ResumeThreadParams {
                 thread_id,
                 rollout_path: Some(rollout_path),
