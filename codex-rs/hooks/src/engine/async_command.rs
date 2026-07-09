@@ -5,8 +5,8 @@
 //! snapshots the ready completions at turn entry, before any hooks for that
 //! turn run, so output that completes during the turn cannot race into it.
 //!
-//! The runtime survives hook configuration refreshes and bounds concurrent
-//! commands, queued completions, and the amount delivered to one request.
+//! The runtime survives hook configuration refreshes and delivers all output
+//! that was ready when an accepted user turn began.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,7 +15,6 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use codex_protocol::ThreadId;
-use codex_utils_output_truncation::approx_token_count;
 use tokio::task::JoinSet;
 
 use super::CommandShell;
@@ -23,11 +22,6 @@ use super::ConfiguredHandler;
 use super::command_runner::run_command;
 use super::output_parser;
 use crate::output_spill::HookOutputSpiller;
-
-const MAX_QUEUED_COMPLETIONS: usize = 64;
-const MAX_IN_FLIGHT_COMMANDS: usize = 32;
-const MAX_DELIVERED_COMPLETIONS_PER_REQUEST: usize = 8;
-const MAX_DELIVERED_OUTPUT_TOKENS_PER_REQUEST: usize = 10_000;
 
 /// Informational async hook output ready to be recorded for a model request.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -133,15 +127,6 @@ impl AsyncCommandRuntime {
         if state.shutting_down {
             return;
         }
-        if state.tasks.len() >= MAX_IN_FLIGHT_COMMANDS {
-            tracing::warn!(
-                event_name = ?handler.event_name,
-                hook_source = ?handler.source,
-                limit = MAX_IN_FLIGHT_COMMANDS,
-                "skipping async hook command after reaching the session concurrency limit"
-            );
-            return;
-        }
 
         let launch_sequence = state.next_launch_sequence;
         state.next_launch_sequence = state.next_launch_sequence.saturating_add(1);
@@ -177,49 +162,14 @@ impl AsyncCommandRuntime {
                 return;
             }
             state.completions.insert(launch_sequence, output);
-            if state.completions.len() > MAX_QUEUED_COMPLETIONS
-                && let Some((oldest, _)) = state.completions.pop_first()
-            {
-                tracing::warn!(
-                    launch_sequence = oldest,
-                    "dropping queued async hook output after reaching the session limit"
-                );
-            }
         });
     }
 
     /// Drains output that was ready when an accepted user turn began.
-    ///
-    /// Delivery is bounded; remaining output stays queued for later accepted
-    /// user turns.
     fn drain_for_accepted_turn(&self, ready: Vec<u64>) -> AsyncHookDelivery {
         let mut state = self.inner.lock_state();
-        let mut eligible = Vec::new();
-        let mut output_tokens = 0usize;
-        for launch_sequence in ready {
-            let Some(completion) = state.completions.get(&launch_sequence) else {
-                continue;
-            };
-            if eligible.len() >= MAX_DELIVERED_COMPLETIONS_PER_REQUEST {
-                break;
-            }
-            let completion_output_tokens = completion
-                .additional_context
-                .as_deref()
-                .into_iter()
-                .chain(completion.system_message.as_deref())
-                .map(approx_token_count)
-                .fold(0, usize::saturating_add);
-            if output_tokens.saturating_add(completion_output_tokens)
-                > MAX_DELIVERED_OUTPUT_TOKENS_PER_REQUEST
-            {
-                break;
-            }
-            eligible.push(launch_sequence);
-            output_tokens = output_tokens.saturating_add(completion_output_tokens);
-        }
         let mut delivery = AsyncHookDelivery::default();
-        for launch_sequence in eligible {
+        for launch_sequence in ready {
             let Some(completion) = state.completions.remove(&launch_sequence) else {
                 continue;
             };

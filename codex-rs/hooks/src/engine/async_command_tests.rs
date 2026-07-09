@@ -2,16 +2,7 @@ use pretty_assertions::assert_eq;
 
 use super::AsyncCommandRuntime;
 use super::AsyncHookDelivery;
-use super::MAX_DELIVERED_OUTPUT_TOKENS_PER_REQUEST;
-use super::MAX_IN_FLIGHT_COMMANDS;
-use crate::engine::CommandShell;
-use crate::engine::ConfiguredHandler;
 use crate::engine::output_parser::AsyncInformationalOutput;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookSource;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::HashMap;
 
 enum TestOutput<'a> {
     AdditionalContext(&'a str),
@@ -69,65 +60,23 @@ fn unfinished_earlier_launch_does_not_block_ready_output() {
     assert_eq!(delivery, context_delivery("ready"));
 }
 
-#[tokio::test]
-async fn launch_is_skipped_at_session_concurrency_limit() {
-    let runtime = AsyncCommandRuntime::new();
-    {
-        let mut state = runtime.inner.lock_state();
-        for _ in 0..MAX_IN_FLIGHT_COMMANDS {
-            state.tasks.spawn(std::future::pending());
-        }
-    }
-
-    runtime.spawn(
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
-        ConfiguredHandler {
-            event_name: HookEventName::PreToolUse,
-            matcher: None,
-            command: "exit 0".to_string(),
-            timeout_sec: 5,
-            status_message: None,
-            source_path: AbsolutePathBuf::current_dir().expect("current dir"),
-            source: HookSource::User,
-            display_order: 0,
-            env: HashMap::new(),
-        },
-        /*configured_order*/ 0,
-        String::new(),
-        std::env::current_dir().expect("current dir"),
-        ThreadId::new(),
-    );
-
-    assert_eq!(runtime.inner.lock_state().next_launch_sequence, 0);
-    runtime.shutdown().await;
-}
-
 #[test]
-fn shared_output_budget_leaves_remaining_completions_queued() {
+fn all_snapshotted_completions_are_delivered_together() {
     let runtime = AsyncCommandRuntime::new();
-    let output = "x".repeat(MAX_DELIVERED_OUTPUT_TOKENS_PER_REQUEST);
     for (launch_sequence, output) in (0_u64..).zip([
-        TestOutput::AdditionalContext(&output),
-        TestOutput::SystemMessage(&output),
-        TestOutput::AdditionalContext(&output),
-        TestOutput::SystemMessage(&output),
-        TestOutput::AdditionalContext(&output),
+        TestOutput::AdditionalContext("first"),
+        TestOutput::SystemMessage("notice"),
+        TestOutput::AdditionalContext("second"),
     ]) {
         complete(&runtime, launch_sequence, output);
     }
 
-    let first_delivery = runtime.pending_delivery().accept_turn();
+    let delivery = runtime.pending_delivery().accept_turn();
     assert_eq!(
-        first_delivery,
+        delivery,
         super::AsyncHookDelivery {
-            additional_contexts: vec![output.clone(), output.clone()],
-            system_messages: vec![output.clone(), output.clone()],
+            additional_contexts: vec!["first".to_string(), "second".to_string()],
+            system_messages: vec!["notice".to_string()],
         }
     );
-
-    let second_delivery = runtime.pending_delivery().accept_turn();
-    assert_eq!(second_delivery, context_delivery(output));
 }
