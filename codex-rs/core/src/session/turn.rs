@@ -102,7 +102,6 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
-use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -1917,27 +1916,19 @@ async fn drain_in_flight(
     Ok(())
 }
 
-fn validate_streamed_response_item_id(
-    turn_context: &TurnContext,
-    event_name: &str,
-    item: &ResponseItem,
-) -> CodexResult<()> {
-    // Legacy streams have historically tolerated missing IDs. Paginated rollouts persist items
-    // by ID, so do not synthesize different IDs for added and done events.
-    if matches!(turn_context.history_mode, ThreadHistoryMode::Paginated)
-        && !matches!(
-            item,
-            ResponseItem::CompactionTrigger { .. } | ResponseItem::Other
-        )
-        && item.id().is_none()
-    {
-        Err(CodexErr::Stream(
-            format!("{event_name} item is missing id"),
-            None,
-        ))
-    } else {
-        Ok(())
+fn assign_missing_streamed_response_item_id(
+    item: &mut ResponseItem,
+    active_item: Option<&TurnItem>,
+) {
+    if item.id().is_some() {
+        return;
     }
+
+    let active_item_id = active_item
+        .map(TurnItem::id)
+        .filter(|item_id| !item_id.is_empty());
+    item.set_id(active_item_id);
+    Session::assign_missing_response_item_id(item);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2054,13 +2045,9 @@ async fn try_run_sampling_request(
 
         match event {
             ResponseEvent::Created => {}
-            ResponseEvent::OutputItemDone(item) => {
-                if let Err(err) = validate_streamed_response_item_id(
-                    &turn_context,
-                    "response.output_item.done",
-                    &item,
-                ) {
-                    break Err(err);
+            ResponseEvent::OutputItemDone(mut item) => {
+                if turn_context.item_ids_enabled() {
+                    assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
                 }
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
@@ -2155,13 +2142,9 @@ async fn try_run_sampling_request(
                     });
                 }
             }
-            ResponseEvent::OutputItemAdded(item) => {
-                if let Err(err) = validate_streamed_response_item_id(
-                    &turn_context,
-                    "response.output_item.added",
-                    &item,
-                ) {
-                    break Err(err);
+            ResponseEvent::OutputItemAdded(mut item) => {
+                if turn_context.item_ids_enabled() {
+                    assign_missing_streamed_response_item_id(&mut item, None);
                 }
                 if let ResponseItem::CustomToolCall {
                     call_id,

@@ -1185,6 +1185,8 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             }
             RolloutItem::EventMsg(ev) => {
                 if let Some(preview) = event_msg_preview(&ev) {
+                    // Legacy rollouts persist UserMessage while paginated rollouts persist
+                    // ItemCompleted(UserMessage), so summaries must recognize both formats.
                     let is_user_message = match &ev {
                         EventMsg::UserMessage(_) => true,
                         EventMsg::ItemCompleted(event) => {
