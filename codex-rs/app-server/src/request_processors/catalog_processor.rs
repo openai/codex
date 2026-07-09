@@ -671,7 +671,7 @@ impl CatalogRequestProcessor {
             .set_extra_roots(extra_roots);
         self.outgoing
             .send_server_notification(ServerNotification::SkillsChanged(
-                codex_app_server_protocol::SkillsChangedNotification {},
+                codex_app_server_protocol::SkillsChangedNotification { thread_id: None },
             ))
             .await;
         Ok(SkillsExtraRootsSetResponse {})

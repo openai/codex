@@ -60,7 +60,7 @@ async fn expect_skills_changed_notification(
         .params
         .context("skills/changed params must be present")?;
     let notification: SkillsChangedNotification = serde_json::from_value(params)?;
-    assert_eq!(notification, SkillsChangedNotification {});
+    assert_eq!(notification, SkillsChangedNotification { thread_id: None });
     Ok(())
 }
 
@@ -992,7 +992,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         .context("skills/changed params must be present")?;
     let notification: SkillsChangedNotification = serde_json::from_value(params)?;
 
-    assert_eq!(notification, SkillsChangedNotification {});
+    assert_eq!(notification, SkillsChangedNotification { thread_id: None });
     let updated_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],

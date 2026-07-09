@@ -12,6 +12,7 @@ use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::guardian_agent_spawner;
+use crate::extensions::send_thread_skills_changed;
 use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
@@ -264,6 +265,17 @@ impl MessageProcessor {
                     restriction_product,
                 ),
             );
+        let skills_catalog_changed: Arc<dyn Fn(ThreadId) + Send + Sync> = {
+            let outgoing = outgoing.clone();
+            let thread_state_manager = thread_state_manager.clone();
+            Arc::new(move |thread_id| {
+                let outgoing = outgoing.clone();
+                let thread_state_manager = thread_state_manager.clone();
+                tokio::spawn(async move {
+                    send_thread_skills_changed(&outgoing, &thread_state_manager, thread_id).await;
+                });
+            })
+        };
         let goal_service = Arc::new(GoalService::new());
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
@@ -285,6 +297,7 @@ impl MessageProcessor {
                         goal_service: Arc::clone(&goal_service),
                         environment_manager: Arc::clone(&environment_manager_for_extensions),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        skills_catalog_changed: Arc::clone(&skills_catalog_changed),
                         thread_store: Arc::clone(&thread_store),
                     },
                 ),
@@ -428,7 +441,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager.clone(),
             pending_thread_unloads,
-            thread_state_manager,
+            thread_state_manager.clone(),
             thread_watch_manager,
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
@@ -463,8 +476,12 @@ impl MessageProcessor {
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
             });
-        let environment_processor =
-            EnvironmentRequestProcessor::new(thread_manager.environment_manager());
+        let environment_processor = EnvironmentRequestProcessor::new(
+            thread_manager.environment_manager(),
+            Arc::clone(&thread_manager),
+            outgoing.clone(),
+            thread_state_manager,
+        );
         let fs_processor = FsRequestProcessor::new(
             Arc::clone(&environment_manager_for_requests),
             FsWatchManager::new(outgoing.clone()),

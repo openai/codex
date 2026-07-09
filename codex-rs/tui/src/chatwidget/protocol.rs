@@ -140,8 +140,12 @@ impl ChatWidget {
                     );
                 }
             }
-            ServerNotification::SkillsChanged(_) => {
-                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+            ServerNotification::SkillsChanged(notification) => {
+                // Thread-selected skills use executor resource locators that the TUI does not
+                // consume yet. Keep the existing local-skill refresh behavior unchanged.
+                if notification.thread_id.is_none() {
+                    self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+                }
             }
             ServerNotification::ModelRerouted(_) => {}
             ServerNotification::ModelVerification(notification) => {

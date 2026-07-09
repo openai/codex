@@ -29,6 +29,7 @@ pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     orchestrator_skills_available: bool,
     executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
+    projected_executor_catalog: Mutex<Option<SkillCatalog>>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
@@ -38,6 +39,7 @@ impl SkillsThreadState {
             config: Mutex::new(config),
             orchestrator_skills_available,
             executor_cache: Mutex::new(Vec::new()),
+            projected_executor_catalog: Mutex::new(None),
             orchestrator_cache: Mutex::new(None),
         }
     }
@@ -114,6 +116,21 @@ impl SkillsThreadState {
             );
         }
         catalog
+    }
+
+    pub(crate) async fn project_executor_catalog(
+        &self,
+        providers: &SkillProviders,
+        query: SkillListQuery,
+    ) -> (SkillCatalog, bool) {
+        let catalog = self.executor_catalog_snapshot(providers, query).await;
+        let mut projected = self
+            .projected_executor_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = projected.as_ref() != Some(&catalog);
+        *projected = Some(catalog.clone());
+        (catalog, changed)
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(

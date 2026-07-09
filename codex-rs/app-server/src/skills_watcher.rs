@@ -147,7 +147,7 @@ impl SkillsWatcher {
                 skills_service.clear_cache();
                 outgoing
                     .send_server_notification(ServerNotification::SkillsChanged(
-                        SkillsChangedNotification {},
+                        SkillsChangedNotification { thread_id: None },
                     ))
                     .await;
             }

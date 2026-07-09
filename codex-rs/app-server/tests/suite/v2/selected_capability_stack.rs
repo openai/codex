@@ -16,6 +16,7 @@ use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -99,11 +100,6 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &responses_server,
         vec![
             responses::sse(vec![
-                responses::ev_response_created("environment-unavailable"),
-                responses::ev_assistant_message("unavailable-message", "Waiting"),
-                responses::ev_completed("environment-unavailable"),
-            ]),
-            responses::sse(vec![
                 responses::ev_response_created("environment-available-call"),
                 responses::ev_function_call_with_namespace(
                     MCP_CALL_ID,
@@ -157,22 +153,17 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         fixture.environment_cwd.clone(),
     )
     .await?;
-
-    run_turn(
-        &mut app_server,
-        &thread_id,
-        "Inspect the current capabilities",
-        fixture.environment_cwd.clone(),
-    )
-    .await?;
-    let initial_requests = response_mock.requests();
-    assert_selected_capabilities_absent(&initial_requests[0]);
+    let (thread_skills, warnings) = list_thread_skills(&mut app_server, &thread_id).await?;
+    assert_eq!(thread_skills, Vec::new());
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains(&format!("environment `{EXECUTOR_ID}` is unavailable")));
 
     let mut exec_server =
         spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     let mut exec_server_proxy =
         DisconnectableWebSocketProxy::start(&fixture.exec_server_url).await?;
     add_environment(&mut app_server, exec_server_proxy.websocket_url()).await?;
+    wait_for_thread_skills_changed(&mut app_server, &thread_id).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
@@ -182,6 +173,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         fixture.environment_cwd.clone(),
     )
     .await?;
+    wait_for_thread_skills_changed(&mut app_server, &thread_id).await?;
     let first_mcp_pid = wait_for_pid_file(&fixture.pid_file).await?;
 
     run_turn(
@@ -200,6 +192,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     )
     .await?;
     exec_server_proxy.pause_and_disconnect().await?;
+    wait_for_thread_skills_changed(&mut app_server, &inspection_thread_id).await?;
     assert_eq!(
         timeout(
             Duration::from_secs(2),
@@ -210,6 +203,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         (Vec::new(), Vec::new())
     );
     exec_server_proxy.resume()?;
+    wait_for_thread_skills_changed(&mut app_server, &inspection_thread_id).await?;
     wait_for_selected_mcp_server(&mut app_server, &inspection_thread_id).await?;
 
     let request_id = app_server
@@ -228,6 +222,10 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     assert!(
         data.iter()
             .any(|entry| { entry.skills.iter().any(|skill| skill.name == SKILL_NAME) })
+    );
+    assert_eq!(
+        list_thread_skills(&mut app_server, &inspection_thread_id).await?,
+        (vec![fixture.thread_skill.clone()], Vec::new())
     );
 
     exec_server.kill().await?;
@@ -263,10 +261,10 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     )
     .await?;
     let requests = response_mock.requests();
-    assert_eq!(5, requests.len());
-    assert_selected_plugin_tools_absent(&requests[4]);
+    assert_eq!(4, requests.len());
+    assert_selected_plugin_tools_absent(&requests[3]);
     assert!(
-        latest_selected_skill_update(&requests[4])
+        latest_selected_skill_update(&requests[3])
             .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
     let (thread_skills, warnings) = list_thread_skills(&mut app_server, &thread_id).await?;
@@ -276,6 +274,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    wait_for_thread_skills_changed(&mut app_server, &thread_id).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
     assert_eq!(
         list_thread_skills(&mut app_server, &thread_id).await?,
@@ -286,28 +285,60 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &mut app_server,
         &thread_id,
         &format!("Use ${SKILL_NAME} after reattaching the selected executor"),
-        fixture.environment_cwd,
+        fixture.environment_cwd.clone(),
     )
     .await?;
     let resumed_mcp_pid = wait_for_pid_file(&fixture.pid_file).await?;
     assert_ne!(first_mcp_pid, resumed_mcp_pid);
 
     let requests = response_mock.requests();
-    assert_eq!(6, requests.len());
-    for request in &requests[1..4] {
+    assert_eq!(5, requests.len());
+    for request in &requests[..3] {
         assert_selected_skill_is_injected(request, /*expected_count*/ 1);
         assert_selected_plugin_tools(request);
         assert_plugin_guidance_count(request, /*expected_count*/ 1);
     }
-    assert_plugin_guidance_count(&requests[4], /*expected_count*/ 1);
-    assert_selected_skill_is_injected(&requests[5], /*expected_count*/ 2);
-    assert_selected_plugin_tools(&requests[5]);
-    let output = requests[2].function_call_output(MCP_CALL_ID);
+    assert_plugin_guidance_count(&requests[3], /*expected_count*/ 1);
+    assert_selected_skill_is_injected(&requests[4], /*expected_count*/ 2);
+    assert_selected_plugin_tools(&requests[4]);
+    let output = requests[1].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
         .expect("MCP function output should be text");
     assert!(output.contains("ECHOING: hello from the selected executor"));
     assert!(output.contains(EXECUTOR_ENV_VALUE));
+
+    let replacement_thread_id = start_thread(
+        &mut app_server,
+        fixture.selected_root.clone(),
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+    assert_eq!(
+        list_thread_skills(&mut app_server, &replacement_thread_id).await?,
+        (vec![fixture.thread_skill.clone()], Vec::new())
+    );
+    let stalled_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    add_environment(
+        &mut app_server,
+        &format!("ws://{}", stalled_listener.local_addr()?),
+    )
+    .await?;
+    timeout(
+        Duration::from_secs(2),
+        wait_for_thread_skills_changed(&mut app_server, &replacement_thread_id),
+    )
+    .await
+    .context("environment replacement did not invalidate thread skills")??;
+    assert_eq!(
+        timeout(
+            Duration::from_secs(2),
+            list_thread_skills(&mut app_server, &replacement_thread_id),
+        )
+        .await
+        .context("skills/list waited for the replacement environment")??,
+        (Vec::new(), Vec::new())
+    );
 
     exec_server.kill().await?;
     apps_server_handle.abort();
@@ -798,6 +829,40 @@ async fn list_thread_skills(
         ..
     } = to_response(response)?;
     Ok((thread_skills, thread_skill_warnings))
+}
+
+async fn wait_for_thread_skills_changed(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    let notification = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_matching_notification(
+            "thread-scoped skills/changed",
+            |notification| {
+                notification.method == "skills/changed"
+                    && notification
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("threadId"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(thread_id)
+            },
+        ),
+    )
+    .await??;
+    let notification: SkillsChangedNotification = serde_json::from_value(
+        notification
+            .params
+            .context("skills/changed params missing")?,
+    )?;
+    assert_eq!(
+        notification,
+        SkillsChangedNotification {
+            thread_id: Some(thread_id.to_string())
+        }
+    );
+    Ok(())
 }
 
 async fn wait_for_selected_mcp_server(

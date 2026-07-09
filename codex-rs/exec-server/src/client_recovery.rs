@@ -310,7 +310,7 @@ impl Inner {
             return;
         }
 
-        self.notify_connection_changed();
+        self.notify_readiness_changed();
         let inner = Arc::clone(self);
         tokio::spawn(async move {
             inner.recover(disconnect_message).await;
@@ -416,9 +416,21 @@ impl Inner {
             }
         };
         if installed {
-            self.notify_connection_changed();
+            self.notify_readiness_changed();
         }
         installed
+    }
+
+    fn notify_readiness_changed(&self) {
+        self.notify_connection_changed();
+        if let Some(readiness_changed) = self
+            .readiness_changed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            readiness_changed.send_replace(());
+        }
     }
 
     fn notify_connection_changed(&self) {
@@ -518,7 +530,7 @@ impl Inner {
             }
         };
         if newly_failed {
-            self.notify_connection_changed();
+            self.notify_readiness_changed();
             fail_all_in_flight_work(self, message.clone()).await;
         }
     }
