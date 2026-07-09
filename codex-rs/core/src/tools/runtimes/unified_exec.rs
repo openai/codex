@@ -508,6 +508,7 @@ mod tests {
             LOCAL_ENVIRONMENT_ID.to_string(),
             Arc::new(Environment::default_for_tests()),
             cwd,
+            Vec::new(),
             /*shell*/ None,
         )
     }

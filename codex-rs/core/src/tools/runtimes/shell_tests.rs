@@ -13,6 +13,7 @@ async fn approval_key_includes_environment_id() {
             "remote".to_string(),
             Arc::new(Environment::default_for_tests()),
             PathUri::from_abs_path(&cwd),
+            Vec::new(),
             /*shell*/ None,
         ),
         shell_type: None,

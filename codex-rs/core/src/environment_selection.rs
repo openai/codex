@@ -177,9 +177,13 @@ impl ThreadEnvironments {
             } else {
                 Some(local_shell)
             };
-            let mut turn_environment =
-                TurnEnvironment::new(selection.environment_id, environment, selection.cwd, shell)
-                    .with_workspace_roots(selection.workspace_roots);
+            let mut turn_environment = TurnEnvironment::new(
+                selection.environment_id,
+                environment,
+                selection.cwd,
+                selection.workspace_roots,
+                shell,
+            );
             let task = shell_snapshot
                 .build(turn_environment.clone())
                 .boxed()
@@ -840,6 +844,7 @@ url = "ws://127.0.0.1:8765"
             selection.environment_id.clone(),
             Arc::clone(&inherited_environment),
             selection.cwd.clone(),
+            Vec::new(),
             /*shell*/ None,
         );
         let manager = Arc::new(EnvironmentManager::without_environments());
@@ -897,6 +902,7 @@ url = "ws://127.0.0.1:8765"
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
                 cwd_uri.clone(),
+                Vec::new(),
                 /*shell*/ None,
             )],
             starting: Vec::new(),
@@ -908,6 +914,7 @@ url = "ws://127.0.0.1:8765"
                     REMOTE_ENVIRONMENT_ID.to_string(),
                     remote_environment,
                     cwd_uri,
+                    Vec::new(),
                     /*shell*/ None,
                 ),
             ],

@@ -6065,6 +6065,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         "remote".to_string(),
         current_environment.environment,
         PathUri::from_abs_path(&environment_cwd),
+        Vec::new(),
         current_environment.shell,
     );
 
@@ -6697,6 +6698,7 @@ async fn primary_environment_uses_first_turn_environment() {
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd_uri.clone(),
+            Vec::new(),
             /*shell*/ None,
         ));
 
@@ -7919,6 +7921,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
         environment.environment_id,
         environment.environment,
         PathUri::from_abs_path(&cwd),
+        Vec::new(),
         environment.shell,
     );
 
@@ -7978,6 +7981,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
         environment.environment_id,
         environment.environment,
         PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
+        Vec::new(),
         environment.shell,
     );
 
@@ -8706,6 +8710,7 @@ async fn turn_context_item_stores_local_cwd() {
         "remote".to_string(),
         environment.environment,
         cwd,
+        Vec::new(),
         environment.shell,
     );
 

@@ -1169,6 +1169,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
             "remote".to_string(),
             environment,
             secondary_cwd.clone(),
+            Vec::new(),
             /*shell*/ None,
         ));
 

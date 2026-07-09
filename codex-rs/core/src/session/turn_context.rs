@@ -55,13 +55,14 @@ impl TurnEnvironment {
         environment_id: String,
         environment: Arc<Environment>,
         cwd: PathUri,
+        workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
     ) -> Self {
         Self {
             environment_id,
             environment,
             cwd,
-            workspace_roots: Vec::new(),
+            workspace_roots,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
         }
@@ -83,11 +84,6 @@ impl TurnEnvironment {
 
     pub(crate) fn workspace_roots(&self) -> &[PathUri] {
         &self.workspace_roots
-    }
-
-    pub(crate) fn with_workspace_roots(mut self, workspace_roots: Vec<PathUri>) -> Self {
-        self.workspace_roots = workspace_roots;
-        self
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {

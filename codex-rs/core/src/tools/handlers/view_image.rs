@@ -270,6 +270,7 @@ mod tests {
             current.environment_id,
             current.environment,
             PathUri::from_abs_path(&cwd),
+            Vec::new(),
             current.shell,
         );
     }
