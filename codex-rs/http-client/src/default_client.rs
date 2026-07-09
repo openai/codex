@@ -64,6 +64,43 @@ impl HttpClient {
             self.request_logging,
         )
     }
+
+    pub(crate) async fn execute(
+        &self,
+        mut request: reqwest::Request,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        request.headers_mut().extend(trace_headers());
+        let method = request.method().clone();
+        let url = request.url().to_string();
+
+        match self.inner.execute(request).await {
+            Ok(response) => {
+                if self.request_logging == RequestLogging::Enabled {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = %response.status(),
+                        headers = ?response.headers(),
+                        version = ?response.version(),
+                        "Request completed"
+                    );
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                if self.request_logging == RequestLogging::Enabled {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = error.status().map(|status| status.as_u16()),
+                        error = %error,
+                        "Request failed"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +229,7 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
-fn trace_headers() -> HeaderMap {
+pub(crate) fn trace_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     global::get_text_map_propagator(|prop| {
         prop.inject_context(

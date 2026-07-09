@@ -255,6 +255,15 @@ impl HttpClientFactory {
         )
     }
 
+    pub(crate) fn build_reqwest_client_for_resolved_route(
+        &self,
+        builder: reqwest::ClientBuilder,
+        route_class: ClientRouteClass,
+        route: &OutboundProxyRoute,
+    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+        let builder = configure_builder_for_resolved_route(builder, route_class, route)?;
+        build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
+    }
 }
 
 fn resolve_proxy_route(
