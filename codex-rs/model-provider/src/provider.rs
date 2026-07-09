@@ -220,7 +220,10 @@ pub fn create_model_provider(
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+        let managed_auth = auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.bedrock_api_key_auth_cached());
+        Arc::new(AmazonBedrockModelProvider::new(provider_info, managed_auth))
     } else {
         Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
     }
@@ -527,17 +530,6 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
-    }
-
-    #[tokio::test]
-    async fn create_model_provider_uses_managed_auth_for_amazon_bedrock_provider() {
-        let auth = bedrock_api_key_auth();
-        let provider = create_model_provider(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            Some(AuthManager::from_auth_for_testing(auth.clone())),
-        );
-
-        assert_eq!(provider.auth().await, Some(auth));
     }
 
     #[test]

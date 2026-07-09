@@ -302,6 +302,8 @@ use crate::SkillsService;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
+use crate::model_provider_runtime::InitialModelProviderRuntime;
+use crate::model_provider_runtime::ModelProviderRuntimeSource;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
@@ -311,6 +313,7 @@ use crate::skills::SkillLoadOutcome;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
+use crate::state::SessionModelRuntime;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -412,6 +415,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
+    pub(crate) model_provider_runtime: InitialModelProviderRuntime,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
@@ -504,6 +508,7 @@ impl Codex {
             installation_id,
             auth_manager,
             models_manager,
+            model_provider_runtime,
             environment_manager,
             skills_service,
             plugins_manager,
@@ -686,6 +691,7 @@ impl Codex {
             installation_id,
             auth_manager.clone(),
             models_manager.clone(),
+            model_provider_runtime,
             exec_policy,
             tx_event.clone(),
             agent_status_tx.clone(),

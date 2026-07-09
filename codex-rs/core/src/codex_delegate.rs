@@ -45,6 +45,7 @@ use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::mcp_tool_call::mcp_approvals_reviewer;
+use crate::model_provider_runtime::build_explicit_model_provider_runtime_with_models_manager;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
@@ -91,6 +92,11 @@ pub(crate) async fn run_codex_thread_interactive(
         instructions: parent_session.user_instructions().await,
         warnings: Vec::new(),
     };
+    let model_provider_runtime = build_explicit_model_provider_runtime_with_models_manager(
+        &config,
+        Arc::clone(&auth_manager),
+        Arc::clone(&models_manager),
+    );
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         allow_provider_model_fallback: false,
@@ -98,6 +104,7 @@ pub(crate) async fn run_codex_thread_interactive(
         installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
+        model_provider_runtime,
         environment_manager: parent_session
             .services
             .turn_environments

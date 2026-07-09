@@ -1,10 +1,10 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::model_provider_runtime::ModelProviderRuntimeSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
-use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -109,6 +109,9 @@ pub struct TurnContext {
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
+    pub(crate) models_manager: SharedModelsManager,
+    pub(crate) model_client: ModelClient,
+    pub(crate) model_provider_generation: u64,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
@@ -269,6 +272,9 @@ impl TurnContext {
                 .clone()
                 .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
+            models_manager: Arc::clone(&self.models_manager),
+            model_client: self.model_client.clone(),
+            model_provider_generation: self.model_provider_generation,
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
@@ -421,7 +427,121 @@ fn local_time_context() -> (String, String) {
     }
 }
 
+struct PreparedModelProviderAdoption {
+    current: Arc<SessionModelRuntime>,
+    latest: Arc<ModelProviderRuntimeSnapshot>,
+    model: String,
+    model_info: ModelInfo,
+}
+
 impl Session {
+    async fn prepare_latest_default_model_provider_adoption(
+        &self,
+    ) -> Option<PreparedModelProviderAdoption> {
+        let current = self.services.model_runtime.load_full();
+        let ModelProviderRuntimeSource::RuntimeDefault(runtime) = &current.source else {
+            return None;
+        };
+        let latest = runtime.snapshot();
+        if latest.generation() == current.snapshot.generation() {
+            return None;
+        }
+
+        let (refresh_strategy, mut config) = {
+            let state = self.state.lock().await;
+            let refresh_strategy = if state
+                .session_configuration
+                .session_source
+                .is_non_root_agent()
+            {
+                RefreshStrategy::Offline
+            } else {
+                RefreshStrategy::OnlineIfUncached
+            };
+            let config = (*state.session_configuration.original_config_do_not_use).clone();
+            (refresh_strategy, config)
+        };
+        let models_manager = latest.models_manager();
+        let _ = models_manager
+            .list_models(refresh_strategy, config.http_client_factory())
+            .await;
+        let model = models_manager
+            .get_default_model(
+                /*model*/ &None,
+                /*allow_provider_model_fallback*/ true,
+                refresh_strategy,
+                config.http_client_factory(),
+            )
+            .await;
+
+        latest.apply_to_config(&mut config);
+        config.model = Some(model.clone());
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &config.to_models_manager_config())
+            .await;
+        Some(PreparedModelProviderAdoption {
+            current,
+            latest,
+            model,
+            model_info,
+        })
+    }
+
+    fn apply_default_model_provider_adoption(
+        &self,
+        state: &mut SessionState,
+        prepared: Option<PreparedModelProviderAdoption>,
+    ) -> Arc<SessionModelRuntime> {
+        let installed = self.services.model_runtime.load_full();
+        let Some(prepared) = prepared else {
+            return installed;
+        };
+        if !Arc::ptr_eq(&installed.snapshot, &prepared.current.snapshot) {
+            return installed;
+        }
+
+        let PreparedModelProviderAdoption {
+            current,
+            latest,
+            model,
+            model_info,
+        } = prepared;
+        let supported_reasoning_levels = model_info
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort.clone())
+            .collect::<Vec<_>>();
+        let current_reasoning_effort = state
+            .session_configuration
+            .collaboration_mode
+            .reasoning_effort();
+        let reasoning_effort = current_reasoning_effort
+            .filter(|effort| supported_reasoning_levels.contains(effort))
+            .or_else(|| model_info.default_reasoning_level.clone());
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        latest.apply_to_config(&mut config);
+        config.model = Some(model.clone());
+        config.model_reasoning_effort = reasoning_effort.clone();
+
+        state.session_configuration.provider = latest.provider_info().clone();
+        state.session_configuration.collaboration_mode =
+            state.session_configuration.collaboration_mode.with_updates(
+                Some(model),
+                Some(reasoning_effort),
+                /*developer_instructions*/ None,
+            );
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+        let next = Arc::new(SessionModelRuntime {
+            source: current.source.clone(),
+            snapshot: latest.clone(),
+            model_client: current.model_client.rebind_provider(latest.provider()),
+        });
+        self.services.model_runtime.store(Arc::clone(&next));
+        // A prewarmed websocket is bound to the provider runtime that created it.
+        let _ = state.take_session_startup_prewarm();
+        next
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(
         session_configuration: &SessionConfiguration,
@@ -482,7 +602,7 @@ impl Session {
         session_id: SessionId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
-        provider: ModelProviderInfo,
+        model_runtime: &SessionModelRuntime,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
@@ -490,7 +610,6 @@ impl Session {
         main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
-        models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
         environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
@@ -506,8 +625,9 @@ impl Session {
             model_info.slug.as_str(),
         );
         let session_source = session_configuration.session_source.clone();
-        let auth_manager_for_context = auth_manager.clone();
-        let provider_for_context = create_model_provider(provider, auth_manager);
+        let auth_manager_for_context = auth_manager;
+        let provider_for_context = model_runtime.snapshot.provider();
+        let models_manager = model_runtime.models_manager();
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
@@ -549,6 +669,9 @@ impl Session {
             model_info,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
+            models_manager,
+            model_client: model_runtime.model_client.clone(),
+            model_provider_generation: model_runtime.snapshot.generation(),
             reasoning_effort,
             reasoning_summary,
             session_source,
@@ -589,8 +712,11 @@ impl Session {
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
+        let prepared_model_provider = self.prepare_latest_default_model_provider_adoption().await;
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
+            let model_runtime =
+                self.apply_default_model_provider_adoption(&mut state, prepared_model_provider);
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let previous_permission_profile =
@@ -611,6 +737,7 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
+                        model_runtime,
                         permission_profile_changed,
                         previous_config,
                         new_config,
@@ -620,22 +747,27 @@ impl Session {
             }
         };
 
-        let (session_configuration, permission_profile_changed, previous_config, new_config) =
-            match update_result {
-                Ok(update) => update,
-                Err(err) => {
-                    let message = err.to_string();
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: message.clone(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(CodexErr::InvalidRequest(message));
-                }
-            };
+        let (
+            session_configuration,
+            model_runtime,
+            permission_profile_changed,
+            previous_config,
+            new_config,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                let message = err.to_string();
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(CodexErr::InvalidRequest(message));
+            }
+        };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
         if permission_profile_changed {
@@ -647,6 +779,7 @@ impl Session {
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
+                model_runtime,
                 updates.final_output_json_schema,
             )
             .await)
@@ -656,11 +789,13 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        model_runtime: Arc<SessionModelRuntime>,
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
+            model_runtime,
             final_output_json_schema,
             TurnMultiAgentRuntime::ResolveAndStore,
         )
@@ -671,10 +806,12 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        model_runtime: Arc<SessionModelRuntime>,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
+            model_runtime,
             /*final_output_json_schema*/ None,
             TurnMultiAgentRuntime::Preview,
         )
@@ -686,6 +823,7 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        model_runtime: Arc<SessionModelRuntime>,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
@@ -706,9 +844,8 @@ impl Session {
                 .set_permission_profile(session_configuration.permission_profile());
         }
 
-        let model_info = self
-            .services
-            .models_manager
+        let model_info = model_runtime
+            .models_manager()
             .get_model_info(
                 session_configuration.collaboration_mode.model(),
                 &per_turn_config.to_models_manager_config(),
@@ -752,7 +889,7 @@ impl Session {
             self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
-            session_configuration.provider.clone(),
+            model_runtime.as_ref(),
             &session_configuration,
             multi_agent_version,
             self.services.user_shell.as_ref(),
@@ -760,7 +897,6 @@ impl Session {
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
-            &self.services.models_manager,
             self.services
                 .network_proxy
                 .load_full()
@@ -820,10 +956,11 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        let session_configuration = self.default_turn_configuration().await;
+        let (session_configuration, model_runtime) = self.default_turn_configuration().await;
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
+            model_runtime,
             /*final_output_json_schema*/ None,
         )
         .await
@@ -833,13 +970,20 @@ impl Session {
         &self,
         sub_id: String,
     ) -> Arc<TurnContext> {
-        let session_configuration = self.default_turn_configuration().await;
-        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
-            .await
+        let (session_configuration, model_runtime) = self.default_turn_configuration().await;
+        self.new_startup_prewarm_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            model_runtime,
+        )
+        .await
     }
 
-    async fn default_turn_configuration(&self) -> SessionConfiguration {
-        let state = self.state.lock().await;
-        state.session_configuration.clone()
+    async fn default_turn_configuration(&self) -> (SessionConfiguration, Arc<SessionModelRuntime>) {
+        let prepared_model_provider = self.prepare_latest_default_model_provider_adoption().await;
+        let mut state = self.state.lock().await;
+        let model_runtime =
+            self.apply_default_model_provider_adoption(&mut state, prepared_model_provider);
+        (state.session_configuration.clone(), model_runtime)
     }
 }

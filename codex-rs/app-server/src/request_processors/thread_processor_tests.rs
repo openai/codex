@@ -1,3 +1,47 @@
+mod model_provider_selection_tests {
+    use super::super::thread_start_model_provider_selection;
+    use codex_core::ModelProviderSelection;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn omitted_provider_follows_the_runtime_default() {
+        assert_eq!(
+            thread_start_model_provider_selection(
+                /*model_provider*/ None, /*request_config*/ None
+            ),
+            ModelProviderSelection::RuntimeDefault
+        );
+
+        let request_config = HashMap::from([("model".to_string(), json!("mock-model"))]);
+        assert_eq!(
+            thread_start_model_provider_selection(
+                /*model_provider*/ None,
+                Some(&request_config),
+            ),
+            ModelProviderSelection::RuntimeDefault
+        );
+    }
+
+    #[test]
+    fn typed_or_config_provider_override_is_explicit() {
+        assert_eq!(
+            thread_start_model_provider_selection(Some("provider-a"), /*request_config*/ None,),
+            ModelProviderSelection::Explicit
+        );
+
+        let request_config = HashMap::from([("model_provider".to_string(), json!("provider-a"))]);
+        assert_eq!(
+            thread_start_model_provider_selection(
+                /*model_provider*/ None,
+                Some(&request_config),
+            ),
+            ModelProviderSelection::Explicit
+        );
+    }
+}
+
 mod thread_list_cwd_filter_tests {
     use super::super::normalize_thread_list_cwd_filters;
     use codex_app_server_protocol::ThreadListCwdFilter;

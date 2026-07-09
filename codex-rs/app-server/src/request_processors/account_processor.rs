@@ -184,12 +184,15 @@ impl AccountRequestProcessor {
             .set_auth_mode(self.auth_manager.get_api_auth_mode());
     }
 
-    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
-        let auth = self.auth_manager.auth_cached();
+    async fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+        let config = self.load_latest_config().await;
+        let provider =
+            create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
+        let auth = provider.auth().await;
         AccountUpdatedNotification {
             auth_mode: auth
                 .as_ref()
-                .map(CodexAuth::api_auth_mode)
+                .map(CodexAuth::auth_mode)
                 .map(auth_mode_to_api),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
@@ -424,7 +427,11 @@ impl AccountRequestProcessor {
                 self.config.auth_keyring_backend_kind(),
             )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
-            self.auth_manager.reload().await;
+            self.auth_manager
+                .reload_bedrock_api_key_auth()
+                .map_err(|err| {
+                    internal_error(format!("failed to reload Amazon Bedrock auth: {err}"))
+                })?;
             refresh_default_model_provider(&self.config_manager, &self.thread_manager).await?;
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
@@ -782,7 +789,7 @@ impl AccountRequestProcessor {
 
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
+                self.current_account_updated_notification().await,
             ))
             .await;
     }
@@ -835,11 +842,9 @@ impl AccountRequestProcessor {
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
-        let managed_bedrock_auth = matches!(
-            self.auth_manager.auth_cached(),
-            Some(CodexAuth::BedrockApiKey(_))
-        );
         let config = self.load_latest_config().await;
+        let managed_bedrock_auth = config.model_provider.is_amazon_bedrock()
+            && self.auth_manager.bedrock_api_key_auth_cached().is_some();
         if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
             return Err(invalid_request(
                 "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
@@ -854,16 +859,17 @@ impl AccountRequestProcessor {
             }
         }
 
-        match self.auth_manager.logout_with_revoke().await {
-            Ok(_) => {}
-            Err(err) => {
-                return Err(internal_error(format!("logout failed: {err}")));
-            }
-        }
-
         if managed_bedrock_auth {
+            self.auth_manager
+                .logout_bedrock_api_key_auth()
+                .map_err(|err| internal_error(format!("logout failed: {err}")))?;
             clear_user_model_provider_if_bedrock(&self.config_manager).await?;
             refresh_default_model_provider(&self.config_manager, &self.thread_manager).await?;
+        } else {
+            self.auth_manager
+                .logout_with_revoke()
+                .await
+                .map_err(|err| internal_error(format!("logout failed: {err}")))?;
         }
 
         Self::maybe_refresh_plugin_caches_for_current_config(

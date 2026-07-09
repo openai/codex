@@ -13,8 +13,7 @@ pub(super) async fn spawn_review_thread(
         .review_model
         .clone()
         .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
-    let review_model_info = sess
-        .services
+    let review_model_info = parent_turn_context
         .models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
@@ -24,8 +23,7 @@ pub(super) async fn spawn_review_thread(
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let available_models = sess
-        .services
+    let available_models = parent_turn_context
         .models_manager
         .list_models(
             RefreshStrategy::OnlineIfUncached,
@@ -117,6 +115,9 @@ pub(super) async fn spawn_review_thread(
         model_info: model_info.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
+        models_manager: Arc::clone(&parent_turn_context.models_manager),
+        model_client: parent_turn_context.model_client.clone(),
+        model_provider_generation: parent_turn_context.model_provider_generation,
         reasoning_effort,
         reasoning_summary,
         session_source,

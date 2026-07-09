@@ -9,6 +9,9 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
 use crate::model_provider_runtime::DefaultModelProviderRuntime;
+use crate::model_provider_runtime::InitialModelProviderRuntime;
+use crate::model_provider_runtime::ModelProviderRuntimeSource;
+use crate::model_provider_runtime::build_explicit_model_provider_runtime;
 use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -200,6 +203,14 @@ pub struct StartThreadOptions {
     pub supports_openai_form_elicitation: bool,
 }
 
+/// Determines whether a thread follows the process-default model provider or keeps its initial
+/// provider pinned for the lifetime of the loaded session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelProviderSelection {
+    RuntimeDefault,
+    Explicit,
+}
+
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
     let service_name = service_name?.trim();
     for originator in ["codex_work_desktop", "codex_work_web", "codex_work_mobile"] {
@@ -241,7 +252,7 @@ pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
-    default_model_provider_runtime: DefaultModelProviderRuntime,
+    default_model_provider_runtime: Arc<DefaultModelProviderRuntime>,
     environment_manager: Arc<EnvironmentManager>,
     skills_service: Arc<SkillsService>,
     plugins_manager: Arc<PluginsManager>,
@@ -334,10 +345,10 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                default_model_provider_runtime: DefaultModelProviderRuntime::new(
+                default_model_provider_runtime: Arc::new(DefaultModelProviderRuntime::new(
                     config,
                     auth_manager.clone(),
-                ),
+                )),
                 environment_manager,
                 skills_service,
                 plugins_manager,
@@ -456,13 +467,13 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                default_model_provider_runtime: DefaultModelProviderRuntime::from_parts(
+                default_model_provider_runtime: Arc::new(DefaultModelProviderRuntime::from_parts(
                     OPENAI_PROVIDER_ID.to_string(),
                     provider,
                     codex_home,
                     /*config_model_catalog*/ None,
                     auth_manager.clone(),
-                ),
+                )),
                 environment_manager,
                 skills_service,
                 plugins_manager,
@@ -706,14 +717,31 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
-            .await
+        self.start_thread_with_options_and_provider_selection(
+            options,
+            ModelProviderSelection::Explicit,
+        )
+        .await
+    }
+
+    pub async fn start_thread_with_options_and_provider_selection(
+        &self,
+        options: StartThreadOptions,
+        model_provider_selection: ModelProviderSelection,
+    ) -> CodexResult<NewThread> {
+        self.start_thread_with_options_and_fork_source(
+            options,
+            /*forked_from_thread_id*/ None,
+            model_provider_selection,
+        )
+        .await
     }
 
     async fn start_thread_with_options_and_fork_source(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        model_provider_selection: ModelProviderSelection,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
@@ -742,6 +770,7 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            model_provider_selection,
         ))
         .await
     }
@@ -779,8 +808,12 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
-            .await
+        self.start_thread_with_options_and_fork_source(
+            options,
+            Some(forked_from_thread_id),
+            ModelProviderSelection::Explicit,
+        )
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -839,6 +872,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -910,6 +944,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -1412,6 +1447,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -1452,6 +1488,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -1494,6 +1531,7 @@ impl ThreadManagerState {
             thread_extension_init,
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -1537,6 +1575,7 @@ impl ThreadManagerState {
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
+            ModelProviderSelection::Explicit,
         ))
         .await
     }
@@ -1544,7 +1583,7 @@ impl ThreadManagerState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
-        config: Config,
+        mut config: Config,
         initial_history: InitialHistory,
         history_mode: Option<ThreadHistoryMode>,
         allow_provider_model_fallback: bool,
@@ -1563,6 +1602,7 @@ impl ThreadManagerState {
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
+        model_provider_selection: ModelProviderSelection,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1610,9 +1650,22 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
-        let models_manager = self
-            .default_model_provider_runtime
-            .models_manager_for_config(&config, Arc::clone(&auth_manager));
+        let model_provider_runtime = match model_provider_selection {
+            ModelProviderSelection::RuntimeDefault => {
+                let snapshot = self.default_model_provider_runtime.snapshot();
+                snapshot.apply_to_config(&mut config);
+                InitialModelProviderRuntime {
+                    source: ModelProviderRuntimeSource::RuntimeDefault(Arc::clone(
+                        &self.default_model_provider_runtime,
+                    )),
+                    snapshot,
+                }
+            }
+            ModelProviderSelection::Explicit => {
+                build_explicit_model_provider_runtime(&config, Arc::clone(&auth_manager))
+            }
+        };
+        let models_manager = model_provider_runtime.snapshot.models_manager();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1622,6 +1675,7 @@ impl ThreadManagerState {
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager,
+            model_provider_runtime,
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),

@@ -520,6 +520,44 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
     .new_session()
 }
 
+fn session_model_runtime_for_tests(
+    config: &Config,
+    auth_manager: &Arc<AuthManager>,
+    models_manager: &SharedModelsManager,
+    thread_id: ThreadId,
+    session_configuration: &SessionConfiguration,
+) -> SessionModelRuntime {
+    let initial =
+        crate::model_provider_runtime::build_explicit_model_provider_runtime_with_models_manager(
+            config,
+            Arc::clone(auth_manager),
+            Arc::clone(models_manager),
+        );
+    let model_client = ModelClient::new_with_provider(
+        initial.snapshot.provider(),
+        AgentIdentityAuthPolicy::JwtOnly,
+        thread_id,
+        session_configuration.session_source.clone(),
+        session_configuration.originator.clone(),
+        config.model_verbosity,
+        config.features.enabled(Feature::EnableRequestCompression),
+        config.features.enabled(Feature::RuntimeMetrics),
+        Session::build_model_client_beta_features_header(config),
+        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+        /*concurrent_reasoning_summaries_enabled*/
+        config
+            .features
+            .enabled(Feature::ConcurrentReasoningSummaries),
+        /*attestation_provider*/ None,
+        config.http_client_factory(),
+    );
+    SessionModelRuntime {
+        source: initial.source,
+        snapshot: initial.snapshot,
+        model_client,
+    }
+}
+
 fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
     items
         .iter()
@@ -5287,6 +5325,12 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let model_provider_runtime =
+        crate::model_provider_runtime::build_explicit_model_provider_runtime_with_models_manager(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            Arc::clone(&models_manager),
+        );
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -5294,6 +5338,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
+        model_provider_runtime,
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -5473,6 +5518,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
+        model_runtime: arc_swap::ArcSwap::from_pointee(session_model_runtime_for_tests(
+            config.as_ref(),
+            &auth_manager,
+            &models_manager,
+            thread_id,
+            &session_configuration,
+        )),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -5547,12 +5599,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
         .await;
+    let model_runtime = services.model_runtime.load_full();
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
-        session_configuration.provider.clone(),
+        model_runtime.as_ref(),
         &session_configuration,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
@@ -5560,7 +5613,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
         model_info,
-        &models_manager,
         /*network*/ None,
         resolved_turn_environments,
         session_configuration.cwd().clone(),
@@ -5673,6 +5725,12 @@ async fn make_session_with_config_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let model_provider_runtime =
+        crate::model_provider_runtime::build_explicit_model_provider_runtime_with_models_manager(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            Arc::clone(&models_manager),
+        );
 
     let session = Session::new(
         session_configuration,
@@ -5681,6 +5739,7 @@ async fn make_session_with_config_and_rx(
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
+        model_provider_runtime,
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -5781,6 +5840,12 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let model_provider_runtime =
+        crate::model_provider_runtime::build_explicit_model_provider_runtime_with_models_manager(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            Arc::clone(&models_manager),
+        );
 
     let session = Session::new(
         session_configuration,
@@ -5789,6 +5854,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
+        model_provider_runtime,
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -7604,6 +7670,13 @@ where
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
+        model_runtime: arc_swap::ArcSwap::from_pointee(session_model_runtime_for_tests(
+            config.as_ref(),
+            &auth_manager,
+            &models_manager,
+            thread_id,
+            &session_configuration,
+        )),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -7678,12 +7751,13 @@ where
         .skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
         .await;
+    let model_runtime = services.model_runtime.load_full();
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
-        session_configuration.provider.clone(),
+        model_runtime.as_ref(),
         &session_configuration,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
@@ -7691,7 +7765,6 @@ where
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
         model_info,
-        &models_manager,
         /*network*/ None,
         resolved_turn_environments,
         session_configuration.cwd().clone(),

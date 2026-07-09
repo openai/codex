@@ -17,8 +17,13 @@ use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::WriteStatus;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_5_MODEL_ID;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -105,6 +110,53 @@ fn bedrock_capabilities() -> ModelProviderCapabilitiesReadResponse {
         image_generation: false,
         web_search: false,
     }
+}
+
+async fn start_provider_runtime_thread(
+    mcp: &mut TestAppServer,
+    model_provider: Option<&str>,
+) -> Result<ThreadStartResponse> {
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            model_provider: model_provider.map(str::to_string),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn run_provider_runtime_turn(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    text: &str,
+) -> Result<()> {
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(())
 }
 
 #[tokio::test]
@@ -225,5 +277,104 @@ async fn managed_bedrock_login_and_logout_publish_provider_runtime() -> Result<(
             web_search: true,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn loaded_threads_adopt_provider_switch_only_when_following_runtime_default() -> Result<()> {
+    let provider_a_server = responses::start_mock_server().await;
+    let provider_b_server = responses::start_mock_server().await;
+    let provider_a_mock = responses::mount_sse_once(
+        &provider_a_server,
+        responses::sse(vec![
+            responses::ev_response_created("provider-a-response"),
+            responses::ev_assistant_message("provider-a-message", "provider A"),
+            responses::ev_completed("provider-a-response"),
+        ]),
+    )
+    .await;
+    let provider_b_mock = responses::mount_sse_once(
+        &provider_b_server,
+        responses::sse(vec![
+            responses::ev_response_created("provider-b-response"),
+            responses::ev_assistant_message("provider-b-message", "provider B"),
+            responses::ev_completed("provider-b-response"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "Provider A"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[model_providers.provider_b]
+name = "Provider B"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            provider_a_server.uri(),
+            provider_b_server.uri(),
+        ),
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let runtime_default_thread = start_provider_runtime_thread(&mut mcp, None).await?;
+    let explicit_thread = start_provider_runtime_thread(&mut mcp, Some("provider_a")).await?;
+    assert_eq!(runtime_default_thread.model_provider, "provider_a");
+    assert_eq!(explicit_thread.model_provider, "provider_a");
+
+    let request_id = mcp
+        .send_config_value_write_request(ConfigValueWriteParams {
+            key_path: "model_provider".to_string(),
+            value: json!("provider_b"),
+            merge_strategy: MergeStrategy::Replace,
+            file_path: None,
+            expected_version: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<ConfigWriteResponse>(response)?.status,
+        WriteStatus::Ok
+    );
+
+    // Both threads were idle when the runtime changed. Selection is applied at the next turn
+    // boundary, so no in-flight request is expected to migrate between providers.
+    run_provider_runtime_turn(
+        &mut mcp,
+        &runtime_default_thread.thread.id,
+        "use the refreshed runtime provider",
+    )
+    .await?;
+    run_provider_runtime_turn(
+        &mut mcp,
+        &explicit_thread.thread.id,
+        "stay on the explicitly selected provider",
+    )
+    .await?;
+
+    assert_eq!(provider_b_mock.requests().len(), 1);
+    assert_eq!(provider_a_mock.requests().len(), 1);
     Ok(())
 }

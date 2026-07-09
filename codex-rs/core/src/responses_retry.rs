@@ -60,7 +60,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
         // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
         let report_error = retry_count > 1
             || cfg!(debug_assertions)
-            || !sess.services.model_client.responses_websocket_enabled();
+            || !turn_context.model_client.responses_websocket_enabled();
         if report_error {
             // Surface retry information to any UI/front-end so the user understands what is
             // happening instead of staring at a seemingly frozen screen.

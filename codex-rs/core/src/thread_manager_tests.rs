@@ -64,6 +64,34 @@ async fn listed_model_ids(models_manager: &SharedModelsManager) -> Vec<String> {
         .collect()
 }
 
+async fn start_thread_with_provider_selection(
+    manager: &ThreadManager,
+    config: Config,
+    model_provider_selection: ModelProviderSelection,
+) -> NewThread {
+    let environments = manager.default_environment_selections(&config.cwd);
+    manager
+        .start_thread_with_options_and_provider_selection(
+            StartThreadOptions {
+                config,
+                allow_provider_model_fallback: false,
+                initial_history: InitialHistory::New,
+                history_mode: None,
+                session_source: None,
+                thread_source: None,
+                dynamic_tools: Vec::new(),
+                metrics_service_name: None,
+                parent_trace: None,
+                environments,
+                thread_extension_init: ExtensionDataInit::default(),
+                supports_openai_form_elicitation: false,
+            },
+            model_provider_selection,
+        )
+        .await
+        .expect("start thread")
+}
+
 struct FakeAgentGraphStore {
     root_thread_id: ThreadId,
     descendant_thread_ids: Vec<ThreadId>,
@@ -1492,10 +1520,12 @@ async fn new_threads_select_models_manager_for_their_effective_config() {
         vec!["model-b".to_string()]
     );
 
-    let default_thread = manager
-        .start_thread(provider_b_config)
-        .await
-        .expect("start default-provider thread");
+    let default_thread = start_thread_with_provider_selection(
+        &manager,
+        provider_b_config,
+        ModelProviderSelection::RuntimeDefault,
+    )
+    .await;
     assert!(Arc::ptr_eq(
         &default_thread.thread.codex.session.services.models_manager,
         &provider_b_models_manager,
@@ -1514,6 +1544,106 @@ async fn new_threads_select_models_manager_for_their_effective_config() {
         listed_model_ids(explicit_models_manager).await,
         vec!["model-a".to_string()]
     );
+
+    let mut expected_completed = vec![default_thread.thread_id, explicit_thread.thread_id];
+    expected_completed.sort_by_key(std::string::ToString::to_string);
+    assert_eq!(
+        manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await,
+        ThreadShutdownReport {
+            completed: expected_completed,
+            submit_failed: Vec::new(),
+            timed_out: Vec::new(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn loaded_default_provider_session_adopts_refresh_between_turns() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut provider_a_config = test_config().await;
+    provider_a_config.codex_home = temp_dir.path().join("codex-home").abs();
+    provider_a_config.cwd = provider_a_config.codex_home.abs();
+    std::fs::create_dir_all(&provider_a_config.codex_home).expect("create codex home");
+    provider_a_config.model = None;
+    provider_a_config.model_provider_id = "provider-a".to_string();
+    provider_a_config.model_provider.name = "Provider A".to_string();
+    provider_a_config.model_catalog = Some(static_model_catalog("model-a"));
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    let manager = ThreadManager::new(
+        &provider_a_config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&provider_a_config, /*state_db*/ None),
+        /*agent_graph_store*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+    let default_thread = start_thread_with_provider_selection(
+        &manager,
+        provider_a_config.clone(),
+        ModelProviderSelection::RuntimeDefault,
+    )
+    .await;
+    let explicit_thread = start_thread_with_provider_selection(
+        &manager,
+        provider_a_config.clone(),
+        ModelProviderSelection::Explicit,
+    )
+    .await;
+
+    let captured_a_turn = default_thread.thread.codex.session.new_default_turn().await;
+    assert_eq!(captured_a_turn.config.model_provider_id, "provider-a");
+    assert_eq!(captured_a_turn.model_info.slug, "model-a");
+    assert_eq!(captured_a_turn.model_provider_generation, 0);
+
+    let mut provider_b_config = provider_a_config;
+    provider_b_config.model_provider_id = "provider-b".to_string();
+    provider_b_config.model_provider.name = "Provider B".to_string();
+    provider_b_config.model_catalog = Some(static_model_catalog("model-b"));
+    assert!(manager.refresh_default_model_provider(&provider_b_config));
+
+    // An already-created turn retains the exact provider runtime it captured.
+    assert_eq!(captured_a_turn.config.model_provider_id, "provider-a");
+    assert_eq!(captured_a_turn.model_info.slug, "model-a");
+    assert_eq!(
+        listed_model_ids(&captured_a_turn.models_manager).await,
+        vec!["model-a".to_string()]
+    );
+
+    let adopted_turn = default_thread.thread.codex.session.new_default_turn().await;
+    assert_eq!(adopted_turn.config.model_provider_id, "provider-b");
+    assert_eq!(adopted_turn.model_info.slug, "model-b");
+    assert_eq!(adopted_turn.model_provider_generation, 1);
+    assert_eq!(
+        listed_model_ids(&adopted_turn.models_manager).await,
+        vec!["model-b".to_string()]
+    );
+    assert_eq!(
+        default_thread
+            .thread
+            .config_snapshot()
+            .await
+            .model_provider_id,
+        "provider-b"
+    );
+
+    let pinned_turn = explicit_thread
+        .thread
+        .codex
+        .session
+        .new_default_turn()
+        .await;
+    assert_eq!(pinned_turn.config.model_provider_id, "provider-a");
+    assert_eq!(pinned_turn.model_info.slug, "model-a");
+    assert_eq!(pinned_turn.model_provider_generation, 0);
 
     let mut expected_completed = vec![default_thread.thread_id, explicit_thread.thread_id];
     expected_completed.sort_by_key(std::string::ToString::to_string);

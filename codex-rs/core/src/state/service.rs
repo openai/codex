@@ -16,6 +16,8 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::model_provider_runtime::ModelProviderRuntimeSnapshot;
+use crate::model_provider_runtime::ModelProviderRuntimeSource;
 use crate::session::McpRuntimeSnapshot;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -68,6 +70,9 @@ pub(crate) struct SessionServices {
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
     pub(crate) auth_manager: Arc<AuthManager>,
+    /// Atomically replaceable provider runtime used to build future turns. Each turn clones one
+    /// immutable runtime so an in-flight turn cannot observe a provider refresh.
+    pub(crate) model_runtime: ArcSwap<SessionModelRuntime>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
@@ -101,6 +106,19 @@ pub(crate) struct SessionServices {
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
     pub(crate) turn_environments: Arc<ThreadEnvironments>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionModelRuntime {
+    pub(crate) source: ModelProviderRuntimeSource,
+    pub(crate) snapshot: Arc<ModelProviderRuntimeSnapshot>,
+    pub(crate) model_client: ModelClient,
+}
+
+impl SessionModelRuntime {
+    pub(crate) fn models_manager(&self) -> SharedModelsManager {
+        self.snapshot.models_manager()
+    }
 }
 
 impl SessionServices {
