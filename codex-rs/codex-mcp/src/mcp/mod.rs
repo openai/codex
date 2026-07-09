@@ -493,10 +493,12 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
 pub fn codex_apps_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
+    originator: Option<&str>,
 ) -> McpServerConfig {
     mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
+        originator,
         McpServerAuth::ChatGpt,
     )
 }
@@ -505,6 +507,7 @@ pub fn codex_apps_mcp_server_config(
 pub fn hosted_plugin_runtime_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
+    originator: Option<&str>,
 ) -> McpServerConfig {
     let base_url = normalize_codex_apps_base_url(chatgpt_base_url);
     let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
@@ -515,6 +518,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
+        originator,
         McpServerAuth::ChatGpt,
     )
 }
@@ -522,19 +526,21 @@ pub fn hosted_plugin_runtime_mcp_server_config(
 fn mcp_server_config_for_url(
     url: String,
     apps_mcp_product_sku: Option<&str>,
+    originator: Option<&str>,
     auth_mode: McpServerAuth,
 ) -> McpServerConfig {
     let product_sku = apps_mcp_product_sku.unwrap_or(DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU);
-    let http_headers = Some(HashMap::from([(
-        "X-OpenAI-Product-Sku".to_string(),
-        product_sku.to_string(),
-    )]));
+    let mut http_headers =
+        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())]);
+    if let Some(originator) = originator {
+        http_headers.insert("originator".to_string(), originator.to_string());
+    }
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers,
+            http_headers: Some(http_headers),
             env_http_headers: None,
         },
         auth: auth_mode,

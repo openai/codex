@@ -32,6 +32,7 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                 config: Box::new(hosted_plugin_runtime_mcp_server_config(
                     &config.chatgpt_base_url,
                     config.apps_mcp_product_sku.as_deref(),
+                    context.originator(),
                 )),
             }]
         })
@@ -51,3 +52,7 @@ pub fn install_executor_plugins(
         executor_plugin::SelectedExecutorPluginMcpContributor::new(environment_manager),
     ));
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

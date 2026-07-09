@@ -202,6 +202,7 @@ async fn raw_selected_plugin_contributions(
             config,
             &thread_init,
             &thread_store,
+            "test_originator",
             &available_environment_ids,
         ))
         .await)
