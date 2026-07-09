@@ -23,6 +23,8 @@ pub use crate::custom_ca::build_reqwest_client_with_custom_ca;
 pub use crate::custom_ca::build_rustls_client_config_with_custom_ca;
 pub use crate::custom_ca::maybe_build_rustls_client_config_with_custom_ca;
 pub use crate::default_client::HttpClient;
+pub use crate::default_client::HttpError;
+pub use crate::default_client::HttpResponse;
 pub use crate::default_client::RequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;

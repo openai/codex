@@ -22,6 +22,7 @@ codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
+codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider = { workspace = true }
@@ -36,7 +37,7 @@ codex-utils-plugins = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
-reqwest = { workspace = true }
+http = { workspace = true }
 regex = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
