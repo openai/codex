@@ -185,41 +185,50 @@ async fn run_connection(
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
-                    let method = notification.method.as_str();
+                    let method = notification.method.clone();
                     let notification_span = tracing::info_span!(
                         "codex.exec_server.notification",
                         otel.kind = "server",
                         otel.name = tracing::field::Empty,
                         rpc.system = "jsonrpc",
-                        rpc.method = method,
+                        rpc.method = method.as_str(),
                         rpc.transport = transport.metric_tag(),
-                        method,
+                        method = method.as_str(),
                         result = tracing::field::Empty,
                     );
-                    let Some((method, route)) = router.notification_route(method) else {
-                        notification_span.record("otel.name", "unknown");
-                        notification_span.record("result", "error");
-                        warn!(
-                            "closing exec-server connection after unexpected notification: {}",
-                            notification.method
-                        );
-                        break;
-                    };
-                    notification_span.record("otel.name", method);
-                    let result = tokio::select! {
-                        result = route(Arc::clone(&handler), notification).instrument(notification_span.clone()) => result,
-                        _ = disconnected_rx.changed() => {
-                            notification_span.record("result", "disconnected");
-                            debug!(
-                                "exec-server transport disconnected while handling notification"
+                    let continue_connection = async {
+                        let Some((method, route)) = router.notification_route(method.as_str())
+                        else {
+                            tracing::Span::current().record("otel.name", "unknown");
+                            tracing::Span::current().record("result", "error");
+                            warn!(
+                                "closing exec-server connection after unexpected notification: {}",
+                                notification.method
                             );
-                            break;
+                            return false;
+                        };
+                        tracing::Span::current().record("otel.name", method);
+                        let result = tokio::select! {
+                            result = route(Arc::clone(&handler), notification) => result,
+                            _ = disconnected_rx.changed() => {
+                                tracing::Span::current().record("result", "disconnected");
+                                debug!(
+                                    "exec-server transport disconnected while handling notification"
+                                );
+                                return false;
+                            }
+                        };
+                        tracing::Span::current()
+                            .record("result", if result.is_ok() { "success" } else { "error" });
+                        if let Err(err) = result {
+                            warn!("closing exec-server connection after protocol error: {err}");
+                            return false;
                         }
-                    };
-                    notification_span
-                        .record("result", if result.is_ok() { "success" } else { "error" });
-                    if let Err(err) = result {
-                        warn!("closing exec-server connection after protocol error: {err}");
+                        true
+                    }
+                    .instrument(notification_span)
+                    .await;
+                    if !continue_connection {
                         break;
                     }
                 }
