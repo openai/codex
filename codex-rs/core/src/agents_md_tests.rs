@@ -719,9 +719,8 @@ async fn marker_search_does_not_wait_for_a_higher_ancestor() {
 }
 
 #[tokio::test]
-async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
+async fn project_root_marker_search_starts_all_ancestor_probes() {
     const NESTING_DEPTH: usize = 9;
-    const CONCURRENCY_LIMIT: usize = 8;
 
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join(".git"), "").unwrap();
@@ -734,6 +733,7 @@ async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
 
     let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     config.cwd = nested.abs();
+    let expected_probe_count = config.cwd.ancestors().count();
     let cwd = PathUri::from_abs_path(&config.cwd);
     let metadata_calls = Arc::new(MetadataCallCounts::default());
     let fs = FailingFileSystem {
@@ -752,7 +752,7 @@ async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
                 .lock()
                 .expect("metadata paths lock")
                 .len()
-                >= CONCURRENCY_LIMIT
+                >= expected_probe_count
             {
                 break;
             }
@@ -767,7 +767,7 @@ async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
             .lock()
             .expect("metadata paths lock")
             .len(),
-        CONCURRENCY_LIMIT
+        expected_probe_count
     );
 
     metadata_calls.release.notify_one();
@@ -775,6 +775,90 @@ async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
         .await
         .expect("marker search should complete")
         .expect("marker search task")
+        .expect("AGENTS.md discovery");
+
+    assert_eq!(
+        paths,
+        vec![PathUri::from_abs_path(
+            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn agents_md_search_starts_all_directory_probes() {
+    const NESTING_DEPTH: usize = 9;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let mut nested = tmp.path().to_path_buf();
+    for depth in 0..NESTING_DEPTH {
+        nested.push(format!("nested-{depth}"));
+    }
+    fs::create_dir_all(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let mut search_dirs = config
+        .cwd
+        .ancestors()
+        .take(NESTING_DEPTH + 1)
+        .collect::<Vec<_>>();
+    search_dirs.reverse();
+    let expected_probes = search_dirs
+        .into_iter()
+        .map(|directory| PathUri::from_abs_path(&directory.join(LOCAL_AGENTS_MD_FILENAME)))
+        .collect::<Vec<_>>();
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: tmp.path().join(LOCAL_AGENTS_MD_FILENAME).abs(),
+        failure: InjectedFailure::MetadataBlocked,
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+
+    let search =
+        tokio::spawn(async move { super::agents_md_paths(&config.config, &cwd, &fs).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let started = metadata_calls.started.notified();
+            if expected_probes.iter().all(|candidate| {
+                metadata_calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .contains(candidate)
+            }) {
+                break;
+            }
+            started.await;
+        }
+    })
+    .await
+    .expect("all directory probes should start");
+
+    let mut actual_probes = metadata_calls
+        .paths
+        .lock()
+        .expect("metadata paths lock")
+        .iter()
+        .filter(|path| expected_probes.contains(path))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    actual_probes.sort();
+    let mut expected_probes = expected_probes
+        .into_iter()
+        .map(|path| path.to_string())
+        .collect::<Vec<_>>();
+    expected_probes.sort();
+    assert_eq!(actual_probes, expected_probes);
+
+    metadata_calls.release.notify_one();
+    let paths = tokio::time::timeout(std::time::Duration::from_secs(5), search)
+        .await
+        .expect("AGENTS.md search should complete")
+        .expect("AGENTS.md search task")
         .expect("AGENTS.md discovery");
 
     assert_eq!(
