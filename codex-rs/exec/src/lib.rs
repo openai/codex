@@ -27,7 +27,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
-use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -89,8 +89,6 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -169,7 +167,7 @@ enum InitialOperation {
         output_schema: Option<Value>,
     },
     Review {
-        review_request: ReviewRequest,
+        target: ReviewTarget,
     },
 }
 
@@ -724,9 +722,23 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
-            let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
+            let target = build_review_target(review_cli)?;
+            let summary = match &target {
+                ReviewTarget::UncommittedChanges => "current changes".to_string(),
+                ReviewTarget::BaseBranch { branch } => {
+                    format!("changes against '{branch}'")
+                }
+                ReviewTarget::Commit { sha, title } => {
+                    let short_sha = sha.chars().take(7).collect::<String>();
+                    if let Some(title) = title {
+                        format!("commit {short_sha}: {title}")
+                    } else {
+                        format!("commit {short_sha}")
+                    }
+                }
+                ReviewTarget::Custom { instructions } => instructions.clone(),
+            };
+            (InitialOperation::Review { target }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
@@ -925,14 +937,14 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             info!("Sent prompt with event ID: {task_id}");
             task_id
         }
-        InitialOperation::Review { review_request } => {
+        InitialOperation::Review { target } => {
             let response: ReviewStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ReviewStart {
                     request_id: request_ids.next(),
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
-                        target: review_target_to_api(review_request.target),
+                        target,
                         delivery: None,
                     },
                 },
@@ -1217,15 +1229,6 @@ fn session_configured_from_thread_resume_response(
         response.cwd.clone(),
         response.reasoning_effort.clone(),
     )
-}
-
-fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
-    match target {
-        ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
-        ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
-        ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
-        ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
-    }
 }
 
 #[expect(
@@ -1980,7 +1983,7 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
     }
 }
 
-fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
+fn build_review_target(args: &ReviewArgs) -> anyhow::Result<ReviewTarget> {
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
     } else if let Some(branch) = args.base.clone() {
@@ -2004,10 +2007,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
         );
     };
 
-    Ok(ReviewRequest {
-        target,
-        user_facing_hint: None,
-    })
+    Ok(target)
 }
 
 #[cfg(test)]

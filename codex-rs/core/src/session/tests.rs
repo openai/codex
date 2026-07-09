@@ -1,12 +1,11 @@
 use super::turn_context::TurnEnvironment;
+use super::turn_context::TurnSkillsContext;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::test_config;
-use crate::context::ContextualUserFragment;
-use crate::context::TurnAborted;
 use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
 use crate::session::step_context::StepContext;
@@ -7074,7 +7073,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() {
         }
     }
 
-    let (mut session, turn_context) = make_session_and_context().await;
+    let (mut session, _turn_context) = make_session_and_context().await;
     let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
     let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
     let config = session.get_config().await;
@@ -7129,7 +7128,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() {
     let (tx_sub, rx_sub) = async_channel::bounded(1);
     drop(tx_sub);
     let session = Arc::new(session);
-    submission_loop(session, Arc::clone(&turn_context.config), rx_sub).await;
+    submission_loop(session, rx_sub).await;
 
     assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(
@@ -7214,7 +7213,7 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 
     let (tx_sub, rx_sub) = async_channel::bounded(1);
     drop(tx_sub);
-    submission_loop(Arc::clone(&session), session.get_config().await, rx_sub).await;
+    submission_loop(Arc::clone(&session), rx_sub).await;
 
     assert_eq!(
         vec!["turn_abort", "thread_stop"],
@@ -7301,15 +7300,14 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
 
 #[tokio::test]
 async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
-    let (parent_session, parent_turn_context) = make_session_and_context().await;
+    let (parent_session, _parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
-    let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
     let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
-        submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
+        submission_loop(parent_session_for_loop, parent_rx_sub).await;
     });
     let parent_codex = Codex {
         tx_sub: parent_tx_sub,
@@ -7390,15 +7388,14 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
 
 #[tokio::test]
 async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
-    let (parent_session, parent_turn_context) = make_session_and_context().await;
+    let (parent_session, _parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
-    let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
     let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
-        submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
+        submission_loop(parent_session_for_loop, parent_rx_sub).await;
     });
     let parent_codex = Codex {
         tx_sub: parent_tx_sub,
@@ -9927,35 +9924,6 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
 }
 
 #[tokio::test]
-async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Review,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
-
-    let item = user_message("synthetic idle input");
-    let err = sess
-        .try_start_turn_if_idle(vec![item.clone()])
-        .await
-        .expect_err("active review turn should reject automatic idle input");
-
-    assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
-    assert_eq!(vec![item], err.into_input());
-    assert_eq!(
-        Vec::<TurnInput>::new(),
-        sess.input_queue.get_pending_input(&sess.active_turn).await
-    );
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-}
-
-#[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
@@ -10024,49 +9992,49 @@ async fn steer_input_enforces_expected_turn_id() {
 }
 
 #[tokio::test]
-async fn steer_input_rejects_non_regular_turns() {
-    for (task_kind, turn_kind) in [
-        (TaskKind::Review, NonSteerableTurnKind::Review),
-        (TaskKind::Compact, NonSteerableTurnKind::Compact),
-    ] {
-        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-        let input = vec![TurnInput::UserInput {
-            content: vec![UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            client_id: None,
-        }];
-        let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
-        sess.spawn_task(
-            turn_context,
-            input,
-            NeverEndingTask {
-                kind: task_kind,
-                listen_to_cancellation_token: true,
-            },
-        )
-        .await;
-
-        let steer_input = vec![UserInput::Text {
-            text: "steer".to_string(),
+async fn steer_input_rejects_compact_turn() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
             text_elements: Vec::new(),
-        }];
-        let err = sess
-            .steer_input(
-                steer_input,
-                /*additional_context*/ Default::default(),
-                /*expected_turn_id*/ None,
-                /*client_user_message_id*/ None,
-                /*responsesapi_client_metadata*/ None,
-            )
-            .await
-            .expect_err("steering a non-regular turn should fail");
+        }],
+        client_id: None,
+    }];
+    let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
+    sess.spawn_task(
+        turn_context,
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Compact,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
 
-        assert_eq!(err, SteerInputError::ActiveTurnNotSteerable { turn_kind });
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let err = sess
+        .steer_input(
+            steer_input,
+            /*additional_context*/ Default::default(),
+            /*expected_turn_id*/ None,
+            /*client_user_message_id*/ None,
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+        .expect_err("steering a compact turn should fail");
 
-        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    }
+    assert_eq!(
+        err,
+        SteerInputError::ActiveTurnNotSteerable {
+            turn_kind: NonSteerableTurnKind::Compact,
+        }
+    );
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[tokio::test]
@@ -10396,83 +10364,6 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![TurnInput::InterAgentCommunication(communication)],
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput {
-        content: vec![UserInput::Text {
-            text: "start review".to_string(),
-            text_elements: Vec::new(),
-        }],
-        client_id: None,
-    }];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
-        .await;
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    // Aborting a review task should exit review mode before surfacing the abort to the client.
-    // We scan for these events (rather than relying on fixed ordering) since unrelated events
-    // may interleave.
-    let mut exited_review_mode_idx = None;
-    let mut turn_aborted_idx = None;
-    let mut idx = 0usize;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-    while tokio::time::Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let evt = tokio::time::timeout(remaining, rx.recv())
-            .await
-            .expect("timeout waiting for event")
-            .expect("event");
-        let event_idx = idx;
-        idx = idx.saturating_add(1);
-        match evt.msg {
-            EventMsg::ExitedReviewMode(ev) => {
-                assert!(ev.review_output.is_none());
-                exited_review_mode_idx = Some(event_idx);
-            }
-            EventMsg::TurnAborted(ev) => {
-                assert_eq!(TurnAbortReason::Interrupted, ev.reason);
-                turn_aborted_idx = Some(event_idx);
-                break;
-            }
-            _ => {}
-        }
-    }
-    assert!(
-        exited_review_mode_idx.is_some(),
-        "expected ExitedReviewMode after abort"
-    );
-    assert!(
-        turn_aborted_idx.is_some(),
-        "expected TurnAborted after abort"
-    );
-    assert!(
-        exited_review_mode_idx.unwrap() < turn_aborted_idx.unwrap(),
-        "expected ExitedReviewMode before TurnAborted"
-    );
-
-    let history = sess.clone_history().await;
-    // Verify the `<turn_aborted>` marker is still recorded in history for the model.
-    assert!(
-        history.raw_items().iter().any(|item| {
-            let ResponseItem::Message { role, content, .. } = item else {
-                return false;
-            };
-            if role != "user" {
-                return false;
-            }
-            content.iter().any(|content_item| {
-                let ContentItem::InputText { text } = content_item else {
-                    return false;
-                };
-                TurnAborted::matches_text(text)
-            })
-        }),
-        "expected a model-visible turn aborted marker in history after interrupt"
     );
 }
 

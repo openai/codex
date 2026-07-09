@@ -13,13 +13,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
 codex-context-fragments = { workspace = true }
-codex-git-utils = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-template = { workspace = true }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }

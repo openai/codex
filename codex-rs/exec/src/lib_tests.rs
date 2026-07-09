@@ -103,7 +103,7 @@ fn exec_root_span_can_be_parented_from_trace_context() {
 }
 
 #[test]
-fn builds_uncommitted_review_request() {
+fn builds_uncommitted_review_target() {
     let args = ReviewArgs {
         uncommitted: true,
         base: None,
@@ -111,18 +111,13 @@ fn builds_uncommitted_review_request() {
         commit_title: None,
         prompt: None,
     };
-    let request = build_review_request(&args).expect("builds uncommitted review request");
+    let target = build_review_target(&args).expect("builds uncommitted review target");
 
-    let expected = ReviewRequest {
-        target: ReviewTarget::UncommittedChanges,
-        user_facing_hint: None,
-    };
-
-    assert_eq!(request, expected);
+    assert_eq!(target, ReviewTarget::UncommittedChanges);
 }
 
 #[test]
-fn builds_commit_review_request_with_title() {
+fn builds_commit_review_target_with_title() {
     let args = ReviewArgs {
         uncommitted: false,
         base: None,
@@ -130,21 +125,19 @@ fn builds_commit_review_request_with_title() {
         commit_title: Some("Add review command".to_string()),
         prompt: None,
     };
-    let request = build_review_request(&args).expect("builds commit review request");
+    let target = build_review_target(&args).expect("builds commit review target");
 
-    let expected = ReviewRequest {
-        target: ReviewTarget::Commit {
+    assert_eq!(
+        target,
+        ReviewTarget::Commit {
             sha: "123456789".to_string(),
             title: Some("Add review command".to_string()),
-        },
-        user_facing_hint: None,
-    };
-
-    assert_eq!(request, expected);
+        }
+    );
 }
 
 #[test]
-fn builds_custom_review_request_trims_prompt() {
+fn builds_custom_review_target_trims_prompt() {
     let args = ReviewArgs {
         uncommitted: false,
         base: None,
@@ -152,16 +145,14 @@ fn builds_custom_review_request_trims_prompt() {
         commit_title: None,
         prompt: Some("  custom review instructions  ".to_string()),
     };
-    let request = build_review_request(&args).expect("builds custom review request");
+    let target = build_review_target(&args).expect("builds custom review target");
 
-    let expected = ReviewRequest {
-        target: ReviewTarget::Custom {
+    assert_eq!(
+        target,
+        ReviewTarget::Custom {
             instructions: "custom review instructions".to_string(),
-        },
-        user_facing_hint: None,
-    };
-
-    assert_eq!(request, expected);
+        }
+    );
 }
 
 #[test]

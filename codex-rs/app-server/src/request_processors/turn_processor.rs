@@ -1318,10 +1318,10 @@ impl TurnRequestProcessor {
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
+        let delivery = delivery.unwrap_or(ReviewDelivery::Inline);
         let bundled_skills_enabled = match &delivery {
-            CoreReviewDelivery::Inline => parent_thread.config().await.bundled_skills_enabled(),
-            CoreReviewDelivery::Detached => self.config.bundled_skills_enabled(),
+            ReviewDelivery::Inline => parent_thread.config().await.bundled_skills_enabled(),
+            ReviewDelivery::Detached => self.config.bundled_skills_enabled(),
         };
         if !bundled_skills_enabled {
             return Err(invalid_request(
@@ -1330,7 +1330,7 @@ impl TurnRequestProcessor {
         }
         let prompt = Self::review_prompt_from_target(target)?;
         match delivery {
-            CoreReviewDelivery::Inline => {
+            ReviewDelivery::Inline => {
                 self.ensure_direct_input_allowed(request_id, parent_thread.as_ref())
                     .await?;
                 let thread_state = self
@@ -1348,7 +1348,7 @@ impl TurnRequestProcessor {
                 self.start_inline_review(request_id, parent_thread, &prompt, thread_id)
                     .await?;
             }
-            CoreReviewDelivery::Detached => {
+            ReviewDelivery::Detached => {
                 self.start_detached_review(request_id, parent_thread_id, parent_thread, &prompt)
                     .await?;
             }
