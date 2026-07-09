@@ -9,8 +9,10 @@ use crate::types::TokenUsageProfile;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
-use codex_http_client::build_reqwest_client_with_custom_ca;
-use codex_http_client::with_chatgpt_cloudflare_cookie_store;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::RequestBuilder;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -19,13 +21,14 @@ use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
-use reqwest::StatusCode;
-use reqwest::header::CACHE_CONTROL;
-use reqwest::header::CONTENT_TYPE;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use reqwest::header::USER_AGENT;
+use http::Method;
+use http::StatusCode;
+use http::header::CACHE_CONTROL;
+use http::header::CONTENT_TYPE;
+use http::header::HeaderMap;
+use http::header::HeaderName;
+use http::header::HeaderValue;
+use http::header::USER_AGENT;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
@@ -123,7 +126,7 @@ impl PathStyle {
 #[derive(Clone)]
 pub struct Client {
     base_url: String,
-    http: reqwest::Client,
+    http: RouteAwareClientPool,
     auth_provider: SharedAuthProvider,
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
@@ -148,7 +151,10 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
-    pub fn new(base_url: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        http_client_factory: HttpClientFactory,
+    ) -> Result<Self> {
         let mut base_url = base_url.into();
         // Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM paths.
         // Also trim trailing slashes for consistent URL building.
@@ -161,9 +167,10 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
-            reqwest::Client::builder(),
-        ))?;
+        let http = RouteAwareClientPool::with_chatgpt_cloudflare_cookies(
+            http_client_factory,
+            ClientRouteClass::Api,
+        );
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
             base_url,
@@ -176,8 +183,12 @@ impl Client {
         })
     }
 
-    pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        Ok(Self::new(base_url)?
+    pub fn from_auth(
+        base_url: impl Into<String>,
+        auth: &CodexAuth,
+        http_client_factory: HttpClientFactory,
+    ) -> Result<Self> {
+        Ok(Self::new(base_url, http_client_factory)?
             .with_user_agent(get_codex_user_agent())
             .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth)))
     }
@@ -231,9 +242,13 @@ impl Client {
         h
     }
 
+    async fn request(&self, method: Method, url: &str) -> Result<RequestBuilder> {
+        Ok(self.http.client_for_url(url).await?.request(method, url))
+    }
+
     async fn exec_request(
         &self,
-        req: reqwest::RequestBuilder,
+        req: RequestBuilder,
         method: &str,
         url: &str,
     ) -> Result<(String, String)> {
@@ -254,7 +269,7 @@ impl Client {
 
     async fn exec_request_detailed(
         &self,
-        req: reqwest::RequestBuilder,
+        req: RequestBuilder,
         method: &str,
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
@@ -306,14 +321,20 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/accounts/check", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/accounts/check", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self
+            .request(Method::GET, &url)
+            .await?
+            .headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
     }
 
     pub async fn get_token_usage_profile(&self) -> Result<TokenUsageProfile> {
         let url = self.token_usage_profile_url();
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self
+            .request(Method::GET, &url)
+            .await?
+            .headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
     }
@@ -331,8 +352,9 @@ impl Client {
     ) -> std::result::Result<(), RequestError> {
         let url = self.send_add_credits_nudge_email_url();
         let req = self
-            .http
-            .post(&url)
+            .request(Method::POST, &url)
+            .await
+            .map_err(RequestError::from)?
             .headers(self.headers())
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&SendAddCreditsNudgeEmailRequest { credit_type });
@@ -351,27 +373,27 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/list", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
-        let req = if let Some(lim) = limit {
-            req.query(&[("limit", lim)])
-        } else {
-            req
-        };
-        let req = if let Some(tf) = task_filter {
-            req.query(&[("task_filter", tf)])
-        } else {
-            req
-        };
-        let req = if let Some(c) = cursor {
-            req.query(&[("cursor", c)])
-        } else {
-            req
-        };
-        let req = if let Some(id) = environment_id {
-            req.query(&[("environment_id", id)])
-        } else {
-            req
-        };
+        let mut url = url::Url::parse(&url)?;
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(limit) = limit {
+                query.append_pair("limit", &limit.to_string());
+            }
+            if let Some(task_filter) = task_filter {
+                query.append_pair("task_filter", task_filter);
+            }
+            if let Some(cursor) = cursor {
+                query.append_pair("cursor", cursor);
+            }
+            if let Some(environment_id) = environment_id {
+                query.append_pair("environment_id", environment_id);
+            }
+        }
+        let url = url.to_string();
+        let req = self
+            .request(Method::GET, &url)
+            .await?
+            .headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<PaginatedListTaskListItem>(&url, &ct, &body)
     }
@@ -389,7 +411,10 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/{}", self.base_url, task_id),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/{}", self.base_url, task_id),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self
+            .request(Method::GET, &url)
+            .await?
+            .headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let parsed: CodeTaskDetailsResponse = self.decode_json(&url, &ct, &body)?;
         Ok((parsed, body, ct))
@@ -410,7 +435,10 @@ impl Client {
                 self.base_url, task_id, turn_id
             ),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self
+            .request(Method::GET, &url)
+            .await?
+            .headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
@@ -426,7 +454,11 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self
+            .request(Method::GET, &url)
+            .await
+            .map_err(RequestError::from)?
+            .headers(self.headers());
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigBundleResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
@@ -437,8 +469,9 @@ impl Client {
     ) -> std::result::Result<CodexWorkspaceMessagesResponse, RequestError> {
         let url = self.workspace_messages_url();
         let req = self
-            .http
-            .get(&url)
+            .request(Method::GET, &url)
+            .await
+            .map_err(RequestError::from)?
             .headers(self.headers())
             .header(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
@@ -454,8 +487,8 @@ impl Client {
             PathStyle::ChatGptApi => format!("{}/wham/tasks", self.base_url),
         };
         let req = self
-            .http
-            .post(&url)
+            .request(Method::POST, &url)
+            .await?
             .headers(self.headers())
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&request_body);
@@ -977,7 +1010,10 @@ mod tests {
     fn test_client(base_url: &str, path_style: PathStyle) -> Client {
         Client {
             base_url: base_url.to_string(),
-            http: reqwest::Client::new(),
+            http: RouteAwareClientPool::new(
+                HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
+                ClientRouteClass::Api,
+            ),
             auth_provider: codex_model_provider::unauthenticated_auth_provider(),
             user_agent: None,
             chatgpt_account_id: None,
