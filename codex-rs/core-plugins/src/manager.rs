@@ -57,6 +57,7 @@ use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::PluginInstallSource;
 use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
@@ -370,6 +371,7 @@ pub struct PluginsManager {
     restriction_product: Option<Product>,
     auth_mode: RwLock<Option<AuthMode>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+    plugin_install_source: PluginInstallSource,
 }
 
 #[derive(Clone)]
@@ -449,7 +451,13 @@ impl PluginsManager {
             restriction_product,
             auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
+            plugin_install_source: PluginInstallSource::Manual,
         }
+    }
+
+    pub fn with_plugin_install_source(mut self, source: PluginInstallSource) -> Self {
+        self.plugin_install_source = source;
+        self
     }
 
     pub fn set_auth_mode(&self, auth_mode: Option<AuthMode>) -> bool {
@@ -1419,6 +1427,7 @@ impl PluginsManager {
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_install_failed(
                 self.telemetry_metadata_for_plugin_id(plugin_id),
+                self.plugin_install_source,
                 error_type.to_string(),
             );
         }

@@ -183,55 +183,48 @@ impl NetworkProxyBuilder {
             .set_blocked_request_observer(self.blocked_request_observer.clone())
             .await;
         let current_cfg = state.current_cfg().await?;
-        let (requested_http_addr, requested_socks_addr, reserved_listeners) = if self
-            .managed_by_codex
-        {
-            let runtime = config::resolve_runtime(&current_cfg)?;
-            #[cfg(target_os = "windows")]
-            let (managed_http_addr, managed_socks_addr) = config::clamp_bind_addrs(
-                runtime.http_addr,
-                runtime.socks_addr,
-                &current_cfg.network,
-            );
-            #[cfg(target_os = "windows")]
-            let reserved = reserve_windows_managed_listeners(
-                managed_http_addr,
-                managed_socks_addr,
-                current_cfg.network.enable_socks5,
-            )
-            .context("reserve managed loopback proxy listeners")?;
-            #[cfg(not(target_os = "windows"))]
-            let reserved = reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
+        let (requested_http_addr, requested_socks_addr, reserved_listeners) =
+            if self.managed_by_codex {
+                let runtime = config::resolve_runtime(&current_cfg)?;
+                #[cfg(target_os = "windows")]
+                let (managed_http_addr, managed_socks_addr) =
+                    config::clamp_bind_addrs(runtime.http_addr, runtime.socks_addr, &current_cfg);
+                #[cfg(target_os = "windows")]
+                let reserved = reserve_windows_managed_listeners(
+                    managed_http_addr,
+                    managed_socks_addr,
+                    current_cfg.enable_socks5,
+                )
                 .context("reserve managed loopback proxy listeners")?;
-            let http_addr = reserved.http_addr()?;
-            let socks_addr = reserved.socks_addr(runtime.socks_addr)?;
-            (
-                http_addr,
-                socks_addr,
-                Some(reserved.into_reserved_listeners()),
-            )
-        } else {
-            let runtime = config::resolve_runtime(&current_cfg)?;
-            (
-                self.http_addr.unwrap_or(runtime.http_addr),
-                self.socks_addr.unwrap_or(runtime.socks_addr),
-                None,
-            )
-        };
+                #[cfg(not(target_os = "windows"))]
+                let reserved = reserve_loopback_ephemeral_listeners(current_cfg.enable_socks5)
+                    .context("reserve managed loopback proxy listeners")?;
+                let http_addr = reserved.http_addr()?;
+                let socks_addr = reserved.socks_addr(runtime.socks_addr)?;
+                (
+                    http_addr,
+                    socks_addr,
+                    Some(reserved.into_reserved_listeners()),
+                )
+            } else {
+                let runtime = config::resolve_runtime(&current_cfg)?;
+                (
+                    self.http_addr.unwrap_or(runtime.http_addr),
+                    self.socks_addr.unwrap_or(runtime.socks_addr),
+                    None,
+                )
+            };
 
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
-        let (http_addr, socks_addr) = config::clamp_bind_addrs(
-            requested_http_addr,
-            requested_socks_addr,
-            &current_cfg.network,
-        );
+        let (http_addr, socks_addr) =
+            config::clamp_bind_addrs(requested_http_addr, requested_socks_addr, &current_cfg);
 
         Ok(NetworkProxy {
             state,
             http_addr,
             socks_addr,
-            socks_enabled: current_cfg.network.enable_socks5,
-            socks5_udp_enabled: current_cfg.network.enable_socks5_udp,
+            socks_enabled: current_cfg.enable_socks5,
+            socks5_udp_enabled: current_cfg.enable_socks5_udp,
             runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
                 &current_cfg,
             )?)),
@@ -317,16 +310,16 @@ struct NetworkProxyRuntimeSettings {
 
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
-        let mitm_ca_trust_bundle = if config.network.mitm {
+        let mitm_ca_trust_bundle = if config.mitm {
             let env = crate::certs::ca_env_from_process();
             Some(crate::certs::managed_ca_trust_bundle(&env)?)
         } else {
             None
         };
         Ok(Self {
-            allow_local_binding: config.network.allow_local_binding,
-            allow_unix_sockets: config.network.allow_unix_sockets().into(),
-            dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
+            allow_local_binding: config.allow_local_binding,
+            allow_unix_sockets: config.allow_unix_sockets().into(),
+            dangerously_allow_all_unix_sockets: config.dangerously_allow_all_unix_sockets,
             mitm_ca_trust_bundle,
         })
     }
@@ -879,23 +872,23 @@ impl NetworkProxy {
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
         let current_cfg = self.state.current_cfg().await?;
         anyhow::ensure!(
-            new_state.config.network.enabled == current_cfg.network.enabled,
+            new_state.config.enabled == current_cfg.enabled,
             "cannot update network.enabled on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.network.proxy_url == current_cfg.network.proxy_url,
+            new_state.config.proxy_url == current_cfg.proxy_url,
             "cannot update network.proxy_url on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.network.socks_url == current_cfg.network.socks_url,
+            new_state.config.socks_url == current_cfg.socks_url,
             "cannot update network.socks_url on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.network.enable_socks5 == current_cfg.network.enable_socks5,
+            new_state.config.enable_socks5 == current_cfg.enable_socks5,
             "cannot update network.enable_socks5 on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
+            new_state.config.enable_socks5_udp == current_cfg.enable_socks5_udp,
             "cannot update network.enable_socks5_udp on a running proxy"
         );
 
@@ -922,7 +915,7 @@ impl NetworkProxy {
             "execution-scoped network proxy is already running"
         );
         let current_cfg = self.state.current_cfg().await?;
-        if !current_cfg.network.enabled {
+        if !current_cfg.enabled {
             warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
@@ -963,11 +956,11 @@ impl NetworkProxy {
             }
         });
 
-        let socks_task = if current_cfg.network.enable_socks5 {
+        let socks_task = if current_cfg.enable_socks5 {
             let socks_state = self.state.clone();
             let socks_decider = self.policy_decider.clone();
             let socks_addr = self.socks_addr;
-            let enable_socks5_udp = current_cfg.network.enable_socks5_udp;
+            let enable_socks5_udp = current_cfg.enable_socks5_udp;
             Some(tokio::spawn(async move {
                 match socks_listener {
                     Some(listener) => {
@@ -1095,7 +1088,7 @@ impl Drop for NetworkProxyHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NetworkProxySettings;
+    use crate::config::NetworkProxyConfig;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
@@ -1111,10 +1104,10 @@ mod tests {
         drop(http_listener);
         drop(socks_listener);
 
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig {
             proxy_url: format!("http://{http_addr}"),
             socks_url: format!("http://{socks_addr}"),
-            ..NetworkProxySettings::default()
+            ..NetworkProxyConfig::default()
         }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
             Ok(proxy) => proxy,
@@ -1145,10 +1138,10 @@ mod tests {
 
     #[tokio::test]
     async fn non_codex_managed_proxy_builder_uses_configured_ports() {
-        let settings = NetworkProxySettings {
+        let settings = NetworkProxyConfig {
             proxy_url: "http://127.0.0.1:43128".to_string(),
             socks_url: "http://127.0.0.1:48081".to_string(),
-            ..NetworkProxySettings::default()
+            ..NetworkProxyConfig::default()
         };
         let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = NetworkProxy::builder()
@@ -1170,9 +1163,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
         let proxy = NetworkProxy::builder().state(state).build().await?;
         let handle = proxy.run().await?;
 
@@ -1229,11 +1220,11 @@ mod tests {
 
     #[tokio::test]
     async fn managed_proxy_builder_does_not_reserve_socks_listener_when_disabled() {
-        let settings = NetworkProxySettings {
+        let settings = NetworkProxyConfig {
             enable_socks5: false,
             proxy_url: "http://127.0.0.1:43128".to_string(),
             socks_url: "http://127.0.0.1:43129".to_string(),
-            ..NetworkProxySettings::default()
+            ..NetworkProxyConfig::default()
         };
         let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = match NetworkProxy::builder().state(state).build().await {

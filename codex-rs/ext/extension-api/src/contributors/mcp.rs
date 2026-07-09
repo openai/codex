@@ -15,6 +15,8 @@ pub struct McpServerContributionContext<'a, C> {
     thread_store: Option<&'a ExtensionData>,
     /// Stable host inputs for the active thread, when resolution is thread-scoped.
     thread_init: Option<&'a ExtensionDataInit>,
+    /// Effective request originator for the active thread, when resolution is thread-scoped.
+    originator: Option<&'a str>,
     /// Environment IDs whose selected roots may contribute to this exact step.
     available_environment_ids: Option<&'a [String]>,
 }
@@ -34,6 +36,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             config,
             thread_store: None,
             thread_init: None,
+            originator: None,
             available_environment_ids: None,
         }
     }
@@ -43,12 +46,14 @@ impl<'a, C> McpServerContributionContext<'a, C> {
         config: &'a C,
         thread_init: &'a ExtensionDataInit,
         thread_store: &'a ExtensionData,
+        originator: &'a str,
         available_environment_ids: &'a [String],
     ) -> Self {
         Self {
             config,
             thread_store: Some(thread_store),
             thread_init: Some(thread_init),
+            originator: Some(originator),
             available_environment_ids: Some(available_environment_ids),
         }
     }
@@ -66,6 +71,11 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     /// Returns stable host inputs when resolving for a running thread.
     pub fn thread_init(&self) -> Option<&'a ExtensionDataInit> {
         self.thread_init
+    }
+
+    /// Returns the effective request originator when resolving for a running thread.
+    pub fn originator(&self) -> Option<&'a str> {
+        self.originator
     }
 
     /// Returns the exact environment availability projection for a model step.

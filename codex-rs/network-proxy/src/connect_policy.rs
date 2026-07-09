@@ -107,7 +107,7 @@ impl TargetPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NetworkProxySettings;
+    use crate::config::NetworkProxyConfig;
     use crate::state::network_proxy_state_for_policy;
     use rama_net::address::HostWithPort;
     use std::net::Ipv4Addr;
@@ -120,7 +120,7 @@ mod tests {
             .expect("bind local listener");
         let target = listener.local_addr().expect("local addr");
         let connector = TargetCheckedTcpConnector::new(Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
+            NetworkProxyConfig::default(),
         )));
 
         let request: rama_tcp::client::Request =
@@ -142,9 +142,9 @@ mod tests {
             .expect("bind local listener");
         let target = listener.local_addr().expect("local addr");
         let connector = TargetCheckedTcpConnector::new(Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings {
+            NetworkProxyConfig {
                 allow_local_binding: true,
-                ..NetworkProxySettings::default()
+                ..NetworkProxyConfig::default()
             },
         )));
 

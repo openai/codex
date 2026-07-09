@@ -220,7 +220,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
     .apply_to_network_proxy_config(&mut config);
 
     assert_eq!(
-        config.network.unix_sockets,
+        config.unix_sockets,
         Some(codex_network_proxy::NetworkUnixSocketPermissions {
             entries: BTreeMap::from([
                 (
@@ -399,7 +399,7 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_bare_network_access() {
         ..Default::default()
     }));
 
-    assert!(!config.network.enabled);
+    assert!(!config.enabled);
 }
 
 #[test]
@@ -417,11 +417,11 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_proxy_policy() {
         ..Default::default()
     }));
 
-    assert!(!config.network.enabled);
-    assert_eq!(config.network.proxy_url, "http://127.0.0.1:43128");
-    assert!(!config.network.enable_socks5);
+    assert!(!config.enabled);
+    assert_eq!(config.proxy_url, "http://127.0.0.1:43128");
+    assert!(!config.enable_socks5);
     assert_eq!(
-        config.network.domains,
+        config.domains,
         Some(codex_network_proxy::NetworkDomainPermissions {
             entries: vec![codex_network_proxy::NetworkDomainPermissionEntry {
                 pattern: "openai.com".to_string(),
