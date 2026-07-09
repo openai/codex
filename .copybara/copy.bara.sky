@@ -14,9 +14,35 @@ PRESERVED_DESTINATION_FILES = [
     "codex-rs/Cargo.lock",
 ]
 
-PUBLIC_TO_INTERNAL_FILES = glob(
+# Keep synchronized with VERBATIM_PUBLIC_FILES in Copyberry's
+# codex-internal-to-codex-oss/push/copy.bara.sky configuration. These paths
+# retain their repository-root locations; every other public path belongs
+# below public/ in codex-internal.
+VERBATIM_PUBLIC_FILES = [
+    "LICENSE",
+    "MODULE.bazel",
+    "MODULE.bazel.lock",
+    "codex-cli/**",
+    "codex-rs/**",
+    "sdk/**",
+    "third_party/**",
+]
+
+PUBLIC_TO_INTERNAL_ORIGIN_FILES = glob(["**"])
+
+PUBLIC_TO_INTERNAL_STAGING_DIRECTORY = ".copybara-public-import-staging"
+
+PUBLIC_TO_INTERNAL_PREFIXED_FILES = glob(
     ["**"],
-    exclude = INTERNAL_ONLY_FILES,
+    exclude = VERBATIM_PUBLIC_FILES + [
+        "public/**",
+        PUBLIC_TO_INTERNAL_STAGING_DIRECTORY + "/**",
+    ],
+)
+
+PUBLIC_TO_INTERNAL_DESTINATION_FILES = glob(
+    VERBATIM_PUBLIC_FILES + ["public/**"],
+    exclude = ["codex-rs/internal*/**"],
 )
 
 PUBLIC_FILES = glob(
@@ -89,6 +115,37 @@ PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC = core.transform(
 
 SYNC_AUTHOR = "OpenAI Codex Sync <codex-sync@openai.com>"
 
+def optional_move(before, after):
+    return core.transform(
+        transformations = [
+            core.move(
+                before = before,
+                after = after,
+            ),
+        ],
+        reversal = [],
+        noop_behavior = "IGNORE_NOOP",
+    )
+
+def public_to_internal_transformations():
+    return [
+        # Moving the root into public/ cannot move an existing public/ directory
+        # into itself, so stage that directory before prefixing the other paths.
+        optional_move(
+            before = "public",
+            after = PUBLIC_TO_INTERNAL_STAGING_DIRECTORY,
+        ),
+        core.move(
+            before = "",
+            after = "public",
+            paths = PUBLIC_TO_INTERNAL_PREFIXED_FILES,
+        ),
+        optional_move(
+            before = PUBLIC_TO_INTERNAL_STAGING_DIRECTORY,
+            after = "public/public",
+        ),
+    ]
+
 core.workflow(
     name = "public_to_internal",
     origin = git.origin(
@@ -100,10 +157,10 @@ core.workflow(
         fetch = "main",
         push = "copybara/public-to-internal",
     ),
-    origin_files = glob(["**"]),
+    origin_files = PUBLIC_TO_INTERNAL_ORIGIN_FILES,
     # Stage the public Cargo.lock so the Actions wrapper can either retain it
     # or restore the internal lockfile before reconciling the workspace.
-    destination_files = PUBLIC_TO_INTERNAL_FILES,
+    destination_files = PUBLIC_TO_INTERNAL_DESTINATION_FILES,
     authoring = authoring.pass_thru(SYNC_AUTHOR),
     mode = "SQUASH",
     custom_rev_id = "Codex-Public-RevId",
@@ -111,7 +168,20 @@ core.workflow(
         package_path = "",
         paths = INTERNAL_ONLY_MARKER_FILES,
     ),
-    transformations = [],
+    transformations = public_to_internal_transformations(),
+)
+
+# Local projection used by verify_copybara_config.py to ensure the fallback
+# import remains the inverse of Copyberry's public/ flattening behavior.
+core.workflow(
+    name = "public_to_internal_projection",
+    origin = folder.origin(),
+    destination = folder.destination(),
+    origin_files = PUBLIC_TO_INTERNAL_ORIGIN_FILES,
+    destination_files = PUBLIC_TO_INTERNAL_DESTINATION_FILES,
+    authoring = authoring.pass_thru(SYNC_AUTHOR),
+    mode = "SQUASH",
+    transformations = public_to_internal_transformations(),
 )
 
 core.workflow(

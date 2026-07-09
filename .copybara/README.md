@@ -6,9 +6,10 @@ public mirror surface.
 
 ## Copybara Workflows
 
-- `public_to_internal` imports `openai/codex` into `openai/codex-internal`,
-  preserves internal-only files, and runs in `SQUASH` mode so `merge_import`
-  has a merge baseline.
+- `public_to_internal` imports `openai/codex` into `openai/codex-internal`.
+  Shared source roots such as `codex-rs/` retain their paths; all other public
+  paths are imported below `public/`. It preserves internal-only files and runs
+  in `SQUASH` mode so `merge_import` has a merge baseline.
 - `internal_to_public_branch` exports the public-owned surface from
   `openai/codex-internal` to a branch in `openai/codex` when run with suitable
   local credentials.

@@ -17,6 +17,18 @@ TRAILER = "Codex-Public-RevId"
 CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
 EMPTY_IMPORT_MARKER_FILE = Path(".github/internal/last_empty_public_import.txt")
 GENERATED_SYNC_PATHS = {CARGO_LOCKFILE, EMPTY_IMPORT_MARKER_FILE}
+# Keep synchronized with VERBATIM_PUBLIC_FILES in .copybara/copy.bara.sky.
+VERBATIM_PUBLIC_FILE_PATHS = {
+    Path("LICENSE"),
+    Path("MODULE.bazel"),
+    Path("MODULE.bazel.lock"),
+}
+VERBATIM_PUBLIC_DIRECTORY_NAMES = {
+    "codex-cli",
+    "codex-rs",
+    "sdk",
+    "third_party",
+}
 
 
 @dataclass(frozen=True)
@@ -290,6 +302,14 @@ def public_change_touched_paths(public_change_rev: str) -> list[Path]:
     ]
 
 
+def internal_path_for_public_path(path: Path) -> Path:
+    if path in VERBATIM_PUBLIC_FILE_PATHS:
+        return path
+    if path.parts and path.parts[0] in VERBATIM_PUBLIC_DIRECTORY_NAMES:
+        return path
+    return Path("public") / path
+
+
 def public_change_touched_workflows(public_change_rev: str) -> list[Path]:
     return [
         path
@@ -465,9 +485,10 @@ def open_or_update_pr(change: PublicChange, body_file: Path, message_file: Path)
 
 
 def validate_sync_branch_paths(public_change_rev: str) -> None:
-    allowed_paths = (
-        set(public_change_touched_paths(public_change_rev)) | GENERATED_SYNC_PATHS
-    )
+    allowed_paths = {
+        internal_path_for_public_path(path)
+        for path in public_change_touched_paths(public_change_rev)
+    } | GENERATED_SYNC_PATHS
     changed_paths = {
         Path(path)
         for path in output(
@@ -589,11 +610,10 @@ def merge_pr(pr_number: str, change: PublicChange, body_file: Path) -> None:
                 f"  - {path.as_posix()}" for path in workflow_paths
             )
             raise RuntimeError(
-                f"Failed to merge sync PR #{pr_number} for {change.rev}. The merge "
-                "may have failed because the public change touched "
-                f".github/workflows:\n{formatted_paths}\n\n"
-                "To copy the public workflow changes into this checkout as unstaged "
-                "changes, run:\n"
+                f"Failed to merge sync PR #{pr_number} for {change.rev}. The public "
+                "workflow paths should have been imported below public/:\n"
+                f"{formatted_paths}\n\n"
+                "To apply those paths to this checkout as unstaged changes, run:\n"
                 f"  {workflow_changes_command(change.rev)}"
             )
 

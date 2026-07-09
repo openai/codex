@@ -16,6 +16,7 @@ from urllib.parse import quote
 DEFAULT_SOURCE_REPO = "openai/codex"
 COPIED_PREFIXES = (".github/actions/", ".github/workflows/")
 COPIED_PATHS_DESCRIPTION = ".github/actions and .github/workflows"
+DESTINATION_PREFIX = Path("public")
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -66,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             f"Copy {COPIED_PATHS_DESCRIPTION} changes from one openai/codex commit "
-            "into this checkout as unstaged changes."
+            "below public/ in this checkout as unstaged changes."
         )
     )
     parser.add_argument("commit", help="Commit SHA or ref in the source repository.")
@@ -163,20 +164,24 @@ def apply_change(
     dry_run: bool,
 ) -> None:
     if change.previous_path is not None and change.previous_path != change.path:
-        remove_local_file(destination_root / change.previous_path, dry_run)
+        remove_local_file(
+            destination_root / DESTINATION_PREFIX / change.previous_path, dry_run
+        )
 
     if not is_copied_path(change.path):
         return
 
     if change.status == "removed":
-        remove_local_file(destination_root / change.path, dry_run)
+        remove_local_file(destination_root / DESTINATION_PREFIX / change.path, dry_run)
         return
 
     if change.blob_sha is None:
         raise RuntimeError(f"GitHub did not report a blob SHA for {change.path}.")
 
     content = load_blob(gh, repo, change.blob_sha)
-    write_local_file(destination_root / change.path, content, dry_run)
+    write_local_file(
+        destination_root / DESTINATION_PREFIX / change.path, content, dry_run
+    )
     print(f"{change.status}: {change.path}")
 
 
