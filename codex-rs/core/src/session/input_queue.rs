@@ -54,12 +54,12 @@ impl InputQueue {
         Option<InputQueueActivity>,
     ) {
         let activity_rx = self.activity_tx.subscribe();
-        let has_pending_turn_input = if let Some(turn_state) = turn_state {
-            !turn_state.lock().await.pending_input.items.is_empty()
+        let has_pending_steer = if let Some(turn_state) = turn_state {
+            turn_state.lock().await.pending_input.has_user_input()
         } else {
             false
         };
-        let pending_activity = if has_pending_turn_input {
+        let pending_activity = if has_pending_steer {
             Some(InputQueueActivity::Steer)
         } else if self.has_pending_mailbox_items().await {
             Some(InputQueueActivity::Mailbox)
@@ -181,7 +181,6 @@ impl InputQueue {
         input: Vec<TurnInput>,
     ) {
         turn_state.lock().await.pending_input.items.extend(input);
-        self.activity_tx.send_replace(InputQueueActivity::Steer);
     }
 
     pub(crate) async fn take_pending_input_for_turn_state(
@@ -253,6 +252,14 @@ impl InputQueue {
     }
 }
 
+impl TurnInputQueue {
+    fn has_user_input(&self) -> bool {
+        self.items
+            .iter()
+            .any(|input| matches!(input, TurnInput::UserInput { .. }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn input_queue_notifies_turn_input_subscribers() {
+    async fn input_queue_notifies_steer_subscribers() {
         let input_queue = InputQueue::new();
         let turn_state = Mutex::new(TurnState::default());
         let (mut activity_rx, pending_activity) =
@@ -314,7 +321,7 @@ mod tests {
         assert_eq!(pending_activity, None);
 
         input_queue
-            .extend_pending_input_for_turn_state(
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
                     content: vec![UserInput::Text {

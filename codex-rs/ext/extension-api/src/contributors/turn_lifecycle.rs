@@ -49,6 +49,8 @@ pub struct TurnErrorInput<'a> {
     pub turn_id: &'a str,
     /// Error surfaced by the host for this turn.
     pub error: CodexErrorInfo,
+    /// Whether the error came from compaction rather than model sampling.
+    pub is_compaction: bool,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

@@ -102,7 +102,6 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
-use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -159,7 +158,7 @@ pub(crate) async fn run_turn(
             return Err(err);
         }
         let error = err.to_codex_protocol_error();
-        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+        sess.emit_compaction_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
         return Ok(None);
@@ -223,7 +222,6 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     let mut next_step_context = Some(first_step_context);
-    let mut retrying_sampling_without_input = false;
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -251,23 +249,18 @@ pub(crate) async fn run_turn(
             Some(step_context) => step_context,
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
-        let capacity_only_retry = std::mem::take(&mut retrying_sampling_without_input);
         let sampling_request_result: CodexResult<_> = async {
-            // A capacity-only retry should not grow model context or invalidate its cache.
-            if !capacity_only_retry {
-                super::time_reminder::maybe_record_current_time_reminder(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    &window_id,
-                )
-                .await?;
-            }
+            super::time_reminder::maybe_record_current_time_reminder(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &window_id,
+            )
+            .await?;
 
-            if !capacity_only_retry
-                && turn_context
-                    .config
-                    .features
-                    .enabled(Feature::DeferredExecutor)
+            if turn_context
+                .config
+                .features
+                .enabled(Feature::DeferredExecutor)
             {
                 world_state = sess
                     .record_step_world_state_if_changed(&world_state, step_context.as_ref())
@@ -368,8 +361,11 @@ pub(crate) async fn run_turn(
                             return Err(err);
                         }
                         let error = err.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
-                            .await;
+                        sess.emit_compaction_turn_error_lifecycle(
+                            turn_context.as_ref(),
+                            error.clone(),
+                        )
+                        .await;
                         return Ok(None);
                     }
                     can_drain_pending_input = !model_needs_follow_up;
@@ -452,70 +448,11 @@ pub(crate) async fn run_turn(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
-                let retry_delay = sess
-                    .retry_delay_for_turn_error(turn_context.as_ref(), error.clone())
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
-                let error_event = e.to_error_event(/*message_prefix*/ None);
-                if let Some(delay) = retry_delay {
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::StreamError(StreamErrorEvent {
-                            message: error_event.message.clone(),
-                            codex_error_info: error_event.codex_error_info.clone(),
-                            additional_details: None,
-                        }),
-                    )
-                    .await;
-                    // Keep this turn alive so its recorded input is not appended again.
-                    // Let deliverable input interrupt the backoff instead of parking the turn.
-                    let turn_state = sess
-                        .input_queue
-                        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
-                        .await;
-                    let (mut activity_rx, _) = sess
-                        .input_queue
-                        .subscribe_activity(turn_state.as_deref())
-                        .await;
-                    let retry_interrupted = if sess
-                        .input_queue
-                        .has_pending_input(&sess.active_turn)
-                        .await
-                    {
-                        true
-                    } else {
-                        tokio::select! {
-                            _ = cancellation_token.cancelled() => {
-                                return Err(CodexErr::TurnAborted);
-                            }
-                            result = tokio::time::timeout(delay, async {
-                                while activity_rx.changed().await.is_ok() {
-                                    // Ignore mailbox activity deferred to the next turn.
-                                    if sess.input_queue.has_pending_input(&sess.active_turn).await {
-                                        return true;
-                                    }
-                                }
-                                false
-                            }) => {
-                                result.unwrap_or(false)
-                            }
-                        }
-                    };
-                    if retry_interrupted
-                        || sess
-                            .retry_delay_for_turn_error(turn_context.as_ref(), error.clone())
-                            .await
-                            .is_some()
-                    {
-                        retrying_sampling_without_input = !retry_interrupted;
-                        can_drain_pending_input = true;
-                        continue;
-                    }
-                }
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
-                    .await;
-                sess.send_event(&turn_context, EventMsg::Error(error_event))
-                    .await;
+                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
             }

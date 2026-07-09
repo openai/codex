@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use codex_extension_api::ExtensionData;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::TokenUsage;
@@ -74,38 +72,36 @@ impl Session {
         }
     }
 
-    pub(crate) async fn retry_delay_for_turn_error(
-        &self,
-        turn_context: &TurnContext,
-        error: CodexErrorInfo,
-    ) -> Option<Duration> {
-        for contributor in self.services.extensions.turn_lifecycle_contributors() {
-            if let Some(delay) = contributor
-                .retry_delay_for_turn_error(codex_extension_api::TurnErrorInput {
-                    turn_id: turn_context.sub_id.as_str(),
-                    error: error.clone(),
-                    session_store: &self.services.session_extension_data,
-                    thread_store: &self.services.thread_extension_data,
-                    turn_store: turn_context.extension_data.as_ref(),
-                })
-                .await
-            {
-                return Some(delay);
-            }
-        }
-        None
-    }
-
     pub(crate) async fn emit_turn_error_lifecycle(
         &self,
         turn_context: &TurnContext,
         error: CodexErrorInfo,
+    ) {
+        self.emit_turn_error_lifecycle_for(turn_context, error, /*is_compaction*/ false)
+            .await;
+    }
+
+    pub(crate) async fn emit_compaction_turn_error_lifecycle(
+        &self,
+        turn_context: &TurnContext,
+        error: CodexErrorInfo,
+    ) {
+        self.emit_turn_error_lifecycle_for(turn_context, error, /*is_compaction*/ true)
+            .await;
+    }
+
+    async fn emit_turn_error_lifecycle_for(
+        &self,
+        turn_context: &TurnContext,
+        error: CodexErrorInfo,
+        is_compaction: bool,
     ) {
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
                 .on_turn_error(codex_extension_api::TurnErrorInput {
                     turn_id: turn_context.sub_id.as_str(),
                     error: error.clone(),
+                    is_compaction,
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),

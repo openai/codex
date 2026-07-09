@@ -520,7 +520,11 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
         )
         .await;
     harness
-        .notify_turn_error("turn-1", CodexErrorInfo::UsageLimitExceeded)
+        .notify_turn_error(
+            "turn-1",
+            CodexErrorInfo::UsageLimitExceeded,
+            /*is_compaction*/ false,
+        )
         .await;
 
     let goal = runtime
@@ -574,7 +578,7 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
 }
 
 #[tokio::test]
-async fn retryable_error_keeps_goal_active_and_terminal_error_blocks_it() -> anyhow::Result<()> {
+async fn capacity_error_retries_sampling_but_not_compaction() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -590,17 +594,14 @@ async fn retryable_error_keeps_goal_active_and_terminal_error_blocks_it() -> any
         ))
         .await?;
 
-    let turn_store = ExtensionData::new("turn-1");
-    let retry_delay = harness.registry.turn_lifecycle_contributors()[0]
-        .retry_delay_for_turn_error(TurnErrorInput {
-            turn_id: "turn-1",
-            error: CodexErrorInfo::ServerOverloaded,
-            session_store: &harness.session_store,
-            thread_store: &harness.thread_store,
-            turn_store: &turn_store,
-        })
+    harness
+        .notify_turn_error(
+            "turn-1",
+            CodexErrorInfo::ServerOverloaded,
+            /*is_compaction*/ false,
+        )
         .await;
-    assert!(retry_delay.is_some());
+
     let goal = runtime
         .thread_goals()
         .get_thread_goal(thread_id)
@@ -609,7 +610,11 @@ async fn retryable_error_keeps_goal_active_and_terminal_error_blocks_it() -> any
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
 
     harness
-        .notify_turn_error("turn-1", CodexErrorInfo::Other)
+        .notify_turn_error(
+            "turn-1",
+            CodexErrorInfo::ServerOverloaded,
+            /*is_compaction*/ true,
+        )
         .await;
 
     let goal = runtime
@@ -1323,13 +1328,14 @@ impl GoalExtensionHarness {
         }
     }
 
-    async fn notify_turn_error(&self, turn_id: &str, error: CodexErrorInfo) {
+    async fn notify_turn_error(&self, turn_id: &str, error: CodexErrorInfo, is_compaction: bool) {
         let turn_store = ExtensionData::new(turn_id);
         for contributor in self.registry.turn_lifecycle_contributors() {
             contributor
                 .on_turn_error(TurnErrorInput {
                     turn_id,
                     error: error.clone(),
+                    is_compaction,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                     turn_store: &turn_store,

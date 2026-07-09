@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
@@ -185,20 +184,7 @@ pub trait TurnLifecycleContributor: Send + Sync {
         })
     }
 
-    /// Returns how long the host should wait before retrying a failed sampling
-    /// request. Returning `None` leaves the error terminal.
-    fn retry_delay_for_turn_error<'a>(
-        &'a self,
-        input: TurnErrorInput<'a>,
-    ) -> ExtensionFuture<'a, Option<Duration>> {
-        Box::pin(async move {
-            let _self = self;
-            let _input = input;
-            None
-        })
-    }
-
-    /// Called when the host observes a terminal error for a running turn.
+    /// Called when the host observes an error for a running turn.
     fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let _self = self;

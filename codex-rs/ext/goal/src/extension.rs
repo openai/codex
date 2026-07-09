@@ -32,7 +32,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
-use rand::Rng;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
@@ -298,36 +297,25 @@ where
         })
     }
 
-    fn retry_delay_for_turn_error<'a>(
-        &'a self,
-        input: TurnErrorInput<'a>,
-    ) -> ExtensionFuture<'a, Option<Duration>> {
-        Box::pin(async move {
-            let runtime = goal_runtime_handle(input.thread_store)?;
-
-            if input.error == CodexErrorInfo::ServerOverloaded
-                && runtime.tools_visible()
-                && runtime
-                    .accounting_state()
-                    .turn_is_current_active_goal(input.turn_id)
-            {
-                // Capacity failures do not consume tokens. Jitter around five minutes
-                // prevents clients that hit capacity together from retrying in lockstep.
-                return Some(Duration::from_secs(
-                    rand::rng().random_range(4 * 60..=6 * 60),
-                ));
-            }
-
-            None
-        })
-    }
-
     fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+
             let reason = match input.error {
+                // Capacity failures do not consume user tokens. Jittering the
+                // delay prevents clients that fail together from retrying in lockstep.
+                CodexErrorInfo::ServerOverloaded
+                    if !input.is_compaction
+                        && runtime.tools_visible()
+                        && runtime
+                            .accounting_state()
+                            .turn_is_current_active_goal(input.turn_id) =>
+                {
+                    runtime.defer_retry(Duration::from_secs(rand::random_range(4 * 60..=6 * 60)));
+                    return;
+                }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic

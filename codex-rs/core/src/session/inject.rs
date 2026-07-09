@@ -46,9 +46,6 @@ impl Session {
         self: &Arc<Self>,
         input: Vec<ResponseItem>,
     ) -> Result<(), TryStartTurnIfIdleError> {
-        if input.is_empty() {
-            return Ok(());
-        }
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,

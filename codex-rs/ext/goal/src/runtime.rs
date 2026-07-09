@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
@@ -45,6 +46,7 @@ struct GoalRuntimeInner {
     thread_manager: Weak<ThreadManager>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
+    retry_pending: AtomicBool,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
 }
@@ -97,6 +99,7 @@ impl GoalRuntimeHandle {
                 thread_manager,
                 accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                retry_pending: AtomicBool::new(false),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
@@ -113,6 +116,32 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn tools_visible(&self) -> bool {
         self.is_enabled() && self.inner.tools_available_for_thread
+    }
+
+    /// Suppresses ordinary idle continuation while a retry timer is pending,
+    /// then starts a new turn from the existing conversation history. The weak
+    /// reference ensures the timer neither keeps an unloaded runtime alive nor
+    /// survives a thread lifecycle.
+    pub(crate) fn defer_retry(&self, delay: Duration) {
+        if self.inner.retry_pending.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let runtime = Arc::downgrade(&self.inner);
+        drop(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let Some(inner) = runtime.upgrade() else {
+                return;
+            };
+            inner.retry_pending.store(false, Ordering::Relaxed);
+            let runtime = GoalRuntimeHandle { inner };
+            if let Err(err) = runtime.retry_if_idle().await {
+                tracing::warn!(
+                    "failed to retry active goal for idle thread {}: {err}",
+                    runtime.thread_id()
+                );
+            }
+        }));
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -357,6 +386,21 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        if self.inner.retry_pending.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.start_if_idle(|goal| vec![continuation_steering_item(&protocol_goal_from_state(goal))])
+            .await
+    }
+
+    async fn retry_if_idle(&self) -> Result<(), String> {
+        self.start_if_idle(|_| Vec::new()).await
+    }
+
+    async fn start_if_idle(
+        &self,
+        input_for_goal: impl FnOnce(codex_state::ThreadGoal) -> Vec<ResponseItem>,
+    ) -> Result<(), String> {
         if !self.tools_visible() {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
@@ -389,9 +433,8 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
-        let item = continuation_steering_item(&protocol_goal_from_state(goal));
 
-        if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
+        if let Err(err) = thread.try_start_turn_if_idle(input_for_goal(goal)).await {
             let reason = err.reason();
             tracing::debug!(
                 ?reason,
