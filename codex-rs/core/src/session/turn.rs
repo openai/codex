@@ -15,6 +15,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
+use crate::compact_token_budget::AutoCompactFallbackPolicy;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
@@ -344,15 +345,24 @@ pub(crate) async fn run_turn(
                 .await;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if needs_follow_up
-                    && (sess.take_new_context_window_request().await || token_limit_reached)
-                {
+                let new_context_window_requested = if needs_follow_up {
+                    sess.take_new_context_window_request().await
+                } else {
+                    false
+                };
+                if needs_follow_up && (new_context_window_requested || token_limit_reached) {
+                    let fallback_policy = if new_context_window_requested {
+                        AutoCompactFallbackPolicy::Skip
+                    } else {
+                        AutoCompactFallbackPolicy::Run
+                    };
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
                         /*fallback_step_context*/ None,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
+                        fallback_policy,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -815,6 +825,7 @@ async fn run_pre_sampling_compact(
             /*fallback_step_context*/ None,
             client_session,
             InitialContextInjection::DoNotInject,
+            AutoCompactFallbackPolicy::Run,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
@@ -892,6 +903,7 @@ async fn maybe_run_previous_model_inline_compact(
             fallback_step_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            AutoCompactFallbackPolicy::Run,
             CompactionReason::CompHashChanged,
             CompactionPhase::PreTurn,
         )
@@ -939,6 +951,7 @@ async fn maybe_run_previous_model_inline_compact(
             fallback_step_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            AutoCompactFallbackPolicy::Run,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
         )
@@ -958,6 +971,7 @@ async fn run_auto_compact(
     fallback_step_context: Option<Arc<StepContext>>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
+    fallback_policy: AutoCompactFallbackPolicy,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -970,6 +984,7 @@ async fn run_auto_compact(
             step_context,
             client_session,
             initial_context_injection,
+            fallback_policy,
         )
         .await?;
         return Ok(());

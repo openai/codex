@@ -1079,7 +1079,7 @@ async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
+async fn new_context_tool_skips_fallback_and_starts_new_window_before_follow_up() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1097,7 +1097,9 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(call_id, "new_context", "{}"),
-                ev_completed("resp-1"),
+                // Explicit rollover takes precedence even when this response also crosses the
+                // automatic compaction threshold.
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
@@ -1112,13 +1114,19 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
         ],
     )
     .await;
+    let (extensions, fallback_tool_calls) = token_budget_auto_compact_fallback_extensions();
     let test = test_codex()
+        .with_extensions(extensions)
         .with_config(|config| {
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config.model_context_window = Some(10_000);
             config
                 .features
                 .enable(Feature::TokenBudget)
                 .expect("test config should allow token budget");
+            config
+                .features
+                .enable(Feature::AutoCompactFallback)
+                .expect("auto compact fallback feature should be known");
         })
         .build(&server)
         .await?;
@@ -1133,12 +1141,32 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             .any(|name| name == "new_context"),
         "new_context should be exposed when token budget is enabled"
     );
+    assert_eq!(
+        fallback_tool_calls.load(Ordering::SeqCst),
+        0,
+        "explicit new_context should skip fallback tool execution"
+    );
+    assert!(
+        !requests[1].body_contains_text(TOKEN_BUDGET_FALLBACK_PROMPT),
+        "the first new-window request should not include the fallback prompt"
+    );
+    let first_new_window_metadata: Value = serde_json::from_str(
+        &requests[1]
+            .header("x-codex-turn-metadata")
+            .expect("the first new-window request should include turn metadata"),
+    )
+    .expect("turn metadata should be valid json");
+    assert_eq!(
+        first_new_window_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "explicit new_context should continue directly with a normal turn"
+    );
     let thread_id = test.session_configured.thread_id;
     let initial_token_budget = token_budget_contexts(&requests[0]);
     assert_eq!(initial_token_budget.len(), 1);
     let (initial_first_window_id, _, initial_window_id) =
         token_budget_window_ids(&initial_token_budget[0], thread_id);
-    let new_window_token_budget = token_budget_contexts(&requests[2]);
+    let new_window_token_budget = token_budget_contexts(&requests[1]);
     assert_eq!(new_window_token_budget.len(), 1);
     let (new_first_window_id, new_previous_window_id, new_window_id) =
         token_budget_window_ids(&new_window_token_budget[0], thread_id);
@@ -1149,7 +1177,7 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
     );
     assert_ne!(new_window_id, initial_window_id);
     assert!(
-        !requests[2].body_contains_text("request new context window"),
+        !requests[1].body_contains_text("request new context window"),
         "new_context should drop the prior window history before continuing the turn"
     );
     assert_eq!(

@@ -19,6 +19,11 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 
+pub(crate) enum AutoCompactFallbackPolicy {
+    Run,
+    Skip,
+}
+
 /// Runs token-budget manual compaction as a normal compaction lifecycle.
 ///
 /// Token-budget compaction skips model/server summarization and installs a fresh context window
@@ -61,6 +66,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
+    fallback_policy: AutoCompactFallbackPolicy,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let world_state = match initial_context_injection {
@@ -69,13 +75,17 @@ pub(crate) async fn run_inline_auto_compact_task(
             Arc::new(sess.build_world_state_for_step(&step_context).await)
         }
     };
+    let (auto_step_context, fallback_client_session) = match fallback_policy {
+        AutoCompactFallbackPolicy::Run => (Some(&step_context), Some(client_session)),
+        AutoCompactFallbackPolicy::Skip => (None, None),
+    };
     run_compact_task_inner(
         &sess,
         turn_context,
         world_state,
         CompactionTrigger::Auto,
-        Some(&step_context),
-        Some(client_session),
+        auto_step_context,
+        fallback_client_session,
     )
     .await
 }
