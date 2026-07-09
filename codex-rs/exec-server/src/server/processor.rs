@@ -185,23 +185,39 @@ async fn run_connection(
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
-                    let Some(route) = router.notification_route(notification.method.as_str())
-                    else {
+                    let method = notification.method.as_str();
+                    let notification_span = tracing::info_span!(
+                        "codex.exec_server.notification",
+                        otel.kind = "server",
+                        otel.name = tracing::field::Empty,
+                        rpc.system = "jsonrpc",
+                        rpc.method = method,
+                        rpc.transport = transport.metric_tag(),
+                        method,
+                        result = tracing::field::Empty,
+                    );
+                    let Some((method, route)) = router.notification_route(method) else {
+                        notification_span.record("otel.name", "unknown");
+                        notification_span.record("result", "error");
                         warn!(
                             "closing exec-server connection after unexpected notification: {}",
                             notification.method
                         );
                         break;
                     };
+                    notification_span.record("otel.name", method);
                     let result = tokio::select! {
-                        result = route(Arc::clone(&handler), notification) => result,
+                        result = route(Arc::clone(&handler), notification).instrument(notification_span.clone()) => result,
                         _ = disconnected_rx.changed() => {
+                            notification_span.record("result", "disconnected");
                             debug!(
                                 "exec-server transport disconnected while handling notification"
                             );
                             break;
                         }
                     };
+                    notification_span
+                        .record("result", if result.is_ok() { "success" } else { "error" });
                     if let Err(err) = result {
                         warn!("closing exec-server connection after protocol error: {err}");
                         break;

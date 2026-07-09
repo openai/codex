@@ -233,8 +233,13 @@ where
             .map(|(&method, route)| (method, route))
     }
 
-    pub(crate) fn notification_route(&self, method: &str) -> Option<&NotificationRoute<S>> {
-        self.notification_routes.get(method)
+    pub(crate) fn notification_route(
+        &self,
+        method: &str,
+    ) -> Option<(&'static str, &NotificationRoute<S>)> {
+        self.notification_routes
+            .get_key_value(method)
+            .map(|(&method, route)| (method, route))
     }
 }
 
