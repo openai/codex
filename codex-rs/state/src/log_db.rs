@@ -56,6 +56,7 @@ pub fn default_filter() -> Targets {
         .with_target("log", LevelFilter::OFF)
         .with_target("codex_otel.log_only", LevelFilter::OFF)
         .with_target("codex_otel.trace_safe", LevelFilter::OFF)
+        .with_target("rmcp::service", LevelFilter::INFO)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
