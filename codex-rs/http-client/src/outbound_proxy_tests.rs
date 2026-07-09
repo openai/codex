@@ -143,6 +143,51 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
     );
 }
 
+#[tokio::test]
+async fn route_aware_pool_uses_respect_system_proxy_route_for_exact_url() {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
+    let proxy_addr = listener
+        .local_addr()
+        .expect("local proxy listener should have an address");
+    let proxy_thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("proxy should accept a request");
+        let mut buffer = [0_u8; 4096];
+        let size = stream.read(&mut buffer).expect("proxy should read request");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .expect("proxy should write response");
+        String::from_utf8_lossy(&buffer[..size]).into_owned()
+    });
+    let request_url = "http://route-aware-proxy.test/proxy-check?pac=exact";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+
+    let response = pool
+        .client_for_url(request_url)
+        .await
+        .expect("route-aware client should build")
+        .get(request_url)
+        .send()
+        .await
+        .expect("request should use local proxy");
+    let proxy_request = proxy_thread.join().expect("proxy thread should finish");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://route-aware-proxy.test/proxy-check?pac=exact HTTP/1.1")
+    );
+}
+
 #[test]
 fn parses_pac_proxy_tokens() {
     assert_eq!(

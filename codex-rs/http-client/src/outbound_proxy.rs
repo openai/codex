@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
@@ -25,6 +26,7 @@ use thiserror::Error;
 const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
 const SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL: Duration = Duration::from_secs(5);
 const SYSTEM_PROXY_CACHE_MAX_ENTRIES: usize = 256;
+static ASYNC_SYSTEM_PROXY_RESOLUTION_PERMIT: Semaphore = Semaphore::const_new(1);
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -102,7 +104,7 @@ pub enum OutboundProxyPolicy {
 ///
 /// `TransportDefault` delegates environment-proxy handling to the underlying transport. Proxy
 /// URLs are intentionally redacted from `Debug` output because they may contain credentials.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum OutboundProxyRoute {
     /// Preserve the underlying transport's existing proxy behavior.
     TransportDefault,
@@ -159,6 +161,33 @@ impl HttpClientFactory {
         )
     }
 
+    /// Resolves the proxy route for a concrete destination without blocking a Tokio worker.
+    pub async fn resolve_proxy_route_async(
+        &self,
+        request_url: String,
+    ) -> io::Result<OutboundProxyRoute> {
+        if matches!(
+            self.outbound_proxy_policy,
+            OutboundProxyPolicy::ReqwestDefault
+        ) {
+            return Ok(OutboundProxyRoute::TransportDefault);
+        }
+
+        let permit = ASYNC_SYSTEM_PROXY_RESOLUTION_PERMIT
+            .acquire()
+            .await
+            .map_err(io::Error::other)?;
+        let factory = self.clone();
+        tokio::task::spawn_blocking(move || {
+            // Keep the permit with the blocking task: cancelling the caller must not allow a
+            // second PAC/WinHTTP lookup to start while this one is still running.
+            let _permit = permit;
+            factory.resolve_proxy_route(&request_url)
+        })
+        .await
+        .map_err(io::Error::other)
+    }
+
     /// Builds an HTTP client for a concrete outbound route.
     pub fn build_client(
         &self,
@@ -182,6 +211,22 @@ impl HttpClientFactory {
             route_class,
             self.outbound_proxy_policy,
         )
+    }
+
+    pub(crate) fn build_reqwest_client_for_resolved_route(
+        &self,
+        builder: reqwest::ClientBuilder,
+        route_class: ClientRouteClass,
+        route: &OutboundProxyRoute,
+    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+        let builder = match route {
+            OutboundProxyRoute::TransportDefault => builder,
+            OutboundProxyRoute::Direct => builder.no_proxy(),
+            OutboundProxyRoute::Proxy { url } => {
+                configure_concrete_proxy(builder, route_class, url, /*no_proxy*/ None)?
+            }
+        };
+        build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
     }
 }
 
