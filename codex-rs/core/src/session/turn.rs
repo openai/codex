@@ -251,9 +251,10 @@ pub(crate) async fn run_turn(
             Some(step_context) => step_context,
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
+        let capacity_only_retry = std::mem::take(&mut retrying_sampling_without_input);
         let sampling_request_result: CodexResult<_> = async {
             // A capacity-only retry should not grow model context or invalidate its cache.
-            if !std::mem::take(&mut retrying_sampling_without_input) {
+            if !capacity_only_retry {
                 super::time_reminder::maybe_record_current_time_reminder(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -262,10 +263,11 @@ pub(crate) async fn run_turn(
                 .await?;
             }
 
-            if turn_context
-                .config
-                .features
-                .enabled(Feature::DeferredExecutor)
+            if !capacity_only_retry
+                && turn_context
+                    .config
+                    .features
+                    .enabled(Feature::DeferredExecutor)
             {
                 world_state = sess
                     .record_step_world_state_if_changed(&world_state, step_context.as_ref())
@@ -458,14 +460,14 @@ pub(crate) async fn run_turn(
                     sess.send_event(
                         &turn_context,
                         EventMsg::StreamError(StreamErrorEvent {
-                            message: error_event.message,
-                            codex_error_info: error_event.codex_error_info,
+                            message: error_event.message.clone(),
+                            codex_error_info: error_event.codex_error_info.clone(),
                             additional_details: None,
                         }),
                     )
                     .await;
                     // Keep this turn alive so its recorded input is not appended again.
-                    // Let queued user input interrupt the backoff instead of parking the turn.
+                    // Let deliverable input interrupt the backoff instead of parking the turn.
                     let turn_state = sess
                         .input_queue
                         .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
@@ -498,17 +500,16 @@ pub(crate) async fn run_turn(
                             }
                         }
                     };
-                    if !retry_interrupted
-                        && sess
+                    if retry_interrupted
+                        || sess
                             .retry_delay_for_turn_error(turn_context.as_ref(), error.clone())
                             .await
-                            .is_none()
+                            .is_some()
                     {
-                        break;
+                        retrying_sampling_without_input = !retry_interrupted;
+                        can_drain_pending_input = true;
+                        continue;
                     }
-                    retrying_sampling_without_input = !retry_interrupted;
-                    can_drain_pending_input = true;
-                    continue;
                 }
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
