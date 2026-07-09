@@ -1081,8 +1081,12 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     )?;
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let mut expected_config = read_config_toml(codex_home.path())?;
     expected_config
@@ -1147,7 +1151,11 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
 async fn managed_bedrock_login_requires_experimental_api() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     let initialized = mcp
         .initialize_with_capabilities(
             ClientInfo {
@@ -1184,8 +1192,12 @@ async fn login_managed_bedrock_updates_active_bedrock_account() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1224,8 +1236,12 @@ async fn login_account_amazon_bedrock_rejects_invalid_credentials_without_change
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let expected_config = read_config_toml(codex_home.path())?;
 
@@ -1271,7 +1287,11 @@ async fn login_account_amazon_bedrock_rejected_when_forced_chatgpt() -> Result<(
         },
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1301,7 +1321,11 @@ async fn login_account_amazon_bedrock_rejected_with_external_chatgpt_auth() -> R
             .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
