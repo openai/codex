@@ -285,7 +285,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &mut app_server,
         &thread_id,
         &format!("Use ${SKILL_NAME} after reattaching the selected executor"),
-        fixture.environment_cwd,
+        fixture.environment_cwd.clone(),
     )
     .await?;
     let resumed_mcp_pid = wait_for_pid_file(&fixture.pid_file).await?;
@@ -307,6 +307,38 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         .expect("MCP function output should be text");
     assert!(output.contains("ECHOING: hello from the selected executor"));
     assert!(output.contains(EXECUTOR_ENV_VALUE));
+
+    let replacement_thread_id = start_thread(
+        &mut app_server,
+        fixture.selected_root.clone(),
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+    assert_eq!(
+        list_thread_skills(&mut app_server, &replacement_thread_id).await?,
+        (vec![fixture.thread_skill.clone()], Vec::new())
+    );
+    let stalled_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    add_environment(
+        &mut app_server,
+        &format!("ws://{}", stalled_listener.local_addr()?),
+    )
+    .await?;
+    timeout(
+        Duration::from_secs(2),
+        wait_for_thread_skills_changed(&mut app_server, &replacement_thread_id),
+    )
+    .await
+    .context("environment replacement did not invalidate thread skills")??;
+    assert_eq!(
+        timeout(
+            Duration::from_secs(2),
+            list_thread_skills(&mut app_server, &replacement_thread_id),
+        )
+        .await
+        .context("skills/list waited for the replacement environment")??,
+        (Vec::new(), Vec::new())
+    );
 
     exec_server.kill().await?;
     apps_server_handle.abort();

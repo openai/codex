@@ -298,13 +298,14 @@ impl EnvironmentManager {
 
     /// Adds or replaces a named remote environment without changing the
     /// manager's default environment selection. Uses the default WebSocket
-    /// connection timeout when none is provided.
+    /// connection timeout when none is provided. Returns whether an existing
+    /// environment was replaced.
     pub fn upsert_environment(
         &self,
         environment_id: String,
         exec_server_url: String,
         connect_timeout: Option<std::time::Duration>,
-    ) -> Result<(), ExecServerError> {
+    ) -> Result<bool, ExecServerError> {
         if environment_id.is_empty() {
             return Err(ExecServerError::Protocol(
                 "environment id cannot be empty".to_string(),
@@ -329,11 +330,13 @@ impl EnvironmentManager {
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
-        self.environments
+        let replaced = self
+            .environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
-        Ok(())
+            .insert(environment_id, environment)
+            .is_some();
+        Ok(replaced)
     }
 
     /// Adds or replaces a named remote environment that connects through an

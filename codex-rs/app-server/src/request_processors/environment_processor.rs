@@ -25,7 +25,11 @@ impl EnvironmentRequestProcessor {
         };
         for (environment_id, environment) in processor.environment_manager.registered_environments()
         {
-            processor.notify_selected_threads_on_readiness_changes(environment_id, environment);
+            processor.notify_selected_threads_on_readiness_changes(
+                environment_id,
+                environment,
+                /*notify_initially*/ false,
+            );
         }
         processor
     }
@@ -35,7 +39,8 @@ impl EnvironmentRequestProcessor {
         params: EnvironmentAddParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let environment_id = params.environment_id;
-        self.environment_manager
+        let replaced = self
+            .environment_manager
             .upsert_environment(
                 environment_id.clone(),
                 params.exec_server_url,
@@ -46,7 +51,7 @@ impl EnvironmentRequestProcessor {
             .environment_manager
             .get_environment(&environment_id)
             .ok_or_else(|| internal_error("upserted environment is unavailable"))?;
-        self.notify_selected_threads_on_readiness_changes(environment_id, environment);
+        self.notify_selected_threads_on_readiness_changes(environment_id, environment, replaced);
         Ok(Some(EnvironmentAddResponse {}.into()))
     }
 
@@ -54,16 +59,17 @@ impl EnvironmentRequestProcessor {
         &self,
         environment_id: String,
         environment: Arc<Environment>,
+        notify_initially: bool,
     ) {
         let Some(mut readiness_changed) = environment.observe_readiness() else {
             return;
         };
-        let startup_finished = environment.startup_finished();
+        let notify_initially = notify_initially || environment.startup_finished();
         let thread_manager = Arc::downgrade(&self.thread_manager);
         let outgoing = Arc::downgrade(&self.outgoing);
         let thread_state_manager = self.thread_state_manager.clone();
         tokio::spawn(async move {
-            if !startup_finished && readiness_changed.changed().await.is_err() {
+            if !notify_initially && readiness_changed.changed().await.is_err() {
                 return;
             }
             loop {
