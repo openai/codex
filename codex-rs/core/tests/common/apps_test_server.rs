@@ -422,6 +422,7 @@ async fn mount_streamable_http_json_rpc(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mount_streamable_http_json_rpc_at_path(
     server: &MockServer,
     mcp_path_regex: &str,
