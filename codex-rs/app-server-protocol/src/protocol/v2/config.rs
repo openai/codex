@@ -684,6 +684,10 @@ pub struct ExternalAgentConfigDetectParams {
     /// Zero or more working directories to include for repo-scoped detection.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<PathBuf>>,
+    /// Source product to detect. Missing or unrecognized values use Claude Code for backwards
+    /// compatibility; `cursor` selects Cursor.
+    #[ts(optional = nullable)]
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -691,7 +695,8 @@ pub struct ExternalAgentConfigDetectParams {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportParams {
     pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    /// Source product that produced the migration items. Missing means unspecified.
+    /// Source product that produced the migration items. Use `cursor` for Cursor items; missing or
+    /// unrecognized values use Claude Code for backwards compatibility.
     #[ts(optional = nullable)]
     pub source: Option<String>,
 }

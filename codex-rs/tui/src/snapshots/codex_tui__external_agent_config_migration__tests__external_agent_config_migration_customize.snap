@@ -4,9 +4,9 @@ expression: rendered
 ---
 
   > Choose what to import
-  Choose the Claude Code items to import.
+  Choose items to import.
   Codex may add files to your current project folder.
-  Your existing Claude Code setup will not be changed.
+  Your existing setup will not be changed.
   Home
   › [x] Settings (settings.json -> config.toml)
         Import /Users/alex/.claude/settings.json into /Users/alex/.codex/conf…
@@ -21,7 +21,7 @@ expression: rendered
         • team-marketplace: asana
         • debug: sample
         • +1 more marketplaces
-    [x] Instructions (CLAUDE.md -> AGENTS.md)
+    [x] Instructions
         Import CLAUDE.md to AGENTS.md
 
   Selected 4 of 4 items.

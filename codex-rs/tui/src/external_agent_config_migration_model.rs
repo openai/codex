@@ -79,7 +79,7 @@ pub(crate) fn external_agent_config_migration_item_label(
     item: &ExternalAgentConfigMigrationItem,
 ) -> &'static str {
     match item.item_type {
-        ExternalAgentConfigMigrationItemType::AgentsMd => "Instructions (CLAUDE.md -> AGENTS.md)",
+        ExternalAgentConfigMigrationItemType::AgentsMd => "Instructions",
         ExternalAgentConfigMigrationItemType::Config => "Settings (settings.json -> config.toml)",
         ExternalAgentConfigMigrationItemType::Skills => "Skills",
         ExternalAgentConfigMigrationItemType::Plugins => "Plugins",

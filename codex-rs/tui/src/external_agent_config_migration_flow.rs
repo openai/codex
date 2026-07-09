@@ -4,6 +4,8 @@ use crate::external_agent_config_migration::ExternalAgentConfigMigrationOutcome;
 use crate::external_agent_config_migration::run_external_agent_config_migration_prompt;
 use crate::external_agent_config_migration_model::external_agent_config_migration_item_count;
 use crate::external_agent_config_migration_model::external_agent_config_migration_type_label;
+use crate::external_agent_config_migration_source::ExternalAgentConfigMigrationSource;
+use crate::external_agent_config_migration_source::run_external_agent_config_source_prompt;
 use crate::legacy_core::config::Config;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -14,14 +16,19 @@ use ratatui::prelude::Stylize as _;
 use ratatui::text::Line;
 
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE: &str =
-    "No Claude Code setup was found to import.";
-pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_REMOTE_UNAVAILABLE_MESSAGE: &str = "Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.";
-pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE: &str = "Import from Claude Code is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.";
+    "No compatible setup was found to import.";
+pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_REMOTE_UNAVAILABLE_MESSAGE: &str = "Import from other apps is unavailable in remote sessions. Start Codex locally and run /import.";
+pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE: &str = "Import from other apps is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.";
 
 pub(crate) enum ExternalAgentConfigMigrationFlowOutcome {
     Started(Vec<Line<'static>>),
     NoItems,
     Cancelled,
+}
+
+struct DetectedExternalAgentConfigSource {
+    source: ExternalAgentConfigMigrationSource,
+    items: Vec<ExternalAgentConfigMigrationItem>,
 }
 
 fn external_agent_config_migration_started_lines(
@@ -89,7 +96,7 @@ fn external_agent_config_migration_started_lines(
     let mut lines = vec![
         vec![
             "• ".dim(),
-            "Claude Code import started.".cyan(),
+            "Import started.".cyan(),
             " You can keep working while it finishes.".into(),
         ]
         .into(),
@@ -145,7 +152,7 @@ pub(crate) fn external_agent_config_migration_finished_lines(
     let mut lines = vec![
         vec![
             "• ".dim(),
-            "Claude Code import finished: ".into(),
+            "Import finished: ".into(),
             format!("{imported_count} imported").green(),
             ", ".into(),
             failed_count,
@@ -212,27 +219,64 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
     }
 
     let cwd = config.cwd.to_path_buf();
-    let detected_items = match app_server
-        .external_agent_config_detect(ExternalAgentConfigDetectParams {
-            include_home: true,
-            cwds: Some(vec![cwd.clone()]),
-        })
-        .await
-    {
-        Ok(response) => response.items,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                cwd = %cwd.display(),
-                "failed to detect external agent config migrations"
-            );
-            return Err(format!("Could not check for Claude Code setup: {err}"));
+    let mut detected_sources = Vec::new();
+    let mut detection_errors = Vec::new();
+    for source in ExternalAgentConfigMigrationSource::ALL {
+        let response = match app_server
+            .external_agent_config_detect(ExternalAgentConfigDetectParams {
+                include_home: true,
+                cwds: Some(vec![cwd.clone()]),
+                source: Some(source.api_source().to_string()),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    cwd = %cwd.display(),
+                    source = source.label(),
+                    "failed to detect external agent config migrations"
+                );
+                detection_errors.push(format!("{}: {err}", source.label()));
+                continue;
+            }
+        };
+        if !response.items.is_empty() {
+            detected_sources.push(DetectedExternalAgentConfigSource {
+                source,
+                items: response.items,
+            });
         }
-    };
+    }
 
-    if detected_items.is_empty() {
+    if detected_sources.is_empty() {
+        if !detection_errors.is_empty() {
+            return Err(format!(
+                "Could not check for importable setup: {}",
+                detection_errors.join("; ")
+            ));
+        }
         return Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems);
     }
+
+    let selected_source = if detected_sources.len() == 1 {
+        detected_sources[0].source
+    } else {
+        let sources = detected_sources
+            .iter()
+            .map(|detected| detected.source)
+            .collect::<Vec<_>>();
+        let Some(source) = run_external_agent_config_source_prompt(tui, &sources).await else {
+            return Ok(ExternalAgentConfigMigrationFlowOutcome::Cancelled);
+        };
+        source
+    };
+    let detected_items = detected_sources
+        .into_iter()
+        .find(|detected| detected.source == selected_source)
+        .map(|detected| detected.items)
+        .unwrap_or_default();
 
     let mut selected_items = detected_items.clone();
     let mut error: Option<String> = None;
@@ -248,7 +292,13 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
         {
             ExternalAgentConfigMigrationOutcome::Proceed(items) => {
                 selected_items = items.clone();
-                match app_server.external_agent_config_import(items).await {
+                match app_server
+                    .external_agent_config_import(
+                        items,
+                        Some(selected_source.api_source().to_string()),
+                    )
+                    .await
+                {
                     Ok(()) => {
                         let remaining_item_count =
                             detected_items.len().saturating_sub(selected_items.len());

@@ -810,6 +810,13 @@
         "includeHome": {
           "description": "If true, include detection under the user's home directory.",
           "type": "boolean"
+        },
+        "source": {
+          "description": "Source product to detect. Missing or unrecognized values use Claude Code for backwards compatibility; `cursor` selects Cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -823,7 +830,7 @@
           "type": "array"
         },
         "source": {
-          "description": "Source product that produced the migration items. Missing means unspecified.",
+          "description": "Source product that produced the migration items. Use `cursor` for Cursor items; missing or unrecognized values use Claude Code for backwards compatibility.",
           "type": [
             "string",
             "null"

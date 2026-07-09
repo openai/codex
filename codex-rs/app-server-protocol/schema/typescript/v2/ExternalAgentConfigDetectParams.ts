@@ -10,4 +10,9 @@ includeHome?: boolean,
 /**
  * Zero or more working directories to include for repo-scoped detection.
  */
-cwds?: Array<string> | null, };
+cwds?: Array<string> | null,
+/**
+ * Source product to detect. Missing or unrecognized values use Claude Code for backwards
+ * compatibility; `cursor` selects Cursor.
+ */
+source?: string | null, };

@@ -204,7 +204,7 @@
       "type": "array"
     },
     "source": {
-      "description": "Source product that produced the migration items. Missing means unspecified.",
+      "description": "Source product that produced the migration items. Use `cursor` for Cursor items; missing or unrecognized values use Claude Code for backwards compatibility.",
       "type": [
         "string",
         "null"
