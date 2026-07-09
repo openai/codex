@@ -38,7 +38,6 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
 http = { workspace = true }
-reqwest = { workspace = true }
 regex = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

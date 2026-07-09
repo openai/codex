@@ -131,6 +131,13 @@ impl PluginsConfigInput {
         }
     }
 
+    /// Builds route-aware service state for remote plugin requests.
+    pub fn remote_plugin_service_config(&self) -> RemotePluginServiceConfig {
+        RemotePluginServiceConfig::new(
+            self.chatgpt_base_url.clone(),
+            self.http_client_factory.clone(),
+        )
+    }
 }
 
 /// Inputs used to select endpoint-backed plugin install candidates.
@@ -228,9 +235,7 @@ struct ConfiguredMarketplaceUpgradeState {
 }
 
 fn remote_plugin_service_config(config: &PluginsConfigInput) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig {
-        chatgpt_base_url: config.chatgpt_base_url.clone(),
-    }
+    config.remote_plugin_service_config()
 }
 
 fn featured_plugin_ids_cache_key(

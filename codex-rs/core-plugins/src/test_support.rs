@@ -7,6 +7,7 @@ use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
 use crate::http_client_selector::HttpClientSelector;
+use crate::remote::RemotePluginServiceConfig;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
@@ -58,6 +59,23 @@ impl HttpClientSelector for RecordingHttpClientSelector {
         }
         self.delegate.request(method, url)
     }
+
+    fn outbound_proxy_policy(&self) -> OutboundProxyPolicy {
+        self.delegate.outbound_proxy_policy()
+    }
+}
+
+pub(crate) fn recording_remote_plugin_service_config(
+    chatgpt_base_url: String,
+) -> (RemotePluginServiceConfig, Arc<Mutex<Vec<String>>>) {
+    let (http_clients, selected_urls) = RecordingHttpClientSelector::new();
+    (
+        RemotePluginServiceConfig {
+            chatgpt_base_url,
+            http_clients,
+        },
+        selected_urls,
+    )
 }
 
 pub(crate) fn recorded_http_client_urls(selected_urls: &Mutex<Vec<String>>) -> Vec<String> {
