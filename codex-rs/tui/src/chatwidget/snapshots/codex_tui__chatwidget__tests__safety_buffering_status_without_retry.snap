@@ -2,7 +2,6 @@
 source: tui/src/chatwidget/tests/app_server.rs
 expression: popup
 ---
-  Additional safety checks
   Our systems are thinking a bit more about this request before responding.
 
 › 1. Keep waiting

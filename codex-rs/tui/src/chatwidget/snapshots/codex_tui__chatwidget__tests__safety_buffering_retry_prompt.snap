@@ -2,10 +2,9 @@
 source: tui/src/chatwidget/tests/app_server.rs
 expression: popup
 ---
-  Additional safety checks
   Our systems are thinking a bit more about this request before responding.
-  You can retry with a faster model for a quicker response, though it may be
-  less capable of handling complex requests.
+  Hang tight or retry with a faster model for a quicker response, though it
+  may be less capable of handling complex requests.
 
 › 1. Retry with a faster model
   2. Keep waiting
