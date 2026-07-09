@@ -9513,6 +9513,7 @@
           "SUBAGENTS",
           "HOOKS",
           "COMMANDS",
+          "MEMORY",
           "SESSIONS"
         ],
         "type": "string"
@@ -12439,6 +12440,35 @@
         ],
         "type": "object"
       },
+      "MemoryFileMigration": {
+        "properties": {
+          "contentSha256": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "sourceFile": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "contentSha256",
+          "projectKey",
+          "sourceFile",
+          "sourcePath"
+        ],
+        "type": "object"
+      },
       "MergeStrategy": {
         "enum": [
           "replace",
@@ -12485,6 +12515,13 @@
             "default": [],
             "items": {
               "$ref": "#/definitions/v2/McpServerMigration"
+            },
+            "type": "array"
+          },
+          "memoryFiles": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/MemoryFileMigration"
             },
             "type": "array"
           },

@@ -1,5 +1,10 @@
 //! Migration helpers for importing external-agent configuration into Codex.
 
+mod memory;
+
+pub use memory::ExternalMemoryFile;
+pub use memory::discover_external_memory_files;
+
 use codex_hooks::HOOK_EVENT_NAMES;
 use codex_hooks::HOOK_EVENT_NAMES_WITH_MATCHERS;
 use serde_json::Value as JsonValue;

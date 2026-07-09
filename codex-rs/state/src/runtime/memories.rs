@@ -1029,6 +1029,144 @@ WHERE kind = ? AND job_key = ?
         enqueue_global_consolidation_with_executor(self.pool.as_ref(), input_watermark).await
     }
 
+    /// Attempts to reserve the Phase 2 workspace for an external mutation.
+    ///
+    /// Unlike [`Self::try_claim_global_phase2_job`], this ignores retry and success cooldowns
+    /// because the caller is staging new workspace input rather than running consolidation. It
+    /// still respects an active Phase 2 lease so external writers cannot race the consolidation
+    /// agent. The returned ownership token must be passed to
+    /// [`Self::queue_global_phase2_after_workspace_mutation`] after the mutation attempt.
+    pub async fn try_claim_global_phase2_workspace_mutation(
+        &self,
+        worker_id: ThreadId,
+        lease_seconds: i64,
+    ) -> anyhow::Result<Option<String>> {
+        let now = Utc::now().timestamp();
+        let lease_until = now.saturating_add(lease_seconds.max(0));
+        let ownership_token = Uuid::new_v4().to_string();
+        let worker_id = worker_id.to_string();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        let existing_job = sqlx::query(
+            r#"
+SELECT status, lease_until
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(existing_job) = existing_job {
+            let status: String = existing_job.try_get("status")?;
+            let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
+            if status == "running"
+                && existing_lease_until.is_some_and(|lease_until| lease_until > now)
+            {
+                tx.commit().await?;
+                return Ok(None);
+            }
+
+            sqlx::query(
+                r#"
+UPDATE jobs
+SET
+    status = 'running',
+    worker_id = ?,
+    ownership_token = ?,
+    started_at = ?,
+    finished_at = NULL,
+    lease_until = ?,
+    retry_at = NULL,
+    retry_remaining = max(retry_remaining, ?),
+    last_error = NULL
+WHERE kind = ? AND job_key = ?
+                "#,
+            )
+            .bind(worker_id.as_str())
+            .bind(ownership_token.as_str())
+            .bind(now)
+            .bind(lease_until)
+            .bind(DEFAULT_RETRY_REMAINING)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query(
+                r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, 0, 0)
+                "#,
+            )
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .bind(worker_id.as_str())
+            .bind(ownership_token.as_str())
+            .bind(now)
+            .bind(lease_until)
+            .bind(DEFAULT_RETRY_REMAINING)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(Some(ownership_token))
+    }
+
+    /// Releases an external workspace-mutation claim and makes Phase 2 immediately claimable.
+    ///
+    /// Clearing `finished_at` deliberately bypasses the normal success cooldown on the next
+    /// startup pass. The input watermark is bookkeeping only; the workspace Git diff remains the
+    /// source of truth for whether consolidation has work to do.
+    pub async fn queue_global_phase2_after_workspace_mutation(
+        &self,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE jobs
+SET
+    status = 'pending',
+    worker_id = NULL,
+    ownership_token = NULL,
+    started_at = NULL,
+    finished_at = NULL,
+    lease_until = NULL,
+    retry_at = NULL,
+    retry_remaining = max(retry_remaining, ?),
+    last_error = NULL,
+    input_watermark = COALESCE(input_watermark, 0) + 1
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(DEFAULT_RETRY_REMAINING)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
     /// Attempts to claim the global phase-2 consolidation lock.
     ///
     /// Claim semantics:
@@ -5081,6 +5219,79 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("claim global phase2 lock after success");
         assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn workspace_mutation_claim_respects_active_runner_and_queues_past_success_cooldown() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        let initial_owner = ThreadId::new();
+        let initial_claim = runtime
+            .try_claim_global_phase2_job(initial_owner, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim initial phase2 job");
+        let initial_token = match initial_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token, ..
+            } => ownership_token,
+            other => panic!("unexpected initial phase2 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    initial_token.as_str(),
+                    /*completed_watermark*/ 0,
+                    &[]
+                )
+                .await
+                .expect("mark initial phase2 success")
+        );
+        assert_eq!(
+            runtime
+                .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
+                .await
+                .expect("claim during success cooldown"),
+            Phase2JobClaimOutcome::SkippedCooldown
+        );
+
+        let mutation_token = runtime
+            .memories()
+            .try_claim_global_phase2_workspace_mutation(
+                ThreadId::new(),
+                /*lease_seconds*/ 3_600,
+            )
+            .await
+            .expect("claim workspace mutation")
+            .expect("workspace mutation should bypass success cooldown");
+        assert_eq!(
+            runtime
+                .memories()
+                .try_claim_global_phase2_workspace_mutation(
+                    ThreadId::new(),
+                    /*lease_seconds*/ 3_600,
+                )
+                .await
+                .expect("claim competing workspace mutation"),
+            None
+        );
+        assert!(
+            runtime
+                .memories()
+                .queue_global_phase2_after_workspace_mutation(&mutation_token)
+                .await
+                .expect("queue phase2 after workspace mutation")
+        );
+        assert!(matches!(
+            runtime
+                .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
+                .await
+                .expect("claim queued phase2 job"),
+            Phase2JobClaimOutcome::Claimed { .. }
+        ));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

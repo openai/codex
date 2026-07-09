@@ -87,6 +87,7 @@ pub(crate) fn external_agent_config_migration_item_label(
         ExternalAgentConfigMigrationItemType::Subagents => "Agents",
         ExternalAgentConfigMigrationItemType::Hooks => "Hooks",
         ExternalAgentConfigMigrationItemType::Commands => "Slash commands",
+        ExternalAgentConfigMigrationItemType::Memory => "Memory files",
         ExternalAgentConfigMigrationItemType::Sessions => "Recent chat sessions",
     }
 }
@@ -103,6 +104,7 @@ pub(crate) fn external_agent_config_migration_type_label(
         ExternalAgentConfigMigrationItemType::Subagents => "Agents",
         ExternalAgentConfigMigrationItemType::Hooks => "Hooks",
         ExternalAgentConfigMigrationItemType::Commands => "Slash commands",
+        ExternalAgentConfigMigrationItemType::Memory => "Memory files",
         ExternalAgentConfigMigrationItemType::Sessions => "Chat sessions",
     }
 }
@@ -168,6 +170,10 @@ pub(crate) fn external_agent_config_migration_item_count(
             .details
             .as_ref()
             .map_or(1, |details| details.commands.len()),
+        ExternalAgentConfigMigrationItemType::Memory => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.memory_files.len().max(1)),
         ExternalAgentConfigMigrationItemType::Sessions => item
             .details
             .as_ref()
@@ -214,6 +220,17 @@ pub(crate) fn external_agent_config_migration_item_detail(
             "slash command",
             details.commands.len(),
             details.commands.iter().map(|command| command.name.as_str()),
+        )),
+        ExternalAgentConfigMigrationItemType::Memory if details.memory_files.is_empty() => {
+            Some("Remove stale imported memory resources".to_string())
+        }
+        ExternalAgentConfigMigrationItemType::Memory => Some(format_counted_details(
+            "memory file",
+            details.memory_files.len(),
+            details
+                .memory_files
+                .iter()
+                .filter_map(|memory_file| memory_file.source_file.to_str()),
         )),
         ExternalAgentConfigMigrationItemType::Sessions => Some(format_counted_details(
             "chat session",

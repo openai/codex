@@ -66,6 +66,11 @@ fn external_agent_config_migration_started_lines(
                     .iter()
                     .map(|command| command.name.as_str())
                     .collect(),
+                ExternalAgentConfigMigrationItemType::Memory => details
+                    .memory_files
+                    .iter()
+                    .filter_map(|memory_file| memory_file.source_file.to_str())
+                    .collect(),
                 ExternalAgentConfigMigrationItemType::Sessions => details
                     .sessions
                     .iter()

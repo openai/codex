@@ -7,6 +7,7 @@ use crate::config::external_agent_config::ExternalAgentConfigImportRawError as C
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use crate::config::external_agent_config::ExternalAgentConfigService;
+use crate::config::external_agent_config::MemoryFileMigration as CoreMemoryFileMigration;
 use crate::config::external_agent_config::NamedMigration as CoreNamedMigration;
 use crate::config::external_agent_config::PendingPluginImport;
 use crate::config::external_agent_config::PluginImportOutcome;
@@ -35,6 +36,7 @@ use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::HookMigration;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerMigration;
+use codex_app_server_protocol::MemoryFileMigration;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
 use codex_app_server_protocol::ServerNotification;
@@ -96,8 +98,11 @@ impl ExternalAgentConfigRequestProcessor {
             config_manager,
             arg0_paths,
         );
-        let migration_service =
-            ExternalAgentConfigService::new(codex_home, analytics_events_client.clone());
+        let migration_service = ExternalAgentConfigService::new(
+            codex_home,
+            analytics_events_client.clone(),
+            state_db.clone(),
+        );
         Self {
             outgoing,
             migration_service,
@@ -148,6 +153,9 @@ impl ExternalAgentConfigRequestProcessor {
                         CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
                         CoreMigrationItemType::Commands => {
                             ExternalAgentConfigMigrationItemType::Commands
+                        }
+                        CoreMigrationItemType::Memory => {
+                            ExternalAgentConfigMigrationItemType::Memory
                         }
                         CoreMigrationItemType::Sessions => {
                             ExternalAgentConfigMigrationItemType::Sessions
@@ -201,6 +209,17 @@ impl ExternalAgentConfigRequestProcessor {
                             .commands
                             .into_iter()
                             .map(|command| CommandMigration { name: command.name })
+                            .collect(),
+                        memory_files: details
+                            .memory_files
+                            .into_iter()
+                            .map(|memory_file| MemoryFileMigration {
+                                project_key: memory_file.project_key,
+                                cwd: memory_file.cwd,
+                                source_path: memory_file.source_path,
+                                source_file: memory_file.source_file,
+                                content_sha256: memory_file.content_sha256,
+                            })
                             .collect(),
                     }),
                 })
@@ -480,6 +499,9 @@ impl ExternalAgentConfigRequestProcessor {
                             ExternalAgentConfigMigrationItemType::Commands => {
                                 CoreMigrationItemType::Commands
                             }
+                            ExternalAgentConfigMigrationItemType::Memory => {
+                                CoreMigrationItemType::Memory
+                            }
                             ExternalAgentConfigMigrationItemType::Sessions => {
                                 CoreMigrationItemType::Sessions
                             }
@@ -535,6 +557,17 @@ impl ExternalAgentConfigRequestProcessor {
                                     .commands
                                     .into_iter()
                                     .map(|command| CoreNamedMigration { name: command.name })
+                                    .collect(),
+                                memory_files: details
+                                    .memory_files
+                                    .into_iter()
+                                    .map(|memory_file| CoreMemoryFileMigration {
+                                        project_key: memory_file.project_key,
+                                        cwd: memory_file.cwd,
+                                        source_path: memory_file.source_path,
+                                        source_file: memory_file.source_file,
+                                        content_sha256: memory_file.content_sha256,
+                                    })
                                     .collect(),
                             }
                         }),
@@ -665,6 +698,7 @@ fn analytics_migration_item_type(item_type: ExternalAgentConfigMigrationItemType
         ExternalAgentConfigMigrationItemType::Subagents => "SUBAGENTS",
         ExternalAgentConfigMigrationItemType::Hooks => "HOOKS",
         ExternalAgentConfigMigrationItemType::Commands => "COMMANDS",
+        ExternalAgentConfigMigrationItemType::Memory => "MEMORY",
         ExternalAgentConfigMigrationItemType::Sessions => "SESSIONS",
     }
 }
@@ -806,7 +840,8 @@ fn completed_notification(
         ExternalAgentConfigMigrationItemType::Subagents => 5,
         ExternalAgentConfigMigrationItemType::Hooks => 6,
         ExternalAgentConfigMigrationItemType::Commands => 7,
-        ExternalAgentConfigMigrationItemType::Sessions => 8,
+        ExternalAgentConfigMigrationItemType::Memory => 8,
+        ExternalAgentConfigMigrationItemType::Sessions => 9,
     });
 
     ExternalAgentConfigImportCompletedNotification {
@@ -867,6 +902,7 @@ fn protocol_migration_item_type(
         CoreMigrationItemType::Subagents => ExternalAgentConfigMigrationItemType::Subagents,
         CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
         CoreMigrationItemType::Commands => ExternalAgentConfigMigrationItemType::Commands,
+        CoreMigrationItemType::Memory => ExternalAgentConfigMigrationItemType::Memory,
         CoreMigrationItemType::Sessions => ExternalAgentConfigMigrationItemType::Sessions,
     }
 }

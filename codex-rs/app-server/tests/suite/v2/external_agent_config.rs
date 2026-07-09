@@ -170,6 +170,133 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
 }
 
 #[tokio::test]
+async fn external_agent_config_detects_and_imports_project_memory_files() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source_home = external_agent_home(codex_home.path());
+    let source_memory = source_home.join("projects/project-a/memory");
+    std::fs::create_dir_all(&source_memory)?;
+    let source_file = source_memory.join("MEMORY.md");
+    std::fs::write(&source_file, "project A memory")?;
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({ "includeHome": true })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
+    assert_eq!(detected.items.len(), 1);
+    let memory_item = &detected.items[0];
+    assert_eq!(
+        memory_item.item_type,
+        ExternalAgentConfigMigrationItemType::Memory
+    );
+    assert_eq!(memory_item.cwd, None);
+    assert_eq!(
+        memory_item
+            .details
+            .as_ref()
+            .expect("memory details")
+            .memory_files
+            .iter()
+            .map(|memory_file| {
+                (
+                    memory_file.project_key.as_str(),
+                    memory_file.source_file.as_path(),
+                    memory_file.content_sha256.len(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![("project-a", Path::new("MEMORY.md"), 64)]
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({ "migrationItems": detected.items })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportResponse = to_response(response)?;
+    let import_id = assert_import_response(response);
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_type_results.len(), 1);
+    let memory_result = &completed.item_type_results[0];
+    assert_eq!(
+        memory_result.item_type,
+        ExternalAgentConfigMigrationItemType::Memory
+    );
+    assert_eq!(memory_result.failures, Vec::new());
+    assert_eq!(memory_result.successes.len(), 1);
+    let source_file = source_file.display().to_string();
+    assert_eq!(
+        memory_result.successes[0].source.as_deref(),
+        Some(source_file.as_str())
+    );
+
+    let imported_file = PathBuf::from(
+        memory_result.successes[0]
+            .target
+            .as_deref()
+            .expect("memory target"),
+    );
+    let expected_resources_root = std::fs::canonicalize(
+        codex_home
+            .path()
+            .join("memories/extensions/external_agent_import/resources"),
+    )?;
+    assert_eq!(
+        imported_file.parent(),
+        Some(expected_resources_root.as_path())
+    );
+    let imported_content = std::fs::read_to_string(&imported_file)?;
+    assert!(imported_content.starts_with("<!-- codex-external-memory-metadata\n"));
+    assert!(imported_content.ends_with("project A memory"));
+    assert!(
+        codex_home
+            .path()
+            .join("memories/extensions/external_agent_import/manifest.json")
+            .is_file()
+    );
+    let memory_diff =
+        codex_git_utils::diff_since_latest_init(&codex_home.path().join("memories")).await?;
+    assert!(memory_diff.changes.iter().any(|change| change.path
+        == format!(
+            "extensions/external_agent_import/resources/{}",
+            imported_file
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("imported filename UTF-8")
+        )));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_agent_config_import_reports_failed_sync_import_in_completion() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(

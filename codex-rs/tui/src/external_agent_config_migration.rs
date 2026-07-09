@@ -710,6 +710,7 @@ mod tests {
     use crate::tui::FrameRequester;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+    use codex_app_server_protocol::MemoryFileMigration;
     use codex_app_server_protocol::PluginsMigration;
     use codex_app_server_protocol::SessionMigration;
     use crossterm::event::KeyCode;
@@ -772,6 +773,34 @@ mod tests {
                         .to_string(),
                 cwd: None,
                 details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Memory,
+                description: "Migrate memory files from /Users/alex/.claude/projects to /Users/alex/.codex/memories/extensions/external_agent_import/resources".to_string(),
+                cwd: None,
+                details: Some(codex_app_server_protocol::MigrationDetails {
+                    memory_files: vec![
+                        MemoryFileMigration {
+                            project_key: "project".to_string(),
+                            cwd: Some(project_root.clone()),
+                            source_path: PathBuf::from(
+                                "/Users/alex/.claude/projects/project/memory/MEMORY.md",
+                            ),
+                            source_file: PathBuf::from("MEMORY.md"),
+                            content_sha256: "hash-index".to_string(),
+                        },
+                        MemoryFileMigration {
+                            project_key: "project".to_string(),
+                            cwd: Some(project_root.clone()),
+                            source_path: PathBuf::from(
+                                "/Users/alex/.claude/projects/project/memory/team-conventions.md",
+                            ),
+                            source_file: PathBuf::from("team-conventions.md"),
+                            content_sha256: "hash-topic".to_string(),
+                        },
+                    ],
+                    ..Default::default()
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Sessions,
@@ -858,7 +887,7 @@ mod tests {
         );
         screen.customize();
 
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 30);
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 34);
         #[cfg(windows)]
         assert_snapshot!(
             "external_agent_config_migration_customize_windows",
@@ -880,7 +909,7 @@ mod tests {
         screen.customize();
         screen.move_up();
 
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 30);
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 34);
         #[cfg(windows)]
         assert_snapshot!(
             "external_agent_config_migration_customize_action_windows",
@@ -931,6 +960,7 @@ mod tests {
                 items[1].clone(),
                 items[2].clone(),
                 items[3].clone(),
+                items[4].clone(),
             ])
         );
     }

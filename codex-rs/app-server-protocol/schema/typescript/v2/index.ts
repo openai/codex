@@ -253,6 +253,7 @@ export type { McpToolCallResult } from "./McpToolCallResult";
 export type { McpToolCallStatus } from "./McpToolCallStatus";
 export type { MemoryCitation } from "./MemoryCitation";
 export type { MemoryCitationEntry } from "./MemoryCitationEntry";
+export type { MemoryFileMigration } from "./MemoryFileMigration";
 export type { MergeStrategy } from "./MergeStrategy";
 export type { MigrationDetails } from "./MigrationDetails";
 export type { Model } from "./Model";

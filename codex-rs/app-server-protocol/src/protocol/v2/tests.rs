@@ -385,6 +385,64 @@ fn external_agent_config_plugins_details_round_trip() {
 }
 
 #[test]
+fn external_agent_config_memory_details_round_trip() {
+    let item: ExternalAgentConfigMigrationItem = serde_json::from_value(json!({
+        "itemType": "MEMORY",
+        "description": "Import project-scoped memory files",
+        "cwd": null,
+        "details": {
+            "memoryFiles": [
+                {
+                    "projectKey": "project-a",
+                    "cwd": absolute_path_string("repo-a"),
+                    "sourcePath": absolute_path_string("memory-a/MEMORY.md"),
+                    "sourceFile": "MEMORY.md",
+                    "contentSha256": "hash-a"
+                },
+                {
+                    "projectKey": "project-b",
+                    "cwd": null,
+                    "sourcePath": absolute_path_string("memory-b/team-conventions.md"),
+                    "sourceFile": "team-conventions.md",
+                    "contentSha256": "hash-b"
+                }
+            ]
+        }
+    }))
+    .expect("memory migration item should deserialize");
+
+    assert_eq!(
+        item,
+        ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Memory,
+            description: "Import project-scoped memory files".to_string(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                memory_files: vec![
+                    MemoryFileMigration {
+                        project_key: "project-a".to_string(),
+                        cwd: Some(PathBuf::from(absolute_path_string("repo-a"))),
+                        source_path: PathBuf::from(absolute_path_string("memory-a/MEMORY.md")),
+                        source_file: PathBuf::from("MEMORY.md"),
+                        content_sha256: "hash-a".to_string(),
+                    },
+                    MemoryFileMigration {
+                        project_key: "project-b".to_string(),
+                        cwd: None,
+                        source_path: PathBuf::from(absolute_path_string(
+                            "memory-b/team-conventions.md",
+                        )),
+                        source_file: PathBuf::from("team-conventions.md"),
+                        content_sha256: "hash-b".to_string(),
+                    },
+                ],
+                ..Default::default()
+            }),
+        }
+    );
+}
+
+#[test]
 fn external_agent_config_import_params_accept_legacy_plugin_details() {
     let params: ExternalAgentConfigImportParams = serde_json::from_value(json!({
         "migrationItems": [{

@@ -162,9 +162,10 @@ Incremental update and forgetting mechanism:
   changes appears to be randomly placed in the files, it is probably a user change and you shouldn't just drop it.
   Make sure to add it to the overall memories consolidation
 - Do not open raw sessions / original rollout transcripts.
-- For added or modified `raw_memories.md` and `rollout_summaries/*.md` files, read the changed
-  raw-memory sections and the corresponding rollout summaries only when needed for stronger
-  evidence, task placement, or conflict resolution.
+- For added or modified `raw_memories.md`, `rollout_summaries/*.md`, or
+  `extensions/*/resources/*.md` files, read the changed inputs. For extension resources, read and
+  follow that extension's `instructions.md` first. Read corresponding rollout summaries only when
+  needed for stronger evidence, task placement, or conflict resolution.
   - When scanning a raw-memory section, read the task-level `Preference signals:` subsections
     first, then the rest of the task blocks.
 - For deleted `rollout_summaries/*.md` or `extensions/*/resources/*.md` files, search their
@@ -783,7 +784,8 @@ WORKFLOW
    - Read existing `MEMORY.md` and, only when it starts with exactly `v1`, existing
      `memory_summary.md` first for continuity and to locate references that may need surgical cleanup.
    - Use the injected git-style workspace changes as the first routing pass:
-     - added/modified `raw_memories.md` and `rollout_summaries/*.md` = ingestion queue
+     - added/modified `raw_memories.md`, `rollout_summaries/*.md`, and
+       `extensions/*/resources/*.md` = ingestion queue
      - deleted `rollout_summaries/*.md` and `extensions/*/resources/*.md` = forgetting /
        stale-cleanup queue
    - Build an index of rollout references already present in existing `MEMORY.md` before
@@ -791,7 +793,8 @@ WORKFLOW
    - Work in this order:
      1. For added or modified rollout inputs, search their paths/thread ids in `raw_memories.md`,
         read those sections, and open the corresponding `rollout_summaries/*.md` files when
-        necessary.
+        necessary. For added or modified extension resources, read the extension instructions and
+        then the changed resources.
      2. Route the new signal into existing `MEMORY.md` blocks or create new ones when needed.
      3. For deleted inputs, search `MEMORY.md` and surgically delete or rewrite only the
         unsupported memory.

@@ -575,6 +575,9 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "COMMANDS")]
     #[ts(rename = "COMMANDS")]
     Commands,
+    #[serde(rename = "MEMORY")]
+    #[ts(rename = "MEMORY")]
+    Memory,
     #[serde(rename = "SESSIONS")]
     #[ts(rename = "SESSIONS")]
     Sessions,
@@ -636,6 +639,17 @@ pub struct CommandMigration {
     pub name: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryFileMigration {
+    pub project_key: String,
+    pub cwd: Option<PathBuf>,
+    pub source_path: PathBuf,
+    pub source_file: PathBuf,
+    pub content_sha256: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -654,6 +668,8 @@ pub struct MigrationDetails {
     pub subagents: Vec<SubagentMigration>,
     #[serde(default)]
     pub commands: Vec<CommandMigration>,
+    #[serde(default)]
+    pub memory_files: Vec<MemoryFileMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

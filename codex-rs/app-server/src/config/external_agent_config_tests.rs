@@ -188,6 +188,113 @@ async fn detect_home_lists_recent_sessions() {
 }
 
 #[tokio::test]
+async fn detects_and_imports_project_scoped_memory_files() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let project_a_memory = external_agent_home.join("projects/project-a/memory");
+    let project_b_memory = external_agent_home.join("projects/project-b/memory");
+    fs::create_dir_all(&project_a_memory).expect("create project A memory");
+    fs::create_dir_all(&project_b_memory).expect("create project B memory");
+    let project_a_source = project_a_memory.join("MEMORY.md");
+    let project_b_source = project_b_memory.join("team-conventions.md");
+    fs::write(&project_a_source, "project A memory").expect("write project A memory");
+    fs::write(&project_b_source, "project B memory").expect("write project B memory");
+    let state_db = codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+        .await
+        .expect("initialize state database");
+    let service = ExternalAgentConfigService::new_for_test_with_state(
+        codex_home.clone(),
+        external_agent_home.clone(),
+        state_db.clone(),
+    );
+
+    let items = service
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(items.len(), 1);
+    let memory_item = &items[0];
+    assert_eq!(
+        memory_item.item_type,
+        ExternalAgentConfigMigrationItemType::Memory
+    );
+    assert_eq!(memory_item.cwd, None);
+    let memory_files = &memory_item
+        .details
+        .as_ref()
+        .expect("memory details")
+        .memory_files;
+    assert_eq!(
+        memory_files
+            .iter()
+            .map(|memory_file| (
+                memory_file.project_key.as_str(),
+                memory_file.source_file.as_path(),
+                memory_file.content_sha256.len(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("project-a", Path::new("MEMORY.md"), 64),
+            ("project-b", Path::new("team-conventions.md"), 64),
+        ]
+    );
+
+    let outcome = service.import(items).await;
+
+    assert_eq!(outcome.item_results.len(), 1);
+    let item_result = &outcome.item_results[0];
+    assert_eq!(item_result.success_count, 2);
+    assert_eq!(item_result.error_count, 0);
+    assert_eq!(
+        item_result
+            .successes
+            .iter()
+            .filter_map(|success| success.source.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            project_a_source.to_str().expect("project A source UTF-8"),
+            project_b_source.to_str().expect("project B source UTF-8"),
+        ]
+    );
+    let target_paths = item_result
+        .successes
+        .iter()
+        .filter_map(|success| success.target.as_deref())
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    assert_eq!(target_paths.len(), 2);
+    assert!(target_paths.iter().all(|path| {
+        path.parent() == Some(external_memory_resources_root(&codex_home).as_path())
+            && path.extension().and_then(|extension| extension.to_str()) == Some("md")
+    }));
+    for target_path in target_paths {
+        let content = fs::read_to_string(target_path).expect("read staged memory resource");
+        assert!(content.starts_with("<!-- codex-external-memory-metadata\n"));
+        assert!(content.contains("\"projectKey\""));
+    }
+    assert!(
+        codex_home
+            .join("memories/extensions/external_agent_import/manifest.json")
+            .is_file()
+    );
+    assert!(!codex_home.join("memories/MEMORY.md").exists());
+    assert!(!codex_home.join("memories/memory_summary.md").exists());
+
+    let phase2_claim = state_db
+        .memories()
+        .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
+        .await
+        .expect("claim queued phase 2 job");
+    assert!(matches!(
+        phase2_claim,
+        codex_state::Phase2JobClaimOutcome::Claimed { .. }
+    ));
+}
+
+#[tokio::test]
 async fn detect_repo_lists_agents_md_for_each_cwd() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
