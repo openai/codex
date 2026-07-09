@@ -66,6 +66,7 @@ use crate::facts::PluginInstallRequestSource;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginInstallRequestedPlugin;
+use crate::facts::PluginInstallSource;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -3242,6 +3243,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
         event_type: "codex_plugin_install_failed",
         event_params: CodexPluginInstallFailedMetadata {
             plugin: codex_plugin_metadata(sample_plugin_metadata()),
+            source: PluginInstallSource::Manual,
             error_type: "store_io".to_string(),
         },
     });
@@ -3261,6 +3263,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
+                "source": "manual",
                 "error_type": "store_io"
             }
         })
@@ -3692,6 +3695,7 @@ async fn reducer_ingests_plugin_install_failed_fact() {
             AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
                 PluginInstallFailedInput {
                     plugin: sample_plugin_metadata(),
+                    source: PluginInstallSource::ExternalAgentMigration,
                     error_type: "invalid_plugin".to_string(),
                 },
             )),
@@ -3713,6 +3717,7 @@ async fn reducer_ingests_plugin_install_failed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
+                "source": "external_agent_migration",
                 "error_type": "invalid_plugin"
             }
         }])
@@ -3734,6 +3739,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
             AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
                 PluginInstallFailedInput {
                     plugin,
+                    source: PluginInstallSource::Manual,
                     error_type: "remote_catalog_unexpected_status".to_string(),
                 },
             )),
@@ -3755,6 +3761,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
                 "mcp_server_count": null,
                 "connector_ids": null,
                 "product_client_id": originator().value,
+                "source": "manual",
                 "error_type": "remote_catalog_unexpected_status"
             }
         }])

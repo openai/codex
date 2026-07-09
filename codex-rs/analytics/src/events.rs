@@ -991,6 +991,7 @@ pub(crate) struct CodexPluginEventRequest {
 pub(crate) struct CodexPluginInstallFailedMetadata {
     #[serde(flatten)]
     pub(crate) plugin: CodexPluginMetadata,
+    pub(crate) source: crate::facts::PluginInstallSource,
     pub(crate) error_type: String,
 }
 

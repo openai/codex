@@ -837,12 +837,17 @@ impl AnalyticsReducer {
         input: PluginInstallFailedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let PluginInstallFailedInput { plugin, error_type } = input;
+        let PluginInstallFailedInput {
+            plugin,
+            source,
+            error_type,
+        } = input;
         out.push(TrackEventRequest::PluginInstallFailed(
             CodexPluginInstallFailedEventRequest {
                 event_type: "codex_plugin_install_failed",
                 event_params: CodexPluginInstallFailedMetadata {
                     plugin: codex_plugin_metadata(plugin),
+                    source,
                     error_type,
                 },
             },

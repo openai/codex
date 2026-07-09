@@ -418,9 +418,18 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
 }
 
 #[tokio::test]
-async fn external_agent_config_import_sends_completion_notification_for_local_plugins() -> Result<()>
-{
+async fn external_agent_config_import_reinstalls_plugins_from_known_marketplaces() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let analytics_server = start_analytics_events_server().await?;
+    write_analytics_config(codex_home.path(), &analytics_server.uri())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
     let marketplace_root = codex_home.path().join("marketplace");
     let plugin_root = marketplace_root.join("plugins").join("sample");
     std::fs::create_dir_all(marketplace_root.join(".agents/plugins"))?;
@@ -445,21 +454,37 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         r#"{"name":"sample","version":"0.1.0"}"#,
     )?;
     let source_home = external_agent_home(codex_home.path());
-    std::fs::create_dir_all(&source_home)?;
+    std::fs::create_dir_all(source_home.join("plugins"))?;
     let settings = serde_json::json!({
         "enabledPlugins": {
-            "sample@debug": true
+            "missing@debug": true,
+            "sample@debug": true,
         },
         "extraKnownMarketplaces": {
             "debug": {
-                "source": "local",
-                "path": marketplace_root,
+                "source": {
+                    "source": "file",
+                    "path": marketplace_root.join(".agents/plugins/marketplace.json"),
+                }
             }
         }
     });
     std::fs::write(
         source_home.join("settings.json"),
         serde_json::to_string_pretty(&settings)?,
+    )?;
+    std::fs::write(
+        source_home.join("plugins/known_marketplaces.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "debug": {
+                "source": {
+                    "source": "file",
+                    "path": marketplace_root.join(".agents/plugins/marketplace.json"),
+                },
+                "installLocation": marketplace_root,
+                "lastUpdated": "2026-07-09T00:16:23.611Z",
+            }
+        }))?,
     )?;
 
     let home_dir = codex_home.path().display().to_string();
@@ -473,23 +498,38 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
 
     let request_id = mcp
         .send_raw_request(
-            "externalAgentConfig/import",
-            Some(serde_json::json!({
-                "migrationItems": [{
-                    "itemType": "PLUGINS",
-                    "description": "Import plugins",
-                    "cwd": null,
-                    "details": {
-                        "plugins": [{
-                            "marketplaceName": "debug",
-                            "pluginNames": ["sample"]
-                        }]
-                    }
-                }]
-            })),
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({ "includeHome": true })),
         )
         .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
+    assert_eq!(detected.items.len(), 1);
+    assert_eq!(
+        detected.items[0].item_type,
+        ExternalAgentConfigMigrationItemType::Plugins
+    );
+    assert_eq!(
+        detected.items[0]
+            .details
+            .as_ref()
+            .map(|details| details.plugins.clone()),
+        Some(vec![codex_app_server_protocol::PluginsMigration {
+            marketplace_name: "debug".to_string(),
+            plugin_names: vec!["missing".to_string(), "sample".to_string()],
+        }])
+    );
 
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({ "migrationItems": detected.items })),
+        )
+        .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
@@ -507,6 +547,55 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_type_results.len(), 1);
+    let plugin_result = &completed.item_type_results[0];
+    assert_eq!(
+        plugin_result.item_type,
+        ExternalAgentConfigMigrationItemType::Plugins
+    );
+    assert_eq!(plugin_result.successes.len(), 1);
+    assert_eq!(
+        plugin_result.successes[0].source.as_deref(),
+        Some("sample@debug")
+    );
+    assert_eq!(plugin_result.failures.len(), 1);
+    assert_eq!(
+        plugin_result.failures[0].source.as_deref(),
+        Some("missing@debug")
+    );
+    assert_eq!(
+        plugin_result.failures[0].error_type.as_deref(),
+        Some("plugin_not_found")
+    );
+    assert_eq!(plugin_result.failures[0].failure_stage, "plugin_import");
+    assert_eq!(
+        plugin_result.failures[0].message,
+        "plugin `missing` was not found in marketplace `debug`"
+    );
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_plugin_install_failed",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["plugin_id"], "missing@debug");
+    assert_eq!(event_params["plugin_name"], "missing");
+    assert_eq!(event_params["marketplace_name"], "debug");
+    assert_eq!(event_params["source"], "external_agent_migration");
+    assert_eq!(event_params["error_type"], "plugin_not_found");
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_onboarding_external_agent_import_failure",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["type"], "PLUGINS");
+    assert_eq!(event_params["failure_stage"], "plugin_import");
+    assert_eq!(event_params["error_type"], "plugin_not_found");
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {

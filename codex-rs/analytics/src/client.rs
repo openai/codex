@@ -18,6 +18,7 @@ use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginInstallSource;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -370,10 +371,16 @@ impl AnalyticsEventsClient {
         ));
     }
 
-    pub fn track_plugin_install_failed(&self, plugin: PluginTelemetryMetadata, error_type: String) {
+    pub fn track_plugin_install_failed(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        source: PluginInstallSource,
+        error_type: String,
+    ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
                 plugin,
+                source,
                 error_type,
             }),
         ));

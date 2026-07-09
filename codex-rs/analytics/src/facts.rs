@@ -579,8 +579,16 @@ pub(crate) struct PluginStateChangedInput {
     pub state: PluginState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstallSource {
+    Manual,
+    ExternalAgentMigration,
+}
+
 pub(crate) struct PluginInstallFailedInput {
     pub plugin: PluginTelemetryMetadata,
+    pub source: PluginInstallSource,
     pub error_type: String,
 }
 
