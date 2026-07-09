@@ -278,16 +278,16 @@ pub fn run_main() -> ! {
                 .map(|setup| serialize_loader_environment(&setup.loader_environment)),
             command,
         });
-        run_bwrap_with_proc_fallback(
-            &sandbox_policy_cwd,
-            command_cwd.as_deref(),
-            &file_system_sandbox_policy,
+        run_bwrap_with_proc_fallback(BwrapWithProcFallbackArgs {
+            sandbox_policy_cwd: &sandbox_policy_cwd,
+            command_cwd: command_cwd.as_deref(),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
             network_sandbox_policy,
             inner,
-            !no_proc,
+            mount_proc: !no_proc,
             allow_network_for_proxy,
-            dns_setup.map(|setup| setup.resolv_conf),
-        );
+            dns_resolv_conf: dns_setup.map(|setup| setup.resolv_conf),
+        });
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
@@ -306,6 +306,17 @@ pub fn run_main() -> ! {
 struct DnsSetup {
     resolv_conf: ResolvConfMount,
     loader_environment: LoaderEnvironment,
+}
+
+struct BwrapWithProcFallbackArgs<'a> {
+    sandbox_policy_cwd: &'a Path,
+    command_cwd: Option<&'a Path>,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    inner: Vec<String>,
+    mount_proc: bool,
+    allow_network_for_proxy: bool,
+    dns_resolv_conf: Option<ResolvConfMount>,
 }
 
 #[derive(Debug, Clone)]
@@ -407,16 +418,17 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
-fn run_bwrap_with_proc_fallback(
-    sandbox_policy_cwd: &Path,
-    command_cwd: Option<&Path>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    inner: Vec<String>,
-    mount_proc: bool,
-    allow_network_for_proxy: bool,
-    dns_resolv_conf: Option<ResolvConfMount>,
-) -> ! {
+fn run_bwrap_with_proc_fallback(args: BwrapWithProcFallbackArgs<'_>) -> ! {
+    let BwrapWithProcFallbackArgs {
+        sandbox_policy_cwd,
+        command_cwd,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        inner,
+        mount_proc,
+        allow_network_for_proxy,
+        dns_resolv_conf,
+    } = args;
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
