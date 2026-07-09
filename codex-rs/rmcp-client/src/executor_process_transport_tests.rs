@@ -92,7 +92,7 @@ fn takes_unterminated_remaining_bytes_at_eof() {
 }
 
 #[test]
-fn rejects_oversized_line_without_appending_new_bytes() {
+fn rejects_oversized_line_without_retaining_its_prefix() {
     let mut buffer = LineBuffer::new(/*max_line_bytes*/ 5);
     buffer
         .extend_from_slice(b"12345")
@@ -103,9 +103,20 @@ fn rejects_oversized_line_without_appending_new_bytes() {
         buffer.extend_from_slice(b"6"),
         Err(LineTooLong { max_line_bytes: 5 })
     );
-    assert_eq!(buffer.bytes, BytesMut::from(&b"12345"[..]));
-    assert_eq!(buffer.scanned_len, 5);
-    assert_eq!(buffer.pending_line_bytes, 5);
+    assert_eq!(buffer, LineBuffer::new(/*max_line_bytes*/ 5));
+}
+
+#[test]
+fn retains_complete_lines_before_an_oversized_line() {
+    let mut buffer = LineBuffer::new(/*max_line_bytes*/ 5);
+
+    assert_eq!(
+        buffer.extend_from_slice(b"first\n123456"),
+        Err(LineTooLong { max_line_bytes: 5 })
+    );
+
+    assert_eq!(buffer.take_line(), Some(BytesMut::from(&b"first"[..])));
+    assert_eq!(buffer.take_remaining(), None);
 }
 
 #[test]

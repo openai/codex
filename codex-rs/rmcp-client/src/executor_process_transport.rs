@@ -84,26 +84,37 @@ impl LineBuffer {
     }
 
     fn extend_from_slice(&mut self, bytes: &[u8]) -> Result<(), LineTooLong> {
-        let mut pending_line_bytes = self.pending_line_bytes;
         let mut remaining = bytes;
         while let Some(newline_index) = memchr(b'\n', remaining) {
-            if newline_index > self.max_line_bytes.saturating_sub(pending_line_bytes) {
+            if newline_index > self.max_line_bytes.saturating_sub(self.pending_line_bytes) {
+                self.discard_pending_line();
                 return Err(LineTooLong {
                     max_line_bytes: self.max_line_bytes,
                 });
             }
-            remaining = &remaining[newline_index + 1..];
-            pending_line_bytes = 0;
+
+            let segment_len = newline_index + 1;
+            self.bytes.extend_from_slice(&remaining[..segment_len]);
+            self.pending_line_bytes = 0;
+            remaining = &remaining[segment_len..];
         }
-        if remaining.len() > self.max_line_bytes.saturating_sub(pending_line_bytes) {
+        if remaining.len() > self.max_line_bytes.saturating_sub(self.pending_line_bytes) {
+            self.discard_pending_line();
             return Err(LineTooLong {
                 max_line_bytes: self.max_line_bytes,
             });
         }
 
-        self.bytes.extend_from_slice(bytes);
-        self.pending_line_bytes = pending_line_bytes + remaining.len();
+        self.bytes.extend_from_slice(remaining);
+        self.pending_line_bytes += remaining.len();
         Ok(())
+    }
+
+    fn discard_pending_line(&mut self) {
+        let complete_line_bytes = self.bytes.len().saturating_sub(self.pending_line_bytes);
+        self.bytes.truncate(complete_line_bytes);
+        self.scanned_len = self.scanned_len.min(complete_line_bytes);
+        self.pending_line_bytes = 0;
     }
 
     fn take_line(&mut self) -> Option<BytesMut> {
@@ -373,6 +384,7 @@ impl ExecutorProcessTransport {
             // startup failures without entering rmcp framing.
             ExecOutputStream::Stderr => {
                 if let Err(error) = self.push_stderr(&bytes) {
+                    self.stdout.clear();
                     self.close_for_oversized_line("stderr", error);
                 }
             }
@@ -385,7 +397,6 @@ impl ExecutorProcessTransport {
             "Remote MCP server {stream_name} line exceeds {max_line_bytes} bytes ({}); closing transport",
             self.program_name
         );
-        self.stdout.clear();
         self.stderr.clear();
         // Returning EOF makes rmcp drop the transport, whose Drop implementation
         // terminates the executor-managed process.
