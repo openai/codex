@@ -60,7 +60,9 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     }
 
     let ua = get_codex_user_agent();
-    let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
+    let (auth_manager, http_client_factory) = util::load_auth_manager(Some(base_url.clone())).await;
+    let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone(), http_client_factory)
+        .with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
     } else {
@@ -68,7 +70,6 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
-    let auth_manager = util::load_auth_manager(Some(base_url.clone())).await;
     let auth = match auth_manager.as_ref() {
         Some(manager) => manager.auth().await,
         None => None,
