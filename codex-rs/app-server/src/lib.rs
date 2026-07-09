@@ -94,6 +94,7 @@ mod connection_cleanup;
 mod connection_rpc_gate;
 mod current_time;
 mod dynamic_tools;
+mod effective_plugin_change;
 mod error_code;
 mod extensions;
 mod external_auth;
