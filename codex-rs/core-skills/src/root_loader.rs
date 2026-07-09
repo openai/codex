@@ -5,12 +5,28 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_utils_plugins::PluginSkillRoot;
+use futures::StreamExt;
 
 use crate::SkillLoadOutcome;
 use crate::loader::SkillRoot;
 use crate::loader::SkillRootSnapshot;
 use crate::loader::load_skill_root;
 use crate::model::SkillFileSystemsByPath;
+
+const MAX_CONCURRENT_ROOT_SCANS: usize = 4;
+
+struct PendingRootLoad {
+    root: SkillRoot,
+    root_index: usize,
+    duplicate_root_indices: Vec<usize>,
+    cache_key: Option<PluginSkillRoot>,
+}
+
+struct CompletedRootLoad {
+    root_index: usize,
+    duplicate_root_indices: Vec<usize>,
+    snapshot: SkillRootSnapshot,
+}
 
 /// Parsed plugin skill-root snapshots produced by one plugin load.
 ///
@@ -44,8 +60,11 @@ pub(crate) async fn load_and_merge_skill_roots<I>(
 where
     I: IntoIterator<Item = SkillRoot>,
 {
-    let mut root_snapshots = Vec::new();
-    for root in roots {
+    let roots = roots.into_iter().collect::<Vec<_>>();
+    let root_count = roots.len();
+    let mut pending_loads = Vec::<PendingRootLoad>::with_capacity(root_count);
+    let mut pending_load_by_cache_key = HashMap::<PluginSkillRoot, usize>::new();
+    for (root_index, root) in roots.into_iter().enumerate() {
         let cache_key = match (
             root.plugin_id.clone(),
             root.plugin_namespace.clone(),
@@ -59,33 +78,91 @@ where
             }),
             _ => None,
         };
-        let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
-            let plugin_skill_snapshots = plugin_skill_snapshots?;
-            plugin_skill_snapshots
-                .snapshots_by_root
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(cache_key)
-                .cloned()
+        // Preserve sequential cache semantics: with a cache, the first occurrence scans and later
+        // occurrences reuse its snapshot. Without a cache, duplicate roots remain independent.
+        if plugin_skill_snapshots.is_some()
+            && let Some(cache_key) = cache_key.as_ref()
+            && let Some(pending_index) = pending_load_by_cache_key.get(cache_key)
+        {
+            pending_loads[*pending_index]
+                .duplicate_root_indices
+                .push(root_index);
+            continue;
+        }
+
+        if plugin_skill_snapshots.is_some()
+            && let Some(cache_key) = cache_key.as_ref()
+        {
+            pending_load_by_cache_key.insert(cache_key.clone(), pending_loads.len());
+        }
+        pending_loads.push(PendingRootLoad {
+            root,
+            root_index,
+            duplicate_root_indices: Vec::new(),
+            cache_key,
         });
-        let snapshot = match cached_snapshot {
-            Some(snapshot) => snapshot,
-            None => {
-                let snapshot = load_skill_root(root).await;
-                if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
-                    && let Some(cache_key) = cache_key
-                {
-                    plugin_skill_snapshots
-                        .snapshots_by_root
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(cache_key, snapshot.clone());
-                }
-                snapshot
-            }
-        };
-        root_snapshots.push(snapshot);
     }
+
+    // Unordered buffering lets fast host and cached roots free slots while an earlier executor
+    // root is still pending. The indexed snapshots below restore the original merge order.
+    let completed_loads = futures::stream::iter(pending_loads)
+        .map(|pending| async move {
+            let PendingRootLoad {
+                root,
+                root_index,
+                duplicate_root_indices,
+                cache_key,
+            } = pending;
+            let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
+                let plugin_skill_snapshots = plugin_skill_snapshots?;
+                plugin_skill_snapshots
+                    .snapshots_by_root
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(cache_key)
+                    .cloned()
+            });
+            match cached_snapshot {
+                Some(snapshot) => CompletedRootLoad {
+                    root_index,
+                    duplicate_root_indices,
+                    snapshot,
+                },
+                None => {
+                    let snapshot = load_skill_root(root).await;
+                    if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
+                        && let Some(cache_key) = cache_key
+                    {
+                        plugin_skill_snapshots
+                            .snapshots_by_root
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(cache_key, snapshot.clone());
+                    }
+                    CompletedRootLoad {
+                        root_index,
+                        duplicate_root_indices,
+                        snapshot,
+                    }
+                }
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_ROOT_SCANS)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut indexed_root_snapshots = Vec::with_capacity(root_count);
+    for completed in completed_loads {
+        for root_index in completed.duplicate_root_indices {
+            indexed_root_snapshots.push((root_index, completed.snapshot.clone()));
+        }
+        indexed_root_snapshots.push((completed.root_index, completed.snapshot));
+    }
+    indexed_root_snapshots.sort_unstable_by_key(|(root_index, _)| *root_index);
+    let root_snapshots = indexed_root_snapshots
+        .into_iter()
+        .map(|(_, snapshot)| snapshot)
+        .collect();
 
     merge_skill_root_snapshots(root_snapshots)
 }
@@ -156,3 +233,7 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
 
     outcome
 }
+
+#[cfg(test)]
+#[path = "root_loader_tests.rs"]
+mod tests;
