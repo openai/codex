@@ -26,6 +26,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::InitialThreadTimestamps;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -246,6 +247,16 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { live_writer::create_thread(self, params).await })
     }
 
+    fn create_thread_with_initial_timestamps(
+        &self,
+        params: CreateThreadParams,
+        timestamps: InitialThreadTimestamps,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            live_writer::create_thread_with_initial_timestamps(self, params, timestamps).await
+        })
+    }
+
     fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::resume_thread(self, params).await })
     }
@@ -325,6 +336,8 @@ impl ThreadStore for LocalThreadStore {
 mod tests {
     use std::sync::Arc;
 
+    use chrono::DateTime;
+    use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::models::FunctionCallOutputPayload;
@@ -342,7 +355,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::InitialThreadTimestamps;
     use crate::LiveThread;
+    use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
@@ -395,6 +410,123 @@ mod tests {
             .expect_err("shutdown should remove the live thread writer");
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_timestamps_survive_read_repair() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let thread_id = ThreadId::new();
+        let created_at = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
+            .expect("created timestamp")
+            .with_timezone(&Utc);
+        let updated_at = DateTime::parse_from_rfc3339("2024-02-03T04:05:06Z")
+            .expect("updated timestamp")
+            .with_timezone(&Utc);
+
+        store
+            .create_thread_with_initial_timestamps(
+                create_thread_params(thread_id),
+                InitialThreadTimestamps {
+                    created_at,
+                    updated_at,
+                },
+            )
+            .await
+            .expect("create historical thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("source history")],
+            })
+            .await
+            .expect("append source history");
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    created_at: Some(created_at),
+                    updated_at: Some(updated_at),
+                    advance_recency_at: Some(updated_at),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("seed source chronology");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("read rollout path");
+        store
+            .persist_thread(thread_id)
+            .await
+            .expect("persist historical thread");
+        store
+            .shutdown_thread(thread_id)
+            .await
+            .expect("shutdown historical thread");
+
+        let session_meta = codex_rollout::read_session_meta_line(&rollout_path)
+            .await
+            .expect("read session metadata");
+        let rollout_modified_at = std::fs::metadata(&rollout_path)
+            .expect("rollout metadata")
+            .modified()
+            .map(DateTime::<Utc>::from)
+            .expect("rollout modified timestamp");
+        assert_eq!(session_meta.meta.timestamp, "2024-01-02T03:04:05.000Z");
+        assert_eq!(rollout_modified_at, updated_at);
+        let local_day = created_at
+            .with_timezone(&chrono::Local)
+            .format("%Y/%m/%d")
+            .to_string();
+        assert!(rollout_path.starts_with(home.path().join("sessions").join(local_day)));
+
+        assert_eq!(
+            runtime
+                .delete_thread(thread_id)
+                .await
+                .expect("delete sqlite metadata"),
+            1
+        );
+        drop(store);
+        drop(runtime);
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should reopen");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read and repair historical thread");
+        let repaired = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("read repaired sqlite metadata")
+            .expect("repaired sqlite metadata");
+        assert_eq!(
+            (
+                repaired.created_at,
+                repaired.updated_at,
+                repaired.recency_at,
+            ),
+            (created_at, updated_at, updated_at)
         );
     }
 

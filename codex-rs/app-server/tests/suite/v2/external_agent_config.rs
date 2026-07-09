@@ -18,6 +18,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -25,6 +27,9 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -49,6 +54,58 @@ fn external_agent_home(codex_home: &Path) -> PathBuf {
 fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
     assert!(!response.import_id.is_empty());
     response.import_id
+}
+
+async fn list_threads(
+    mcp: &mut TestAppServer,
+    sort_key: ThreadSortKey,
+    use_state_db_only: bool,
+) -> Result<ThreadListResponse> {
+    let request_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: None,
+            sort_key: Some(sort_key),
+            sort_direction: Some(SortDirection::Desc),
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only,
+            search_term: None,
+            parent_thread_id: None,
+            ancestor_thread_id: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+fn assert_thread_timestamps(thread: &Thread, created_at: i64, updated_at: i64) {
+    assert_eq!(
+        (thread.created_at, thread.updated_at, thread.recency_at),
+        (created_at, updated_at, Some(updated_at))
+    );
+}
+
+fn remove_state_db_files(codex_home: &Path) -> Result<()> {
+    let state_db_path = codex_state::state_db_path(codex_home);
+    for path in [
+        state_db_path.clone(),
+        PathBuf::from(format!("{}-wal", state_db_path.display())),
+        PathBuf::from(format!("{}-shm", state_db_path.display())),
+    ] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -612,7 +669,12 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
-    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let source_created_at_text = "2024-01-02T03:04:05Z";
+    let source_updated_at_text = "2024-02-03T04:05:06Z";
+    let source_created_at =
+        chrono::DateTime::parse_from_rfc3339(source_created_at_text)?.timestamp();
+    let source_updated_at =
+        chrono::DateTime::parse_from_rfc3339(source_updated_at_text)?.timestamp();
     let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     let control_request = "<ide_selection>src/auth.rs:1-5</ide_selection>";
@@ -625,21 +687,21 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             serde_json::json!({
                 "type": "user",
                 "cwd": &project_root,
-                "timestamp": &recent_timestamp,
+                "timestamp": source_created_at_text,
                 "message": { "content": control_request },
             })
             .to_string(),
             serde_json::json!({
                 "type": "user",
                 "cwd": &project_root,
-                "timestamp": &recent_timestamp,
+                "timestamp": "2024-01-03T00:00:00Z",
                 "message": { "content": first_request },
             })
             .to_string(),
             serde_json::json!({
                 "type": "assistant",
                 "cwd": &project_root,
-                "timestamp": &recent_timestamp,
+                "timestamp": source_updated_at_text,
                 "message": { "content": "first answer" },
             })
             .to_string(),
@@ -655,6 +717,42 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(project_root.display().to_string()),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let native_thread: ThreadStartResponse = to_response(response)?;
+    let native_thread_id = native_thread.thread.id;
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: native_thread_id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "newer native request".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     let request_id = mcp
         .send_raw_request(
@@ -727,36 +825,57 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .expect("session success should include imported thread id")
         .to_string();
 
-    let request_id = mcp
-        .send_thread_list_request(ThreadListParams {
-            cursor: None,
-            limit: None,
-            sort_key: None,
-            sort_direction: None,
-            model_providers: None,
-            source_kinds: None,
-            archived: None,
-            cwd: None,
-            use_state_db_only: false,
-            search_term: None,
-            parent_thread_id: None,
-            ancestor_thread_id: None,
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    let response = list_threads(
+        &mut mcp,
+        ThreadSortKey::CreatedAt,
+        /*use_state_db_only*/ false,
     )
-    .await??;
-    let response: ThreadListResponse = to_response(response)?;
+    .await?;
+    assert_eq!(
+        response
+            .data
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![native_thread_id.as_str(), imported_thread_id.as_str()]
+    );
     let thread = response
         .data
-        .first()
+        .iter()
+        .find(|thread| thread.id == imported_thread_id)
         .expect("expected imported thread")
         .clone();
-    assert_eq!(imported_thread_id, thread.id.to_string());
+    let native_thread = response
+        .data
+        .iter()
+        .find(|thread| thread.id == native_thread_id)
+        .expect("expected native thread");
+    assert_thread_timestamps(&thread, source_created_at, source_updated_at);
+    assert!(native_thread.created_at > source_updated_at);
+    assert!(native_thread.updated_at > source_updated_at);
+    assert!(
+        native_thread
+            .recency_at
+            .is_some_and(|value| value > source_updated_at)
+    );
     assert_eq!(thread.preview, control_request);
     assert_eq!(thread.name.as_deref(), Some("Fix auth flow"));
+
+    for sort_key in [ThreadSortKey::UpdatedAt, ThreadSortKey::RecencyAt] {
+        let response = list_threads(&mut mcp, sort_key, /*use_state_db_only*/ false).await?;
+        assert_eq!(
+            response.data.first().map(|thread| thread.id.as_str()),
+            Some(native_thread_id.as_str())
+        );
+    }
+
+    let rollout_path = thread.path.clone().expect("imported rollout path");
+    let session_meta = codex_rollout::read_session_meta_line(&rollout_path).await?;
+    let rollout_modified_at = std::fs::metadata(&rollout_path)?
+        .modified()
+        .map(chrono::DateTime::<chrono::Utc>::from)?;
+    assert_eq!(session_meta.meta.timestamp, "2024-01-02T03:04:05.000Z");
+    assert_eq!(rollout_modified_at.timestamp(), source_updated_at);
 
     let request_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -809,9 +928,43 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         })
     );
 
+    drop(mcp);
+    remove_state_db_files(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    list_threads(
+        &mut mcp,
+        ThreadSortKey::CreatedAt,
+        /*use_state_db_only*/ false,
+    )
+    .await?;
+    for sort_key in [
+        ThreadSortKey::CreatedAt,
+        ThreadSortKey::UpdatedAt,
+        ThreadSortKey::RecencyAt,
+    ] {
+        let rebuilt = list_threads(&mut mcp, sort_key, /*use_state_db_only*/ true).await?;
+        assert_eq!(
+            rebuilt.data.first().map(|thread| thread.id.as_str()),
+            Some(native_thread_id.as_str())
+        );
+        let rebuilt_thread = rebuilt
+            .data
+            .iter()
+            .find(|thread| thread.id == imported_thread_id)
+            .expect("rebuilt imported thread");
+        assert_thread_timestamps(rebuilt_thread, source_created_at, source_updated_at);
+    }
+
     let request_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id.clone(),
+            thread_id: imported_thread_id.clone(),
             ..Default::default()
         })
         .await?;
@@ -824,7 +977,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
 
     let request_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
+            thread_id: imported_thread_id.clone(),
             client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "follow up".to_string(),
@@ -844,9 +997,36 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
 
+    let response = list_threads(
+        &mut mcp,
+        ThreadSortKey::RecencyAt,
+        /*use_state_db_only*/ true,
+    )
+    .await?;
+    let updated_thread = response
+        .data
+        .iter()
+        .find(|thread| thread.id == imported_thread_id)
+        .expect("updated imported thread");
+    assert_eq!(updated_thread.created_at, source_created_at);
+    assert!(updated_thread.updated_at > source_updated_at);
+    assert!(
+        updated_thread
+            .recency_at
+            .is_some_and(|value| value > source_updated_at)
+    );
+    assert_eq!(
+        response.data.first().map(|thread| thread.id.as_str()),
+        Some(imported_thread_id.as_str())
+    );
+    let resumed_rollout_modified_at = std::fs::metadata(&rollout_path)?
+        .modified()
+        .map(chrono::DateTime::<chrono::Utc>::from)?;
+    assert!(resumed_rollout_modified_at.timestamp() > source_updated_at);
+
     let request_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id: thread.id,
+            thread_id: imported_thread_id.clone(),
             include_turns: true,
         })
         .await?;
@@ -861,6 +1041,40 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         ThreadItem::AgentMessage { text, .. } => assert_eq!(text, "follow-up answer"),
         other => panic!("expected agent message item, got {other:?}"),
     }
+
+    drop(mcp);
+    remove_state_db_files(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    list_threads(
+        &mut mcp,
+        ThreadSortKey::RecencyAt,
+        /*use_state_db_only*/ false,
+    )
+    .await?;
+    let repaired_after_resume = list_threads(
+        &mut mcp,
+        ThreadSortKey::RecencyAt,
+        /*use_state_db_only*/ true,
+    )
+    .await?;
+    let repaired_thread = repaired_after_resume
+        .data
+        .iter()
+        .find(|thread| thread.id == imported_thread_id)
+        .expect("repaired resumed imported thread");
+    assert_eq!(repaired_thread.created_at, source_created_at);
+    assert!(repaired_thread.updated_at > source_updated_at);
+    assert!(
+        repaired_thread
+            .recency_at
+            .is_some_and(|value| value > source_updated_at)
+    );
 
     Ok(())
 }

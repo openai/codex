@@ -29,6 +29,7 @@ pub use types::CreateThreadParams;
 pub use types::DeleteThreadParams;
 pub use types::ExtraConfig;
 pub use types::GitInfoPatch;
+pub use types::InitialThreadTimestamps;
 pub use types::ItemPage;
 pub use types::ListItemsParams;
 pub use types::ListThreadsParams;

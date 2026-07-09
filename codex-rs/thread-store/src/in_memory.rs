@@ -22,6 +22,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::InitialThreadTimestamps;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -609,6 +610,14 @@ impl ThreadStore for InMemoryThreadStore {
     }
 
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(InMemoryThreadStore::create_thread(self, params))
+    }
+
+    fn create_thread_with_initial_timestamps(
+        &self,
+        params: CreateThreadParams,
+        _timestamps: InitialThreadTimestamps,
+    ) -> ThreadStoreFuture<'_, ()> {
         Box::pin(InMemoryThreadStore::create_thread(self, params))
     }
 

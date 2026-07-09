@@ -8,8 +8,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::SystemTime;
 
+use chrono::DateTime;
 use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -82,6 +85,7 @@ pub struct RolloutRecorder {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RolloutRecorderParams {
     Create {
         session_id: SessionId,
@@ -97,6 +101,8 @@ pub enum RolloutRecorderParams {
         multi_agent_version: Option<MultiAgentVersion>,
         history_mode: ThreadHistoryMode,
         initial_window_id: Option<String>,
+        initial_created_at: Option<DateTime<Utc>>,
+        initial_updated_at: Option<DateTime<Utc>>,
     },
     Resume {
         path: PathBuf,
@@ -190,6 +196,8 @@ impl RolloutRecorderParams {
             multi_agent_version: None,
             history_mode: Default::default(),
             initial_window_id: None,
+            initial_created_at: None,
+            initial_updated_at: None,
         }
     }
 
@@ -245,6 +253,23 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *window_id = Some(initial_window_id);
+        }
+        self
+    }
+
+    pub fn with_initial_timestamps(
+        mut self,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        if let Self::Create {
+            initial_created_at,
+            initial_updated_at,
+            ..
+        } = &mut self
+        {
+            *initial_created_at = Some(created_at);
+            *initial_updated_at = Some(updated_at);
         }
         self
     }
@@ -766,8 +791,15 @@ impl RolloutRecorder {
                 multi_agent_version,
                 history_mode,
                 initial_window_id,
+                initial_created_at,
+                initial_updated_at,
             } => {
-                let log_file_info = precompute_log_file_info(config, conversation_id)?;
+                let log_file_info = precompute_log_file_info(
+                    config,
+                    conversation_id,
+                    initial_created_at,
+                    initial_updated_at,
+                )?;
                 let path = log_file_info.path.clone();
                 let thread_id = log_file_info.conversation_id;
                 let started_at = log_file_info.timestamp;
@@ -1493,15 +1525,31 @@ struct LogFileInfo {
 
     /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
+
+    /// Initial file modification time used when reconstructing imported chronology.
+    initial_modified_at: Option<SystemTime>,
 }
 
 fn precompute_log_file_info(
     config: &impl RolloutConfigView,
     conversation_id: ThreadId,
+    initial_created_at: Option<DateTime<Utc>>,
+    initial_updated_at: Option<DateTime<Utc>>,
 ) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD path.
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let timestamp = match initial_created_at {
+        Some(created_at) => {
+            let timestamp = OffsetDateTime::from(SystemTime::from(created_at));
+            let local_offset = time::UtcOffset::local_offset_at(timestamp).map_err(|e| {
+                IoError::other(format!(
+                    "failed to get local offset for initial session time: {e}"
+                ))
+            })?;
+            timestamp.to_offset(local_offset)
+        }
+        None => OffsetDateTime::now_local()
+            .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?,
+    };
     let mut dir = config.codex_home().to_path_buf();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
@@ -1524,6 +1572,7 @@ fn precompute_log_file_info(
         path,
         conversation_id,
         timestamp,
+        initial_modified_at: initial_updated_at.map(SystemTime::from),
     })
 }
 
@@ -1554,6 +1603,7 @@ struct RolloutWriterState {
     meta: Option<SessionMeta>,
     cwd: PathBuf,
     rollout_path: PathBuf,
+    initial_modified_at: Option<SystemTime>,
     last_logged_error: Option<String>,
 }
 
@@ -1565,6 +1615,9 @@ impl RolloutWriterState {
         cwd: PathBuf,
         rollout_path: PathBuf,
     ) -> Self {
+        let initial_modified_at = deferred_log_file_info
+            .as_ref()
+            .and_then(|info| info.initial_modified_at);
         Self {
             writer: file.map(|file| JsonlWriter { file }),
             deferred_log_file_info,
@@ -1572,6 +1625,7 @@ impl RolloutWriterState {
             meta,
             cwd,
             rollout_path,
+            initial_modified_at,
             last_logged_error: None,
         }
     }
@@ -1688,6 +1742,13 @@ impl RolloutWriterState {
 
         if let Some(writer) = self.writer.as_mut() {
             writer.file.flush().await?;
+        }
+        if let Some(modified_at) = self.initial_modified_at {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&self.rollout_path)?
+                .set_times(fs::FileTimes::new().set_modified(modified_at))?;
+            self.initial_modified_at = None;
         }
         Ok(())
     }

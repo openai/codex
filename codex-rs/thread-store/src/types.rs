@@ -60,6 +60,15 @@ pub struct ThreadPersistenceMetadata {
     pub memory_mode: MemoryMode,
 }
 
+/// Source chronology used only while creating a thread from pre-existing history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InitialThreadTimestamps {
+    /// Original creation time of the imported thread.
+    pub created_at: DateTime<Utc>,
+    /// Original last-activity time of the imported thread.
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Extra configuration fields for a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraConfig {}

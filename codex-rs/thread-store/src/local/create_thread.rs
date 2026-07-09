@@ -1,5 +1,6 @@
 use super::LocalThreadStore;
 use crate::CreateThreadParams;
+use crate::InitialThreadTimestamps;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::error::reject_paginated_history_mode;
@@ -11,6 +12,22 @@ use codex_rollout::RolloutRecorderParams;
 pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
+) -> ThreadStoreResult<RolloutRecorder> {
+    create_thread_recorder(store, params, /*initial_timestamps*/ None).await
+}
+
+pub(super) async fn create_thread_with_initial_timestamps(
+    store: &LocalThreadStore,
+    params: CreateThreadParams,
+    initial_timestamps: InitialThreadTimestamps,
+) -> ThreadStoreResult<RolloutRecorder> {
+    create_thread_recorder(store, params, Some(initial_timestamps)).await
+}
+
+async fn create_thread_recorder(
+    store: &LocalThreadStore,
+    params: CreateThreadParams,
+    initial_timestamps: Option<InitialThreadTimestamps>,
 ) -> ThreadStoreResult<RolloutRecorder> {
     reject_paginated_history_mode(params.history_mode)?;
     let cwd = params
@@ -27,26 +44,30 @@ pub(super) async fn create_thread(
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };
-    RolloutRecorder::new(
-        &config,
-        RolloutRecorderParams::new(
-            params.thread_id,
-            params.forked_from_id,
-            params.parent_thread_id,
-            params.source,
-            params.thread_source,
-            params.originator,
-            params.base_instructions,
-            params.dynamic_tools,
-        )
-        .with_session_id(params.session_id)
-        .with_selected_capability_roots(params.selected_capability_roots)
-        .with_multi_agent_version(params.multi_agent_version)
-        .with_history_mode(params.history_mode)
-        .with_initial_window_id(params.initial_window_id),
+    let recorder_params = RolloutRecorderParams::new(
+        params.thread_id,
+        params.forked_from_id,
+        params.parent_thread_id,
+        params.source,
+        params.thread_source,
+        params.originator,
+        params.base_instructions,
+        params.dynamic_tools,
     )
-    .await
-    .map_err(|err| ThreadStoreError::Internal {
-        message: format!("failed to initialize local thread recorder: {err}"),
-    })
+    .with_session_id(params.session_id)
+    .with_selected_capability_roots(params.selected_capability_roots)
+    .with_multi_agent_version(params.multi_agent_version)
+    .with_history_mode(params.history_mode)
+    .with_initial_window_id(params.initial_window_id);
+    let recorder_params = match initial_timestamps {
+        Some(timestamps) => {
+            recorder_params.with_initial_timestamps(timestamps.created_at, timestamps.updated_at)
+        }
+        None => recorder_params,
+    };
+    RolloutRecorder::new(&config, recorder_params)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to initialize local thread recorder: {err}"),
+        })
 }

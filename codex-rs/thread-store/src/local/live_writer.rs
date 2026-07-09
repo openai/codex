@@ -12,6 +12,7 @@ use super::LocalThreadStore;
 use super::create_thread;
 use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
+use crate::InitialThreadTimestamps;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
@@ -29,6 +30,21 @@ pub(super) async fn create_thread(
     let history_mode = params.history_mode;
     store.ensure_live_recorder_absent(thread_id).await?;
     let recorder = create_thread::create_thread(store, params).await?;
+    store
+        .insert_live_recorder(thread_id, recorder, history_mode)
+        .await
+}
+
+pub(super) async fn create_thread_with_initial_timestamps(
+    store: &LocalThreadStore,
+    params: CreateThreadParams,
+    timestamps: InitialThreadTimestamps,
+) -> ThreadStoreResult<()> {
+    let thread_id = params.thread_id;
+    let history_mode = params.history_mode;
+    store.ensure_live_recorder_absent(thread_id).await?;
+    let recorder =
+        create_thread::create_thread_with_initial_timestamps(store, params, timestamps).await?;
     store
         .insert_live_recorder(thread_id, recorder, history_mode)
         .await

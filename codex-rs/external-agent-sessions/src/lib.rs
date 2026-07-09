@@ -33,6 +33,8 @@ pub struct ImportedExternalAgentSession {
     pub cwd: PathBuf,
     pub title: Option<String>,
     pub first_user_message: Option<String>,
+    pub source_created_at: Option<i64>,
+    pub source_updated_at: Option<i64>,
     pub rollout_items: Vec<RolloutItem>,
 }
 

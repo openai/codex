@@ -8,6 +8,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::InitialThreadTimestamps;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
@@ -44,6 +45,16 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;
+
+    /// Creates a thread from pre-existing history using its original chronology.
+    ///
+    /// This is a creation-only initialization hook. Normal appends after creation must advance
+    /// update and recency timestamps through the usual live-thread path.
+    fn create_thread_with_initial_timestamps(
+        &self,
+        params: CreateThreadParams,
+        timestamps: InitialThreadTimestamps,
+    ) -> ThreadStoreFuture<'_, ()>;
 
     /// Reopens an existing thread for live appends.
     fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()>;
