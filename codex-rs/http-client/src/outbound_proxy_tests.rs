@@ -1,6 +1,7 @@
 //! Shared outbound proxy policy tests.
 
 use super::*;
+use http::header::COOKIE;
 use pretty_assertions::assert_eq;
 use std::io::Read;
 use std::io::Write;
@@ -8,6 +9,76 @@ use std::sync::Arc;
 
 struct MapEnv {
     values: HashMap<String, String>,
+}
+
+fn spawn_proxy_listener() -> (
+    std::net::SocketAddr,
+    std::thread::JoinHandle<Option<String>>,
+) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
+    let proxy_addr = listener
+        .local_addr()
+        .expect("local proxy listener should have an address");
+    listener
+        .set_nonblocking(true)
+        .expect("proxy listener should become nonblocking");
+    let proxy_thread = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("proxy stream should get a read timeout");
+                    let mut buffer = [0_u8; 4096];
+                    let size = stream.read(&mut buffer).expect("proxy should read request");
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .expect("proxy should write response");
+                    break Some(String::from_utf8_lossy(&buffer[..size]).into_owned());
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("proxy should accept a request: {error}"),
+            }
+        }
+    });
+    (proxy_addr, proxy_thread)
+}
+
+fn spawn_redirect_listener(
+    location: &str,
+) -> (std::net::SocketAddr, std::thread::JoinHandle<String>) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("redirect listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("redirect listener should have an address");
+    let location = location.to_string();
+    let thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("redirect server should accept");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("redirect stream should get a read timeout");
+        let mut buffer = [0_u8; 4096];
+        let size = stream
+            .read(&mut buffer)
+            .expect("redirect request should read");
+        write!(
+            stream,
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .expect("redirect response should write");
+        String::from_utf8_lossy(&buffer[..size]).into_owned()
+    });
+    (address, thread)
 }
 
 #[test]
@@ -194,20 +265,7 @@ async fn async_resolution_uses_cached_route_before_global_permit() {
 
 #[tokio::test]
 async fn enabled_environment_proxy_routes_request_through_proxy() {
-    let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
-    let proxy_addr = listener
-        .local_addr()
-        .expect("local proxy listener should have an address");
-    let proxy_thread = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("proxy should accept a request");
-        let mut buffer = [0_u8; 4096];
-        let size = stream.read(&mut buffer).expect("proxy should read request");
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .expect("proxy should write response");
-        String::from_utf8_lossy(&buffer[..size]).into_owned()
-    });
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
     let env = MapEnv {
         values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
     };
@@ -231,13 +289,107 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
         .send()
         .await
         .expect("request should use local proxy");
-    let proxy_request = proxy_thread.join().expect("proxy thread should finish");
+    let proxy_request = proxy_thread
+        .join()
+        .expect("proxy thread should finish")
+        .expect("proxy should receive request before timeout");
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert_eq!(
         proxy_request.lines().next(),
         Some("GET http://enabled-proxy.test/proxy-check HTTP/1.1")
     );
+}
+
+#[tokio::test]
+async fn route_aware_pool_uses_respect_system_proxy_route_for_exact_url() {
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
+    let request_url = "http://route-aware-proxy.test/proxy-check?pac=exact";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+
+    let response = tokio::time::timeout(Duration::from_secs(2), pool.get(request_url).send())
+        .await
+        .expect("proxy request should finish")
+        .expect("request should use local proxy");
+    let proxy_request = proxy_thread
+        .join()
+        .expect("proxy thread should finish")
+        .expect("proxy should receive request before timeout");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://route-aware-proxy.test/proxy-check?pac=exact HTTP/1.1")
+    );
+}
+
+#[tokio::test]
+async fn route_aware_pool_resolves_each_redirect_hop_and_strips_credentials() {
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
+    let redirected_url = "http://redirect-target.test/final?pac=redirect";
+    let (redirect_addr, redirect_thread) = spawn_redirect_listener(redirected_url);
+    let initial_url = format!("http://{redirect_addr}/start");
+    cache_system_proxy_decision(&initial_url, SystemProxyDecision::Direct);
+    cache_system_proxy_decision(
+        redirected_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        pool.get(&initial_url)
+            .bearer_auth("redirect-secret")
+            .header(COOKIE, "session=redirect-secret")
+            .send(),
+    )
+    .await
+    .expect("redirected request should finish")
+    .expect("redirected request should use selected routes");
+    let initial_request = redirect_thread
+        .join()
+        .expect("redirect thread should finish");
+    let proxy_request = proxy_thread
+        .join()
+        .expect("proxy thread should finish")
+        .expect("redirect target should reach proxy");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.url().as_str(), redirected_url);
+    assert!(
+        initial_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer redirect-secret")
+    );
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://redirect-target.test/final?pac=redirect HTTP/1.1")
+    );
+    assert!(
+        !proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization:")
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains(&format!("referer: {initial_url}").to_ascii_lowercase())
+    );
+    assert!(!proxy_request.contains("redirect-secret"));
 }
 
 #[test]
