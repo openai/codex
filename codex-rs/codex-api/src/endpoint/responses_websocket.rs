@@ -156,6 +156,8 @@ const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str = "websocket_connection_limit_reached";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.";
+const RESPONSES_WEBSOCKET_TIMING_KIND: &str = "responsesapi.websocket_timing";
+const RESPONSES_WEBSOCKET_TIMING_EVENT_TARGET: &str = "codex_api::responses_websocket_timing";
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -678,6 +680,7 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                emit_responses_websocket_timing_event(event.kind(), text.as_str());
                 if let Some(response_turn_state) = event.turn_state()
                     && let Some(turn_state) = turn_state
                 {
@@ -759,6 +762,22 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+fn emit_responses_websocket_timing_event(kind: &str, payload: &str) {
+    if kind != RESPONSES_WEBSOCKET_TIMING_KIND {
+        return;
+    }
+
+    // This full payload is excluded from always-on sinks. Opt in to the request span's event with
+    // `RUST_LOG='codex_api::responses_websocket_timing=trace'`.
+    tracing::event!(
+        name: RESPONSES_WEBSOCKET_TIMING_KIND,
+        target: RESPONSES_WEBSOCKET_TIMING_EVENT_TARGET,
+        tracing::Level::TRACE,
+        payload,
+        "responses websocket timing"
+    );
 }
 
 fn safety_buffering_for_event(

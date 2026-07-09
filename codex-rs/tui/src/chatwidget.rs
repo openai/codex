@@ -2013,8 +2013,8 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
         || summary.responses_api_inference_time_ms > 0
         || summary.responses_api_engine_iapi_ttft_ms > 0
         || summary.responses_api_engine_service_ttft_ms > 0
-        || summary.responses_api_engine_iapi_tbt_ms > 0
-        || summary.responses_api_engine_service_tbt_ms > 0
+        || summary.responses_api_engine_iapi_tbt_ms > 0.0
+        || summary.responses_api_engine_service_tbt_ms > 0.0
 }
 
 impl Drop for ChatWidget {

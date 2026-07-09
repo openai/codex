@@ -1237,8 +1237,8 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     assert_eq!(summary.responses_api_inference_time_ms, 450);
     assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 310);
     assert_eq!(summary.responses_api_engine_service_ttft_ms, 340);
-    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220);
-    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220.0);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260.0);
 
     server.shutdown().await;
 }
