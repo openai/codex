@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -94,4 +95,46 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn refreshes_the_latest_models_manager_each_iteration() {
+    let codex_home = tempdir().expect("temp dir");
+    let first_endpoint = TestModelsEndpoint::new();
+    let first_models_manager: SharedModelsManager = Arc::new(OpenAiModelsManager::new(
+        codex_home.path().to_path_buf(),
+        first_endpoint.clone(),
+        /*auth_manager*/ None,
+    ));
+    let second_endpoint = TestModelsEndpoint::new();
+    let second_models_manager: SharedModelsManager = Arc::new(OpenAiModelsManager::new(
+        codex_home.path().to_path_buf(),
+        second_endpoint.clone(),
+        /*auth_manager*/ None,
+    ));
+    let current_models_manager = Arc::new(RwLock::new(first_models_manager));
+    let models_manager_source = {
+        let current_models_manager = Arc::clone(&current_models_manager);
+        Arc::new(move || {
+            Some(
+                current_models_manager
+                    .read()
+                    .expect("models manager lock")
+                    .clone(),
+            )
+        })
+    };
+    let worker = spawn_with_source(
+        models_manager_source,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        Duration::from_millis(25),
+    );
+
+    first_endpoint.wait_for_fetch_count(/*expected*/ 1).await;
+    *current_models_manager.write().expect("models manager lock") = second_models_manager;
+    second_endpoint.wait_for_fetch_count(/*expected*/ 1).await;
+    drop(worker);
+
+    assert_eq!(first_endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    assert_eq!(second_endpoint.fetch_count.load(Ordering::SeqCst), 1);
 }

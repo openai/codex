@@ -6,6 +6,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::provider_runtime_refresh::refresh_default_model_provider;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
@@ -41,7 +42,6 @@ use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
-use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
 use serde_json::json;
@@ -159,9 +159,7 @@ impl ConfigRequestProcessor {
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
-        let capabilities = provider.capabilities();
+        let capabilities = self.thread_manager.default_model_provider_capabilities();
         Ok(ModelProviderCapabilitiesReadResponse {
             namespace_tools: capabilities.namespace_tools,
             image_generation: capabilities.image_generation,
@@ -169,9 +167,11 @@ impl ConfigRequestProcessor {
         })
     }
 
-    pub(crate) async fn handle_config_mutation(&self) {
+    pub(crate) async fn handle_config_mutation(&self) -> Result<(), JSONRPCErrorError> {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_service().clear_cache();
+        refresh_default_model_provider(&self.config_manager, &self.thread_manager).await?;
+        Ok(())
     }
 
     async fn handle_config_mutation_result<T>(
@@ -179,7 +179,7 @@ impl ConfigRequestProcessor {
         result: std::result::Result<T, JSONRPCErrorError>,
     ) -> Result<T, JSONRPCErrorError> {
         let response = result?;
-        self.handle_config_mutation().await;
+        self.handle_config_mutation().await?;
         Ok(response)
     }
 

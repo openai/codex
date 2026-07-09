@@ -226,8 +226,13 @@ impl ExternalAgentConfigRequestProcessor {
         let (pending_session_imports, session_validation_result) =
             self.validate_pending_session_imports(&params);
         let import_outcome = self.import_external_agent_config(params).await;
-        if needs_runtime_refresh {
-            self.config_processor.handle_config_mutation().await;
+        if needs_runtime_refresh
+            && let Err(err) = self.config_processor.handle_config_mutation().await
+        {
+            tracing::warn!(
+                error = %err.message,
+                "failed to refresh runtime state after external agent config import"
+            );
         }
         self.outgoing
             .send_response(

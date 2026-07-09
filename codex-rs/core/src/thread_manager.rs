@@ -8,6 +8,7 @@ use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
+use crate::model_provider_runtime::DefaultModelProviderRuntime;
 use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -36,7 +37,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
-use codex_model_provider::create_model_provider;
+use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
@@ -240,7 +241,7 @@ pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
+    default_model_provider_runtime: DefaultModelProviderRuntime,
     environment_manager: Arc<EnvironmentManager>,
     skills_service: Arc<SkillsService>,
     plugins_manager: Arc<PluginsManager>,
@@ -263,11 +264,7 @@ pub fn build_models_manager(
     config: &Config,
     auth_manager: Arc<AuthManager>,
 ) -> SharedModelsManager {
-    let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
-    provider.models_manager(
-        config.codex_home.to_path_buf(),
-        config.model_catalog.clone(),
-    )
+    crate::model_provider_runtime::build_models_manager(config, auth_manager)
 }
 
 pub fn thread_store_from_config(
@@ -337,7 +334,10 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(config, auth_manager.clone()),
+                default_model_provider_runtime: DefaultModelProviderRuntime::new(
+                    config,
+                    auth_manager.clone(),
+                ),
                 environment_manager,
                 skills_service,
                 plugins_manager,
@@ -456,8 +456,13 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                default_model_provider_runtime: DefaultModelProviderRuntime::from_parts(
+                    OPENAI_PROVIDER_ID.to_string(),
+                    provider,
+                    codex_home,
+                    /*config_model_catalog*/ None,
+                    auth_manager.clone(),
+                ),
                 environment_manager,
                 skills_service,
                 plugins_manager,
@@ -539,7 +544,7 @@ impl ThreadManager {
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
-        self.state.models_manager.clone()
+        self.state.default_model_provider_runtime.models_manager()
     }
 
     pub async fn list_models(
@@ -547,14 +552,35 @@ impl ThreadManager {
         refresh_strategy: RefreshStrategy,
         http_client_factory: codex_http_client::HttpClientFactory,
     ) -> Vec<ModelPreset> {
-        self.state
-            .models_manager
+        self.get_models_manager()
             .list_models(refresh_strategy, http_client_factory)
             .await
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state.models_manager.list_collaboration_modes()
+        self.get_models_manager().list_collaboration_modes()
+    }
+
+    /// Publishes a new process-default model-provider runtime when its config identity changed.
+    pub fn refresh_default_model_provider(&self, config: &Config) -> bool {
+        self.state
+            .default_model_provider_runtime
+            .refresh(config, Arc::clone(&self.state.auth_manager))
+    }
+
+    /// Returns the effective provider ID for new threads that follow the process default.
+    pub fn default_model_provider_id(&self) -> String {
+        self.state.default_model_provider_runtime.provider_id()
+    }
+
+    /// Returns the provider-owned capabilities for the current process default.
+    pub fn default_model_provider_capabilities(&self) -> ProviderCapabilities {
+        self.state.default_model_provider_runtime.capabilities()
+    }
+
+    /// Returns the generation of the current process-default provider snapshot.
+    pub fn default_model_provider_generation(&self) -> u64 {
+        self.state.default_model_provider_runtime.generation()
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -1584,6 +1610,9 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let models_manager = self
+            .default_model_provider_runtime
+            .models_manager_for_config(&config, Arc::clone(&auth_manager));
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1592,7 +1621,7 @@ impl ThreadManagerState {
             user_instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: Arc::clone(&self.models_manager),
+            models_manager,
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),

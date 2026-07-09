@@ -9,12 +9,17 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
+use codex_model_provider::ProviderCapabilities;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
@@ -36,6 +41,28 @@ use tempfile::tempdir;
 use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn static_model_catalog(slug: &str) -> ModelsResponse {
+    let mut model = model_info_from_slug(slug);
+    model.visibility = ModelVisibility::List;
+    model.priority = 0;
+    model.used_fallback_model_metadata = false;
+    ModelsResponse {
+        models: vec![model],
+    }
+}
+
+async fn listed_model_ids(models_manager: &SharedModelsManager) -> Vec<String> {
+    models_manager
+        .list_models(
+            RefreshStrategy::Offline,
+            crate::test_support::default_http_client_factory(),
+        )
+        .await
+        .into_iter()
+        .map(|model| model.id)
+        .collect()
+}
 
 struct FakeAgentGraphStore {
     root_thread_id: ThreadId,
@@ -1367,6 +1394,139 @@ async fn new_uses_active_provider_for_model_refresh() {
         )
         .await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn refresh_default_model_provider_publishes_one_coherent_snapshot() {
+    let mut config = test_config().await;
+    let manager = ThreadManager::with_models_provider_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
+    let initial_models_manager = manager.get_models_manager();
+
+    assert_eq!(manager.default_model_provider_id(), OPENAI_PROVIDER_ID);
+    assert_eq!(manager.default_model_provider_generation(), 0);
+    assert_eq!(
+        manager.default_model_provider_capabilities(),
+        ProviderCapabilities::default()
+    );
+
+    config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+    config.model_provider = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+    config.model_catalog = None;
+
+    assert!(manager.refresh_default_model_provider(&config));
+    let bedrock_models_manager = manager.get_models_manager();
+    assert!(!Arc::ptr_eq(
+        &initial_models_manager,
+        &bedrock_models_manager
+    ));
+    assert_eq!(
+        (
+            manager.default_model_provider_id(),
+            manager.default_model_provider_generation(),
+            manager.default_model_provider_capabilities(),
+        ),
+        (
+            AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+            1,
+            ProviderCapabilities {
+                namespace_tools: true,
+                image_generation: false,
+                web_search: false,
+            },
+        )
+    );
+
+    assert!(!manager.refresh_default_model_provider(&config));
+    assert_eq!(manager.default_model_provider_generation(), 1);
+    assert!(Arc::ptr_eq(
+        &bedrock_models_manager,
+        &manager.get_models_manager()
+    ));
+}
+
+#[tokio::test]
+async fn new_threads_select_models_manager_for_their_effective_config() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut provider_a_config = test_config().await;
+    provider_a_config.codex_home = temp_dir.path().join("codex-home").abs();
+    provider_a_config.cwd = provider_a_config.codex_home.abs();
+    std::fs::create_dir_all(&provider_a_config.codex_home).expect("create codex home");
+    provider_a_config.model = None;
+    provider_a_config.model_provider_id = "provider-a".to_string();
+    provider_a_config.model_provider.name = "Provider A".to_string();
+    provider_a_config.model_catalog = Some(static_model_catalog("model-a"));
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    let manager = ThreadManager::new(
+        &provider_a_config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&provider_a_config, /*state_db*/ None),
+        /*agent_graph_store*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+    let provider_a_models_manager = manager.get_models_manager();
+    assert_eq!(
+        listed_model_ids(&provider_a_models_manager).await,
+        vec!["model-a".to_string()]
+    );
+
+    let mut provider_b_config = provider_a_config.clone();
+    provider_b_config.model_provider_id = "provider-b".to_string();
+    provider_b_config.model_provider.name = "Provider B".to_string();
+    provider_b_config.model_catalog = Some(static_model_catalog("model-b"));
+    assert!(manager.refresh_default_model_provider(&provider_b_config));
+
+    let provider_b_models_manager = manager.get_models_manager();
+    assert_eq!(
+        listed_model_ids(&provider_b_models_manager).await,
+        vec!["model-b".to_string()]
+    );
+
+    let default_thread = manager
+        .start_thread(provider_b_config)
+        .await
+        .expect("start default-provider thread");
+    assert!(Arc::ptr_eq(
+        &default_thread.thread.codex.session.services.models_manager,
+        &provider_b_models_manager,
+    ));
+
+    let explicit_thread = manager
+        .start_thread(provider_a_config)
+        .await
+        .expect("start explicitly configured provider thread");
+    let explicit_models_manager = &explicit_thread.thread.codex.session.services.models_manager;
+    assert!(!Arc::ptr_eq(
+        explicit_models_manager,
+        &provider_b_models_manager
+    ));
+    assert_eq!(
+        listed_model_ids(explicit_models_manager).await,
+        vec!["model-a".to_string()]
+    );
+
+    let mut expected_completed = vec![default_thread.thread_id, explicit_thread.thread_id];
+    expected_completed.sort_by_key(std::string::ToString::to_string);
+    assert_eq!(
+        manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await,
+        ThreadShutdownReport {
+            completed: expected_completed,
+            submit_failed: Vec::new(),
+            timed_out: Vec::new(),
+        }
+    );
 }
 
 #[test]

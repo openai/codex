@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_core::ThreadManager;
 use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -28,18 +29,42 @@ impl Drop for ModelsRefreshWorker {
 }
 
 pub(crate) fn spawn(
-    models_manager: &SharedModelsManager,
+    thread_manager: &Arc<ThreadManager>,
     http_client_factory: HttpClientFactory,
 ) -> ModelsRefreshWorker {
-    spawn_with_interval(models_manager, http_client_factory, MODELS_REFRESH_INTERVAL)
+    let thread_manager = Arc::downgrade(thread_manager);
+    spawn_with_source(
+        Arc::new(move || {
+            thread_manager
+                .upgrade()
+                .map(|thread_manager| thread_manager.get_models_manager())
+        }),
+        http_client_factory,
+        MODELS_REFRESH_INTERVAL,
+    )
 }
 
+#[cfg(test)]
 fn spawn_with_interval(
     models_manager: &SharedModelsManager,
     http_client_factory: HttpClientFactory,
     refresh_interval: Duration,
 ) -> ModelsRefreshWorker {
     let models_manager = Arc::downgrade(models_manager);
+    spawn_with_source(
+        Arc::new(move || models_manager.upgrade()),
+        http_client_factory,
+        refresh_interval,
+    )
+}
+
+type ModelsManagerSource = Arc<dyn Fn() -> Option<SharedModelsManager> + Send + Sync>;
+
+fn spawn_with_source(
+    models_manager_source: ModelsManagerSource,
+    http_client_factory: HttpClientFactory,
+    refresh_interval: Duration,
+) -> ModelsRefreshWorker {
     let shutdown = CancellationToken::new();
     let worker_shutdown = shutdown.clone();
     let task = tokio::spawn(async move {
@@ -47,7 +72,7 @@ fn spawn_with_interval(
             if worker_shutdown.is_cancelled() {
                 break;
             }
-            let Some(models_manager) = models_manager.upgrade() else {
+            let Some(models_manager) = models_manager_source() else {
                 break;
             };
             models_manager

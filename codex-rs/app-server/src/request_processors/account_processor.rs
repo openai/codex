@@ -3,6 +3,7 @@ use super::bedrock_auth::set_user_model_provider_to_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
+use crate::provider_runtime_refresh::refresh_default_model_provider;
 use chrono::DateTime;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
@@ -424,6 +425,7 @@ impl AccountRequestProcessor {
             )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
+            refresh_default_model_provider(&self.config_manager, &self.thread_manager).await?;
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -861,6 +863,7 @@ impl AccountRequestProcessor {
 
         if managed_bedrock_auth {
             clear_user_model_provider_if_bedrock(&self.config_manager).await?;
+            refresh_default_model_provider(&self.config_manager, &self.thread_manager).await?;
         }
 
         Self::maybe_refresh_plugin_caches_for_current_config(
