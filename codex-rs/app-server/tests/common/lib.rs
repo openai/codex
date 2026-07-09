@@ -4,10 +4,12 @@ mod analytics_server;
 mod auth_fixtures;
 mod config;
 mod json_logging;
+mod local_websocket_exec_server;
 mod mock_model_server;
 mod models_cache;
 mod responses;
 mod rollout;
+mod rpc_delay;
 mod test_app_server;
 
 pub use analytics_server::start_analytics_events_server;
