@@ -189,6 +189,14 @@ pub struct SkillRoot {
     pub plugin_root: Option<AbsolutePathBuf>,
 }
 
+impl SkillRoot {
+    pub(crate) fn is_agents_skills_root(&self) -> bool {
+        self.path.file_name() == Some(std::ffi::OsStr::new(SKILLS_DIR_NAME))
+            && self.path.parent().is_some_and(|parent| {
+                parent.file_name() == Some(std::ffi::OsStr::new(AGENTS_DIR_NAME))
+            })
+    }
+}
 pub async fn load_skills_from_roots<I>(
     roots: I,
     plugin_skill_snapshots: Option<&crate::PluginSkillSnapshots>,

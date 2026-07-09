@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -37,6 +38,7 @@ const TEST_WAIT: Duration = Duration::from_secs(/*secs*/ 5);
 struct ControlledFileSystem {
     inner: Arc<dyn ExecutorFileSystem>,
     walk_gate: Option<Arc<Semaphore>>,
+    walk_paths: Mutex<Vec<PathUri>>,
     walks_started: AtomicUsize,
     walk_started: Notify,
     blocked_read_root: Option<PathUri>,
@@ -51,6 +53,7 @@ impl ControlledFileSystem {
         Self {
             inner,
             walk_gate: None,
+            walk_paths: Mutex::new(Vec::new()),
             walks_started: AtomicUsize::new(/*v*/ 0),
             walk_started: Notify::new(),
             blocked_read_root: None,
@@ -82,6 +85,13 @@ impl ControlledFileSystem {
 
     fn walks_started(&self) -> usize {
         self.walks_started.load(Ordering::Acquire)
+    }
+
+    fn walk_paths(&self) -> Vec<PathUri> {
+        self.walk_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     async fn wait_for_walks(&self, expected: usize) {
@@ -203,6 +213,10 @@ impl ExecutorFileSystem for ControlledFileSystem {
         options: WalkOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        self.walk_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.clone());
         self.walks_started.fetch_add(/*val*/ 1, Ordering::AcqRel);
         self.walk_started.notify_waiters();
         Box::pin(async move {
@@ -287,7 +301,13 @@ async fn loads_roots_unordered_but_merges_errors_in_input_order() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let roots = (0..ROOT_COUNT)
-        .map(|index| temp.path().join(format!("root-{index}")))
+        .map(|index| {
+            if index == 1 {
+                temp.path().join("root-1").join(".agents").join("skills")
+            } else {
+                temp.path().join(format!("root-{index}"))
+            }
+        })
         .collect::<Vec<_>>();
     for root in &roots {
         fs::create_dir_all(root).expect("create root");
@@ -348,6 +368,57 @@ async fn loads_roots_unordered_but_merges_errors_in_input_order() {
 }
 
 #[tokio::test]
+async fn starts_agents_skill_roots_before_other_pending_scans() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let default_roots = (0..MAX_CONCURRENT_ROOT_SCANS)
+        .map(|index| temp.path().join(format!("default-{index}")))
+        .collect::<Vec<_>>();
+    let agents_roots = (0..MAX_CONCURRENT_ROOT_SCANS)
+        .map(|index| {
+            temp.path()
+                .join(format!("repo-{index}"))
+                .join(".agents")
+                .join("skills")
+        })
+        .collect::<Vec<_>>();
+    for root in default_roots.iter().chain(&agents_roots) {
+        fs::create_dir_all(root).expect("create root");
+    }
+
+    let walk_gate = Arc::new(Semaphore::new(/*permits*/ 0));
+    let file_system = Arc::new(
+        ControlledFileSystem::new(Arc::clone(&LOCAL_FS)).with_walk_gate(Arc::clone(&walk_gate)),
+    );
+    let root_file_system: Arc<dyn ExecutorFileSystem> = file_system.clone();
+    let skill_roots = default_roots
+        .iter()
+        .chain(&agents_roots)
+        .map(|root| plain_root(root, SkillScope::Repo, Arc::clone(&root_file_system)))
+        .collect::<Vec<_>>();
+
+    let load = tokio::spawn(async move {
+        load_and_merge_skill_roots(skill_roots, /*plugin_skill_snapshots*/ None).await
+    });
+    file_system.wait_for_walks(MAX_CONCURRENT_ROOT_SCANS).await;
+    assert_eq!(
+        file_system.walk_paths(),
+        agents_roots
+            .iter()
+            .map(|root| PathUri::from_host_native_path(root).expect("agents root"))
+            .collect::<Vec<_>>()
+    );
+
+    walk_gate.add_permits(MAX_CONCURRENT_ROOT_SCANS);
+    file_system
+        .wait_for_walks(MAX_CONCURRENT_ROOT_SCANS * 2)
+        .await;
+    walk_gate.add_permits(MAX_CONCURRENT_ROOT_SCANS);
+    let outcome = load.await.expect("skill-root load should finish");
+    assert_eq!(outcome.skills, Vec::new());
+    assert_eq!(outcome.errors, Vec::new());
+}
+
+#[tokio::test]
 async fn limits_concurrent_root_scans() {
     const ROOT_COUNT: usize = MAX_CONCURRENT_ROOT_SCANS + 1;
 
@@ -388,19 +459,26 @@ async fn limits_concurrent_root_scans() {
 #[tokio::test]
 async fn duplicate_plugin_roots_share_work_only_when_snapshots_are_available() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let skills_root = temp.path().join("skills");
+    let skills_root = temp.path().join("plugin").join(".agents").join("skills");
     write_skill(
         &skills_root,
         "demo",
         "---\nname: demo\ndescription: demo skill\n---\n",
     );
     let broken_skill = write_skill(&skills_root, "broken", "missing frontmatter");
+    let default_root = temp.path().join("default-skills");
+    let default_broken_skill = write_skill(&default_root, "broken", "default missing frontmatter");
 
     let cached_file_system = Arc::new(ControlledFileSystem::new(Arc::clone(&LOCAL_FS)));
     let cached_root_file_system: Arc<dyn ExecutorFileSystem> = cached_file_system.clone();
     let snapshots = PluginSkillSnapshots::for_plugin_load();
     let cached_outcome = load_and_merge_skill_roots(
         [
+            plain_root(
+                &default_root,
+                SkillScope::User,
+                Arc::clone(&cached_root_file_system),
+            ),
             plugin_root(
                 &skills_root,
                 temp.path(),
@@ -415,12 +493,17 @@ async fn duplicate_plugin_roots_share_work_only_when_snapshots_are_available() {
         Some(&snapshots),
     )
     .await;
-    assert_eq!(cached_file_system.walks_started(), 1);
+    assert_eq!(cached_file_system.walks_started(), 2);
 
     let uncached_file_system = Arc::new(ControlledFileSystem::new(Arc::clone(&LOCAL_FS)));
     let uncached_root_file_system: Arc<dyn ExecutorFileSystem> = uncached_file_system.clone();
     let uncached_outcome = load_and_merge_skill_roots(
         [
+            plain_root(
+                &default_root,
+                SkillScope::User,
+                Arc::clone(&uncached_root_file_system),
+            ),
             plugin_root(
                 &skills_root,
                 temp.path(),
@@ -435,7 +518,7 @@ async fn duplicate_plugin_roots_share_work_only_when_snapshots_are_available() {
         /*plugin_skill_snapshots*/ None,
     )
     .await;
-    assert_eq!(uncached_file_system.walks_started(), 2);
+    assert_eq!(uncached_file_system.walks_started(), 3);
 
     assert_eq!(cached_outcome.skills, uncached_outcome.skills);
     assert_eq!(cached_outcome.errors, uncached_outcome.errors);
@@ -446,8 +529,18 @@ async fn duplicate_plugin_roots_share_work_only_when_snapshots_are_available() {
             .abs(),
         message: "missing YAML frontmatter delimited by ---".to_string(),
     };
+    let expected_default_error = SkillError {
+        path: dunce::canonicalize(default_broken_skill)
+            .expect("canonical default broken skill")
+            .abs(),
+        message: "missing YAML frontmatter delimited by ---".to_string(),
+    };
     assert_eq!(
         cached_outcome.errors,
-        vec![expected_error.clone(), expected_error]
+        vec![
+            expected_default_error,
+            expected_error.clone(),
+            expected_error,
+        ]
     );
 }

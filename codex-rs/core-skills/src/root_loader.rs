@@ -15,11 +15,18 @@ use crate::model::SkillFileSystemsByPath;
 
 const MAX_CONCURRENT_ROOT_SCANS: usize = 4;
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RootScanPriority {
+    AgentsSkills,
+    Default,
+}
+
 struct PendingRootLoad {
     root: SkillRoot,
     root_index: usize,
     duplicate_root_indices: Vec<usize>,
     cache_key: Option<PluginSkillRoot>,
+    scheduling_priority: RootScanPriority,
 }
 
 struct CompletedRootLoad {
@@ -95,16 +102,26 @@ where
         {
             pending_load_by_cache_key.insert(cache_key.clone(), pending_loads.len());
         }
+        let scheduling_priority = if root.is_agents_skills_root() {
+            RootScanPriority::AgentsSkills
+        } else {
+            RootScanPriority::Default
+        };
         pending_loads.push(PendingRootLoad {
             root,
             root_index,
             duplicate_root_indices: Vec::new(),
             cache_key,
+            scheduling_priority,
         });
     }
 
-    // Unordered buffering lets fast host and cached roots free slots while an earlier executor
-    // root is still pending. The indexed snapshots below restore the original merge order.
+    // Group duplicate cache keys before prioritization so the original first occurrence remains
+    // the scan/cache owner. Sorting by the original index within each priority retains FIFO order.
+    pending_loads.sort_by_key(|pending| (pending.scheduling_priority, pending.root_index));
+    // Unordered buffering starts known `.agents/skills` roots first and lets fast host and cached
+    // roots free slots while an earlier executor root is still pending. The indexed snapshots
+    // below restore the original merge order.
     let completed_loads = futures::stream::iter(pending_loads)
         .map(|pending| async move {
             let PendingRootLoad {
@@ -112,6 +129,7 @@ where
                 root_index,
                 duplicate_root_indices,
                 cache_key,
+                scheduling_priority: _,
             } = pending;
             let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
                 let plugin_skill_snapshots = plugin_skill_snapshots?;
