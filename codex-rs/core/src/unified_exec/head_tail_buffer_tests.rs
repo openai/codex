@@ -91,3 +91,20 @@ fn fills_head_then_tail_across_multiple_chunks() {
     assert_eq!(buf.to_bytes(), b"012346789a".to_vec());
     assert_eq!(buf.omitted_bytes(), 1);
 }
+
+#[test]
+fn empty_and_tiny_chunks_have_bounded_metadata() {
+    let mut buf = HeadTailBuffer::new(/*max_bytes*/ 10);
+
+    for byte in b"0123456789ab" {
+        buf.push_chunk(Vec::new());
+        buf.push_chunk(vec![*byte]);
+    }
+
+    assert_eq!(
+        buf.snapshot_chunks(),
+        vec![b"01234".to_vec(), b"789ab".to_vec()]
+    );
+    assert_eq!(buf.retained_bytes(), 10);
+    assert_eq!(buf.omitted_bytes(), 2);
+}

@@ -327,17 +327,11 @@ fn push_chunk_preserves_prefix_and_suffix() {
 
     assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
     let snapshot = buffer.snapshot_chunks();
-
-    let first = snapshot.first().expect("expected at least one chunk");
-    assert_eq!(first.first(), Some(&b'a'));
-    assert!(snapshot.iter().any(|chunk| chunk.as_slice() == b"b"));
-    assert_eq!(
-        snapshot
-            .last()
-            .expect("expected at least one chunk")
-            .as_slice(),
-        b"c"
-    );
+    let head_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
+    let tail_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
+    let mut expected_tail = vec![b'a'; tail_bytes - 2];
+    expected_tail.extend_from_slice(b"bc");
+    assert_eq!(snapshot, vec![vec![b'a'; head_bytes], expected_tail]);
 }
 
 #[test]
