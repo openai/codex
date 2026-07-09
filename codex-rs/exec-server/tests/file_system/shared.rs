@@ -4,6 +4,14 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FindUpErrorPolicy;
+use codex_exec_server::FindUpMatch;
+use codex_exec_server::FindUpMatchKind;
+use codex_exec_server::FindUpOptions;
+use codex_exec_server::FindUpOutcome;
+use codex_exec_server::MAX_FIND_UP_CANDIDATE_BYTES;
+use codex_exec_server::MAX_FIND_UP_CANDIDATES;
+use codex_exec_server::MAX_FIND_UP_TOTAL_CANDIDATE_BYTES;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkEntry;
@@ -155,6 +163,115 @@ async fn file_system_get_metadata_batch_preserves_order_and_errors(
             Ok(expected_directory),
         ]
     );
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_find_up_preserves_ancestor_and_candidate_order(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let parent = tmp.path().join("parent");
+    let start = parent.join("child");
+    std::fs::create_dir_all(&start)?;
+    std::fs::write(parent.join("first.marker"), "parent")?;
+    std::fs::write(start.join("second.marker"), "child")?;
+    let options = FindUpOptions {
+        candidate_relative_paths: vec!["first.marker".to_string(), "second.marker".to_string()],
+        match_kind: FindUpMatchKind::File,
+        non_not_found_error_policy: FindUpErrorPolicy::Propagate,
+    };
+    let start_uri = PathUri::from_host_native_path(&start)?;
+
+    let nearest = file_system
+        .find_up(&start_uri, &options, /*sandbox*/ None)
+        .await?;
+    assert_eq!(
+        nearest,
+        FindUpOutcome {
+            matched: Some(FindUpMatch {
+                ancestor: start_uri.clone(),
+                path: PathUri::from_host_native_path(start.join("second.marker"))?,
+            }),
+            visited_ancestor_count: 1,
+            metadata_probe_count: 2,
+            ignored_error_count: 0,
+        }
+    );
+
+    std::fs::write(start.join("first.marker"), "first")?;
+    let first = file_system
+        .find_up(&start_uri, &options, /*sandbox*/ None)
+        .await?;
+    assert_eq!(
+        first,
+        FindUpOutcome {
+            matched: Some(FindUpMatch {
+                ancestor: start_uri,
+                path: PathUri::from_host_native_path(start.join("first.marker"))?,
+            }),
+            visited_ancestor_count: 1,
+            metadata_probe_count: 1,
+            ignored_error_count: 0,
+        }
+    );
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_find_up_enforces_bounds_and_sandbox(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let start = tmp.path().join("allowed/nested");
+    std::fs::create_dir_all(&start)?;
+    std::fs::write(start.join("marker"), "ok")?;
+    let start_uri = PathUri::from_host_native_path(&start)?;
+    let sandbox = read_only_sandbox(tmp.path().join("allowed"));
+    let options = FindUpOptions {
+        candidate_relative_paths: vec!["marker".to_string()],
+        match_kind: FindUpMatchKind::Any,
+        non_not_found_error_policy: FindUpErrorPolicy::Propagate,
+    };
+
+    assert!(
+        file_system
+            .find_up(&start_uri, &options, Some(&sandbox))
+            .await?
+            .matched
+            .is_some()
+    );
+
+    for invalid_candidates in [
+        vec!["marker".to_string(); MAX_FIND_UP_CANDIDATES + 1],
+        vec!["x".repeat(MAX_FIND_UP_CANDIDATE_BYTES + 1)],
+        vec![
+            "x".repeat(MAX_FIND_UP_TOTAL_CANDIDATE_BYTES / MAX_FIND_UP_CANDIDATES + 1);
+            MAX_FIND_UP_CANDIDATES
+        ],
+        vec!["../marker".to_string()],
+    ] {
+        let error = file_system
+            .find_up(
+                &start_uri,
+                &FindUpOptions {
+                    candidate_relative_paths: invalid_candidates,
+                    ..options.clone()
+                },
+                Some(&sandbox),
+            )
+            .await
+            .expect_err("invalid candidates should fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
     Ok(())
 }
 

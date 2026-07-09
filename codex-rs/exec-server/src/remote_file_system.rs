@@ -13,6 +13,8 @@ use crate::FileMetadata;
 use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
+use crate::FindUpOptions;
+use crate::FindUpOutcome;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::WalkOptions;
@@ -21,6 +23,7 @@ use crate::client::LazyRemoteExecServerClient;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsFindUpParams;
 use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataBatchResult;
 use crate::protocol::FsGetMetadataParams;
@@ -211,6 +214,34 @@ impl RemoteFileSystem {
             .collect())
     }
 
+    async fn find_up(
+        &self,
+        start: &PathUri,
+        options: &FindUpOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FindUpOutcome> {
+        trace!("remote fs find_up");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        match client
+            .fs_find_up(FsFindUpParams {
+                start: start.clone(),
+                options: options.clone(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(ExecServerError::Server {
+                code: METHOD_NOT_FOUND_ERROR_CODE,
+                ..
+            }) => {
+                <Self as ExecutorFileSystem>::find_up_via_metadata(self, start, options, sandbox)
+                    .await
+            }
+            Err(error) => Err(map_remote_error(error)),
+        }
+    }
+
     async fn read_directory(
         &self,
         path: &PathUri,
@@ -368,6 +399,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FileMetadata>>> {
         Box::pin(RemoteFileSystem::get_metadata_batch(self, paths, sandbox))
+    }
+
+    fn find_up<'a>(
+        &'a self,
+        start: &'a PathUri,
+        options: &'a FindUpOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FindUpOutcome> {
+        Box::pin(RemoteFileSystem::find_up(self, start, options, sandbox))
     }
 
     fn read_directory<'a>(

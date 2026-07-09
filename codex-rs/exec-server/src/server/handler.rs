@@ -25,6 +25,8 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsFindUpParams;
+use crate::protocol::FsFindUpResponse;
 use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataBatchResponse;
 use crate::protocol::FsGetMetadataParams;
@@ -308,6 +310,14 @@ impl ExecServerHandler {
     ) -> Result<FsGetMetadataBatchResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.get_metadata_batch(params).await
+    }
+
+    pub(crate) async fn fs_find_up(
+        &self,
+        params: FsFindUpParams,
+    ) -> Result<FsFindUpResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.find_up(params).await
     }
 
     pub(crate) async fn fs_canonicalize(

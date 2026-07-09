@@ -11,6 +11,7 @@ use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_FIND_UP_METHOD;
 use crate::protocol::FS_GET_METADATA_BATCH_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_OPEN_METHOD;
@@ -24,6 +25,7 @@ use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCloseParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsFindUpParams;
 use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsOpenParams;
@@ -143,6 +145,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_GET_METADATA_BATCH_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsGetMetadataBatchParams| async move {
             handler.fs_get_metadata_batch(params).await
+        },
+    );
+    router.request(
+        FS_FIND_UP_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsFindUpParams| async move {
+            handler.fs_find_up(params).await
         },
     );
     router.request(

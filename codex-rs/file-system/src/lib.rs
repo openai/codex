@@ -1,6 +1,13 @@
 mod find_up;
 
 pub use find_up::FindUpErrorPolicy;
+pub use find_up::FindUpMatch;
+pub use find_up::FindUpMatchKind;
+pub use find_up::FindUpOptions;
+pub use find_up::FindUpOutcome;
+pub use find_up::MAX_FIND_UP_CANDIDATE_BYTES;
+pub use find_up::MAX_FIND_UP_CANDIDATES;
+pub use find_up::MAX_FIND_UP_TOTAL_CANDIDATE_BYTES;
 pub use find_up::find_nearest_ancestor_with_markers;
 pub use find_up::find_nearest_native_ancestor_with_markers;
 
@@ -322,6 +329,28 @@ pub trait ExecutorFileSystem: Send + Sync {
             }
             Ok(results)
         })
+    }
+
+    /// Finds the nearest ancestor containing a qualifying candidate path.
+    fn find_up<'a>(
+        &'a self,
+        start: &'a PathUri,
+        options: &'a FindUpOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FindUpOutcome> {
+        self.find_up_via_metadata(start, options, sandbox)
+    }
+
+    /// Performs an ordered upward search using primitive metadata operations.
+    ///
+    /// Implementations with an optimized transport can use this as a compatibility fallback.
+    fn find_up_via_metadata<'a>(
+        &'a self,
+        start: &'a PathUri,
+        options: &'a FindUpOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FindUpOutcome> {
+        Box::pin(find_up::find_up_via_metadata(self, start, options, sandbox))
     }
 
     fn read_directory<'a>(

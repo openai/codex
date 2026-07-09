@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
+pub use codex_file_system::FindUpErrorPolicy;
+pub use codex_file_system::FindUpMatchKind;
+pub use codex_file_system::FindUpOptions;
+pub use codex_file_system::FindUpOutcome;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -33,6 +37,7 @@ pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_GET_METADATA_BATCH_METHOD: &str = "fs/getMetadataBatch";
+pub const FS_FIND_UP_METHOD: &str = "fs/findUp";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_WALK_METHOD: &str = "fs/walk";
@@ -372,6 +377,17 @@ pub struct FsGetMetadataBatchResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsFindUpParams {
+    pub start: PathUri,
+    #[serde(flatten)]
+    pub options: FindUpOptions,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+pub type FsFindUpResponse = FindUpOutcome;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
@@ -599,6 +615,9 @@ mod tests {
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
     use super::ExecParams;
+    use super::FindUpErrorPolicy;
+    use super::FindUpMatchKind;
+    use super::FsFindUpParams;
     use super::FsGetMetadataBatchResponse;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -703,6 +722,14 @@ mod tests {
             "sandbox": null,
         }))
         .expect_err("native absolute path should not deserialize as a URI");
+        serde_json::from_value::<FsFindUpParams>(serde_json::json!({
+            "start": native_path.to_string_lossy(),
+            "candidateRelativePaths": ["marker"],
+            "matchKind": FindUpMatchKind::Any,
+            "nonNotFoundErrorPolicy": FindUpErrorPolicy::Propagate,
+            "sandbox": null,
+        }))
+        .expect_err("native absolute find-up start should not deserialize as a URI");
 
         let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
