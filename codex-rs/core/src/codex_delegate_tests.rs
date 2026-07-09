@@ -1,6 +1,7 @@
 use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
+use crate::session::step_context::StepContext;
 use async_channel::bounded;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -69,7 +70,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
         Arc::clone(&codex),
         tx_out.clone(),
         session,
-        ctx,
+        StepContext::for_test(ctx),
         Arc::new(Mutex::new(HashMap::new())),
         cancel.clone(),
     ));
@@ -194,7 +195,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             Arc::clone(&parent_session.services.auth_manager),
             Arc::clone(&parent_session.services.models_manager),
             parent_session,
-            parent_ctx,
+            StepContext::for_test(parent_ctx),
             cancel_token,
             SubAgentSource::Review,
             /*initial_history*/ None,
@@ -251,7 +252,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
             handle_request_permissions(
                 codex.as_ref(),
                 &parent_session,
-                &parent_ctx,
+                &StepContext::for_test(Arc::clone(&parent_ctx)),
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
@@ -341,7 +342,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                 codex.as_ref(),
                 "child-turn-1".to_string(),
                 &parent_session,
-                &parent_ctx,
+                StepContext::for_test(Arc::clone(&parent_ctx)),
                 ExecApprovalRequestEvent {
                     call_id: "command-item-1".to_string(),
                     approval_id: Some("callback-approval-1".to_string()),
@@ -449,7 +450,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
-        &parent_ctx,
+        StepContext::for_test(Arc::clone(&parent_ctx)),
         &pending_mcp_invocations,
         &RequestUserInputEvent {
             call_id: "call-1".to_string(),
@@ -513,7 +514,7 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     };
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
-        &parent_ctx,
+        StepContext::for_test(Arc::clone(&parent_ctx)),
         &pending_mcp_invocations,
         &event,
         &cancel_token,

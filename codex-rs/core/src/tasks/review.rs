@@ -22,6 +22,7 @@ use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
@@ -70,11 +71,16 @@ impl SessionTask for ReviewTask {
             }
         }
 
+        let step_context = session
+            .session
+            .capture_step_context(Arc::clone(&ctx))
+            .refresh_env(&session.session)
+            .await;
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
             session.clone(),
-            ctx.clone(),
             user_input,
+            step_context,
             cancellation_token.clone(),
         )
         .await
@@ -95,10 +101,11 @@ impl SessionTask for ReviewTask {
 
 async fn start_review_conversation(
     session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
+    step_context: Arc<StepContext>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
+    let ctx = &step_context.turn;
     let config = ctx.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
@@ -128,7 +135,7 @@ async fn start_review_conversation(
         session.models_manager(),
         input,
         session.clone_session(),
-        ctx.clone(),
+        step_context,
         cancellation_token,
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,

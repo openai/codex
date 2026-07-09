@@ -226,7 +226,7 @@ impl ShellCommandHandler {
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
-            turn,
+            step_context,
             turn_environment,
             tracker,
             call_id,

@@ -87,7 +87,7 @@ pub(super) async fn run_remote_compact_attempt(
             &turn_context.model_info,
             turn_state,
             CompactConversationRequestSettings {
-                effort: turn_context.reasoning_effort.clone(),
+                effort: step_context.turn.reasoning_effort.clone(),
                 summary: turn_context.reasoning_summary,
                 service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
                     None

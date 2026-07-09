@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::tests::make_session_and_context_with_rx;
+use crate::session::step_context::StepContext;
 use crate::state::ActiveTurn;
 
 async fn wait_until_held(pause_state: &mut watch::Receiver<bool>) {
@@ -100,12 +101,14 @@ async fn patch_approval_holds_an_elicitation_until_response() {
 #[tokio::test]
 async fn permission_request_holds_an_elicitation_until_response() {
     let (session, turn_context, events) = make_session_and_context_with_rx().await;
+    let step_context = StepContext::for_test(turn_context.clone());
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
     let request = tokio::spawn({
         let session = session.clone();
         let turn_context = turn_context.clone();
+        let step_context = step_context.clone();
         async move {
             let environment = turn_context
                 .environments
@@ -114,7 +117,7 @@ async fn permission_request_holds_an_elicitation_until_response() {
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    &step_context,
                     "call-1".to_string(),
                     RequestPermissionsArgs {
                         environment_id: None,

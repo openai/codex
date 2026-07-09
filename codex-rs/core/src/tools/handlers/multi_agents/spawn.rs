@@ -48,6 +48,7 @@ async fn handle_spawn_agent(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         payload,
         call_id,
         ..
@@ -86,8 +87,10 @@ async fn handle_spawn_agent(
             }),
         )
         .await;
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        step_context.as_ref(),
+    )?;
     if let Some(service_tier) = args.service_tier.as_ref() {
         config.service_tier = Some(service_tier.clone());
     }

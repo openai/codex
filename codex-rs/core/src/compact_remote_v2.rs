@@ -21,7 +21,6 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -83,13 +82,9 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
 ) -> CodexResult<()> {
-    // Standalone compaction is its own request boundary, so it captures a fresh step.
-    let step_context = sess
-        .capture_step_context(Arc::clone(&turn_context))
-        .refresh_env(&sess)
-        .await;
+    let turn_context = Arc::clone(&step_context.turn);
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         trace_id: turn_context.trace_id.clone(),
@@ -286,7 +281,7 @@ async fn run_remote_compact_task_inner_impl(
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
-        compaction_turn_context.as_ref(),
+        step_context.as_ref(),
         compacted_history,
         &initial_context_injection,
     )
@@ -295,7 +290,7 @@ async fn run_remote_compact_task_inner_impl(
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage(_) => {
-            Some(compaction_turn_context.to_turn_context_item())
+            Some(step_context.to_turn_context_item())
         }
     };
     let compacted_item = CompactedItem {
@@ -332,11 +327,12 @@ struct RemoteCompactionV2Output {
 
 async fn run_remote_compaction_request_v2(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
 ) -> CodexResult<RemoteCompactionV2Output> {
+    let turn_context = step_context.turn.as_ref();
     let max_retries = turn_context
         .provider
         .info()
@@ -349,7 +345,7 @@ async fn run_remote_compaction_request_v2(
                 prompt,
                 &turn_context.model_info,
                 &turn_context.session_telemetry,
-                turn_context.reasoning_effort.clone(),
+                step_context.turn.reasoning_effort.clone(),
                 turn_context.reasoning_summary,
                 turn_context.config.service_tier.clone(),
                 responses_metadata,

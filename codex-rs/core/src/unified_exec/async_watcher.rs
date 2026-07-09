@@ -47,7 +47,7 @@ pub(crate) fn start_streaming_output(
     let exit_token = process.cancellation_token();
 
     let session_ref = Arc::clone(&context.session);
-    let turn_ref = Arc::clone(&context.turn);
+    let turn_ref = Arc::clone(&context.step_context.turn);
     let call_id = context.call_id.clone();
 
     tokio::spawn(async move {

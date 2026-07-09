@@ -311,7 +311,7 @@ async fn schedule_startup_prewarm_inner(
             &startup_prompt,
             &startup_turn_context.model_info,
             &startup_turn_context.session_telemetry,
-            startup_turn_context.reasoning_effort.clone(),
+            step_context.turn.reasoning_effort.clone(),
             startup_turn_context.reasoning_summary,
             startup_turn_context.config.service_tier.clone(),
             &responses_metadata,

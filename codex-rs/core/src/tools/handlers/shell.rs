@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
@@ -53,7 +53,7 @@ struct RunExecLikeArgs {
     additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     turn_environment: TurnEnvironment,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
@@ -70,12 +70,13 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         additional_permissions,
         prefix_rule,
         session,
-        turn,
+        step_context,
         turn_environment,
         tracker,
         call_id,
         shell_runtime_backend,
     } = args;
+    let turn = step_context.turn.clone();
 
     let fs = turn_environment.environment.get_filesystem();
 
@@ -145,7 +146,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         fs.as_ref(),
         turn_environment.clone(),
         session.clone(),
-        turn.clone(),
+        step_context.clone(),
         Some(&tracker),
         &call_id,
         tool_name.name.as_str(),
@@ -205,7 +206,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let mut runtime = ShellRuntime::for_shell_command(shell_runtime_backend);
     let tool_ctx = ToolCtx {
         session: session.clone(),
-        turn: turn.clone(),
+        step_context,
         call_id: call_id.clone(),
         tool_name,
     };

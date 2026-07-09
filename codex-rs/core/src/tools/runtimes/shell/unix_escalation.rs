@@ -200,8 +200,8 @@ pub(super) async fn try_run_zsh_fork(
         arg0,
         sandbox_policy_cwd,
         windows_sandbox_workspace_roots,
-        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.step_context.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.step_context.turn.config.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -235,11 +235,11 @@ pub(super) async fn try_run_zsh_fork(
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
-        turn: Arc::clone(&ctx.turn),
+        step_context: Arc::clone(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: ctx.turn.approval_policy.value(),
+        approval_policy: ctx.step_context.turn.approval_policy.value(),
         permission_profile: command_executor.permission_profile.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
@@ -313,17 +313,17 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd,
         windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
-        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.step_context.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.step_context.turn.config.features.use_legacy_landlock(),
     };
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
-        turn: Arc::clone(&ctx.turn),
+        step_context: Arc::clone(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
-        approval_policy: ctx.turn.approval_policy.value(),
+        approval_policy: ctx.step_context.turn.approval_policy.value(),
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
@@ -354,7 +354,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
     session: Arc<crate::session::session::Session>,
-    turn: Arc<crate::session::turn_context::TurnContext>,
+    step_context: Arc<crate::session::step_context::StepContext>,
     call_id: String,
     environment_id: String,
     tool_name: GuardianCommandSource,
@@ -450,7 +450,8 @@ impl CoreShellActionProvider {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.clone();
         let session = self.session.clone();
-        let turn = self.turn.clone();
+        let step_context = self.step_context.clone();
+        let turn = step_context.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
@@ -493,7 +494,7 @@ impl CoreShellActionProvider {
                 if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
-                        &turn,
+                        step_context,
                         review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
@@ -651,7 +652,7 @@ impl CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
-                    windows_sandbox_level: self.turn.windows_sandbox_level,
+                    windows_sandbox_level: self.step_context.turn.windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
