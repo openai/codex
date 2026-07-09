@@ -123,6 +123,7 @@ impl AppsTestServer {
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -428,6 +429,7 @@ async fn mount_streamable_http_json_rpc_at_path(
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
+    tool_call_delay: Option<Duration>,
 ) {
     mount_streamable_http_json_rpc_with_startup_control(
         server,
