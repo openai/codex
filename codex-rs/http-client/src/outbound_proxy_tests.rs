@@ -10,6 +10,48 @@ struct MapEnv {
     values: HashMap<String, String>,
 }
 
+fn spawn_proxy_listener() -> (
+    std::net::SocketAddr,
+    std::thread::JoinHandle<Option<String>>,
+) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
+    let proxy_addr = listener
+        .local_addr()
+        .expect("local proxy listener should have an address");
+    listener
+        .set_nonblocking(true)
+        .expect("proxy listener should become nonblocking");
+    let proxy_thread = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("proxy stream should get a read timeout");
+                    let mut buffer = [0_u8; 4096];
+                    let size = stream.read(&mut buffer).expect("proxy should read request");
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .expect("proxy should write response");
+                    break Some(String::from_utf8_lossy(&buffer[..size]).into_owned());
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("proxy should accept a request: {error}"),
+            }
+        }
+    });
+    (proxy_addr, proxy_thread)
+}
+
 #[test]
 fn websocket_route_uses_http_equivalent_for_system_resolution() {
     let route = resolve_proxy_route(
@@ -97,20 +139,7 @@ fn environment_fallback_reads_injected_proxy_environment() {
 
 #[tokio::test]
 async fn enabled_environment_proxy_routes_request_through_proxy() {
-    let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
-    let proxy_addr = listener
-        .local_addr()
-        .expect("local proxy listener should have an address");
-    let proxy_thread = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("proxy should accept a request");
-        let mut buffer = [0_u8; 4096];
-        let size = stream.read(&mut buffer).expect("proxy should read request");
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .expect("proxy should write response");
-        String::from_utf8_lossy(&buffer[..size]).into_owned()
-    });
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
     let env = MapEnv {
         values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
     };
@@ -134,12 +163,50 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
         .send()
         .await
         .expect("request should use local proxy");
-    let proxy_request = proxy_thread.join().expect("proxy thread should finish");
+    let proxy_request = proxy_thread
+        .join()
+        .expect("proxy thread should finish")
+        .expect("proxy should receive request before timeout");
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert_eq!(
         proxy_request.lines().next(),
         Some("GET http://enabled-proxy.test/proxy-check HTTP/1.1")
+    );
+}
+
+#[tokio::test]
+async fn route_aware_pool_uses_respect_system_proxy_route_for_exact_url() {
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
+    let request_url = "http://route-aware-proxy.test/proxy-check?pac=exact";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+
+    let client = tokio::time::timeout(Duration::from_secs(2), pool.client_for_url(request_url))
+        .await
+        .expect("route resolution should finish")
+        .expect("route-aware client should build");
+    let response = tokio::time::timeout(Duration::from_secs(2), client.get(request_url).send())
+        .await
+        .expect("proxy request should finish")
+        .expect("request should use local proxy");
+    let proxy_request = proxy_thread
+        .join()
+        .expect("proxy thread should finish")
+        .expect("proxy should receive request before timeout");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://route-aware-proxy.test/proxy-check?pac=exact HTTP/1.1")
     );
 }
 

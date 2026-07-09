@@ -28,9 +28,12 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new(base_url: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> anyhow::Result<Self> {
         let base_url = base_url.into();
-        let backend = backend::Client::new(base_url.clone())?;
+        let backend = backend::Client::new(base_url.clone(), http_client_factory)?;
         Ok(Self { base_url, backend })
     }
 
