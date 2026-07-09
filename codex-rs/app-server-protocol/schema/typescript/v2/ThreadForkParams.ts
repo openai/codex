@@ -21,7 +21,7 @@ export type ThreadForkParams = {threadId: string, /**
  * Optional last turn id to fork through, inclusive.
  *
  * When specified, turns after `last_turn_id` are omitted from the fork.
- * The referenced turn cannot be in progress.
+ * The referenced turn must report `isForkable: true` and cannot be in progress.
  */
 lastTurnId?: string | null, /**
  * Configuration overrides for the forked thread, if any.
