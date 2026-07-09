@@ -593,7 +593,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         (
             "environment_ids".to_string(),
             JsonSchema::array(
-                JsonSchema::string(None),
+                JsonSchema::string(/*description*/ None),
                 Some(SPAWN_AGENT_ENVIRONMENT_IDS_DESCRIPTION.to_string()),
             ),
         ),
@@ -642,7 +642,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "environment_ids".to_string(),
             JsonSchema::array(
-                JsonSchema::string(None),
+                JsonSchema::string(/*description*/ None),
                 Some(SPAWN_AGENT_ENVIRONMENT_IDS_DESCRIPTION.to_string()),
             ),
         ),

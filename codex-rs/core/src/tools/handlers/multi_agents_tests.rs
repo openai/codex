@@ -188,8 +188,8 @@ async fn spawn_agent_environment_ids_omitted_inherits_parent_environments() {
     let (_session, turn) = make_session_and_context().await;
     let turn = with_windows_environment(turn);
 
-    let selections =
-        spawn_agent_environment_selections(&turn, None).expect("omitted ids should inherit");
+    let selections = spawn_agent_environment_selections(&turn, /*environment_ids*/ None)
+        .expect("omitted ids should inherit");
 
     assert_eq!(selections, turn.environments.to_selections());
 }

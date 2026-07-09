@@ -550,7 +550,10 @@ async fn spawned_agent_can_restrict_inherited_environments() -> Result<()> {
 
     let child_followup = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, LOCAL_EXEC_CALL_ID),
+        |req: &wiremock::Request| {
+            body_contains(req, LOCAL_EXEC_CALL_ID)
+                && body_contains(req, "unknown turn environment id")
+        },
         sse(vec![
             ev_response_created("resp-child-2"),
             ev_assistant_message("msg-child-2", "child done"),
