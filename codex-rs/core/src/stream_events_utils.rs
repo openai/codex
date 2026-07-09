@@ -310,6 +310,7 @@ pub(crate) type InFlightFuture<'f> =
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
+    pub tool_call_emitted: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
@@ -409,8 +410,10 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let tool_call = ToolRouter::build_tool_call(item.clone());
+    output.tool_call_emitted = !matches!(&tool_call, Ok(None));
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    match tool_call {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess

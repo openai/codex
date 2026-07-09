@@ -301,6 +301,7 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    tool_call_emitted: _,
                 } = sampling_request_output;
                 can_drain_pending_input = true;
                 let (has_pending_input, token_status, estimated_token_count) = async {
@@ -1398,8 +1399,9 @@ pub(crate) async fn built_tools(
 
 #[derive(Debug)]
 pub(crate) struct SamplingRequestResult {
-    needs_follow_up: bool,
+    pub(crate) needs_follow_up: bool,
     last_agent_message: Option<String>,
+    pub(crate) tool_call_emitted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2036,6 +2038,7 @@ async fn try_run_sampling_request(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
+    let mut tool_call_emitted = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -2181,11 +2184,13 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                tool_call_emitted |= output_result.tool_call_emitted;
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
+                        tool_call_emitted,
                     });
                 }
             }
@@ -2345,6 +2350,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    tool_call_emitted,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

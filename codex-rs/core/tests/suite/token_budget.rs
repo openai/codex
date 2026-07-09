@@ -41,6 +41,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -954,13 +955,16 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() -> Result<()> {
+async fn token_budget_auto_compact_fallback_allows_reasoning_before_one_tool_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let trigger_call_id = "token-budget-trigger-call";
     let first_fallback_call_id = "token-budget-fallback-call-1";
     let second_fallback_call_id = "token-budget-fallback-call-2";
+    let mut fallback_reasoning_completed =
+        ev_completed_with_tokens("fallback-reasoning", /*total_tokens*/ 10);
+    fallback_reasoning_completed["response"]["end_turn"] = json!(false);
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -968,6 +972,14 @@ async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() ->
                 ev_response_created("resp-1"),
                 ev_function_call(trigger_call_id, "get_context_remaining", "{}"),
                 ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
+            ]),
+            sse(vec![
+                ev_reasoning_item(
+                    "fallback-reasoning-item",
+                    &["I should persist token-budget fallback state."],
+                    &[],
+                ),
+                fallback_reasoning_completed,
             ]),
             // Deliberately return two calls even though the request disables parallel tool calls.
             // The fallback runtime must execute only the first one.
@@ -1021,8 +1033,8 @@ async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() ->
     let requests = responses.requests();
     assert_eq!(
         requests.len(),
-        3,
-        "expected initial, fallback, and post-rollover sampling requests"
+        4,
+        "expected initial, reasoning fallback, tool fallback, and post-rollover sampling requests"
     );
 
     let thread_id = test.session_configured.thread_id;
@@ -1048,13 +1060,27 @@ async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() ->
         fallback_request.body_json().get("parallel_tool_calls"),
         Some(&Value::Bool(false))
     );
+    let tool_fallback_request = &requests[2];
+    assert_eq!(
+        token_budget_contexts(tool_fallback_request),
+        initial_context,
+        "tool fallback sampling should remain in the old context window"
+    );
+    assert!(
+        tool_fallback_request.body_contains_text("I should persist token-budget fallback state."),
+        "the tool-call request should include the preceding reasoning item"
+    );
+    assert_eq!(
+        tool_fallback_request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(false))
+    );
     assert_eq!(
         tool_calls.load(Ordering::SeqCst),
         1,
         "only one extension tool call may execute during fallback"
     );
 
-    let post_rollover_request = &requests[2];
+    let post_rollover_request = &requests[3];
     let post_rollover_context = token_budget_contexts(post_rollover_request);
     assert_eq!(post_rollover_context.len(), 1);
     let (new_first_window_id, previous_window_id, new_window_id) =
@@ -1064,6 +1090,7 @@ async fn token_budget_auto_compact_fallback_runs_in_old_window_before_reset() ->
     assert_ne!(new_window_id, old_window_id);
     for fallback_artifact in [
         TOKEN_BUDGET_FALLBACK_PROMPT,
+        "I should persist token-budget fallback state.",
         first_fallback_call_id,
         second_fallback_call_id,
         "first-fallback-state",

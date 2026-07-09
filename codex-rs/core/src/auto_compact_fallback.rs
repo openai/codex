@@ -17,7 +17,8 @@ use crate::session::turn::run_sampling_request;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
 /// Runs the optional, extension-configured turn immediately before an automatic compaction
-/// rollover. Tool follow-up inference is ignored.
+/// rollover. Non-tool responses may continue sampling, but the first response containing a tool
+/// call is terminal for the fallback after its tool output is recorded.
 ///
 /// The returned step refreshes request-scoped world state after any fallback tool side effects while
 /// retaining the model that successfully performed compaction.
@@ -67,10 +68,6 @@ pub(crate) async fn run_auto_compact_fallback(
         window_id,
         CodexResponsesRequestKind::AutoCompactFallback,
     );
-    let input = sess
-        .clone_history()
-        .await
-        .for_prompt(&restricted_turn.model_info.input_modalities);
     let turn_diff_tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
     let cancellation_token = sess
         .active_turn_context_and_cancellation_token()
@@ -79,18 +76,28 @@ pub(crate) async fn run_auto_compact_fallback(
         .unwrap_or_else(CancellationToken::new);
 
     let _elicitation_guard = McpElicitationAutoDenyGuard::new(restricted_step.mcp.manager_arc());
-    run_sampling_request(
-        Arc::clone(sess),
-        restricted_step,
-        Arc::clone(&restricted_turn.extension_data),
-        turn_diff_tracker,
-        client_session,
-        &responses_metadata,
-        input,
-        SamplingRequestOptions::auto_compact_fallback(),
-        cancellation_token,
-    )
-    .await?;
+    loop {
+        let input = sess
+            .clone_history()
+            .await
+            .for_prompt(&restricted_turn.model_info.input_modalities);
+        let (result, _) = run_sampling_request(
+            Arc::clone(sess),
+            Arc::clone(&restricted_step),
+            Arc::clone(&restricted_turn.extension_data),
+            Arc::clone(&turn_diff_tracker),
+            client_session,
+            &responses_metadata,
+            input,
+            SamplingRequestOptions::auto_compact_fallback(),
+            cancellation_token.child_token(),
+        )
+        .await?;
+
+        if result.tool_call_emitted || !result.needs_follow_up {
+            break;
+        }
+    }
 
     Ok(Some(
         sess.capture_step_context(Arc::clone(turn_context)).await,

@@ -1961,10 +1961,13 @@ async fn auto_compact_fallback_is_gated_by_feature_flag() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
+async fn auto_compact_fallback_allows_reasoning_before_one_tool_call() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
+    let mut fallback_reasoning_completed =
+        ev_completed_with_tokens("fallback-reasoning-response", /*total_tokens*/ 10);
+    fallback_reasoning_completed["response"]["end_turn"] = json!(false);
     let request_log = mount_sse_sequence(
         &server,
         vec![
@@ -1975,6 +1978,14 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
             sse(vec![
                 ev_assistant_message("compact-message", AUTO_SUMMARY_TEXT),
                 ev_completed_with_tokens("compact-response", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_reasoning_item(
+                    "fallback-reasoning",
+                    &["I should record fallback state before rollover."],
+                    &[],
+                ),
+                fallback_reasoning_completed,
             ]),
             // Deliberately violate `parallel_tool_calls: false`: the fallback
             // runtime must still execute no more than one tool call.
@@ -2024,8 +2035,8 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        4,
-        "expected initial, compact, one fallback sample, and post-rollover requests"
+        5,
+        "expected initial, compact, reasoning fallback, tool fallback, and post-rollover requests"
     );
     assert!(
         requests[1].body_contains_text(SUMMARIZATION_PROMPT),
@@ -2045,6 +2056,16 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
         Some(&Value::Bool(false)),
         "fallback sampling must disable parallel tool calls"
     );
+    let tool_fallback_request = &requests[3];
+    assert!(
+        tool_fallback_request.body_contains_text("I should record fallback state before rollover."),
+        "the tool-call fallback request should include the preceding reasoning item"
+    );
+    assert_eq!(
+        tool_fallback_request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(false)),
+        "every fallback sampling request must disable parallel tool calls"
+    );
     assert_eq!(prompt_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         tool_calls.load(Ordering::SeqCst),
@@ -2052,7 +2073,7 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
         "fallback runtime should execute at most one tool call"
     );
 
-    let post_rollover_request = &requests[3];
+    let post_rollover_request = &requests[4];
     let post_rollover_body = post_rollover_request.body_json().to_string();
     assert!(
         post_rollover_body.contains("continue after compaction"),
@@ -2064,6 +2085,7 @@ async fn auto_compact_fallback_runs_one_tool_once_before_rollover() {
     );
     assert!(
         !post_rollover_body.contains(AUTO_COMPACT_FALLBACK_PROMPT)
+            && !post_rollover_body.contains("I should record fallback state before rollover.")
             && !post_rollover_body.contains("fallback-call-1")
             && !post_rollover_body.contains("fallback-call-2"),
         "fallback-only prompt and tool artifacts should stay in the old window"
