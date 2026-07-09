@@ -450,21 +450,9 @@ pub(crate) async fn run_turn(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
-                let mut retry_delay = None;
-                for contributor in sess.services.extensions.turn_lifecycle_contributors() {
-                    retry_delay = contributor
-                        .retry_delay_for_turn_error(codex_extension_api::TurnErrorInput {
-                            turn_id: turn_context.sub_id.as_str(),
-                            error: error.clone(),
-                            session_store: &sess.services.session_extension_data,
-                            thread_store: &sess.services.thread_extension_data,
-                            turn_store: turn_context.extension_data.as_ref(),
-                        })
-                        .await;
-                    if retry_delay.is_some() {
-                        break;
-                    }
-                }
+                let retry_delay = sess
+                    .retry_delay_for_turn_error(turn_context.as_ref(), error.clone())
+                    .await;
                 let error_event = e.to_error_event(/*message_prefix*/ None);
                 if let Some(delay) = retry_delay {
                     sess.send_event(
@@ -510,6 +498,14 @@ pub(crate) async fn run_turn(
                             }
                         }
                     };
+                    if !retry_interrupted
+                        && sess
+                            .retry_delay_for_turn_error(turn_context.as_ref(), error.clone())
+                            .await
+                            .is_none()
+                    {
+                        break;
+                    }
                     retrying_sampling_without_input = !retry_interrupted;
                     can_drain_pending_input = true;
                     continue;
