@@ -11,6 +11,7 @@ pub(crate) mod metadata;
 mod persistence_metrics;
 pub(crate) mod policy;
 pub(crate) mod recorder;
+mod reverse_jsonl_scanner;
 pub(crate) mod search;
 pub(crate) mod session_index;
 mod sqlite_metrics;
