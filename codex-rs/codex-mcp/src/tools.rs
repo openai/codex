@@ -49,6 +49,11 @@ pub struct ToolInfo {
     pub namespace_description: Option<String>,
     /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
+    /// Optional provided-file fields accepted by each declared `openai/fileParams`
+    /// argument. This is derived from the raw MCP schema before file arguments are
+    /// masked as local paths for the model.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub openai_file_input_optional_fields: HashMap<String, Vec<String>>,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]
@@ -261,6 +266,107 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+
+#[derive(Default)]
+struct OpenAiFileSchemaInfo {
+    accepts_mime_type: bool,
+    accepts_file_name: bool,
+}
+
+pub(crate) fn declared_openai_file_input_optional_fields(
+    tool: &Tool,
+) -> HashMap<String, Vec<String>> {
+    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
+    let properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(JsonValue::as_object);
+
+    file_params
+        .into_iter()
+        .map(|field_name| {
+            let optional_fields = properties
+                .and_then(|properties| properties.get(&field_name))
+                .map(|schema| {
+                    let schema_info = openai_file_schema_info(schema, tool.input_schema.as_ref());
+                    let mut optional_fields = Vec::new();
+                    if schema_info.accepts_mime_type {
+                        optional_fields.push("mime_type".to_string());
+                    }
+                    if schema_info.accepts_file_name {
+                        optional_fields.push("file_name".to_string());
+                    }
+                    optional_fields
+                })
+                .unwrap_or_default();
+            (field_name, optional_fields)
+        })
+        .collect()
+}
+
+fn openai_file_schema_info(
+    schema: &JsonValue,
+    root_schema: &Map<String, JsonValue>,
+) -> OpenAiFileSchemaInfo {
+    let mut info = OpenAiFileSchemaInfo::default();
+    let mut pending = vec![schema];
+    let mut visited_refs = HashSet::new();
+
+    while let Some(schema) = pending.pop() {
+        let Some(schema) = schema.as_object() else {
+            continue;
+        };
+
+        if let Some(schema_ref) = schema.get("$ref").and_then(JsonValue::as_str)
+            && visited_refs.insert(schema_ref)
+            && let Some(referenced_schema) = resolve_local_schema_ref(root_schema, schema_ref)
+        {
+            pending.push(referenced_schema);
+        }
+
+        for keyword in ["anyOf", "oneOf", "allOf"] {
+            if let Some(variants) = schema.get(keyword).and_then(JsonValue::as_array) {
+                pending.extend(variants);
+            }
+        }
+
+        if schema.get("type").and_then(JsonValue::as_str) == Some("array") {
+            if let Some(items) = schema.get("items") {
+                pending.push(items);
+            }
+            continue;
+        }
+
+        let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) else {
+            continue;
+        };
+        info.accepts_mime_type |= properties.contains_key("mime_type");
+        info.accepts_file_name |= properties.contains_key("file_name");
+    }
+
+    info
+}
+
+fn resolve_local_schema_ref<'a>(
+    root_schema: &'a Map<String, JsonValue>,
+    schema_ref: &str,
+) -> Option<&'a JsonValue> {
+    let pointer = schema_ref.strip_prefix("#/")?;
+    let mut segments = pointer.split('/');
+    let first_segment = segments.next()?.replace("~1", "/").replace("~0", "~");
+    let mut referenced_schema = root_schema.get(&first_segment)?;
+
+    for segment in segments {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        referenced_schema = match referenced_schema {
+            JsonValue::Object(object) => object.get(&segment)?,
+            JsonValue::Array(array) => array.get(segment.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+
+    Some(referenced_schema)
+}
 
 fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
     let Some(properties) = input_schema

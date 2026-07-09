@@ -34,6 +34,7 @@ use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
+use crate::tools::declared_openai_file_input_optional_fields;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
@@ -575,6 +576,8 @@ impl McpConnectionManager {
         let tools = filter_tools(tools, &managed_client.tool_filter)
             .into_iter()
             .map(|mut tool| {
+                tool.openai_file_input_optional_fields =
+                    declared_openai_file_input_optional_fields(&tool.tool);
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 self.with_server_metadata(tool)
             });
