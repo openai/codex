@@ -26,6 +26,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::TestTargetOs;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
@@ -48,6 +49,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -2024,8 +2026,13 @@ async fn permission_request_hook_allow_bypasses_strict_auto_review() -> Result<(
     let server = start_mock_server().await;
     let permission_call_id = "strict-hook-permissions";
     let command_call_id = "strict-hook-shell-command";
-    let marker = std::env::temp_dir().join("strict-hook-shell-command-marker");
-    let command = format!("rm -f {}", marker.display());
+    let marker_name = "strict-hook-shell-command-marker";
+    let command = match test_target_os() {
+        TestTargetOs::Linux | TestTargetOs::MacOs => format!("rm -f {marker_name}"),
+        TestTargetOs::Windows => {
+            format!("Remove-Item -Force -ErrorAction SilentlyContinue {marker_name}")
+        }
+    };
     let requested_permissions = RequestPermissionProfile {
         network: Some(NetworkPermissions {
             enabled: Some(true),
@@ -2079,9 +2086,17 @@ async fn permission_request_hook_allow_bypasses_strict_auto_review() -> Result<(
                 .enable(Feature::RequestPermissionsTool)
                 .expect("test config should allow feature update");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
-    fs::write(&marker, "seed").context("create strict auto-review marker")?;
+    let marker = test
+        .executor_environment()
+        .selection()
+        .cwd
+        .join(marker_name)?;
+    test.fs()
+        .write_file(&marker, b"seed".to_vec(), /*sandbox*/ None)
+        .await
+        .context("create strict auto-review marker")?;
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
@@ -2130,7 +2145,10 @@ async fn permission_request_hook_allow_bypasses_strict_auto_review() -> Result<(
     assert_eq!(requests.len(), 3);
     requests[2].function_call_output(command_call_id);
     assert!(
-        !marker.exists(),
+        test.fs()
+            .read_file(&marker, /*sandbox*/ None)
+            .await
+            .is_err(),
         "hook-approved command should remove marker without Guardian review"
     );
     assert_single_permission_request_hook_input(

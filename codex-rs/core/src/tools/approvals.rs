@@ -6,6 +6,7 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -17,7 +18,6 @@ use crate::tools::sandboxing::ToolRuntime;
 use codex_config::types::ApprovalsReviewer;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -35,18 +35,11 @@ impl ApprovalReviewer {
     }
 
     fn for_reviewer(turn: &TurnContext, reviewer: ApprovalsReviewer) -> Self {
-        if Self::routes_to_guardian(turn, reviewer) {
+        if routes_approval_to_guardian_with_reviewer(turn, reviewer) {
             Self::Guardian
         } else {
             Self::User
         }
-    }
-
-    fn routes_to_guardian(turn: &TurnContext, reviewer: ApprovalsReviewer) -> bool {
-        matches!(
-            turn.approval_policy.value(),
-            AskForApproval::OnRequest | AskForApproval::Granular(_)
-        ) && reviewer == ApprovalsReviewer::AutoReview
     }
 }
 
