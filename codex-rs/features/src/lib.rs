@@ -925,11 +925,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryTool,
         key: "memories",
-        stage: Stage::Experimental {
-            name: "Memories",
-            menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
-            announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
-        },
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
