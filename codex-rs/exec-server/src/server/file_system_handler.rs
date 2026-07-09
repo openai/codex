@@ -9,10 +9,13 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::TextFilePrefix;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_FIND_UP_BATCH_MAX_REQUESTS;
 use crate::protocol::FS_GET_METADATA_BATCH_MAX_PATHS;
+use crate::protocol::FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS;
+use crate::protocol::FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -41,6 +44,9 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadTextPrefixesBatchParams;
+use crate::protocol::FsReadTextPrefixesBatchResponse;
+use crate::protocol::FsReadTextPrefixesBatchResult;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
@@ -48,6 +54,7 @@ use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
+use crate::rpc::invalid_data;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
 
@@ -126,6 +133,45 @@ impl FileSystemHandler {
         Ok(FsReadFileResponse {
             data_base64: STANDARD.encode(bytes),
         })
+    }
+
+    pub(crate) async fn read_text_prefixes_batch(
+        &self,
+        params: FsReadTextPrefixesBatchParams,
+    ) -> Result<FsReadTextPrefixesBatchResponse, JSONRPCErrorError> {
+        if params.paths.len() > FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS {
+            return Err(invalid_request(format!(
+                "text-prefix batch must not exceed {FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS} paths"
+            )));
+        }
+        if params.prefix_byte_limit > FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES {
+            return Err(invalid_request(format!(
+                "text-prefix byte limit must not exceed {FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES}"
+            )));
+        }
+        let mut results = Vec::with_capacity(params.paths.len());
+        for path in params.paths {
+            let result = self
+                .file_system
+                .read_file(&path, params.sandbox.as_ref())
+                .await
+                .and_then(|bytes| {
+                    String::from_utf8(bytes)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                })
+                .map(|text| TextFilePrefix::from_complete_text(text, params.prefix_byte_limit))
+                .map_err(map_text_read_error);
+            match result {
+                Ok(prefix) => {
+                    results.push(FsReadTextPrefixesBatchResult::Data {
+                        data_base64: STANDARD.encode(prefix.text),
+                        complete: prefix.complete,
+                    });
+                }
+                Err(error) => results.push(FsReadTextPrefixesBatchResult::Error { error }),
+            }
+        }
+        Ok(FsReadTextPrefixesBatchResponse { results })
     }
 
     pub(crate) async fn write_file(
@@ -338,6 +384,14 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
             invalid_request(err.to_string())
         }
         _ => internal_error(err.to_string()),
+    }
+}
+
+fn map_text_read_error(err: io::Error) -> JSONRPCErrorError {
+    if err.kind() == io::ErrorKind::InvalidData {
+        invalid_data(err.to_string())
+    } else {
+        map_fs_error(err)
     }
 }
 

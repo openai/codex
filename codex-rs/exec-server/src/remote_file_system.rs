@@ -19,6 +19,7 @@ use crate::FindUpOutcome;
 use crate::FindUpRequest;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::TextFilePrefix;
 use crate::WalkOptions;
 use crate::WalkOutcome;
 use crate::client::LazyRemoteExecServerClient;
@@ -38,12 +39,15 @@ use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const INVALID_DATA_ERROR_CODE: i64 = -32005;
 const METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
 const MAX_CONCURRENT_FIND_UP_FALLBACKS: usize = 8;
 
 #[path = "remote_file_stream.rs"]
 mod file_stream;
+#[path = "remote_text_prefix.rs"]
+mod text_prefix;
 
 pub(crate) struct RemoteFileSystem {
     client: LazyRemoteExecServerClient,
@@ -409,6 +413,17 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
     }
 
+    fn read_text_prefixes_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        max_bytes: usize,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<TextFilePrefix>>> {
+        Box::pin(RemoteFileSystem::read_text_prefixes_batch(
+            self, paths, max_bytes, sandbox,
+        ))
+    }
+
     fn read_file_stream<'a>(
         &'a self,
         path: &'a PathUri,
@@ -555,6 +570,9 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
         }
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
+        }
+        ExecServerError::Server { code, message } if code == INVALID_DATA_ERROR_CODE => {
+            io::Error::new(io::ErrorKind::InvalidData, message)
         }
         ExecServerError::Server { message, .. } => io::Error::other(message),
         ExecServerError::Closed | ExecServerError::Disconnected(_) => {

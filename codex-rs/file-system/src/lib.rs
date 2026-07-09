@@ -26,6 +26,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::Stream;
+use futures::StreamExt;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -37,6 +38,7 @@ use std::task::Poll;
 
 /// Maximum chunk size returned by [`ExecutorFileSystem::read_file_stream`].
 pub const FILE_READ_CHUNK_SIZE: usize = 1024 * 1024;
+const DEFAULT_BATCH_TEXT_PREFIX_READ_CONCURRENCY: usize = 64;
 const MAX_WALK_DEPTH: usize = 64;
 const MAX_WALK_DIRECTORIES: usize = 10_000;
 const MAX_WALK_ENTRIES: usize = 50_000;
@@ -68,6 +70,29 @@ pub struct FileMetadata {
     pub size: u64,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
+}
+
+/// A UTF-8 file prefix returned by a bounded text read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextFilePrefix {
+    pub text: String,
+    /// Whether `text` contains the complete file rather than a bounded prefix.
+    pub complete: bool,
+}
+
+impl TextFilePrefix {
+    /// Produces the longest prefix no larger than `max_bytes` that ends on a UTF-8 boundary.
+    pub fn from_complete_text(mut text: String, max_bytes: usize) -> Self {
+        let complete = text.len() <= max_bytes;
+        if !complete {
+            let mut end = max_bytes;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        Self { text, complete }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,6 +316,43 @@ pub trait ExecutorFileSystem: Send + Sync {
         Box::pin(async move {
             let bytes = self.read_file(path, sandbox).await?;
             String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        })
+    }
+
+    /// Reads bounded UTF-8 prefixes for multiple files, preserving path order and per-file errors.
+    ///
+    /// The complete file is decoded before its prefix is selected, so invalid UTF-8 outside the
+    /// returned prefix remains an error. Implementations with an optimized batch transport can
+    /// override this method.
+    fn read_text_prefixes_batch<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        max_bytes: usize,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<TextFilePrefix>>> {
+        self.read_text_prefixes_batch_via_reads(paths, max_bytes, sandbox)
+    }
+
+    /// Performs bounded text-prefix reads using the primitive complete-text operation.
+    ///
+    /// Optimized transports can use this as a compatibility fallback.
+    fn read_text_prefixes_batch_via_reads<'a>(
+        &'a self,
+        paths: &'a [PathUri],
+        max_bytes: usize,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<TextFilePrefix>>> {
+        Box::pin(async move {
+            let results = futures::stream::iter(paths.iter().cloned())
+                .map(|path| async move {
+                    self.read_file_text(&path, sandbox)
+                        .await
+                        .map(|text| TextFilePrefix::from_complete_text(text, max_bytes))
+                })
+                .buffered(DEFAULT_BATCH_TEXT_PREFIX_READ_CONCURRENCY)
+                .collect()
+                .await;
+            Ok(results)
         })
     }
 

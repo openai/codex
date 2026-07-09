@@ -4,6 +4,8 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FS_FIND_UP_BATCH_MAX_REQUESTS;
+use codex_exec_server::FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS;
+use codex_exec_server::FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FindUpErrorPolicy;
 use codex_exec_server::FindUpMatch;
@@ -16,6 +18,7 @@ use codex_exec_server::MAX_FIND_UP_CANDIDATES;
 use codex_exec_server::MAX_FIND_UP_TOTAL_CANDIDATE_BYTES;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::TextFilePrefix;
 use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
@@ -546,6 +549,85 @@ async fn file_system_read_file_text_returns_string(
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, "hello from trait");
 
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_text_prefix_batch_preserves_text_semantics_and_order(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let multibyte = tmp.path().join("multibyte.txt");
+    let missing = tmp.path().join("missing.txt");
+    let exact = tmp.path().join("exact.txt");
+    let invalid_tail = tmp.path().join("invalid-tail.txt");
+    std::fs::write(&multibyte, "abéz")?;
+    std::fs::write(&exact, "hey")?;
+    std::fs::write(&invalid_tail, b"abc\xff")?;
+    let paths = [&multibyte, &missing, &exact, &invalid_tail]
+        .into_iter()
+        .map(PathUri::from_host_native_path)
+        .collect::<std::io::Result<Vec<_>>>()?;
+
+    let results = file_system
+        .read_text_prefixes_batch(&paths, 3, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+
+    assert_eq!(
+        results[0].as_ref().expect("multibyte prefix"),
+        &TextFilePrefix {
+            text: "ab".to_string(),
+            complete: false,
+        }
+    );
+    assert_eq!(
+        results[1].as_ref().expect_err("missing file").kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        results[2].as_ref().expect("exact prefix"),
+        &TextFilePrefix {
+            text: "hey".to_string(),
+            complete: true,
+        }
+    );
+    assert_eq!(
+        results[3]
+            .as_ref()
+            .expect_err("invalid omitted tail")
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_text_prefix_batch_enforces_request_caps() -> Result<()> {
+    let context = create_file_system_context(FileSystemImplementation::Remote).await?;
+    let file_system = context.file_system;
+    let path = PathUri::from_host_native_path(std::env::current_dir()?)?;
+    let paths = vec![path.clone(); FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS + 1];
+
+    let path_error = file_system
+        .read_text_prefixes_batch(&paths, 1, /*sandbox*/ None)
+        .await
+        .expect_err("path cap should be enforced");
+    let prefix_error = file_system
+        .read_text_prefixes_batch(
+            &[path],
+            FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES + 1,
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("prefix cap should be enforced");
+
+    assert_eq!(path_error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(prefix_error.kind(), std::io::ErrorKind::InvalidInput);
     Ok(())
 }
 

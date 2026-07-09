@@ -61,6 +61,7 @@ use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_READ_TEXT_PREFIXES_BATCH_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
@@ -88,6 +89,8 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadTextPrefixesBatchParams;
+use crate::protocol::FsReadTextPrefixesBatchResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
@@ -674,6 +677,13 @@ impl ExecServerClient {
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
         self.call(FS_READ_FILE_METHOD, &params).await
+    }
+
+    pub async fn fs_read_text_prefixes_batch(
+        &self,
+        params: FsReadTextPrefixesBatchParams,
+    ) -> Result<FsReadTextPrefixesBatchResponse, ExecServerError> {
+        self.call(FS_READ_TEXT_PREFIXES_BATCH_METHOD, &params).await
     }
 
     pub async fn fs_open(&self, params: FsOpenParams) -> Result<FsOpenResponse, ExecServerError> {

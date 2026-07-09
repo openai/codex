@@ -31,6 +31,7 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
+pub const FS_READ_TEXT_PREFIXES_BATCH_METHOD: &str = "fs/readTextPrefixesBatch";
 pub const FS_OPEN_METHOD: &str = "fs/open";
 pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
 pub const FS_CLOSE_METHOD: &str = "fs/close";
@@ -268,6 +269,46 @@ pub struct FsReadFileParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileResponse {
     pub data_base64: String,
+}
+
+/// Maximum number of paths accepted by one `fs/readTextPrefixesBatch` request.
+pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS: usize = 64;
+/// Maximum caller-selected raw prefix size for one `fs/readTextPrefixesBatch` item.
+pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES: usize = 16 * 1024;
+/// Maximum raw prefix bytes returned by one full batch. Per-item base64 encoding expands this to
+/// at most 1,398,272 bytes before per-item JSON framing.
+pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_RAW_RESPONSE_BYTES: usize =
+    FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS * FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadTextPrefixesBatchParams {
+    /// Paths are evaluated and returned in this order.
+    pub paths: Vec<PathUri>,
+    /// Maximum raw UTF-8 bytes returned for each path.
+    pub prefix_byte_limit: usize,
+    /// One sandbox context shared by every path in the batch.
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FsReadTextPrefixesBatchResult {
+    Data {
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+        complete: bool,
+    },
+    Error {
+        error: JSONRPCErrorError,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadTextPrefixesBatchResponse {
+    /// One result for each requested path, in request order.
+    pub results: Vec<FsReadTextPrefixesBatchResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -650,6 +691,7 @@ mod tests {
     use super::FsFindUpParams;
     use super::FsGetMetadataBatchResponse;
     use super::FsReadFileParams;
+    use super::FsReadTextPrefixesBatchResponse;
     use super::HttpRequestParams;
     use super::InitializeResponse;
     use super::ProcessId;
@@ -788,6 +830,27 @@ mod tests {
             "sandbox": native_path_sandbox,
         }))
         .expect_err("native absolute sandbox cwd should not deserialize as a URI");
+    }
+
+    #[test]
+    fn read_text_prefixes_batch_mixed_results_round_trip() {
+        let serialized = serde_json::json!({
+            "results": [
+                { "type": "data", "dataBase64": "aGVsbG8=", "complete": false },
+                {
+                    "type": "error",
+                    "error": { "code": -32004, "message": "missing" },
+                },
+            ],
+        });
+        let response =
+            serde_json::from_value::<FsReadTextPrefixesBatchResponse>(serialized.clone())
+                .expect("deserialize text-prefix batch");
+
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize text-prefix batch"),
+            serialized
+        );
     }
 
     #[test]

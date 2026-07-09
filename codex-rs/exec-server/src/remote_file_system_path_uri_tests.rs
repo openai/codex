@@ -32,11 +32,13 @@ use crate::client_api::ExecServerTransportParams;
 use crate::protocol::FS_FIND_UP_BATCH_METHOD;
 use crate::protocol::FS_FIND_UP_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_READ_TEXT_PREFIXES_BATCH_METHOD;
 use crate::protocol::FsFindUpBatchParams;
 use crate::protocol::FsFindUpBatchResponse;
 use crate::protocol::FsFindUpParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadTextPrefixesBatchParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
@@ -215,6 +217,98 @@ async fn find_up_batch_method_not_found_falls_back_concurrently_and_preserves_or
             .map(|outcome| outcome.visited_ancestor_count)
             .collect::<Vec<_>>(),
         vec![1, 2]
+    );
+    server.await.expect("recording server should succeed");
+}
+
+#[tokio::test]
+async fn text_prefix_batch_method_not_found_falls_back_to_complete_read() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let path = PathUri::parse("file:///C:/Users/Alice/skill.txt").expect("valid drive URI");
+    let expected_path = path.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket).await;
+        let batch_request = match read_jsonrpc_websocket(&mut websocket).await {
+            JSONRPCMessage::Request(request)
+                if request.method == FS_READ_TEXT_PREFIXES_BATCH_METHOD =>
+            {
+                request
+            }
+            other => panic!("expected fs/readTextPrefixesBatch request, got {other:?}"),
+        };
+        let params: FsReadTextPrefixesBatchParams = serde_json::from_value(
+            batch_request
+                .params
+                .expect("text-prefix batch params should exist"),
+        )
+        .expect("text-prefix batch params should deserialize");
+        assert_eq!(params.paths, vec![expected_path.clone()]);
+        assert_eq!(params.prefix_byte_limit, 3);
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Error(JSONRPCError {
+                error: JSONRPCErrorError {
+                    code: -32601,
+                    data: None,
+                    message: "method not found".to_string(),
+                },
+                id: batch_request.id,
+            }),
+        )
+        .await;
+
+        let request = match read_jsonrpc_websocket(&mut websocket).await {
+            JSONRPCMessage::Request(request) if request.method == FS_READ_FILE_METHOD => request,
+            other => panic!("expected fs/readFile request, got {other:?}"),
+        };
+        let params: FsReadFileParams = serde_json::from_value(
+            request
+                .params
+                .clone()
+                .expect("read-file params should exist"),
+        )
+        .expect("read-file params should deserialize");
+        assert_eq!(params.path, expected_path);
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(FsReadFileResponse {
+                    data_base64: "YWJjZA==".to_string(),
+                })
+                .expect("read response should serialize"),
+            }),
+        )
+        .await;
+    });
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+    ));
+
+    let actual = file_system
+        .read_text_prefixes_batch(&[path], 3, /*sandbox*/ None)
+        .await
+        .expect("legacy fallback should succeed")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("legacy reads should succeed");
+
+    assert_eq!(
+        actual,
+        vec![TextFilePrefix {
+            text: "abc".to_string(),
+            complete: false,
+        }]
     );
     server.await.expect("recording server should succeed");
 }

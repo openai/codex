@@ -41,6 +41,8 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsReadTextPrefixesBatchParams;
+use crate::protocol::FsReadTextPrefixesBatchResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
@@ -288,6 +290,14 @@ impl ExecServerHandler {
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.write_file(params).await
+    }
+
+    pub(crate) async fn fs_read_text_prefixes_batch(
+        &self,
+        params: FsReadTextPrefixesBatchParams,
+    ) -> Result<FsReadTextPrefixesBatchResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_text_prefixes_batch(params).await
     }
 
     pub(crate) async fn fs_create_directory(
