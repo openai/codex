@@ -34,43 +34,24 @@ const COMMAND_CALL_ID: &str = "workspace-root-command";
 const PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-fn workspace_roots_read_profile() -> Result<PermissionProfile> {
-    let entries = vec![
-        FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Minimal,
-            },
-            access: FileSystemAccessMode::Read,
-        },
-        FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-            },
-            access: FileSystemAccessMode::Read,
-        },
-    ];
-    #[cfg(target_os = "linux")]
-    let entries = {
-        let mut entries = entries;
-        if !core_test_support::is_remote_test_environment() {
-            // Bubblewrap re-execs the test binary after applying the filesystem policy.
-            // Bazel places that binary outside the platform paths covered by `:minimal`.
-            entries.push(FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-                        std::env::current_exe()?,
-                    )?,
+fn workspace_roots_read_profile() -> PermissionProfile {
+    PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
                 },
                 access: FileSystemAccessMode::Read,
-            });
-        }
-        entries
-    };
-
-    Ok(PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(entries),
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]),
         NetworkSandboxPolicy::Restricted,
-    ))
+    )
 }
 
 async fn workspace_roots_test(server: &MockServer) -> Result<TestCodex> {
@@ -141,7 +122,7 @@ async fn mount_file_and_command_calls(
 }
 
 async fn submit_workspace_turn(test: &TestCodex, prompt: &str) -> Result<()> {
-    test.submit_turn_with_permission_profile(prompt, workspace_roots_read_profile()?)
+    test.submit_turn_with_permission_profile(prompt, workspace_roots_read_profile())
         .await
 }
 
