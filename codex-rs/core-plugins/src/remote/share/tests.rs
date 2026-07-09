@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_support::recorded_http_client_urls;
+use crate::test_support::recording_remote_plugin_service_config;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
@@ -23,9 +25,10 @@ use wiremock::matchers::query_param;
 use wiremock::matchers::query_param_is_missing;
 
 fn test_config(server: &MockServer) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig {
-        chatgpt_base_url: format!("{}/backend-api", server.uri()),
-    }
+    RemotePluginServiceConfig::new(
+        format!("{}/backend-api", server.uri()),
+        crate::test_support::test_http_client_factory(),
+    )
 }
 
 fn test_auth() -> CodexAuth {
@@ -174,7 +177,8 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         .unwrap()
         .len();
     let server = MockServer::start().await;
-    let config = test_config(&server);
+    let (config, selected_urls) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
     let auth = test_auth();
 
     Mock::given(method("POST"))
@@ -259,6 +263,17 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
     assert_eq!(
         local_paths::load_plugin_share_local_paths(codex_home.path()).unwrap(),
         BTreeMap::from([("plugins_123".to_string(), plugin_path)])
+    );
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![
+            format!(
+                "{}/backend-api/public/plugins/workspace/upload-url",
+                server.uri()
+            ),
+            format!("{}/upload/file_123", server.uri()),
+            format!("{}/backend-api/public/plugins/workspace", server.uri()),
+        ]
     );
 
     let requests = server.received_requests().await.unwrap_or_default();
