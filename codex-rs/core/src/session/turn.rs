@@ -224,6 +224,7 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     let mut next_step_context = Some(first_step_context);
+    let mut retrying_sampling_without_steer = false;
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -252,12 +253,15 @@ pub(crate) async fn run_turn(
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
         let sampling_request_result: CodexResult<_> = async {
-            super::time_reminder::maybe_record_current_time_reminder(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                &window_id,
-            )
-            .await?;
+            // A capacity-only retry should not grow model context or invalidate its cache.
+            if !std::mem::take(&mut retrying_sampling_without_steer) {
+                super::time_reminder::maybe_record_current_time_reminder(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &window_id,
+                )
+                .await?;
+            }
 
             if turn_context
                 .config
@@ -462,7 +466,6 @@ pub(crate) async fn run_turn(
                         break;
                     }
                 }
-                sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let error_event = e.to_error_event(/*message_prefix*/ None);
                 if let Some(delay) = retry_delay {
                     sess.send_event(
@@ -484,20 +487,26 @@ pub(crate) async fn run_turn(
                         .input_queue
                         .subscribe_activity(turn_state.as_deref())
                         .await;
-                    if pending_activity != Some(InputQueueActivity::Steer) {
-                        let _ = tokio::time::timeout(delay, async {
+                    let steered = if pending_activity == Some(InputQueueActivity::Steer) {
+                        true
+                    } else {
+                        tokio::time::timeout(delay, async {
                             while activity_rx.changed().await.is_ok() {
                                 // Mailbox activity does not represent user intent to retry now.
                                 if *activity_rx.borrow_and_update() == InputQueueActivity::Steer {
-                                    break;
+                                    return true;
                                 }
                             }
+                            false
                         })
-                        .await;
-                    }
+                        .await
+                        .unwrap_or(false)
+                    };
+                    retrying_sampling_without_steer = !steered;
                     can_drain_pending_input = true;
                     continue;
                 }
+                sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
                     .await;
                 sess.send_event(&turn_context, EventMsg::Error(error_event))
