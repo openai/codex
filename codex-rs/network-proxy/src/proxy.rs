@@ -1302,7 +1302,8 @@ mod tests {
         }));
         let proxy = NetworkProxy::builder().state(state).build().await?;
 
-        let prepared = proxy.prepare_for_optional_environment(HashMap::new(), None)?;
+        let prepared =
+            proxy.prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
 
         assert_eq!(proxy.dns_addr, None);
         assert_eq!(prepared.env.get(DNS_PROXY_ENV_KEY), None);

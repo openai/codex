@@ -13,7 +13,7 @@ use url::Url;
 
 const SANDBOX_DNS_LISTEN_ADDR: (Ipv4Addr, u16) = (Ipv4Addr::LOCALHOST, 53);
 const DNS_IO_TIMEOUT: Duration = Duration::from_secs(3);
-const MAX_DNS_MESSAGE_BYTES: usize = usize::from(u16::MAX);
+const MAX_DNS_MESSAGE_BYTES: usize = u16::MAX as usize;
 
 pub(crate) struct BoundDnsStub {
     udp_socket: UdpSocket,
