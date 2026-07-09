@@ -406,6 +406,7 @@ impl AccountRequestProcessor {
                 }
             }
 
+            set_user_model_provider_to_bedrock(&self.config_manager).await?;
             login_with_bedrock_api_key(
                 &self.config.codex_home,
                 api_key,
@@ -414,7 +415,6 @@ impl AccountRequestProcessor {
                 self.config.auth_keyring_backend_kind(),
             )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
-            set_user_model_provider_to_bedrock(&self.config_manager).await?;
             self.auth_manager.reload().await;
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
