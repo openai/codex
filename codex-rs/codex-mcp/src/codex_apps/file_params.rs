@@ -1,8 +1,10 @@
 //! Apps SDK `openai/fileParams` metadata and schema shaping.
 //!
-//! Raw provided-file schemas are inspected before the corresponding arguments
-//! are presented to the model as local paths. The derived optional-field
-//! capabilities stay on `ToolInfo` for execution-time argument rewriting.
+//! For each declared file argument, this module derives the provided-file fields
+//! accepted by its input schema and records them on `ToolInfo` for execution-time
+//! argument rewriting. It also presents file arguments to the model as local paths.
+//!
+//! See <https://developers.openai.com/apps-sdk/reference#tool-descriptor-parameters>.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
