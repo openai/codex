@@ -62,7 +62,7 @@ use tempfile::TempDir;
 use tracing::Instrument;
 use tracing_test::traced_test;
 
-const MODEL: &str = "gpt-5.3-codex";
+const MODEL: &str = "gpt-5.4";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
