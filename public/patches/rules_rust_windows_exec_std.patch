@@ -1,0 +1,178 @@
+# What: expose an exec-side Rust standard library alongside the target stdlib.
+# Why: mixed Windows toolchains compile repo crates for `windows-gnullvm`, but
+# exec-side helper binaries (build.rs, runners) may need the host MSVC stdlib.
+# The toolchain sysroot must therefore carry both stdlib trees so rustc can
+# resolve the correct one for each `--target`.
+
+diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
+--- a/rust/toolchain.bzl
++++ b/rust/toolchain.bzl
+@@ -211,6 +211,7 @@
+         clippy = None,
+         cargo_clippy = None,
+         llvm_tools = None,
++        exec_rust_std = None,
+         rust_std = None,
+         rustfmt = None,
+         linker = None):
+@@ -315,6 +316,14 @@
+         # Made available to support $(location) expansion in stdlib_linkflags and extra_rustc_flags.
+         transitive_file_sets.append(depset(ctx.files.rust_std))
+ 
++    sysroot_exec_rust_std = None
++    if exec_rust_std:
++        sysroot_exec_rust_std = _symlink_sysroot_tree(ctx, name, exec_rust_std)
++        transitive_file_sets.extend([sysroot_exec_rust_std])
++
++        # Made available to support $(location) expansion in extra_exec_rustc_flags.
++        transitive_file_sets.append(depset(ctx.files.exec_rust_std))
++
+     # Declare a file in the root of the sysroot to make locating the sysroot easy
+     sysroot_anchor = ctx.actions.declare_file("{}/rust.sysroot".format(name))
+     ctx.actions.write(
+@@ -325,6 +334,7 @@
+             "cargo-clippy: {}".format(cargo_clippy),
+             "linker: {}".format(linker),
+             "llvm_tools: {}".format(llvm_tools),
++            "exec_rust_std: {}".format(exec_rust_std),
+             "rust_std: {}".format(rust_std),
+             "rustc_lib: {}".format(rustc_lib),
+             "rustc: {}".format(rustc),
+@@ -342,6 +352,7 @@
+         cargo_clippy = sysroot_cargo_clippy,
+         clippy = sysroot_clippy,
+         linker = sysroot_linker,
++        exec_rust_std = sysroot_exec_rust_std,
+         rust_std = sysroot_rust_std,
+         rustc = sysroot_rustc,
+         rustc_lib = sysroot_rustc_lib,
+@@ -412,12 +423,14 @@
+         )
+ 
+     rust_std = ctx.attr.rust_std
++    exec_rust_std = ctx.attr.exec_rust_std if ctx.attr.exec_rust_std else rust_std
+ 
+     sysroot = _generate_sysroot(
+         ctx = ctx,
+         rustc = ctx.file.rustc,
+         rustdoc = ctx.file.rust_doc,
+         rustc_lib = ctx.attr.rustc_lib,
++        exec_rust_std = exec_rust_std,
+         rust_std = rust_std,
+         rustfmt = ctx.file.rustfmt,
+         clippy = ctx.file.clippy_driver,
+@@ -454,7 +467,7 @@
+ 
+     expanded_stdlib_linkflags = _expand_flags(ctx, "stdlib_linkflags", rust_std[rust_common.stdlib_info].srcs, make_variables)
+     expanded_extra_rustc_flags = _expand_flags(ctx, "extra_rustc_flags", rust_std[rust_common.stdlib_info].srcs, make_variables)
+-    expanded_extra_exec_rustc_flags = _expand_flags(ctx, "extra_exec_rustc_flags", rust_std[rust_common.stdlib_info].srcs, make_variables)
++    expanded_extra_exec_rustc_flags = _expand_flags(ctx, "extra_exec_rustc_flags", exec_rust_std[rust_common.stdlib_info].srcs, make_variables)
+ 
+     linking_context = cc_common.create_linking_context(
+         linker_inputs = depset([
+@@ -807,6 +820,10 @@
+             doc = "The Rust standard library.",
+             mandatory = True,
+         ),
++        "exec_rust_std": attr.label(
++            doc = "Optional Rust standard library for exec-configuration Rust tools. Defaults to rust_std.",
++            mandatory = False,
++        ),
+         "rustc": attr.label(
+             doc = "The location of the `rustc` binary. Can be a direct source or a filegroup containing one item.",
+             allow_single_file = True,
+diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.bzl
+--- a/rust/private/repository_utils.bzl
++++ b/rust/private/repository_utils.bzl
+@@ -342,6 +342,7 @@
+     name = "{toolchain_name}",
+     rust_doc = "//:rustdoc",
+     rust_std = "//:rust_std-{target_triple}",
++    exec_rust_std = {exec_rust_std_label},
+     rustc = "//:rustc",
+     linker = {linker_label},
+     linker_type = {linker_type},
+@@ -389,6 +390,7 @@
+         include_llvm_tools = False,
+         include_linker = False,
+         include_objcopy = False,
++        exec_rust_std_label = None,
+         stdlib_linkflags = None,
+         extra_rustc_flags = None,
+         extra_exec_rustc_flags = None,
+@@ -412,6 +414,7 @@
+         include_llvm_tools (bool): Whether llvm-tools are present in the toolchain.
+         include_linker (bool): Whether a linker is available in the toolchain.
+         include_objcopy (bool): Whether rust-objcopy is available in the toolchain.
++        exec_rust_std_label (str, optional): Label for an exec-side stdlib when it differs from rust_std.
+         stdlib_linkflags (list, optional): Overridden flags needed for linking to rust
+                                            stdlib, akin to BAZEL_LINKLIBS. Defaults to
+                                            None.
+@@ -465,6 +468,7 @@
+         staticlib_ext = system_to_staticlib_ext(target_triple.system),
+         dylib_ext = system_to_dylib_ext(target_triple.system),
+         allocator_library = repr(allocator_library_label),
++        exec_rust_std_label = repr(exec_rust_std_label),
+         global_allocator_library = repr(global_allocator_library_label),
+         stdlib_linkflags = stdlib_linkflags,
+         default_edition = default_edition,
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -1010,7 +1010,10 @@
+     if build_metadata and not use_json_output:
+         fail("build_metadata requires parse_json_output")
+ 
+-    use_exec_target = is_exec_configuration(ctx) and crate_info.type == "bin"
++    # Exec-configuration crates (build scripts, proc-macros, and their
++    # dependencies) must all target the exec triple so they can link against
++    # each other and the exec-side standard library.
++    use_exec_target = is_exec_configuration(ctx)
+ 
+     output_dir = getattr(crate_info.output, "dirname", None)
+     linker_script = getattr(file, "linker_script", None)
+diff --git a/rust/repositories.bzl b/rust/repositories.bzl
+--- a/rust/repositories.bzl
++++ b/rust/repositories.bzl
+@@ -574,6 +574,18 @@
+     build_components.append(rust_stdlib_content)
+     sha256s.update(rust_stdlib_sha256)
+ 
++    exec_rust_std_label = None
++    if exec_triple.str != target_triple.str:
++        exec_rust_stdlib_content, exec_rust_stdlib_sha256 = load_rust_stdlib(
++            ctx = ctx,
++            target_triple = exec_triple,
++            version = version,
++            iso_date = iso_date,
++        )
++        build_components.append(exec_rust_stdlib_content)
++        sha256s.update(exec_rust_stdlib_sha256)
++        exec_rust_std_label = "//:rust_std-{}".format(exec_triple.str)
++
+     stdlib_linkflags = None
+     if "BAZEL_RUST_STDLIB_LINKFLAGS" in ctx.os.environ:
+         stdlib_linkflags = ctx.os.environ["BAZEL_RUST_STDLIB_LINKFLAGS"].split(":")
+@@ -590,6 +602,7 @@
+         include_llvm_tools = include_llvm_tools,
+         include_linker = include_linker,
+         include_objcopy = include_objcopy,
++        exec_rust_std_label = exec_rust_std_label,
+         extra_rustc_flags = ctx.attr.extra_rustc_flags,
+         extra_exec_rustc_flags = ctx.attr.extra_exec_rustc_flags,
+         opt_level = ctx.attr.opt_level if ctx.attr.opt_level else None,
+@@ -608,6 +621,14 @@
+             iso_date = iso_date,
+         )
+         sha256s.update(rustc_dev_sha256)
++        if exec_triple.str != target_triple.str:
++            exec_rustc_dev_sha256 = load_rustc_dev_nightly(
++                ctx = ctx,
++                target_triple = exec_triple,
++                version = version,
++                iso_date = iso_date,
++            )
++            sha256s.update(exec_rustc_dev_sha256)
+ 
+     ctx.file("WORKSPACE.bazel", """workspace(name = "{}")""".format(
+         ctx.name,

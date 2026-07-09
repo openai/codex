@@ -1,0 +1,79 @@
+#!/usr/bin/env dotslash
+
+{
+  "name": "argument-comment-lint",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 3402747,
+      "hash": "blake3",
+      "digest": "a11669d2f184a2c6f226cedce1bf10d1ec478d53413c42fe80d17dd873fdb2d7",
+      "format": "tar.gz",
+      "path": "argument-comment-lint/bin/argument-comment-lint",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.117.0-alpha.2/argument-comment-lint-aarch64-apple-darwin.tar.gz"
+        },
+        {
+          "type": "github-release",
+          "repo": "https://github.com/openai/codex",
+          "tag": "rust-v0.117.0-alpha.2",
+          "name": "argument-comment-lint-aarch64-apple-darwin.tar.gz"
+        }
+      ]
+    },
+    "linux-x86_64": {
+      "size": 3869711,
+      "hash": "blake3",
+      "digest": "1015f4ba07d57edc5ec79c8f6709ddc1516f64c903e909820437a4b89d8d853a",
+      "format": "tar.gz",
+      "path": "argument-comment-lint/bin/argument-comment-lint",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.117.0-alpha.2/argument-comment-lint-x86_64-unknown-linux-gnu.tar.gz"
+        },
+        {
+          "type": "github-release",
+          "repo": "https://github.com/openai/codex",
+          "tag": "rust-v0.117.0-alpha.2",
+          "name": "argument-comment-lint-x86_64-unknown-linux-gnu.tar.gz"
+        }
+      ]
+    },
+    "linux-aarch64": {
+      "size": 3759446,
+      "hash": "blake3",
+      "digest": "91f2a31e6390ca728ad09ae1aa6b6f379c67d996efcc22956001df89f068af5b",
+      "format": "tar.gz",
+      "path": "argument-comment-lint/bin/argument-comment-lint",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.117.0-alpha.2/argument-comment-lint-aarch64-unknown-linux-gnu.tar.gz"
+        },
+        {
+          "type": "github-release",
+          "repo": "https://github.com/openai/codex",
+          "tag": "rust-v0.117.0-alpha.2",
+          "name": "argument-comment-lint-aarch64-unknown-linux-gnu.tar.gz"
+        }
+      ]
+    },
+    "windows-x86_64": {
+      "size": 3244599,
+      "hash": "blake3",
+      "digest": "dc711c6d85b1cabbe52447dda3872deb20c2e64b155da8be0ecb207c7c391683",
+      "format": "zip",
+      "path": "argument-comment-lint/bin/argument-comment-lint.exe",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.117.0-alpha.2/argument-comment-lint-x86_64-pc-windows-msvc.zip"
+        },
+        {
+          "type": "github-release",
+          "repo": "https://github.com/openai/codex",
+          "tag": "rust-v0.117.0-alpha.2",
+          "name": "argument-comment-lint-x86_64-pc-windows-msvc.zip"
+        }
+      ]
+    }
+  }
+}

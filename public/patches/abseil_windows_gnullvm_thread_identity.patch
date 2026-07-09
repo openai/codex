@@ -1,0 +1,16 @@
+# What: avoid MinGW pthread TLS linkage in Abseil thread identity selection.
+# Scope: one MinGW-specific preprocessor branch in Abseil's internal
+# thread-identity mode selection; no other Abseil behavior changes.
+
+diff --git a/absl/base/internal/thread_identity.h b/absl/base/internal/thread_identity.h
+--- a/absl/base/internal/thread_identity.h
++++ b/absl/base/internal/thread_identity.h
+@@ -217,6 +217,8 @@
+ #error ABSL_THREAD_IDENTITY_MODE cannot be directly set
+ #elif defined(ABSL_FORCE_THREAD_IDENTITY_MODE)
+ #define ABSL_THREAD_IDENTITY_MODE ABSL_FORCE_THREAD_IDENTITY_MODE
++#elif defined(__MINGW32__)
++#define ABSL_THREAD_IDENTITY_MODE ABSL_THREAD_IDENTITY_MODE_USE_CPP11
+ #elif defined(_WIN32) && !defined(__MINGW32__)
+ #define ABSL_THREAD_IDENTITY_MODE ABSL_THREAD_IDENTITY_MODE_USE_CPP11
+ #elif defined(__APPLE__) && defined(ABSL_HAVE_THREAD_LOCAL)

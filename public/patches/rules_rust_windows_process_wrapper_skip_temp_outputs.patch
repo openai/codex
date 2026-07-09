@@ -1,0 +1,15 @@
+--- a/util/process_wrapper/main.rs
++++ b/util/process_wrapper/main.rs
+@@ -213,6 +213,12 @@ fn consolidate_dependency_search_paths(
+             let file_name_lower = file_name
+                 .to_string_lossy()
+                 .to_ascii_lowercase();
++            if file_name_lower.contains(".tmp") || file_name_lower.ends_with(".rcgu.o") {
++                // MSVC link actions can leave transient `*.exe.tmp*` and
++                // per-codegen-unit `*.rcgu.o` outputs next to the final binary.
++                // Those are not stable linker search-path inputs.
++                continue;
++            }
+             if !seen.insert(file_name_lower) {
+                 continue;
+             }

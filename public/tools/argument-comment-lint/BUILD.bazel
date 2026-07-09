@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+
+exports_files(["lint_aspect.bzl"])
+
+rust_library(
+    name = "argument-comment-lint-lib",
+    srcs = [
+        "src/comment_parser.rs",
+        "src/lib.rs",
+    ],
+    crate_features = ["bazel_native"],
+    crate_name = "argument_comment_lint",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+    deps = ["@argument_comment_lint_crates//:clippy_utils"],
+)
+
+rust_binary(
+    name = "argument-comment-lint-driver",
+    srcs = ["driver.rs"],
+    crate_name = "argument_comment_lint_driver",
+    crate_root = "driver.rs",
+    edition = "2024",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":argument-comment-lint-lib",
+        "@zlib//:z",
+    ],
+)

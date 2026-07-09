@@ -495,6 +495,9 @@ def write_message_inputs(
         )
         run(["git", "config", "user.name", BOT_NAME], cwd=workspace)
         run(["git", "config", "user.email", BOT_EMAIL], cwd=workspace)
+        # The baseline creates thousands of loose objects. Avoid background GC racing
+        # TemporaryDirectory cleanup after the message bundle has been written.
+        run(["git", "config", "gc.auto", "0"], cwd=workspace)
         replace_worktree(workspace, baseline_public_tree)
         run(["git", "add", "--all"], cwd=workspace)
         run(

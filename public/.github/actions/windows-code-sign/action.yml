@@ -1,0 +1,73 @@
+name: windows-code-sign
+description: Sign Windows binaries with Azure Trusted Signing.
+inputs:
+  target:
+    description: Target triple for the artifacts to sign.
+    required: true
+  binaries:
+    description: Space-delimited binary basenames to sign.
+    default: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner"
+  client-id:
+    description: Azure Trusted Signing client ID.
+    required: true
+  tenant-id:
+    description: Azure tenant ID for Trusted Signing.
+    required: true
+  subscription-id:
+    description: Azure subscription ID for Trusted Signing.
+    required: true
+  endpoint:
+    description: Azure Trusted Signing endpoint.
+    required: true
+  account-name:
+    description: Azure Trusted Signing account name.
+    required: true
+  certificate-profile-name:
+    description: Certificate profile name for signing.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login for Trusted Signing (OIDC)
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: Prepare file list
+      id: prepare
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "files<<EOF"
+          for binary in ${BINARIES}; do
+            echo "${CARGO_TARGET_DIR}/${TARGET}/release/${binary}.exe"
+          done
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Sign Windows binaries with Azure Trusted Signing
+      uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0.5.11
+      with:
+        endpoint: ${{ inputs.endpoint }}
+        trusted-signing-account-name: ${{ inputs.account-name }}
+        certificate-profile-name: ${{ inputs.certificate-profile-name }}
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-cli-credential: false
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+        cache-dependencies: false
+        files: ${{ steps.prepare.outputs.files }}

@@ -1,0 +1,17 @@
+name: setup-msvc-env
+description: Expose an MSVC developer environment for the requested Windows target.
+inputs:
+  target:
+    description: Rust target triple that will be built on this Windows runner.
+    required: true
+  host-arch:
+    description: Optional Visual Studio host architecture override.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Expose MSVC SDK environment
+      shell: pwsh
+      run: '& "$env:GITHUB_ACTION_PATH/setup-msvc-env.ps1" -Target "${{ inputs.target }}" -HostArch "${{ inputs.host-arch }}"'

@@ -1,0 +1,46 @@
+#!/usr/bin/env dotslash
+
+// This DotSlash file wraps zstd for Windows runners.
+// The upstream release provides win32/win64 binaries; for windows-aarch64 we
+// use the win64 artifact via Windows x64 emulation.
+{
+  "name": "zstd",
+  "platforms": {
+    "windows-x86_64": {
+      "size": 1747181,
+      "hash": "sha256",
+      "digest": "acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9",
+      "format": "zip",
+      "path": "zstd-v1.5.7-win64/zstd.exe",
+      "providers": [
+        {
+          "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
+        },
+        {
+          "type": "github-release",
+          "repo": "facebook/zstd",
+          "tag": "v1.5.7",
+          "name": "zstd-v1.5.7-win64.zip"
+        }
+      ]
+    },
+    "windows-aarch64": {
+      "size": 1747181,
+      "hash": "sha256",
+      "digest": "acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9",
+      "format": "zip",
+      "path": "zstd-v1.5.7-win64/zstd.exe",
+      "providers": [
+        {
+          "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
+        },
+        {
+          "type": "github-release",
+          "repo": "facebook/zstd",
+          "tag": "v1.5.7",
+          "name": "zstd-v1.5.7-win64.zip"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,228 @@
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+# Dummy xcode config so we don't need to build xcode_locator in repo rule.
+common --xcode_version_config=//:disable_xcode
+
+common --disk_cache=~/.cache/bazel-disk-cache
+common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
+common --repository_cache=~/.cache/bazel-repo-cache
+common --remote_cache_compression
+startup --experimental_remote_repo_contents_cache
+
+common --experimental_platform_in_output_dir
+
+# Runfiles strategy rationale: codex-rs/utils/cargo-bin/README.md
+common --noenable_runfiles
+
+common --enable_platform_specific_config
+common:linux --host_platform=//:local_linux
+common:windows --host_platform=//:local_windows
+common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
+common --@llvm//config:experimental_stub_libgcc_s
+
+# TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
+# common --@rules_rust//rust/settings:pipelined_compilation
+
+common --incompatible_strict_action_env
+# Not ideal, but We need to allow dotslash to be found
+common:linux --test_env=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+common:macos --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+# Pass through some env vars Windows needs to use powershell?
+common:windows --test_env=SYSTEMROOT
+common:windows --test_env=COMSPEC
+common:windows --test_env=WINDIR
+# Rust's libtest harness runs test bodies on std-spawned threads. The default
+# 2 MiB stack can be too small for large async test futures on Windows CI; see
+# https://github.com/openai/codex/pull/19067 for the motivating failure.
+common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
+
+common --test_output=errors
+common --nobuild_runfile_links
+# These settings tune BuildBuddy/RBE behavior but do not contact a remote
+# service unless a `buildbuddy-*` configuration below supplies an endpoint.
+common --remote_download_toplevel
+common --remote_timeout=3600
+common --noexperimental_throttle_remote_action_building
+common --experimental_remote_execution_keepalive
+common --grpc_keepalive_time=30s
+
+# Opt-in remote configurations selected by
+# `.github/scripts/run_bazel_with_buildbuddy.py`. Plain Bazel commands do not
+# contact BuildBuddy unless a user selects one of these configurations.
+# Use the generic host for cache, BES, and downloads without remote execution.
+common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
+
+# Add remote execution on the generic host.
+common:buildbuddy-generic-rbe --config=buildbuddy-generic
+common:buildbuddy-generic-rbe --config=remote
+common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
+
+# Use the OpenAI tenant for cache, BES, and downloads without remote execution.
+common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --bes_results_url=https://openai.buildbuddy.io/invocation/
+common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
+
+# Add remote execution on the OpenAI tenant.
+common:buildbuddy-openai-rbe --config=buildbuddy-openai
+common:buildbuddy-openai-rbe --config=remote
+common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
+
+# This limits both in-flight executions and concurrent downloads. Even with high number
+# of jobs execution will still be limited by CPU cores, so this just pays a bit of
+# memory in exchange for higher download concurrency.
+common --jobs=30
+
+# Shared remote execution policy. The endpoint-bearing `buildbuddy-*-rbe`
+# configurations include this group; CI configs override TestRunner below
+# when tests must remain local on their runner.
+common:remote --strategy=remote
+common:remote --extra_execution_platforms=//:rbe
+common:remote --jobs=800
+# TODO(team): Evaluate if this actually helps, zbarsky is not sure, everything seems bottlenecked on `core` either way.
+# Enable pipelined compilation since we are not bound by local CPU count.
+#common:remote --@rules_rust//rust/settings:pipelined_compilation
+
+# GitHub Actions CI configs.
+common:ci --remote_download_minimal
+common:ci --keep_going
+common:ci --verbose_failures
+common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
+common:ci --build_metadata=ROLE=CI
+common:ci --build_metadata=VISIBILITY=PUBLIC
+# rules_rust derives debug level from Bazel toolchain/compilation-mode settings,
+# not Cargo profiles. Keep CI Rust actions explicit and lean.
+common:ci --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+common:ci --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
+
+# Disable disk cache in CI since we have a remote one and aren't using persistent workers.
+common:ci --disk_cache=
+
+# Shared config for the main Bazel CI workflow.
+common:ci-bazel --config=ci
+common:ci-bazel --build_metadata=TAG_workflow=bazel
+# Keep code-mode integration cases out of ordinary Bazel legs. The
+# Windows-cross config below re-enables them after generating its Windows V8
+# snapshot on the Windows runner. Also skip the ConPTY Ctrl-C integration test
+# until Windows Bazel CI can reliably interrupt foreground processes.
+common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,tests::windows_tests::conpty_ctrl_c_interrupts_powershell_foreground_child
+
+# Shared config for Bazel-backed Rust linting.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
+# Keep this deny-list in sync with `codex-rs/Cargo.toml` `[workspace.lints.clippy]`.
+# Cargo applies those lint levels to member crates that opt into `[lints] workspace = true`
+# in their own `Cargo.toml`, but `rules_rust` Bazel clippy does not read Cargo lint levels.
+# `clippy.toml` can configure lint behavior, but it cannot set allow/warn/deny/forbid levels.
+build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_invalid_type
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_lock
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::expect_used
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::identity_op
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_clamp
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_filter
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_find
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_flatten
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_map
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_memcpy
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_non_exhaustive
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_ok_or
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_range_contains
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_retain
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_strip
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_try_fold
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_unwrap_or
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_borrow
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_borrowed_reference
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_collect
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_late_init
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_option_as_deref
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_question_mark
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_update
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_clone
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_closure
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_closure_for_method_calls
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_static_lifetimes
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::trivially_copy_pass_by_ref
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::uninlined_format_args
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_filter_map
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_lazy_evaluations
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_sort_by
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_to_owned
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unwrap_used
+
+# Shared config for Bazel-backed argument-comment-lint.
+build:argument-comment-lint --aspects=//tools/argument-comment-lint:lint_aspect.bzl%rust_argument_comment_lint_aspect
+build:argument-comment-lint --output_groups=argument_comment_lint_checks
+build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
+
+# Rearrange caches on Windows so they're on the same volume as the checkout.
+common:ci-windows --config=ci-bazel
+common:ci-windows --build_metadata=TAG_os=windows
+common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+
+# We prefer to run the build actions entirely remotely so we can dial up the concurrency.
+# We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
+
+# On linux, we can do a full remote build/test, by targeting the right (x86/arm) runners, so we have coverage of both.
+# Linux crossbuilds don't work until we untangle the libc constraint mess.
+common:ci-linux --config=ci-bazel
+common:ci-linux --build_metadata=TAG_os=linux
+common:ci-linux --platforms=//:rbe
+
+# On mac, we can run all the build actions remotely but test actions locally.
+common:ci-macos --config=ci-bazel
+common:ci-macos --build_metadata=TAG_os=macos
+common:ci-macos --strategy=TestRunner=darwin-sandbox,local
+
+# On Windows, use Linux remote execution for build actions but keep test actions
+# on the Windows runner so Bazel's normal test sharding and flaky-test retries
+# still run against Windows binaries.
+common:ci-windows-cross --config=ci-windows
+common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
+common:ci-windows-cross --host_platform=//:rbe
+common:ci-windows-cross --strategy=TestRunner=local
+# V8 embeds IsolateData offsets in snapshot builtins; Windows snapshots must be
+# generated by a Windows mksnapshot binary rather than the Linux RBE host tool.
+common:ci-windows-cross --strategy=V8Mksnapshot=local
+common:ci-windows-cross --local_test_jobs=8
+common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
+# Native Windows CI still covers the PowerShell parser-process tests. The
+# cross-built gnullvm binaries currently hang in those tests when run on the
+# Windows runner. Keep V8-backed code-mode tests enabled except for the hidden
+# dynamic-tool callback test, which currently times out on Windows. This config
+# replaces the base skip list, so repeat the exact ConPTY Ctrl-C test exclusion.
+common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=command_safety::powershell_parser::tests::,suite::code_mode::code_mode_can_call_hidden_dynamic_tools,tests::windows_tests::conpty_ctrl_c_interrupts_powershell_foreground_child
+common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
+common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
+common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+
+# Linux-only V8 CI config.
+common:ci-v8 --config=ci
+common:ci-v8 --build_metadata=TAG_workflow=v8
+common:ci-v8 --build_metadata=TAG_os=linux
+
+# Source-built Bazel V8 artifacts use the in-process sandbox by default. This
+# does not affect Cargo's default prebuilt rusty_v8 path.
+common --@v8//:v8_enable_pointer_compression=True
+common --@v8//:v8_enable_sandbox=True
+
+# Keep currently published rusty_v8 release artifacts non-sandboxed until the
+# artifact migration ships matching Rust feature selection for Cargo consumers.
+common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
+common:v8-release-compat --@v8//:v8_enable_sandbox=False
+common:v8-target-x64 --@v8//bazel/config:v8_target_cpu=x64
+common:v8-target-arm64 --@v8//bazel/config:v8_target_cpu=arm64
+
+# Match rusty_v8's upstream GN release contract for published artifacts: every
+# target object uses Chromium's custom libc++ headers and the archive folds in
+# the matching runtime objects.
+common:rusty-v8-upstream-libcxx --@v8//:v8_use_rusty_v8_custom_libcxx=True
+
+# Optional per-user local overrides.
+try-import %workspace%/user.bazelrc

@@ -1,0 +1,100 @@
+name: python-runtime-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_version:
+        description: "Runtime version to publish before updating the SDK pin, for example 0.136.0 or 0.136.0a2."
+        required: true
+        type: string
+
+concurrency:
+  group: python-runtime-release-${{ inputs.runtime_version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-python-runtime:
+    name: prepare-python-runtime
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python-runtime-build.yml
+    with:
+      runtime_version: ${{ inputs.runtime_version }}
+
+  # PyPI must trust this top-level workflow for manual runtime publication.
+  publish-python-runtime:
+    if: github.repository == 'openai/codex'
+    name: publish-python-runtime
+    needs: prepare-python-runtime
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # Required for PyPI trusted publishing.
+
+    steps:
+      - name: Download Python runtime wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-runtime-wheels
+          path: dist/python-runtime
+
+      - name: Publish Python runtime wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/python-runtime
+          skip-existing: true
+
+      - name: Verify Python runtime wheels are available on PyPI
+        env:
+          PYTHON_RUNTIME_VERSION: ${{ inputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["PYTHON_RUNTIME_VERSION"]
+          tags = {
+              "macosx_10_9_x86_64",
+              "macosx_11_0_arm64",
+              "manylinux_2_17_aarch64",
+              "manylinux_2_17_x86_64",
+              "musllinux_1_1_aarch64",
+              "musllinux_1_1_x86_64",
+              "win_amd64",
+              "win_arm64",
+          }
+          expected = {
+              f"openai_codex_cli_bin-{version}-py3-none-{tag}.whl"
+              for tag in tags
+          }
+
+          try:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/openai-codex-cli-bin/{version}/json",
+                  timeout=30,
+              ) as response:
+                  payload = json.load(response)
+          except urllib.error.URLError as error:
+              print(f"Could not read runtime {version} from PyPI: {error}.")
+              raise SystemExit(1) from error
+
+          actual = {file["filename"] for file in payload["urls"]}
+          if actual != expected:
+              print(f"Missing runtime wheels: {sorted(expected - actual)}")
+              print(f"Unexpected runtime files: {sorted(actual - expected)}")
+              raise SystemExit(1)
+          PY
+            then
+              exit 0
+            fi
+            echo "Runtime wheels are not available on PyPI yet; retrying (${attempt}/30)."
+            sleep 10
+          done
+
+          echo "Runtime wheels did not become available on PyPI."
+          exit 1

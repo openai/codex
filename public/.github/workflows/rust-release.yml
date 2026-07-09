@@ -1,0 +1,1547 @@
+# Release workflow for codex-rs.
+# To release, follow a workflow like:
+# ```
+# git tag -a rust-v0.1.0 -m "Release 0.1.0"
+# git push origin rust-v0.1.0
+# ```
+#
+# Tag releases sign macOS binaries and DMGs through the protected `codesigning`
+# GitHub environment and Azure Key Vault before final verification on macOS.
+
+name: rust-release
+on:
+  push:
+    tags:
+      - "rust-v*.*.*"
+
+env:
+  CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Tag validation"
+
+          # Release runs must come from a tag.
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "❌  Not a tag ref"; exit 1; }
+
+          # Release tags must match the version in Cargo.toml.
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+
+          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
+                        | sed -E 's/version *= *"([^"]+)".*/\1/')"
+
+          [[ "${tag_ver}" == "${cargo_ver}" ]] \
+            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+
+          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
+          echo "::endgroup::"
+
+  build:
+    needs: tag-check
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    # Release builds can take a long time, so leave some headroom to avoid
+    # having to restart the full workflow due to a timeout.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      # macOS release packages archive packed dSYM bundles before stripping.
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
+      # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
+      # macOS release runners have intermittently failed to fetch nested
+      # submodules through SecureTransport/libgit2, especially libwebrtc's
+      # libyuv submodule from chromium.googlesource.com.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+          # Release artifacts intentionally ship MUSL-linked Linux binaries.
+          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+            target: x86_64-unknown-linux-musl
+            bundle: primary
+            artifact_name: x86_64-unknown-linux-musl
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            build_dmg: "false"
+          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+            target: x86_64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: x86_64-unknown-linux-musl-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+          - runner: ${{ github.event.repository.name }}-linux-arm64
+            target: aarch64-unknown-linux-musl
+            bundle: primary
+            artifact_name: aarch64-unknown-linux-musl
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            build_dmg: "false"
+          - runner: ${{ github.event.repository.name }}-linux-arm64
+            target: aarch64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: aarch64-unknown-linux-musl-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Print runner specs (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          total_ram="$(awk '/MemTotal/ {printf "%.1f GiB\n", $2 / 1024 / 1024}' /proc/meminfo)"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(uname -a)"
+          echo "CPU model: ${cpu_model}"
+          echo "Logical CPUs: $(nproc)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - name: Print runner specs (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - name: Install Linux bwrap build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Disable aws-lc jitter entropy (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Avoid problematic aws-lc jitter entropy code path on musl builders.
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Build bwrap and export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          cargo build --target "$target" --release --timings --bin bwrap
+
+          bwrap_path="target/${target}/release/bwrap"
+          if [[ ! -f "$bwrap_path" ]]; then
+            echo "bwrap binary ${bwrap_path} not found"
+            exit 1
+          fi
+
+          # Codex embeds this digest at build time and verifies the bundled
+          # bwrap resource before use. Strip bwrap before hashing so the digest
+          # covers the exact bytes that the release packages.
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+          echo "Built bwrap ${bwrap_path} with sha256:${digest}"
+
+      - name: Cargo build
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            # bwrap was built, finalized, and hashed before this build so
+            # Codex can embed the digest of the bytes that will be packaged.
+            if [[ "$binary" == "bwrap" ]]; then
+              continue
+            fi
+            build_args+=(--bin "$binary")
+          done
+          cargo build --target "$target" --release --timings "${build_args[@]}"
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Build symbols archive and strip binaries
+        shell: bash
+        run: |
+          binaries=()
+          for binary in ${{ matrix.binaries }}; do
+            # bwrap is already stripped before hashing. Its symbols are not
+            # useful enough to justify a separate pre-Codex symbols pass.
+            if [[ "$binary" == "bwrap" ]]; then
+              continue
+            fi
+            binaries+=("$binary")
+          done
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "${{ matrix.target }}" \
+            --artifact-name "${{ matrix.artifact_name }}" \
+            --release-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "symbols-dist/${{ matrix.artifact_name }}" \
+            --binaries "${binaries[*]}"
+
+      - name: Upload symbols archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-symbols
+          path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
+          if-no-files-found: error
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Stage unsigned macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dest="unsigned-dist/${target}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            unsigned_name="${binary}-${target}-unsigned"
+            unsigned_path="${dest}/${unsigned_name}"
+            if [[ ! -f "${binary_path}" ]]; then
+              echo "Binary ${binary_path} not found"
+              exit 1
+            fi
+
+            cp "${binary_path}" "${unsigned_path}"
+            tar -C "$dest" -czf "${unsigned_path}.tar.gz" "${unsigned_name}"
+            zstd -T0 -19 --rm "${unsigned_path}"
+          done
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Upload unsigned macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: codex-rs/unsigned-dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Cosign Linux artifacts
+        uses: ./.github/actions/linux-code-sign
+        with:
+          target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
+          binaries: ${{ matrix.binaries }}
+
+      - name: Stage artifacts
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          dest="dist/${{ matrix.target }}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
+            cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
+            if [[ "${{ matrix.target }}" == *linux* ]]; then
+              cp "target/${{ matrix.target }}/release/${binary}.sigstore" \
+                "$dest/${binary}-${{ matrix.target }}.sigstore"
+            fi
+          done
+
+          if [[ "${{ matrix.target }}" == *linux* && "${{ matrix.bundle }}" == "primary" ]]; then
+            bundle_root="${RUNNER_TEMP}/codex-${{ matrix.target }}-bundle"
+            rm -rf "$bundle_root"
+            mkdir -p "$bundle_root/codex-resources"
+            cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
+            cp "$dest/codex-code-mode-host-${{ matrix.target }}" "$bundle_root/codex-code-mode-host"
+            cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
+            chmod 0755 \
+              "$bundle_root/codex" \
+              "$bundle_root/codex-code-mode-host" \
+              "$bundle_root/codex-resources/bwrap"
+            tar -C "$bundle_root" -cf - codex codex-code-mode-host codex-resources/bwrap |
+              zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
+          fi
+
+          if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
+            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
+          fi
+
+      - name: Download packaged zsh manifest
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+
+      - name: Build Codex package archive
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "dist/${TARGET}" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+
+      - name: Build Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              platform_tag="macosx_11_0_arm64"
+              ;;
+            x86_64-apple-darwin)
+              platform_tag="macosx_10_9_x86_64"
+              ;;
+            aarch64-unknown-linux-musl)
+              platform_tag="manylinux_2_17_aarch64"
+              ;;
+            x86_64-unknown-linux-musl)
+              platform_tag="manylinux_2_17_x86_64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          # Do not install into the runner's system Python; macOS runners mark
+          # the Homebrew Python as externally managed under PEP 668.
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          stage_runtime_args=(
+            "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
+            stage-runtime
+            "$stage_dir"
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz"
+            --codex-version "${GITHUB_REF_NAME}"
+            --platform-tag "$platform_tag"
+          )
+          python3 "${stage_runtime_args[@]}"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheel-${{ matrix.target }}
+          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          if-no-files-found: error
+
+      - name: Compress artifacts
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          # Path that contains the uncompressed binaries for the current
+          # ${{ matrix.target }}
+          dest="dist/${{ matrix.target }}"
+
+          # For compatibility with environments that lack the `zstd` tool we
+          # additionally create a `.tar.gz` alongside every binary we publish.
+          # The end result is:
+          #   codex-<target>.zst          (existing)
+          #   codex-<target>.tar.gz       (new)
+
+          # 1. Produce a .tar.gz for every file in the directory *before* we
+          #    run `zstd --rm`, because that flag deletes the original files.
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            # Skip files that are already archives (shouldn't happen, but be
+            # safe).
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+
+            # Don't try to compress signature bundles.
+            if [[ "$base" == *.sigstore ]]; then
+              continue
+            fi
+
+            # Create per-binary tar.gz
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+            # Also create .zst and remove the uncompressed binaries to keep
+            # non-Windows artifact directories small.
+            zstd -T0 -19 --rm "$dest/$base"
+          done
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: ${{ runner.os != 'macOS' }}
+        with:
+          name: ${{ matrix.artifact_name }}
+          # Upload the per-binary .zst files, .tar.gz equivalents, and any
+          # prebuilt archives staged above.
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*
+
+  sign-macos-binaries:
+    needs: build
+    name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: codesigning
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: ${{ runner.temp }}/unsigned-macos
+
+      - name: Set up AKV PKCS11 macOS signing
+        uses: ./.github/actions/setup-akv-pkcs11-codesigning
+        with:
+          rcodesign-blob-uri: ${{ secrets.AKV_CODESIGN_RCODESIGN_BLOB_URI }}
+          rcodesign-sha256: ${{ secrets.AKV_CODESIGN_RCODESIGN_SHA256 }}
+          akv-pkcs11-library-blob-uri: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_BLOB_URI }}
+          akv-pkcs11-library-sha256: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_SHA256 }}
+          azure-client-id: ${{ secrets.AKV_CODESIGN_AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AKV_CODESIGN_TENANT }}
+          azure-subscription-id: ${{ secrets.AKV_CODESIGN_SUBSCRIPTION }}
+          key-vault-name: ${{ secrets.AKV_CODESIGN_KEY_VAULT_NAME }}
+          key-name: ${{ secrets.AKV_CODESIGN_KEY_NAME }}
+          key-version: ${{ secrets.AKV_CODESIGN_KEY_VERSION || '' }}
+          certificate-sha256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 || '' }}
+
+      - name: Sign and notarize macOS binaries
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARIES: ${{ matrix.binaries }}
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          input_dir="${RUNNER_TEMP}/unsigned-macos"
+          output_dir="${GITHUB_WORKSPACE}/signed-macos/${TARGET}"
+          report_dir="${GITHUB_WORKSPACE}/macos-binary-signing-verification/${TARGET}"
+          mkdir -p "$output_dir" "$report_dir"
+
+          for binary in ${BINARIES}; do
+            unsigned_path="${input_dir}/${binary}-${TARGET}-unsigned.zst"
+            signed_path="${output_dir}/${binary}"
+            if [[ ! -f "$unsigned_path" ]]; then
+              echo "Unsigned binary $unsigned_path not found"
+              exit 1
+            fi
+
+            zstd -d --stdout "$unsigned_path" >"$signed_path"
+            chmod 0755 "$signed_path"
+
+            entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$entitlements" ]]; then
+              echo "Entitlements file $entitlements not found"
+              exit 1
+            fi
+
+            .github/scripts/macos-signing/sign_macos_code.sh \
+              --target "$signed_path" \
+              --identity unused \
+              --deep false \
+              --identifier "$binary" \
+              --options runtime \
+              --timestamp true \
+              --entitlements "$entitlements"
+
+            mkdir -p "${report_dir}/${binary}"
+            rcodesign print-signature-info "$signed_path" \
+              >"${report_dir}/${binary}/signature-info.yaml"
+
+            .github/scripts/macos-signing/notarize_macos_binary_with_rcodesign.sh \
+              --binary "$signed_path" \
+              --report-dir "${report_dir}/${binary}"
+          done
+
+      - name: Upload signed macOS binaries
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: signed-macos/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - name: Upload binary signing verification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-binary-signing-verification
+          path: macos-binary-signing-verification/${{ matrix.target }}/
+          if-no-files-found: warn
+
+  package-macos:
+    needs: sign-macos-binaries
+    name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: macos-15-xlarge
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            build_dmg: "true"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            build_dmg: "true"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            build_dmg: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download signed macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: codex-rs/target/${{ matrix.target }}/release
+
+      - name: Verify signed macOS binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="target/${{ matrix.target }}/release/${binary}"
+            chmod 0755 "$binary_path"
+            codesign --verify --strict --verbose=2 "$binary_path"
+          done
+
+      - name: Build unsigned macOS DMG
+        if: ${{ matrix.build_dmg == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root-${target}"
+          volname="Codex (${target})"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            if [[ ! -f "$binary_path" ]]; then
+              echo "Binary $binary_path not found"
+              exit 1
+            fi
+            ditto "$binary_path" "${dmg_root}/${binary}"
+          done
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "DMG $dmg_path not found after build"
+            exit 1
+          fi
+
+      - name: Upload unsigned macOS DMG
+        if: ${{ matrix.build_dmg == 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
+          if-no-files-found: error
+
+      - name: Stage macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/${{ matrix.target }}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            # Both variants package the host, but only the primary bundle publishes
+            # standalone binary archives to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
+            cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
+          done
+
+      - name: Download packaged zsh manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+
+      - name: Build Codex package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "dist/${TARGET}" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+
+      - name: Build Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              platform_tag="macosx_11_0_arm64"
+              ;;
+            x86_64-apple-darwin)
+              platform_tag="macosx_10_9_x86_64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          python3 \
+            "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime \
+            "$stage_dir" \
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
+            --codex-version "${GITHUB_REF_NAME}" \
+            --platform-tag "$platform_tag"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheel-${{ matrix.target }}
+          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          if-no-files-found: error
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/${{ matrix.target }}"
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            zstd -T0 -19 --rm "$dest/$base"
+          done
+
+      - name: Upload packaged macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-packaged
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  sign-macos-dmg:
+    needs: package-macos
+    name: Sign macOS DMG - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: codesigning
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            artifact_name: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            artifact_name: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned macOS DMG
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          path: ${{ runner.temp }}/unsigned-dmg
+
+      - name: Set up AKV PKCS11 macOS signing
+        uses: ./.github/actions/setup-akv-pkcs11-codesigning
+        with:
+          rcodesign-blob-uri: ${{ secrets.AKV_CODESIGN_RCODESIGN_BLOB_URI }}
+          rcodesign-sha256: ${{ secrets.AKV_CODESIGN_RCODESIGN_SHA256 }}
+          akv-pkcs11-library-blob-uri: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_BLOB_URI }}
+          akv-pkcs11-library-sha256: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_SHA256 }}
+          azure-client-id: ${{ secrets.AKV_CODESIGN_AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AKV_CODESIGN_TENANT }}
+          azure-subscription-id: ${{ secrets.AKV_CODESIGN_SUBSCRIPTION }}
+          key-vault-name: ${{ secrets.AKV_CODESIGN_KEY_VAULT_NAME }}
+          key-name: ${{ secrets.AKV_CODESIGN_KEY_NAME }}
+          key-version: ${{ secrets.AKV_CODESIGN_KEY_VERSION || '' }}
+          certificate-sha256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 || '' }}
+
+      - name: Sign, notarize, and staple macOS DMG
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          dmg_path="${RUNNER_TEMP}/unsigned-dmg/codex-${TARGET}.dmg"
+          report_dir="${GITHUB_WORKSPACE}/macos-dmg-signing-verification/${TARGET}"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Unsigned DMG $dmg_path not found"
+            exit 1
+          fi
+
+          .github/scripts/macos-signing/sign_macos_code.sh \
+            --target "$dmg_path" \
+            --identity unused \
+            --deep false \
+            --timestamp true
+
+          mkdir -p "$report_dir"
+          rcodesign print-signature-info "$dmg_path" \
+            >"${report_dir}/signature-info-before-notarization.yaml"
+
+          .github/scripts/macos-signing/notarize_macos_dmg_with_rcodesign.sh \
+            --dmg "$dmg_path" \
+            --report-dir "$report_dir"
+
+          rcodesign print-signature-info "$dmg_path" \
+            >"${report_dir}/signature-info.yaml"
+
+      - name: Upload signed macOS DMG
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-signed-dmg
+          path: ${{ runner.temp }}/unsigned-dmg/codex-${{ matrix.target }}.dmg
+          if-no-files-found: error
+
+      - name: Upload DMG signing verification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-dmg-signing-verification
+          path: macos-dmg-signing-verification/${{ matrix.target }}/
+          if-no-files-found: warn
+
+  finalize-macos:
+    needs:
+      - package-macos
+      - sign-macos-dmg
+    name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: macos-15-xlarge
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            verify_dmg: "true"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            verify_dmg: "false"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            verify_dmg: "true"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server codex-code-mode-host"
+            verify_dmg: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download packaged macOS artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-packaged
+          path: codex-rs/dist/${{ matrix.target }}
+
+      - name: Download signed macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: ${{ runner.temp }}/signed-binaries
+
+      - name: Download signed macOS DMG
+        if: ${{ matrix.verify_dmg == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-dmg
+          path: ${{ runner.temp }}/signed-dmg
+
+      - name: Verify signed macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          packaged_dir="dist/${target}"
+          case "$target" in
+            aarch64-apple-darwin) expected_arch="arm64" ;;
+            x86_64-apple-darwin) expected_arch="x86_64" ;;
+            *)
+              echo "Unexpected macOS target: $target"
+              exit 1
+              ;;
+          esac
+
+          verify_signed_binary() {
+            local path="$1"
+            local binary="$2"
+            local actual_entitlements expected_entitlements normalized_actual normalized_expected
+
+            chmod 0755 "$path"
+            lipo "$path" -verify_arch "$expected_arch"
+            codesign --verify --strict --verbose=2 "$path"
+
+            expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
+            if [[ ! -f "$expected_entitlements" ]]; then
+              echo "Expected entitlements file $expected_entitlements not found"
+              exit 1
+            fi
+            actual_entitlements="$(mktemp)"
+            normalized_actual="$(mktemp)"
+            normalized_expected="$(mktemp)"
+            codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
+            diff -u "$normalized_expected" "$normalized_actual"
+            rm -f "$actual_entitlements" "$normalized_actual" "$normalized_expected"
+          }
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
+            verify_signed_binary "$binary_path" "$binary"
+
+            # The app-server package contains the host, but its standalone archives
+            # are omitted above to avoid duplicate release asset names.
+            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+              continue
+            fi
+
+            direct_archive_dir="${RUNNER_TEMP}/direct-archive-${binary}-${target}"
+            rm -rf "$direct_archive_dir"
+            mkdir -p "$direct_archive_dir"
+            tar -xzf "${packaged_dir}/${binary}-${target}.tar.gz" -C "$direct_archive_dir"
+            verify_signed_binary "${direct_archive_dir}/${binary}-${target}" "$binary"
+
+            direct_zstd_path="${RUNNER_TEMP}/${binary}-${target}-from-zstd"
+            zstd -d --stdout "${packaged_dir}/${binary}-${target}.zst" >"$direct_zstd_path"
+            verify_signed_binary "$direct_zstd_path" "$binary"
+          done
+
+          case "${{ matrix.bundle }}" in
+            primary)
+              package_stem="codex-package"
+              package_entrypoint="codex"
+              ;;
+            app-server)
+              package_stem="codex-app-server-package"
+              package_entrypoint="codex-app-server"
+              ;;
+            *)
+              echo "Unexpected macOS bundle: ${{ matrix.bundle }}"
+              exit 1
+              ;;
+          esac
+
+          package_dir="${RUNNER_TEMP}/${package_stem}-${target}"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
+          verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
+          verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
+
+          if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
+            exit 0
+          fi
+
+          dmg_path="${RUNNER_TEMP}/signed-dmg/codex-${target}.dmg"
+          mount_dir="${RUNNER_TEMP}/codex-dmg-mount-${target}"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Signed DMG $dmg_path not found"
+            exit 1
+          fi
+
+          hdiutil verify "$dmg_path"
+          codesign --verify --strict --verbose=2 "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+
+          rm -rf "$mount_dir"
+          mkdir -p "$mount_dir"
+          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_dir"
+          cleanup_mount() {
+            hdiutil detach "$mount_dir" >/dev/null
+          }
+          trap cleanup_mount EXIT
+
+          for binary in ${{ matrix.binaries }}; do
+            verify_signed_binary "${mount_dir}/${binary}" "$binary"
+          done
+
+          cleanup_mount
+          trap - EXIT
+          cp "$dmg_path" "dist/${target}/codex-${target}.dmg"
+
+      - name: Upload verified macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  build-windows:
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-windows.yml
+    secrets: inherit
+
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
+    with:
+      publish: true
+
+  release:
+    needs:
+      - tag-check
+      - build
+      - finalize-macos
+      - build-windows
+      - argument-comment-lint-release-assets
+    if: >-
+      ${{
+        always() &&
+        needs.tag-check.result == 'success' &&
+        needs.build.result == 'success' &&
+        needs.finalize-macos.result == 'success' &&
+        needs.build-windows.result == 'success' &&
+        needs.argument-comment-lint-release-assets.result == 'success'
+      }}
+    name: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ steps.release_name.outputs.name }}
+      tag: ${{ github.ref_name }}
+      should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
+      npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Generate release notes from tag commit message
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # On tag pushes, GITHUB_SHA may be a tag object for annotated tags;
+          # peel it to the underlying commit.
+          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+
+          # Use the commit message for the commit the tag points at (not the
+          # annotated tag message).
+          git log -1 --format=%B "${commit}" > "${notes_path}"
+          # Ensure trailing newline so GitHub's markdown renderer doesn't
+          # occasionally run the last line into subsequent content.
+          echo >> "${notes_path}"
+
+          echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download target artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}"
+
+      - name: Download supplemental release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "{*-symbols,argument-comment-lint-*,python-runtime-wheel-*}"
+
+      - name: List
+        run: ls -R dist/
+
+      - name: Add Codex package checksum manifest
+        run: |
+          set -euo pipefail
+
+          manifest="dist/codex-package_SHA256SUMS"
+          tmp_manifest="$(mktemp)"
+          find dist -type f \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$tmp_manifest"
+
+          if [[ ! -s "$tmp_manifest" ]]; then
+            echo "No Codex package archives found for checksum manifest"
+            exit 1
+          fi
+
+          mv "$tmp_manifest" "$manifest"
+          cat "$manifest"
+
+      - name: Add config schema release asset
+        run: |
+          cp codex-rs/core/config.schema.json dist/config-schema.json
+
+      - name: Define release name
+        id: release_name
+        run: |
+          # Extract the version from the tag name, which is in the format
+          # "rust-v0.1.0".
+          version="${GITHUB_REF_NAME#rust-v}"
+          echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Determine npm publish settings
+        id: npm_publish_settings
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --workflow-url "$workflow_url" \
+            --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
+
+      - name: Stage installer scripts
+        run: |
+          cp scripts/install/install.sh dist/install.sh
+          cp scripts/install/install.ps1 dist/install.ps1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          name: ${{ steps.release_name.outputs.name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: ${{ steps.release_notes.outputs.path }}
+          files: dist/**
+          overwrite_files: true
+          make_latest: ${{ !contains(steps.release_name.outputs.name, '-') }}
+          # Mark as prerelease only when the version has a suffix after x.y.z
+          # (e.g. -alpha, -beta). Otherwise publish a normal release.
+          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+
+  publish-dotslash:
+    name: publish-dotslash
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
+
+  # Publish to npm using OIDC authentication.
+  # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
+  # npm docs: https://docs.npmjs.com/trusted-publishers
+  publish-npm:
+    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.should_publish_npm == 'true'
+      }}
+    name: publish-npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          scope: "@openai"
+
+      - name: Download npm tarballs from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
+          mkdir -p dist/npm
+          patterns=(
+            "codex-npm-${version}.tgz"
+            "codex-npm-linux-*-${version}.tgz"
+            "codex-npm-darwin-*-${version}.tgz"
+            "codex-npm-win32-*-${version}.tgz"
+            "codex-responses-api-proxy-npm-${version}.tgz"
+            "codex-sdk-npm-${version}.tgz"
+          )
+          for pattern in "${patterns[@]}"; do
+            gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$pattern" \
+              --dir dist/npm
+          done
+
+      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      - name: Publish to npm
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          prefix=""
+          if [[ -n "${NPM_TAG}" ]]; then
+            prefix="${NPM_TAG}-"
+          fi
+
+          root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
+          sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
+          # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
+          # codex-cli/scripts/build_npm_package.py. The root wrapper advances
+          # @openai/codex@latest as soon as it publishes, so every platform
+          # package it aliases must already exist in the registry first.
+          platform_tarballs=(
+            "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+          )
+
+          for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
+            if [[ ! -f "${required_tarball}" ]]; then
+              echo "Missing npm tarball: ${required_tarball}"
+              exit 1
+            fi
+          done
+
+          shopt -s nullglob
+          other_tarballs=()
+          for tarball in dist/npm/*-"${VERSION}".tgz; do
+            if [[ "${tarball}" == "${root_tarball}" || "${tarball}" == "${sdk_tarball}" ]]; then
+              continue
+            fi
+
+            is_platform_tarball=false
+            for platform_tarball in "${platform_tarballs[@]}"; do
+              if [[ "${tarball}" == "${platform_tarball}" ]]; then
+                is_platform_tarball=true
+                break
+              fi
+            done
+            if [[ "${is_platform_tarball}" == true ]]; then
+              continue
+            fi
+
+            other_tarballs+=("${tarball}")
+          done
+
+          # npm returns HTTP 409 when concurrent publishes update the same
+          # packument. Every platform tarball is a version of @openai/codex,
+          # so publish all tarballs serially.
+          tarballs=(
+            "${platform_tarballs[@]}"
+            "${other_tarballs[@]}"
+            "${root_tarball}"
+          )
+          # The SDK depends on this exact root package version.
+          if [[ -f "${sdk_tarball}" ]]; then
+            tarballs+=("${sdk_tarball}")
+          fi
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
+          done
+
+  deploy-dev-website:
+    name: Trigger developers.openai.com deploy
+    needs: release
+    # Only trigger the deploy for a stable release.
+    # The deploy updates developers.openai.com with the new config schema json file.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        !contains(needs.release.outputs.version, '-')
+      }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions: {}
+    environment:
+      name: dev-website-vercel-deploy
+      deployment: false
+
+    steps:
+      - name: Trigger developers.openai.com deploy
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+  winget:
+    name: winget
+    needs: release
+    # Only publish stable/mainline releases to WinGet; pre-releases include a
+    # '-' in the semver string (e.g., 1.2.3-alpha.1).
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        !contains(needs.release.outputs.version, '-')
+      }}
+    # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
+    # it does not execute Windows-only tooling, so Linux is sufficient.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: mainline-release-winget
+      deployment: false
+
+    steps:
+      - name: Publish to WinGet
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
+        with:
+          identifier: OpenAI.Codex
+          version: ${{ needs.release.outputs.version }}
+          release-tag: ${{ needs.release.outputs.tag }}
+          fork-user: openai-oss-forks
+          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
+
+  update-branch:
+    name: Update latest-alpha-cli branch
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success'
+      }}
+    permissions:
+      contents: write
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Update latest-alpha-cli branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            -X PATCH \
+            -f sha="${GITHUB_SHA}" \
+            -F force=true

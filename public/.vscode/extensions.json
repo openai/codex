@@ -1,0 +1,13 @@
+{
+    "recommendations": [
+        "BazelBuild.vscode-bazel",
+        "rust-lang.rust-analyzer",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+
+        // Useful if touching files in .github/workflows, though most
+        // contributors will not be doing that?
+        // "github.vscode-github-actions",
+    ]
+}
