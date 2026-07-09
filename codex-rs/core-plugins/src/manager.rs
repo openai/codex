@@ -69,6 +69,7 @@ use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_hooks::plugin_hook_declarations;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -110,6 +111,7 @@ pub struct PluginsConfigInput {
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
+    http_client_factory: HttpClientFactory,
 }
 
 impl PluginsConfigInput {
@@ -118,14 +120,17 @@ impl PluginsConfigInput {
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
         chatgpt_base_url: String,
+        http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
             chatgpt_base_url,
+            http_client_factory,
         }
     }
+
 }
 
 /// Inputs used to select endpoint-backed plugin install candidates.
@@ -1942,7 +1947,7 @@ impl PluginsManager {
             let use_remote_global_catalog =
                 config.remote_plugin_enabled && auth_manager.current_auth_uses_codex_backend();
             if !use_remote_global_catalog {
-                self.start_curated_repo_sync();
+                self.start_curated_repo_sync(config.http_client_factory.clone());
             }
             let should_spawn_marketplace_auto_upgrade = {
                 let mut state = match self.configured_marketplace_upgrade_state.write() {
@@ -2298,7 +2303,7 @@ impl PluginsManager {
         }
     }
 
-    fn start_curated_repo_sync(self: &Arc<Self>) {
+    fn start_curated_repo_sync(self: &Arc<Self>, http_client_factory: HttpClientFactory) {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -2306,8 +2311,8 @@ impl PluginsManager {
         let codex_home = self.codex_home.clone();
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-curated-repo-sync".to_string())
-            .spawn(
-                move || match sync_openai_plugins_repo(codex_home.as_path()) {
+            .spawn(move || {
+                match sync_openai_plugins_repo(codex_home.as_path(), http_client_factory) {
                     Ok(curated_plugin_version) => {
                         let configured_curated_plugin_ids =
                             configured_curated_plugin_ids_from_codex_home(codex_home.as_path());
@@ -2331,8 +2336,8 @@ impl PluginsManager {
                         CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
                         warn!("failed to sync curated plugins repo: {err}");
                     }
-                },
-            )
+                }
+            })
         {
             CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
             warn!("failed to start curated plugins repo sync task: {err}");
