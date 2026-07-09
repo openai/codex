@@ -189,6 +189,7 @@ impl ExternalAgentSessionImporter {
                 &config.model,
                 /*allow_provider_model_fallback*/ false,
                 RefreshStrategy::Offline,
+                config.http_client_factory(),
             )
             .await;
         let model_info = models_manager
@@ -230,7 +231,7 @@ impl ExternalAgentSessionImporter {
                 memory_mode,
             },
         };
-        rollout_items.retain(is_persisted_rollout_item);
+        rollout_items.retain(|item| is_persisted_rollout_item(item, ThreadHistoryMode::Legacy));
         let title = title
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);

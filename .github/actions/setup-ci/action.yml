@@ -1,9 +1,67 @@
 name: setup-ci
 description: Prepare common tools and environment shared by CI jobs.
+outputs:
+  bazel-output-base:
+    description: Filesystem path used for Bazel's output base.
+    value: ${{ steps.configure_ci_build_paths.outputs.bazel-output-base }}
+  cargo-target-dir:
+    description: Filesystem path used for Cargo's target directory.
+    value: ${{ steps.configure_ci_build_paths.outputs.cargo-target-dir }}
 
 runs:
   using: composite
   steps:
+    # setup-ci expects either this step or the Unix fallback below to define
+    # CI_BUILD_ROOT. Windows puts it on a Dev Drive because Cargo and Bazel
+    # spend significant time reading and writing build/cache trees.
+    - name: Configure Dev Drive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./.github/scripts/setup-dev-drive.ps1
+
+    - name: Configure CI build root (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: echo "CI_BUILD_ROOT=$HOME/.cache/codex-ci" >> "$GITHUB_ENV"
+
+    - name: Configure CI build paths
+      id: configure_ci_build_paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        # setup-bazel passes output_base explicitly, so keep both it and the
+        # user root under the shared build root. Keep these directory names tiny
+        # on every platform so Windows Bazel paths do not overflow argv or
+        # confuse test MANIFEST handling.
+        bazel_output_base="$CI_BUILD_ROOT/o"
+        bazel_output_user_root="$CI_BUILD_ROOT/b"
+        bazel_repository_cache="$CI_BUILD_ROOT/bazel-repository-cache"
+        bazel_repo_contents_cache="$CI_BUILD_ROOT/bazel-repo-contents-cache-$GITHUB_RUN_ID-$GITHUB_JOB"
+        cargo_target_dir="$CI_BUILD_ROOT/cargo-target"
+        tmp="$CI_BUILD_ROOT/tmp"
+
+        build_dirs=(
+          "$bazel_output_base"
+          "$bazel_output_user_root"
+          "$bazel_repository_cache"
+          "$bazel_repo_contents_cache"
+          "$cargo_target_dir"
+          "$tmp"
+        )
+        mkdir -p "${build_dirs[@]}"
+        echo "bazel-output-base=$bazel_output_base" >> "$GITHUB_OUTPUT"
+        echo "cargo-target-dir=$cargo_target_dir" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "BAZEL_OUTPUT_BASE=$bazel_output_base"
+          echo "BAZEL_OUTPUT_USER_ROOT=$bazel_output_user_root"
+          echo "BAZEL_REPOSITORY_CACHE=$bazel_repository_cache"
+          echo "BAZEL_REPO_CONTENTS_CACHE=$bazel_repo_contents_cache"
+          echo "CARGO_TARGET_DIR=$cargo_target_dir"
+          echo "TEMP=$tmp"
+          echo "TMP=$tmp"
+        } >> "$GITHUB_ENV"
+
     - name: Prefer the Git CLI for Cargo git dependencies
       shell: bash
       run: echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"

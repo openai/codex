@@ -1,12 +1,11 @@
 ---
 source: tui/src/app/tests/model_catalog.rs
-assertion_line: 289
 expression: model_migration_copy_to_plain_text(&copy)
 ---
-Introducing GPT-5.4
+Codex just got an upgrade. Introducing GPT-5.5.
 
-Codex just got an upgrade with GPT-5.4, our most capable model for professional work. It outperforms prior models while being more token efficient, with notable improvements on long-running tasks, tool calling, computer use, and frontend development.
+We recommend switching from gpt-5.2 to gpt-5.5.
 
-Learn more: https://openai.com/index/introducing-gpt-5-4
+Frontier model for complex coding, research, and real-world work.
 
-You can always keep using GPT-5.3-Codex if you prefer.
+You can continue using gpt-5.2 if you prefer.

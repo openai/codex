@@ -58,16 +58,9 @@ fn tool_spec_name_covers_all_variants() {
         "tool_search"
     );
     assert_eq!(
-        ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
-        }
-        .name(),
-        "image_generation"
-    );
-    assert_eq!(
         ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: None,
+            indexed_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -200,7 +193,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::WebSearch {
             external_web_access: Some(true),
-            index_gated_web_access: None,
+            indexed_web_access: Some(true),
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),
@@ -218,6 +211,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
         json!({
             "type": "web_search",
             "external_web_access": true,
+            "indexed_web_access": true,
             "filters": {
                 "allowed_domains": ["example.com"],
             },

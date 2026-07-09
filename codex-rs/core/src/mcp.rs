@@ -79,9 +79,15 @@ impl McpManager {
     /// Returns the MCP config after applying compatibility built-ins and
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
-        self.runtime_config_with_context(McpServerContributionContext::global(config))
-            .await
-            .config
+        self.runtime_config_with_context(
+            McpServerContributionContext::global(config),
+            // Threadless discovery and control-plane paths have no effective thread
+            // originator; active-thread tool calls use runtime_config_for_step below.
+            /*originator*/
+            None,
+        )
+        .await
+        .config
     }
 
     pub(crate) async fn runtime_config_for_step(
@@ -89,20 +95,26 @@ impl McpManager {
         config: &Config,
         thread_init: &ExtensionDataInit,
         thread_store: &ExtensionData,
+        originator: &str,
         available_environment_ids: &[String],
     ) -> McpRuntimeProjection {
-        self.runtime_config_with_context(McpServerContributionContext::for_step(
-            config,
-            thread_init,
-            thread_store,
-            available_environment_ids,
-        ))
+        self.runtime_config_with_context(
+            McpServerContributionContext::for_step(
+                config,
+                thread_init,
+                thread_store,
+                originator,
+                available_environment_ids,
+            ),
+            Some(originator),
+        )
         .await
     }
 
     async fn runtime_config_with_context(
         &self,
         context: McpServerContributionContext<'_, Config>,
+        originator: Option<&str>,
     ) -> McpRuntimeProjection {
         let config = context.config();
         let mut selected_plugin_available = false;
@@ -181,6 +193,7 @@ impl McpManager {
                 codex_apps_mcp_server_config(
                     &mcp_config.chatgpt_base_url,
                     mcp_config.apps_mcp_product_sku.as_deref(),
+                    originator,
                 ),
             ));
         } else {

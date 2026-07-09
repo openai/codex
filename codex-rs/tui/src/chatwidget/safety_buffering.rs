@@ -6,9 +6,9 @@ use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 const SAFETY_BUFFERING_PROMPT_VIEW_ID: &str = "safety-buffering-prompt";
 const SAFETY_BUFFERING_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
 
-const SAFETY_BUFFERING_MESSAGE_WITH_RETRY: &str = "This request requires additional safety checks, which can take extra time. Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests.";
-const SAFETY_BUFFERING_MESSAGE_WITHOUT_RETRY: &str =
-    "This request requires additional safety checks, which can take extra time.";
+const SAFETY_BUFFERING_HEADER: &str =
+    "Our systems are thinking a bit more about this request before responding.";
+const SAFETY_BUFFERING_MESSAGE_WITH_RETRY: &str = "Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests.";
 
 #[derive(Debug)]
 struct ActiveSafetyBuffering {
@@ -135,15 +135,15 @@ impl ChatWidget {
             agent_message_started,
         });
 
-        let message = if can_offer_retry {
-            SAFETY_BUFFERING_MESSAGE_WITH_RETRY
+        let status_details = if can_offer_retry {
+            format!("{SAFETY_BUFFERING_HEADER} {SAFETY_BUFFERING_MESSAGE_WITH_RETRY}")
         } else {
-            SAFETY_BUFFERING_MESSAGE_WITHOUT_RETRY
+            SAFETY_BUFFERING_HEADER.to_string()
         };
         self.bottom_pane.ensure_status_indicator();
         self.set_status(
             "Working".to_string(),
-            Some(message.to_string()),
+            Some(status_details),
             StatusDetailsCapitalization::Preserve,
             /*details_max_lines*/ 6,
         );
@@ -154,10 +154,16 @@ impl ChatWidget {
         self.bottom_pane
             .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
 
-        let header = ColumnRenderable::with(vec![
-            Box::new(Line::from("Additional safety checks").bold()) as Box<dyn Renderable>,
-            Box::new(Paragraph::new(Line::from(message).dim()).wrap(Wrap { trim: false })),
-        ]);
+        let mut header = vec![Box::new(
+            Paragraph::new(Line::from(SAFETY_BUFFERING_HEADER).bold()).wrap(Wrap { trim: false }),
+        ) as Box<dyn Renderable>];
+        if can_offer_retry {
+            header.push(Box::new(
+                Paragraph::new(Line::from(SAFETY_BUFFERING_MESSAGE_WITH_RETRY).dim())
+                    .wrap(Wrap { trim: false }),
+            ));
+        }
+        let header = ColumnRenderable::with(header);
         let mut items = Vec::new();
         if let (Some(faster_model), Some(turn), Some(thread_id)) =
             (faster_model, retry_turn, thread_id)

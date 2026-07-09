@@ -37,7 +37,7 @@ impl ChatWidget {
                     // Submitted is emitted when user submits.
                     // Reset any reasoning header only when we are actually submitting a turn.
                     self.reasoning_buffer.clear();
-                    self.full_reasoning_buffer.clear();
+                    self.reasoning_summary_parts.clear();
                     self.set_status_header(String::from("Working"));
                     self.submit_user_message(user_message);
                 } else {

@@ -89,11 +89,15 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
-    let (_codex_home, mut mcp) =
-        start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
+    let (_codex_home, mut mcp) = start_resource_test_app_server(
+        &apps_server_url,
+        &responses_server_uri,
+        ResourceTestEnvironment::Auto,
+    )
+    .await?;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -133,8 +137,12 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
-    let (_codex_home, mut mcp) =
-        start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
+    let (_codex_home, mut mcp) = start_resource_test_app_server(
+        &apps_server_url,
+        &responses_server_uri,
+        ResourceTestEnvironment::Auto,
+    )
+    .await?;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -369,8 +377,13 @@ async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
-    let (_codex_home, mut mcp) =
-        start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
+    let (_codex_home, mut mcp) = start_resource_test_app_server(
+        &apps_server_url,
+        &responses_server_uri,
+        // This test exercises the implicit local executor.
+        ResourceTestEnvironment::Local,
+    )
+    .await?;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -449,13 +462,13 @@ async fn disabled_orchestrator_skills_do_not_expose_skills_namespace() -> Result
 [orchestrator.skills]
 enabled = false
 "#,
+        ResourceTestEnvironment::Auto,
     )
     .await?;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            environments: Some(Vec::new()),
             ..Default::default()
         })
         .await?;
@@ -552,7 +565,11 @@ apps = true
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_request_id = mcp
@@ -644,15 +661,22 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
 async fn start_resource_test_app_server(
     apps_server_url: &str,
     responses_server_uri: &str,
+    environment: ResourceTestEnvironment,
 ) -> Result<(TempDir, TestAppServer)> {
-    start_resource_test_app_server_with_extra_config(apps_server_url, responses_server_uri, "")
-        .await
+    start_resource_test_app_server_with_extra_config(
+        apps_server_url,
+        responses_server_uri,
+        "",
+        environment,
+    )
+    .await
 }
 
 async fn start_resource_test_app_server_with_extra_config(
     apps_server_url: &str,
     responses_server_uri: &str,
     extra_config: &str,
+    environment: ResourceTestEnvironment,
 ) -> Result<(TempDir, TestAppServer)> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -692,9 +716,20 @@ stream_max_retries = 0
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let builder = TestAppServer::builder().with_codex_home(codex_home.path());
+    let builder = match environment {
+        ResourceTestEnvironment::Auto => builder,
+        // The Local caller explicitly exercises the implicit local executor.
+        ResourceTestEnvironment::Local => builder.without_auto_env(),
+    };
+    let mut mcp = builder.build().await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok((codex_home, mcp))
+}
+
+enum ResourceTestEnvironment {
+    Auto,
+    Local,
 }
 
 async fn start_resource_apps_mcp_server()

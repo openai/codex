@@ -1,6 +1,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+const SAFETY_BUFFERING_HEADER_TEXT: &str =
+    "Our systems are thinking a bit more about this request before responding.";
+
 fn thread_settings_for_test(
     model: &str,
     thread_id: ThreadId,
@@ -42,7 +45,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
-        model: "gpt-5.3-codex".to_string(),
+        model: "gpt-5.2".to_string(),
         model_provider_id: "openai".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
@@ -136,7 +139,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
         }
     };
     assert_eq!(opened_url, "https://help.openai.com/en/articles/20001326");
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -157,7 +160,10 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     assert_eq!(event_turn_id, turn_id);
     assert_eq!(model, "faster-model");
     assert_matches!(turn, Op::UserTurn { .. });
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(
+        !render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Press enter to confirm or esc to go back")
+    );
 }
 
 #[tokio::test]
@@ -177,11 +183,11 @@ async fn safety_buffering_remains_visible_until_turn_completes() {
     chat.on_agent_message_delta("Visible response".to_string());
 
     assert!(!chat.can_retry_safety_buffered_turn(turn_id));
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
 
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 }
 
 #[tokio::test]
@@ -218,7 +224,10 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
     assert_eq!(render_popup(&chat), popup);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(
+        !render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Press enter to confirm or esc to go back")
+    );
 }
 
 #[tokio::test]
@@ -248,14 +257,14 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
         )),
         Some(ReplayKind::ResumeInitialMessages),
     );
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 
     let mut hidden = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(hidden.clone()),
         /*replay_kind*/ None,
     );
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
     hidden.show_buffering_ui = false;
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(hidden),
@@ -269,7 +278,7 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
             .details(),
         None
     );
-    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
 }
 
 #[tokio::test]
@@ -311,7 +320,7 @@ async fn invalid_url_elicitation_is_declined() {
 
 #[tokio::test]
 async fn thread_settings_updated_updates_visible_state_without_transcript() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     set_fast_mode_test_catalog(&mut chat);
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
@@ -367,7 +376,7 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
 
 #[tokio::test]
 async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
     session.model = "gpt-default".to_string();
@@ -1182,11 +1191,26 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
 
 #[tokio::test]
 async fn app_server_safety_access_errors_render_dedicated_notice() {
-    let message = "Invalid prompt: we've limited access to this content for safety reasons.";
-    for message in [
-        message.to_string(),
-        json!({ "error": { "message": message } }).to_string(),
-    ] {
+    let legacy_message = "Invalid prompt: we've limited access to this content for safety reasons.";
+    let bio_policy_message = "This content was flagged for possible biological risk.";
+    let cases = [
+        ("legacy plain message", legacy_message.to_string()),
+        (
+            "legacy JSON message",
+            json!({ "error": { "message": legacy_message } }).to_string(),
+        ),
+        ("bio policy plain message", bio_policy_message.to_string()),
+        (
+            "bio policy JSON message",
+            json!({ "error": { "message": bio_policy_message } }).to_string(),
+        ),
+        (
+            "bio policy code",
+            json!({ "error": { "code": "bio_policy", "message": "copy may change" } }).to_string(),
+        ),
+    ];
+    let mut rendered_cases = Vec::new();
+    for (case, message) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.handle_non_retry_error(message, /*codex_error_info*/ None);
 
@@ -1195,8 +1219,17 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
         assert!(rendered.contains("biological research"));
-        assert!(!rendered.contains("Invalid prompt:"));
+        rendered_cases.push((case, rendered));
     }
+
+    let canonical = &rendered_cases[0].1;
+    for (case, rendered) in &rendered_cases[1..] {
+        assert_eq!(rendered, canonical, "unexpected rendering for {case}");
+    }
+    insta::assert_snapshot!(
+        "app_server_bio_policy_error_renders_dedicated_notice",
+        rendered_cases.last().unwrap().1.as_str()
+    );
 }
 
 #[tokio::test]

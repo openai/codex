@@ -1418,6 +1418,7 @@ fn server_metadata_preserves_tool_approval_policy() {
     let mut config = crate::codex_apps_mcp_server_config(
         "https://docs.example",
         /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
     );
     config.environment_id = "remote".to_string();
     config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
@@ -1462,6 +1463,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
     let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
     ));
     manager.server_metadata.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -1561,6 +1563,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
         /*auth*/ None,
+        /*codex_apps_auth_manager*/ None,
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         ElicitationRequestRouter::default(),

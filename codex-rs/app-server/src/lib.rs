@@ -97,6 +97,7 @@ mod current_time;
 mod dynamic_tools;
 mod error_code;
 mod extensions;
+mod external_auth;
 mod filters;
 mod fs_watch;
 mod fuzzy_file_search;

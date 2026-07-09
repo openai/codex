@@ -50,6 +50,9 @@ tracing = { workspace = true }
 url = { workspace = true }
 zip = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+which = { workspace = true }
+
 [dev-dependencies]
 libc = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -2,8 +2,7 @@
 source: tui/src/chatwidget/tests/app_server.rs
 expression: popup
 ---
-  Additional safety checks
-  This request requires additional safety checks, which can take extra time.
+  Our systems are thinking a bit more about this request before responding.
   Hang tight or retry with a faster model for a quicker response, though it
   may be less capable of handling complex requests.
 

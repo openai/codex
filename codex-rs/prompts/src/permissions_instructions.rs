@@ -4,6 +4,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -47,6 +48,7 @@ static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 struct PermissionsPromptConfig<'a> {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
+    approval_messages: Option<&'a ApprovalMessages>,
     exec_policy: &'a Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
@@ -58,12 +60,24 @@ pub struct PermissionsInstructions {
     text: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ApprovalPromptContext<'a> {
+    reviewer: ApprovalsReviewer,
+    messages: Option<&'a ApprovalMessages>,
+}
+
+impl<'a> ApprovalPromptContext<'a> {
+    pub fn new(reviewer: ApprovalsReviewer, messages: Option<&'a ApprovalMessages>) -> Self {
+        Self { reviewer, messages }
+    }
+}
+
 impl PermissionsInstructions {
     /// Builds permissions instructions from the effective permission profile and approval policy.
     pub fn from_permission_profile(
         permission_profile: &PermissionProfile,
         approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
+        approval_context: ApprovalPromptContext<'_>,
         exec_policy: &Policy,
         cwd: &Path,
         exec_permission_approvals_enabled: bool,
@@ -78,7 +92,8 @@ impl PermissionsInstructions {
             network_access_from_policy(permission_profile.network_sandbox_policy()),
             PermissionsPromptConfig {
                 approval_policy,
-                approvals_reviewer,
+                approvals_reviewer: approval_context.reviewer,
+                approval_messages: approval_context.messages,
                 exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
@@ -122,6 +137,7 @@ impl PermissionsInstructions {
             &approval_text(
                 config.approval_policy,
                 config.approvals_reviewer,
+                config.approval_messages,
                 config.exec_policy,
                 config.exec_permission_approvals_enabled,
                 config.request_permissions_tool_enabled,
@@ -192,10 +208,23 @@ fn append_section(text: &mut String, section: &str) {
 fn approval_text(
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
+    approval_messages: Option<&ApprovalMessages>,
     exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
+    if approval_policy == AskForApproval::OnRequest
+        && let Some(approval_messages) = approval_messages
+    {
+        let selected = match approvals_reviewer {
+            ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
+            ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
+        };
+        if let Some(selected) = selected {
+            return selected.clone();
+        }
+    }
+
     let with_request_permissions_tool = |text: &str| {
         if request_permissions_tool_enabled {
             format!("{text}\n\n{}", request_permissions_tool_prompt_section())

@@ -81,6 +81,9 @@ pub struct WalkOptions {
     pub max_entries: usize,
     /// Whether directory symlinks should be followed.
     pub follow_directory_symlinks: bool,
+    /// Whether directories whose names start with `.` should be returned but not traversed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prune_hidden_directories: bool,
 }
 
 /// Type of a filesystem entry returned by a walk.
@@ -463,6 +466,9 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
             });
 
             if kind == WalkEntryKind::Directory && depth < options.max_depth {
+                if options.prune_hidden_directories && entry.file_name.starts_with('.') {
+                    continue;
+                }
                 let directory_identity = if options.follow_directory_symlinks {
                     match file_system.canonicalize(&path, sandbox).await {
                         Ok(path) => path,

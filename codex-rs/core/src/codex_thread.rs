@@ -4,6 +4,7 @@ use crate::elicitation::ElicitationRegistration;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -627,6 +628,18 @@ impl CodexThread {
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.codex.thread_environment_selections().await
+    }
+
+    /// Passively inspects the selected capability roots whose environments are ready now.
+    pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
+        self.codex
+            .session
+            .services
+            .turn_environments
+            .environment_manager()
+            .inspect_selected_capability_roots(
+                &self.codex.session.services.selected_capability_roots,
+            )
     }
 
     pub async fn read_mcp_resource(

@@ -277,6 +277,9 @@ impl ModelProvider for ConfiguredModelProvider {
                     if auth_manager.refresh_failure_for_auth(&auth).is_some() {
                         return None;
                     }
+                    if matches!(auth, CodexAuth::Headers(_)) {
+                        return None;
+                    }
                     Some(auth)
                 })
                 .map(|auth| match &auth {
@@ -286,6 +289,7 @@ impl ModelProvider for ConfiguredModelProvider {
                     }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
+                    | CodexAuth::Headers(_)
                     | CodexAuth::AgentIdentity(_)
                     | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
@@ -336,6 +340,8 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
@@ -652,26 +658,34 @@ mod tests {
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
 
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
-        let model_ids = catalog
+        let catalog = manager
+            .raw_model_catalog(
+                RefreshStrategy::Online,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
+        let models = catalog
             .models
             .iter()
-            .map(|model| model.slug.as_str())
+            .map(|model| (model.slug.as_str(), model.display_name.as_str()))
             .collect::<Vec<_>>();
 
         assert_eq!(
-            model_ids,
+            models,
             vec![
-                "openai.gpt-5.5",
-                "openai.gpt-5.4",
-                "openai.gpt-5.6-sol",
-                "openai.gpt-5.6-terra",
-                "openai.gpt-5.6-luna",
+                ("openai.gpt-5.5", "GPT-5.5"),
+                ("openai.gpt-5.4", "GPT-5.4"),
+                ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
+                ("openai.gpt-5.6-terra", "GPT-5.6 Terra"),
+                ("openai.gpt-5.6-luna", "GPT-5.6 Luna"),
             ]
         );
 
         let default_model = manager
-            .list_models(RefreshStrategy::Online)
+            .list_models(
+                RefreshStrategy::Online,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
             .await
             .into_iter()
             .find(|preset| preset.is_default)
@@ -702,7 +716,12 @@ mod tests {
             }),
         );
 
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let catalog = manager
+            .raw_model_catalog(
+                RefreshStrategy::Online,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
 
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].slug, "gpt-5.5");
@@ -744,7 +763,12 @@ mod tests {
 
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let catalog = manager
+            .raw_model_catalog(
+                RefreshStrategy::Online,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
 
         assert!(
             catalog

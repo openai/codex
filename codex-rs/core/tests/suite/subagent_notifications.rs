@@ -55,7 +55,7 @@ const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
 const CHILD_PROMPT: &str = "child: do work";
-const INHERITED_MODEL: &str = "gpt-5.3-codex";
+const INHERITED_MODEL: &str = "gpt-5.2";
 const INHERITED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::XHigh;
 const REQUESTED_MODEL: &str = "gpt-5.4";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
@@ -1120,10 +1120,22 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let child_request = wait_for_requests(&child_request_log)
-        .await?
-        .pop()
-        .expect("child request");
+    // The response mock records candidate requests before its request matcher runs, so wait for
+    // the child request instead of assuming the latest recorded request is already it.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = child_request_log
+            .requests()
+            .into_iter()
+            .find(|request| !request.inputs_of_type("agent_message").is_empty())
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for child agent message request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
     assert_eq!(
         strip_metadata_from_json(Value::Array(child_request.inputs_of_type("agent_message"))),
         Value::Array(vec![json!({

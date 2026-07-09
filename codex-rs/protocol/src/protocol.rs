@@ -120,6 +120,14 @@ pub const CONTEXT_WINDOW_GUIDANCE_OPEN_TAG: &str = "<context_window_guidance>";
 pub const CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG: &str = "</context_window_guidance>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+/// Removes the model-context prefix from a user message before displaying it.
+pub fn strip_user_message_prefix(text: &str) -> &str {
+    match text.find(USER_MESSAGE_BEGIN) {
+        Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
+        None => text.trim(),
+    }
+}
+
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
 // identifiers.
 #[derive(Debug, Clone, PartialEq)]
@@ -1428,7 +1436,7 @@ pub enum EventMsg {
     ShutdownComplete,
 
     /// Entered review mode.
-    EnteredReviewMode(ReviewRequest),
+    EnteredReviewMode(EnteredReviewModeEvent),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
@@ -1853,7 +1861,27 @@ pub struct ReasoningRawContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct EnteredReviewModeEvent {
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
     pub review_output: Option<ReviewOutputEvent>,
 }
 
@@ -2274,6 +2302,23 @@ pub struct UserMessageEvent {
     pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
+/// Returns the user-facing preview text for a user message.
+pub fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
+    let message = strip_user_message_prefix(user.message.as_str());
+    if !message.is_empty() {
+        return Some(message.to_string());
+    }
+    if user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || !user.local_images.is_empty()
+    {
+        return Some("[Image]".to_string());
+    }
+    None
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
@@ -2571,11 +2616,11 @@ impl InitialHistory {
 
     pub fn get_history_mode(&self, default_history_mode: ThreadHistoryMode) -> ThreadHistoryMode {
         match self {
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                default_history_mode
-            }
-            InitialHistory::Resumed(_) => self
-                .get_resumed_session_meta()
+            InitialHistory::New | InitialHistory::Cleared => default_history_mode,
+            // Forks copy their source rollout items as-is, so they must keep
+            // the source format instead of converting to the destination default.
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => self
+                .get_session_meta()
                 .map(|meta| meta.history_mode)
                 .unwrap_or(default_history_mode),
         }
@@ -3174,6 +3219,8 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_policy: SandboxPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
@@ -4313,6 +4360,8 @@ mod tests {
     use crate::items::CommandExecutionStatus;
     use crate::items::DynamicToolCallItem;
     use crate::items::DynamicToolCallStatus;
+    use crate::items::EnteredReviewModeItem;
+    use crate::items::ExitedReviewModeItem;
     use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::McpToolCallItem;
@@ -5428,6 +5477,63 @@ mod tests {
     }
 
     #[test]
+    fn review_mode_item_completion_emits_legacy_events_with_ids() {
+        let entered = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 0,
+            item: TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: "entered-review".into(),
+                target: ReviewTarget::Custom {
+                    instructions: "review this".into(),
+                },
+                user_facing_hint: "Review requested.".into(),
+            }),
+        };
+        let exited = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 0,
+            item: TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+                id: "exited-review".into(),
+                review_output: Some(ReviewOutputEvent {
+                    overall_explanation: "Looks good.".into(),
+                    ..Default::default()
+                }),
+            }),
+        };
+
+        assert!(matches!(
+            entered
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .as_slice(),
+            [EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+                target: ReviewTarget::Custom { instructions },
+                user_facing_hint: Some(user_facing_hint),
+                turn_id: Some(turn_id),
+                item_id: Some(item_id),
+            })]
+                if instructions == "review this"
+                    && user_facing_hint == "Review requested."
+                    && turn_id == "turn-1"
+                    && item_id == "entered-review"
+        ));
+        assert!(matches!(
+            exited
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .as_slice(),
+            [EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                turn_id: Some(turn_id),
+                item_id: Some(item_id),
+                review_output: Some(review_output),
+            })]
+                if turn_id == "turn-1"
+                    && item_id == "exited-review"
+                    && review_output.overall_explanation == "Looks good."
+        ));
+    }
+
+    #[test]
     fn item_started_event_requires_started_at_ms() {
         let mut value = serde_json::to_value(ItemStartedEvent {
             thread_id: ThreadId::new(),
@@ -5454,6 +5560,27 @@ mod tests {
 
         let event = serde_json::from_value::<ItemCompletedEvent>(value).unwrap();
         assert_eq!(event.completed_at_ms, 0);
+    }
+
+    #[test]
+    fn review_mode_events_deserialize_legacy_payloads() {
+        let entered = serde_json::from_value::<EnteredReviewModeEvent>(json!({
+            "target": {
+                "type": "custom",
+                "instructions": "review this"
+            },
+            "user_facing_hint": "hint"
+        }))
+        .unwrap();
+        assert_eq!(entered.turn_id, None);
+        assert_eq!(entered.item_id, None);
+
+        let exited = serde_json::from_value::<ExitedReviewModeEvent>(json!({
+            "review_output": null
+        }))
+        .unwrap();
+        assert_eq!(exited.turn_id, None);
+        assert_eq!(exited.item_id, None);
     }
 
     #[test]
@@ -5680,13 +5807,13 @@ mod tests {
     }
 
     #[test]
-    fn resumed_history_uses_persisted_history_mode() -> Result<()> {
+    fn copied_history_uses_persisted_history_mode() -> Result<()> {
         let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")?;
         let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
-                history_mode: ThreadHistoryMode::Paginated,
+                history_mode: ThreadHistoryMode::Legacy,
                 ..SessionMeta::default()
             },
             git: None,
@@ -5698,11 +5825,12 @@ mod tests {
         });
 
         assert_eq!(
-            history.get_history_mode(ThreadHistoryMode::Legacy),
-            ThreadHistoryMode::Paginated
+            history.get_history_mode(ThreadHistoryMode::Paginated),
+            ThreadHistoryMode::Legacy
         );
         assert_eq!(
-            InitialHistory::Forked(vec![session_meta]).get_history_mode(ThreadHistoryMode::Legacy),
+            InitialHistory::Forked(vec![session_meta])
+                .get_history_mode(ThreadHistoryMode::Paginated),
             ThreadHistoryMode::Legacy
         );
         assert_eq!(
@@ -5839,6 +5967,7 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             permission_profile: None,
             network: Some(TurnContextNetworkItem {
