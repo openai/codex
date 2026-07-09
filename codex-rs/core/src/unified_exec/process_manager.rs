@@ -1210,7 +1210,7 @@ impl UnifiedExecProcessManager {
     ) -> Vec<u8> {
         const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
 
-        let mut collected: Vec<u8> = Vec::with_capacity(4096);
+        let mut collected = HeadTailBuffer::default();
         let mut exit_signal_received = cancellation_token.is_cancelled();
         let mut post_exit_deadline: Option<Instant> = None;
         loop {
@@ -1276,7 +1276,7 @@ impl UnifiedExecProcessManager {
             }
 
             for chunk in drained_chunks {
-                collected.extend_from_slice(&chunk);
+                collected.push_chunk(chunk);
             }
 
             exit_signal_received |= cancellation_token.is_cancelled();
@@ -1285,7 +1285,7 @@ impl UnifiedExecProcessManager {
             }
         }
 
-        collected
+        collected.to_bytes()
     }
 
     async fn extend_deadlines_while_paused(
