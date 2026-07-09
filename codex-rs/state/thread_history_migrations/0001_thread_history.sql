@@ -7,8 +7,8 @@ CREATE TABLE thread_turns (
     started_at INTEGER,
     completed_at INTEGER,
     duration_ms INTEGER,
-    summary_first_user_item_id TEXT,
-    summary_final_agent_item_id TEXT,
+    first_user_item_id TEXT,
+    final_agent_item_id TEXT,
     PRIMARY KEY (thread_id, turn_id)
 );
 
