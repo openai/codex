@@ -203,6 +203,8 @@ pub struct NetworkProxyConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_socks5_udp: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_dns: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_upstream_proxy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dangerously_allow_non_loopback_proxy: Option<bool>,

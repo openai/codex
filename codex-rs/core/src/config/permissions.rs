@@ -141,6 +141,7 @@ pub(crate) fn apply_network_proxy_feature_config(
         enable_socks5: feature_config.enable_socks5,
         socks_url: feature_config.socks_url.clone(),
         enable_socks5_udp: feature_config.enable_socks5_udp,
+        enable_dns: feature_config.enable_dns,
         allow_upstream_proxy: feature_config.allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy: feature_config.dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets: feature_config.dangerously_allow_all_unix_sockets,

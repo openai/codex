@@ -1065,6 +1065,7 @@ strip_request_headers = ["authorization"]
                         enable_socks5: Some(false),
                         socks_url: None,
                         enable_socks5_udp: None,
+                        enable_dns: None,
                         allow_upstream_proxy: Some(false),
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,

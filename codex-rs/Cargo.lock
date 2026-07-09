@@ -3306,6 +3306,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-utils-absolute-path",
  "globset",
+ "hickory-proto",
  "landlock",
  "libc",
  "pretty_assertions",

@@ -6,6 +6,11 @@ use codex_network_proxy::DNS_PROXY_ENV_KEY;
 use codex_network_proxy::DNS_PROXY_SESSION_PREFACE;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::PermissionProfile;
+use hickory_proto::op::Message;
+use hickory_proto::op::ResponseCode;
+use hickory_proto::rr::RData;
+use hickory_proto::rr::Record;
+use hickory_proto::rr::rdata::A;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::Read;
@@ -379,50 +384,29 @@ async fn managed_proxy_mode_routes_native_dns_through_bridge() {
 }
 
 fn dns_query_name(query: &[u8]) -> Option<String> {
-    let mut offset = 12usize;
-    let mut labels = Vec::new();
-    loop {
-        let len = *query.get(offset)? as usize;
-        offset += 1;
-        if len == 0 {
-            break;
-        }
-        let label = query.get(offset..offset.checked_add(len)?)?;
-        labels.push(std::str::from_utf8(label).ok()?);
-        offset += len;
-    }
-    Some(labels.join("."))
+    let query = Message::from_vec(query).ok()?;
+    let question = query.queries().first()?;
+    Some(question.name().to_utf8().trim_end_matches('.').to_string())
 }
 
 fn dns_a_response(query: &[u8], address: [u8; 4]) -> Vec<u8> {
-    let question_end = dns_question_end(query).expect("DNS question end");
-    let mut response = Vec::new();
-    response.extend_from_slice(&query[..2]);
-    response.extend_from_slice(&[0x81, 0x80]);
-    response.extend_from_slice(&[0x00, 0x01]);
-    response.extend_from_slice(&[0x00, 0x01]);
-    response.extend_from_slice(&[0x00, 0x00]);
-    response.extend_from_slice(&[0x00, 0x00]);
-    response.extend_from_slice(&query[12..question_end]);
-    response.extend_from_slice(&[0xc0, 0x0c]);
-    response.extend_from_slice(&[0x00, 0x01]);
-    response.extend_from_slice(&[0x00, 0x01]);
-    response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-    response.extend_from_slice(&[0x00, 0x04]);
-    response.extend_from_slice(&address);
+    let query = Message::from_vec(query).expect("parse DNS query");
+    let question = query
+        .queries()
+        .first()
+        .expect("DNS query should include one question")
+        .clone();
+    let mut response = Message::error_msg(query.id(), query.op_code(), ResponseCode::NoError);
     response
-}
-
-fn dns_question_end(query: &[u8]) -> Option<usize> {
-    let mut offset = 12usize;
-    loop {
-        let len = *query.get(offset)? as usize;
-        offset += 1;
-        if len == 0 {
-            return offset.checked_add(4).filter(|end| *end <= query.len());
-        }
-        offset = offset.checked_add(len)?;
-    }
+        .set_recursion_desired(query.recursion_desired())
+        .set_recursion_available(true)
+        .add_query(question.clone())
+        .add_answer(Record::from_rdata(
+            question.name().clone(),
+            /*ttl*/ 0,
+            RData::A(A(Ipv4Addr::from(address))),
+        ));
+    response.to_vec().expect("serialize DNS response")
 }
 
 fn write_frame(writer: &mut impl Write, payload: &[u8]) -> std::io::Result<()> {
