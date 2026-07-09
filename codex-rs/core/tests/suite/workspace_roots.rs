@@ -26,16 +26,14 @@ use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_target_os;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use tokio::time::Duration;
 use wiremock::MockServer;
 
 const IMAGE_CALL_ID: &str = "workspace-root-image";
 const COMMAND_CALL_ID: &str = "workspace-root-command";
-const TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 const PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -130,11 +128,9 @@ async fn mount_file_and_command_calls(
 async fn submit_workspace_turn(test: &TestCodex, prompt: &str) -> Result<()> {
     test.submit_turn_with_permission_profile(prompt, workspace_roots_read_profile())
         .await?;
-    wait_for_event_with_timeout(
-        &test.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        TURN_COMPLETE_TIMEOUT,
-    )
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
     .await;
     Ok(())
 }
