@@ -13,15 +13,15 @@ CREATE INDEX idx_thread_turns_page
 
 CREATE TABLE thread_items (
     thread_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
+    turn_id TEXT,
     item_id TEXT NOT NULL,
     rollout_ordinal INTEGER NOT NULL,
     materialized_thread_item_json TEXT NOT NULL,
-    PRIMARY KEY (thread_id, turn_id, item_id)
+    PRIMARY KEY (thread_id, item_id)
 );
 
 CREATE INDEX idx_thread_items_page
-    ON thread_items(thread_id, rollout_ordinal, turn_id, item_id);
+    ON thread_items(thread_id, rollout_ordinal, item_id);
 
 CREATE INDEX idx_thread_items_by_turn_page
     ON thread_items(thread_id, turn_id, rollout_ordinal, item_id);
