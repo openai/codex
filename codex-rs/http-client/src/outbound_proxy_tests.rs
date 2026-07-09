@@ -12,7 +12,11 @@ struct MapEnv {
 
 #[test]
 fn websocket_route_uses_http_equivalent_for_system_resolution() {
+    let env = MapEnv {
+        values: HashMap::new(),
+    };
     let route = resolve_proxy_route(
+        &env,
         "wss://api.openai.com/v1/responses",
         OutboundProxyPolicy::RespectSystemProxy,
         |request_url, origin| {
@@ -30,13 +34,18 @@ fn websocket_route_uses_http_equivalent_for_system_resolution() {
         route,
         OutboundProxyRoute::Proxy {
             url: "http://proxy.example:8080".to_string(),
+            no_proxy: None,
         }
     );
 }
 
 #[test]
 fn reqwest_default_route_preserves_transport_proxy_behavior() {
+    let env = MapEnv {
+        values: HashMap::new(),
+    };
     let route = resolve_proxy_route(
+        &env,
         "wss://api.openai.com/v1/responses",
         OutboundProxyPolicy::ReqwestDefault,
         |_, _| panic!("default policy should not resolve system proxy settings"),
@@ -80,11 +89,11 @@ fn environment_fallback_reads_injected_proxy_environment() {
         values: HashMap::from([("HTTPS_PROXY".to_string(), "://invalid".to_string())]),
     };
     let origin = RequestOrigin::parse("https://auth.openai.com/oauth/token").expect("valid URL");
-    let result = configure_env_proxy_handling(
-        &env,
+    let route = resolve_env_proxy_route(&env, &origin);
+    let result = configure_builder_for_resolved_route(
         reqwest::Client::builder(),
-        Some(&origin),
         ClientRouteClass::Auth,
+        &route,
     );
 
     assert!(matches!(
@@ -93,6 +102,69 @@ fn environment_fallback_reads_injected_proxy_environment() {
             route_class: ClientRouteClass::Auth,
         })
     ));
+}
+
+#[test]
+fn unavailable_system_route_resolves_environment_or_direct_explicitly() {
+    let origin = RequestOrigin::parse("https://backend.example/tasks").expect("valid URL");
+    let env = MapEnv {
+        values: HashMap::from([
+            (
+                "HTTPS_PROXY".to_string(),
+                "http://proxy.example:8080".to_string(),
+            ),
+            ("NO_PROXY".to_string(), "localhost,.internal".to_string()),
+        ]),
+    };
+
+    assert_eq!(
+        route_from_system_decision(
+            &env,
+            &origin,
+            SystemProxyDecision::Unavailable {
+                failure: RouteFailureClass::ProxyResolutionUnavailable,
+            },
+        ),
+        OutboundProxyRoute::Proxy {
+            url: "http://proxy.example:8080".to_string(),
+            no_proxy: Some("localhost,.internal".to_string()),
+        }
+    );
+    assert_eq!(
+        route_from_system_decision(
+            &MapEnv {
+                values: HashMap::new(),
+            },
+            &origin,
+            SystemProxyDecision::Unavailable {
+                failure: RouteFailureClass::ProxyResolutionUnavailable,
+            },
+        ),
+        OutboundProxyRoute::Direct
+    );
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[tokio::test]
+async fn async_resolution_uses_cached_route_before_global_permit() {
+    let request_url = "https://cached-fast-path.test/request";
+    cache_system_proxy_decision(request_url, SystemProxyDecision::Direct);
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy);
+    let permit = ASYNC_SYSTEM_PROXY_RESOLUTION_PERMIT
+        .acquire()
+        .await
+        .expect("global proxy permit should stay open");
+
+    let route = tokio::time::timeout(
+        Duration::from_millis(100),
+        factory.resolve_proxy_route_async(request_url.to_string()),
+    )
+    .await
+    .expect("cached resolution should not wait for the global permit")
+    .expect("cached route should resolve");
+    drop(permit);
+
+    assert_eq!(route, OutboundProxyRoute::Direct);
 }
 
 #[tokio::test]

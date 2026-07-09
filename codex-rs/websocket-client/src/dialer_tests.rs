@@ -232,6 +232,7 @@ async fn assert_proxy_tunnels_secure_websocket(proxy_tls: bool) {
         tls_config,
         OutboundProxyRoute::Proxy {
             url: format!("{proxy_scheme}://localhost:{}", proxy_addr.port()),
+            no_proxy: None,
         },
     )
     .await

@@ -38,9 +38,14 @@ pub(crate) async fn connect(
     proxy_route: OutboundProxyRoute,
 ) -> Result<(ConnectionInner, Response), WebSocketError> {
     let stream: Box<dyn AsyncIo> = match proxy_route {
-        OutboundProxyRoute::TransportDefault => {
+        OutboundProxyRoute::TransportDefault
+        | OutboundProxyRoute::Proxy {
+            no_proxy: Some(_), ..
+        } => {
             // The workspace enables tokio-tungstenite's `proxy` feature, so its default dialer
             // resolves HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY before opening the socket.
+            // Environment routes retain this path when NO_PROXY is present so Tungstenite applies
+            // its complete bypass semantics rather than duplicating them in this crate.
             let (stream, response) = connect_async_tls_with_config(
                 request,
                 Some(config),
@@ -59,7 +64,10 @@ pub(crate) async fn connect(
                     .map_err(WebSocketError::Io)?,
             )
         }
-        OutboundProxyRoute::Proxy { url } => {
+        OutboundProxyRoute::Proxy {
+            url,
+            no_proxy: None,
+        } => {
             let proxy = ProxyEndpoint::parse(&url)?;
             let host = websocket_host(&request)?;
             let port = websocket_port(&request)?;
