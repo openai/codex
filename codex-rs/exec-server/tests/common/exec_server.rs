@@ -179,6 +179,7 @@ impl ExecServerHarness {
         self.send_message(JSONRPCMessage::Notification(JSONRPCNotification {
             method: method.to_string(),
             params: Some(params),
+            trace: None,
         }))
         .await
     }

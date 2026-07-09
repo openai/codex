@@ -196,6 +196,7 @@ async fn run_connection(
                         method = method.as_str(),
                         result = tracing::field::Empty,
                     );
+                    set_notification_span_parent(&notification_span, &notification);
                     let continue_connection = async {
                         let Some((method, route)) = router.notification_route(method.as_str())
                         else {
@@ -301,6 +302,21 @@ fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
     }
 }
 
+fn set_notification_span_parent(
+    span: &tracing::Span,
+    notification: &codex_exec_server_protocol::JSONRPCNotification,
+) {
+    let method = notification.method.as_str();
+    if let Some(trace) = &notification.trace
+        && !codex_otel::set_parent_from_w3c_trace_context(span, trace)
+    {
+        warn!(
+            method,
+            "ignoring invalid inbound exec-server notification trace carrier"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -334,6 +350,7 @@ mod tests {
 
     use super::request_span;
     use super::run_connection;
+    use super::set_notification_span_parent;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
@@ -407,6 +424,58 @@ mod tests {
         );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
+    }
+
+    #[test]
+    #[serial_test::serial(exec_server_tracing)]
+    fn notification_span_uses_inbound_trace_parent() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let trace_id = TraceId::from_hex("00000000000000000000000000000001").expect("trace id");
+        let parent_span_id = SpanId::from_hex("0000000000000002").expect("span id");
+        let notification = JSONRPCNotification {
+            method: INITIALIZED_METHOD.to_string(),
+            params: None,
+            trace: Some(codex_protocol::protocol::W3cTraceContext {
+                traceparent: Some(format!("00-{trace_id}-{parent_span_id}-01")),
+                tracestate: None,
+            }),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            let notification_span = tracing::info_span!(
+                "codex.exec_server.notification",
+                otel.kind = "server",
+                otel.name = tracing::field::Empty,
+                rpc.system = "jsonrpc",
+                rpc.method = INITIALIZED_METHOD,
+                rpc.transport = "stdio",
+                method = INITIALIZED_METHOD,
+                result = tracing::field::Empty,
+            );
+            set_notification_span_parent(&notification_span, &notification);
+            notification_span.record("otel.name", INITIALIZED_METHOD);
+            notification_span.in_scope(|| {});
+            drop(notification_span);
+        });
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let notification_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == INITIALIZED_METHOD)
+            .expect("initialized notification span");
+        assert_eq!(notification_span.span_context.trace_id(), trace_id);
+        assert_eq!(notification_span.parent_span_id, parent_span_id);
     }
 
     #[tokio::test]
@@ -581,6 +650,7 @@ mod tests {
             &JSONRPCMessage::Notification(JSONRPCNotification {
                 method: method.to_string(),
                 params: Some(serde_json::to_value(params).expect("serialize params")),
+                trace: None,
             }),
         )
         .await;

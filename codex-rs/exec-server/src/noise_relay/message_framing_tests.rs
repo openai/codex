@@ -15,6 +15,7 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
         params: Some(serde_json::json!({
             "data": "x".repeat(128 * 1024),
         })),
+        trace: None,
     });
     let framed = frame_jsonrpc_message(&message).unwrap();
     assert!(framed.len() > 128 * 1024);

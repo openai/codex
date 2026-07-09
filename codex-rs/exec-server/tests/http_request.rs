@@ -605,7 +605,7 @@ async fn collect_response_body_deltas(
     let mut deltas = Vec::new();
     loop {
         let event = server.next_event().await?;
-        let JSONRPCMessage::Notification(JSONRPCNotification { method, params }) = event else {
+        let JSONRPCMessage::Notification(JSONRPCNotification { method, params, .. }) = event else {
             anyhow::bail!("expected http/request body delta notification, got {event:?}");
         };
         assert_eq!(method, "http/request/bodyDelta");

@@ -1099,6 +1099,7 @@ impl JsonRpcPeer {
         self.write_message(JSONRPCMessage::Notification(JSONRPCNotification {
             method: HTTP_REQUEST_BODY_DELTA_METHOD.to_string(),
             params: Some(to_value(delta)?),
+            trace: None,
         }))
         .await
     }

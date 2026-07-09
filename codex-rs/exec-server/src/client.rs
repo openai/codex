@@ -1749,6 +1749,7 @@ mod tests {
                     })
                     .expect("closed notification should serialize"),
                 ),
+                trace: None,
             }),
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
@@ -1761,6 +1762,7 @@ mod tests {
                     })
                     .expect("output notification should serialize"),
                 ),
+                trace: None,
             }),
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method: EXEC_EXITED_METHOD.to_string(),
@@ -1773,6 +1775,7 @@ mod tests {
                     })
                     .expect("exit notification should serialize"),
                 ),
+                trace: None,
             }),
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
@@ -1785,6 +1788,7 @@ mod tests {
                     })
                     .expect("output notification should serialize"),
                 ),
+                trace: None,
             }),
         ] {
             notifications_tx
@@ -2118,6 +2122,7 @@ mod tests {
                             })
                             .expect("output notification should serialize"),
                         ),
+                        trace: None,
                     }),
                 )
                 .await;
@@ -2412,6 +2417,7 @@ mod tests {
                         })
                         .expect("output notification should serialize"),
                     ),
+                    trace: None,
                 }))
                 .await
                 .expect("output notification should queue");
@@ -2429,6 +2435,7 @@ mod tests {
                     })
                     .expect("exit notification should serialize"),
                 ),
+                trace: None,
             }))
             .await
             .expect("exit notification should queue");

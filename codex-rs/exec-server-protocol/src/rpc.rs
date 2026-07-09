@@ -7,6 +7,7 @@ use std::fmt;
 
 use codex_protocol::protocol::W3cTraceContext;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 
 pub const JSONRPC_VERSION: &str = "2.0";
@@ -56,6 +57,23 @@ pub struct JSONRPCNotification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+    /// Optional W3C Trace Context for distributed tracing.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_trace_context"
+    )]
+    pub trace: Option<W3cTraceContext>,
+}
+
+fn deserialize_optional_trace_context<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<W3cTraceContext>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// A successful response to a request.
@@ -79,3 +97,7 @@ pub struct JSONRPCErrorError {
     pub data: Option<serde_json::Value>,
     pub message: String,
 }
+
+#[cfg(test)]
+#[path = "rpc_tests.rs"]
+mod tests;

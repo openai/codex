@@ -100,6 +100,7 @@ async fn stdio_listen_transport_serves_initialize() {
     let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
         method: INITIALIZED_METHOD.to_string(),
         params: Some(serde_json::to_value(()).expect("initialized params should serialize")),
+        trace: None,
     });
     write_jsonrpc_line(&mut client_writer, &initialized).await;
 
