@@ -11,6 +11,8 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::codex_apps_mcp_server_config;
+use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -38,7 +40,27 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
     let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
         panic!("hosted plugin runtime should use streamable HTTP");
     };
-    assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
+    let plugins_mcp_base_url_override = std::env::var("CODEX_PLUGINS_MCP_BASE_URL").ok();
+    let expected_config = match plugins_mcp_base_url_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        Some(base_url) => {
+            codex_apps_mcp_server_config(base_url, /*apps_mcp_product_sku*/ None)
+        }
+        None => hosted_plugin_runtime_mcp_server_config(
+            "https://chatgpt.com",
+            /*apps_mcp_product_sku*/ None,
+        ),
+    };
+    let McpServerTransportConfig::StreamableHttp {
+        url: expected_url, ..
+    } = expected_config.transport
+    else {
+        panic!("expected hosted plugin runtime config should use streamable HTTP");
+    };
+    assert_eq!(url, &expected_url);
 
     Ok(())
 }

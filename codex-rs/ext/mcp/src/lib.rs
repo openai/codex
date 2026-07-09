@@ -5,9 +5,32 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 
 mod executor_plugin;
+
+const CODEX_PLUGINS_MCP_BASE_URL_ENV_VAR: &str = "CODEX_PLUGINS_MCP_BASE_URL";
+
+#[derive(Debug, Eq, PartialEq)]
+enum PluginsMcpServerTarget<'a> {
+    HostedPluginRuntime(&'a str),
+    PluginsMcp(&'a str),
+}
+
+fn plugins_mcp_server_target<'a>(
+    chatgpt_base_url: &'a str,
+    plugins_mcp_base_url_override: Option<&'a str>,
+) -> PluginsMcpServerTarget<'a> {
+    if let Some(plugins_mcp_base_url) = plugins_mcp_base_url_override
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        return PluginsMcpServerTarget::PluginsMcp(plugins_mcp_base_url);
+    }
+
+    PluginsMcpServerTarget::HostedPluginRuntime(chatgpt_base_url)
+}
 
 struct HostedPluginRuntimeExtension;
 
@@ -27,16 +50,32 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                 return vec![McpServerContribution::Remove { name }];
             }
 
+            let plugins_mcp_base_url_override =
+                std::env::var(CODEX_PLUGINS_MCP_BASE_URL_ENV_VAR).ok();
+            let apps_mcp_product_sku = config.apps_mcp_product_sku.as_deref();
+            let server_config = match plugins_mcp_server_target(
+                &config.chatgpt_base_url,
+                plugins_mcp_base_url_override.as_deref(),
+            ) {
+                PluginsMcpServerTarget::HostedPluginRuntime(base_url) => {
+                    hosted_plugin_runtime_mcp_server_config(base_url, apps_mcp_product_sku)
+                }
+                PluginsMcpServerTarget::PluginsMcp(base_url) => {
+                    codex_apps_mcp_server_config(base_url, apps_mcp_product_sku)
+                }
+            };
+
             vec![McpServerContribution::Set {
                 name,
-                config: Box::new(hosted_plugin_runtime_mcp_server_config(
-                    &config.chatgpt_base_url,
-                    config.apps_mcp_product_sku.as_deref(),
-                )),
+                config: Box::new(server_config),
             }]
         })
     }
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
 
 pub fn install(builder: &mut ExtensionRegistryBuilder<Config>) {
     builder.mcp_server_contributor(std::sync::Arc::new(HostedPluginRuntimeExtension));
