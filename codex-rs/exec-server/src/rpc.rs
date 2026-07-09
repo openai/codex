@@ -607,10 +607,11 @@ where
     P: DeserializeOwned,
 {
     let params = params.unwrap_or(Value::Null);
-    match serde_json::from_value(params.clone()) {
+    let retry_as_null = matches!(&params, Value::Object(map) if map.is_empty());
+    match serde_json::from_value(params) {
         Ok(params) => Ok(params),
         Err(err) => {
-            if matches!(params, Value::Object(ref map) if map.is_empty()) {
+            if retry_as_null {
                 serde_json::from_value(Value::Null).map_err(|_| err)
             } else {
                 Err(err)
