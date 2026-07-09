@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tracing::Instrument;
 
 use crate::ExecBackend;
 use crate::ExecBackendFuture;
@@ -341,34 +342,69 @@ impl LocalProcess {
                 })),
             );
         }
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stdout
-            },
-            spawned.stdout_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stderr
-            },
-            spawned.stderr_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(watch_exit(
-            process_id.clone(),
-            spawned.exit_rx,
-            Arc::clone(&self.inner),
-            output_notify,
-        ));
+        let (stdout_stream, stdout_stream_name) = if params.tty {
+            (ExecOutputStream::Pty, "pty")
+        } else {
+            (ExecOutputStream::Stdout, "stdout")
+        };
+        let stdout_span = tracing::info_span!(
+            parent: None,
+            "codex.exec_server.process_output",
+            otel.kind = "internal",
+            exec_server.process_id = %process_id,
+            exec_server.output_stream = stdout_stream_name,
+        );
+        stdout_span.follows_from(tracing::Span::current());
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                stdout_stream,
+                spawned.stdout_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stdout_span),
+        );
+        let (stderr_stream, stderr_stream_name) = if params.tty {
+            (ExecOutputStream::Pty, "pty")
+        } else {
+            (ExecOutputStream::Stderr, "stderr")
+        };
+        let stderr_span = tracing::info_span!(
+            parent: None,
+            "codex.exec_server.process_output",
+            otel.kind = "internal",
+            exec_server.process_id = %process_id,
+            exec_server.output_stream = stderr_stream_name,
+        );
+        stderr_span.follows_from(tracing::Span::current());
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                stderr_stream,
+                spawned.stderr_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stderr_span),
+        );
+        let wait_span = tracing::info_span!(
+            parent: None,
+            "codex.exec_server.process_wait",
+            otel.kind = "internal",
+            exec_server.process_id = %process_id,
+            process.exit_code = tracing::field::Empty,
+        );
+        wait_span.follows_from(tracing::Span::current());
+        tokio::spawn(
+            watch_exit(
+                process_id.clone(),
+                spawned.exit_rx,
+                Arc::clone(&self.inner),
+                output_notify,
+            )
+            .instrument(wait_span),
+        );
 
         Ok((ExecResponse { process_id }, wake_tx, events))
     }
@@ -823,6 +859,7 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
+    tracing::Span::current().record("process.exit_code", exit_code);
     let sandboxed = {
         let mut processes = inner.processes.lock().await;
         match processes.get_mut(&process_id) {

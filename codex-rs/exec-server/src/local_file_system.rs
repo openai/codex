@@ -667,44 +667,53 @@ impl DirectFileSystem {
         reject_sandbox_context(sandbox)?;
         let source_path = source_path.to_abs_path()?.into_path_buf();
         let destination_path = destination_path.to_abs_path()?.into_path_buf();
-        tokio::task::spawn_blocking(move || -> FileSystemResult<()> {
-            let metadata = std::fs::symlink_metadata(source_path.as_path())?;
-            let file_type = metadata.file_type();
+        let copy_span = tracing::info_span!(
+            parent: None,
+            "codex.exec_server.fs_copy",
+            otel.kind = "internal",
+            fs.recursive = options.recursive,
+        );
+        copy_span.follows_from(tracing::Span::current());
+        tokio::task::spawn_blocking(move || {
+            copy_span.in_scope(|| -> FileSystemResult<()> {
+                let metadata = std::fs::symlink_metadata(source_path.as_path())?;
+                let file_type = metadata.file_type();
 
-            if file_type.is_dir() {
-                if !options.recursive {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "fs/copy requires recursive: true when sourcePath is a directory",
-                    ));
+                if file_type.is_dir() {
+                    if !options.recursive {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "fs/copy requires recursive: true when sourcePath is a directory",
+                        ));
+                    }
+                    if destination_is_same_or_descendant_of_source(
+                        source_path.as_path(),
+                        destination_path.as_path(),
+                    )? {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "fs/copy cannot copy a directory to itself or one of its descendants",
+                        ));
+                    }
+                    copy_dir_recursive(source_path.as_path(), destination_path.as_path())?;
+                    return Ok(());
                 }
-                if destination_is_same_or_descendant_of_source(
-                    source_path.as_path(),
-                    destination_path.as_path(),
-                )? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "fs/copy cannot copy a directory to itself or one of its descendants",
-                    ));
+
+                if file_type.is_symlink() {
+                    copy_symlink(source_path.as_path(), destination_path.as_path())?;
+                    return Ok(());
                 }
-                copy_dir_recursive(source_path.as_path(), destination_path.as_path())?;
-                return Ok(());
-            }
 
-            if file_type.is_symlink() {
-                copy_symlink(source_path.as_path(), destination_path.as_path())?;
-                return Ok(());
-            }
+                if file_type.is_file() {
+                    std::fs::copy(source_path.as_path(), destination_path.as_path())?;
+                    return Ok(());
+                }
 
-            if file_type.is_file() {
-                std::fs::copy(source_path.as_path(), destination_path.as_path())?;
-                return Ok(());
-            }
-
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "fs/copy only supports regular files, directories, and symlinks",
-            ))
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "fs/copy only supports regular files, directories, and symlinks",
+                ))
+            })
         })
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?

@@ -57,13 +57,25 @@ impl FileReadHandleManager {
                 .cloned()
                 .ok_or_else(|| unknown_handle_error(handle_id))?
         };
-        let result =
-            match tokio::task::spawn_blocking(move || read_block_at(&file, offset, len)).await {
-                Ok(result) => result,
-                Err(error) => Err(io::Error::other(format!(
-                    "file read task stopped unexpectedly: {error}"
-                ))),
-            };
+        let read_span = tracing::info_span!(
+            parent: None,
+            "codex.exec_server.fs_read_block",
+            otel.kind = "internal",
+            fs.handle_id = handle_id,
+            fs.offset = offset,
+            fs.length = len,
+        );
+        read_span.follows_from(tracing::Span::current());
+        let result = match tokio::task::spawn_blocking(move || {
+            read_span.in_scope(|| read_block_at(&file, offset, len))
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => Err(io::Error::other(format!(
+                "file read task stopped unexpectedly: {error}"
+            ))),
+        };
         if result.is_err() {
             self.close(handle_id).await;
         }

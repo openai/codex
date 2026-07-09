@@ -234,11 +234,14 @@ impl ReqwestHttpRequestRunner {
                     )
                     .await
                     {
+                        tracing::Span::current().record("result", "disconnected");
                         return;
                     }
                     seq += 1;
                 }
                 Err(error) => {
+                    tracing::Span::current().record("result", "error");
+                    tracing::Span::current().record("error.type", "response_body");
                     let _ = send_body_delta(
                         &notifications,
                         HttpRequestBodyDeltaNotification {
@@ -255,7 +258,7 @@ impl ReqwestHttpRequestRunner {
             }
         }
 
-        let _ = send_body_delta(
+        let sent = send_body_delta(
             &notifications,
             HttpRequestBodyDeltaNotification {
                 request_id,
@@ -266,6 +269,7 @@ impl ReqwestHttpRequestRunner {
             },
         )
         .await;
+        tracing::Span::current().record("result", if sent { "success" } else { "disconnected" });
     }
 
     fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
