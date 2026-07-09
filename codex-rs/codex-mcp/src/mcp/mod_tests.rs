@@ -134,6 +134,7 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
             "https://alpha.example",
             /*apps_mcp_product_sku*/ None,
             /*originator*/ None,
+            /*supports_parallel_tool_calls*/ false,
         ),
     ));
     config.mcp_server_catalog = catalog.build();
@@ -205,6 +206,7 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
             "https://github.example",
             /*apps_mcp_product_sku*/ None,
             /*originator*/ None,
+            /*supports_parallel_tool_calls*/ false,
         ),
     ));
     config.mcp_server_catalog = catalog.build();
@@ -264,6 +266,7 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
+        /*supports_parallel_tool_calls*/ false,
     );
     let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
@@ -279,6 +282,7 @@ fn codex_apps_server_config_forwards_thread_originator_header() {
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
         Some("thread_originator"),
+        /*supports_parallel_tool_calls*/ false,
     );
 
     match &config.transport {
@@ -307,6 +311,7 @@ fn codex_apps_server_config_sets_product_sku_header() {
             "https://chatgpt.com",
             configured_product_sku,
             /*originator*/ None,
+            /*supports_parallel_tool_calls*/ false,
         );
 
         match &config.transport {
@@ -335,6 +340,7 @@ fn codex_apps_server_config_forwards_originator_and_configured_product_sku_heade
         "https://chatgpt.com",
         Some("tpp"),
         Some("thread_originator"),
+        /*supports_parallel_tool_calls*/ false,
     );
 
     match &config.transport {
@@ -422,6 +428,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
             &config.chatgpt_base_url,
             config.apps_mcp_product_sku.as_deref(),
             /*originator*/ None,
+            /*supports_parallel_tool_calls*/ false,
         ),
     ));
     config.mcp_server_catalog = catalog.build();

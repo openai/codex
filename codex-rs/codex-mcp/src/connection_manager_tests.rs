@@ -1419,6 +1419,7 @@ fn server_metadata_preserves_tool_approval_policy() {
         "https://docs.example",
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
+        /*supports_parallel_tool_calls*/ false,
     );
     config.environment_id = "remote".to_string();
     config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
@@ -1464,6 +1465,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
+        /*supports_parallel_tool_calls*/ false,
     ));
     manager.server_metadata.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),

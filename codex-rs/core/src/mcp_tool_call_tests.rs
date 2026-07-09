@@ -1436,6 +1436,7 @@ async fn host_owned_codex_apps_manager(
             "https://chatgpt.com",
             /*apps_mcp_product_sku*/ None,
             Some(&turn_context.originator),
+            /*supports_parallel_tool_calls*/ false,
         )),
     )]);
     let manager = codex_mcp::McpConnectionManager::new(

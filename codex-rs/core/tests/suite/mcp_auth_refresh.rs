@@ -67,6 +67,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         &apps_server.chatgpt_base_url,
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
+        /*supports_parallel_tool_calls*/ false,
     );
     let McpServerTransportConfig::StreamableHttp {
         bearer_token_env_var,

@@ -494,13 +494,16 @@ pub fn codex_apps_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
     originator: Option<&str>,
+    supports_parallel_tool_calls: bool,
 ) -> McpServerConfig {
-    mcp_server_config_for_url(
+    let mut config = mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
         originator,
         McpServerAuth::ChatGpt,
-    )
+    );
+    config.supports_parallel_tool_calls = supports_parallel_tool_calls;
+    config
 }
 
 /// Builds the ChatGPT-hosted plugin runtime served by plugin-service.
@@ -508,6 +511,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
     originator: Option<&str>,
+    supports_parallel_tool_calls: bool,
 ) -> McpServerConfig {
     let base_url = normalize_codex_apps_base_url(chatgpt_base_url);
     let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
@@ -515,12 +519,14 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     } else {
         format!("{base_url}/api/codex")
     };
-    mcp_server_config_for_url(
+    let mut config = mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
         originator,
         McpServerAuth::ChatGpt,
-    )
+    );
+    config.supports_parallel_tool_calls = supports_parallel_tool_calls;
+    config
 }
 
 fn mcp_server_config_for_url(

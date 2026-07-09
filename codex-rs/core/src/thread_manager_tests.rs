@@ -554,6 +554,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     "https://selected.invalid",
                     /*apps_mcp_product_sku*/ None,
                     /*originator*/ None,
+                    /*supports_parallel_tool_calls*/ false,
                 );
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;
