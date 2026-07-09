@@ -196,6 +196,7 @@ async fn run_sync_with_transport_overrides(
             Some(git_binary.as_path()),
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -215,6 +216,7 @@ async fn run_sync_without_git(
             /*git_binary*/ None,
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -227,7 +229,11 @@ async fn run_http_sync(
 ) -> Result<String, String> {
     let api_base_url = api_base_url.into();
     tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_via_http(codex_home.as_path(), &api_base_url)
+        sync_openai_plugins_repo_via_http(
+            codex_home.as_path(),
+            &api_base_url,
+            &crate::test_support::test_http_client_factory(),
+        )
     })
     .await
     .expect("sync task should join")
@@ -366,6 +372,7 @@ exit 1
                 Some(git_path.as_path()),
                 "http://127.0.0.1:9",
                 "http://127.0.0.1:9/backend-api/plugins/export/curated",
+                &crate::test_support::test_http_client_factory(),
             )
         };
         let first = scope.spawn(run_sync);

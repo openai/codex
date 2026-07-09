@@ -8,11 +8,17 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value;
 
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
+
+pub(crate) fn test_http_client_factory() -> HttpClientFactory {
+    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+}
 
 pub(crate) fn write_file(path: &Path, contents: &str) {
     fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
@@ -152,6 +158,7 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
             /*default_enabled*/ true,
         ),
         "https://chatgpt.com/backend-api/".to_string(),
+        test_http_client_factory(),
     )
 }
 
