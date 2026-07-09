@@ -29,7 +29,6 @@ use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_response_created;
-use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -43,14 +42,14 @@ use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
 
-struct RetryTurnErrors(std::time::Duration);
+struct RetryTurnErrors;
 
 impl TurnLifecycleContributor for RetryTurnErrors {
-    fn on_turn_error<'a>(
+    fn retry_delay_for_turn_error<'a>(
         &'a self,
         _input: codex_extension_api::TurnErrorInput<'a>,
     ) -> codex_extension_api::ExtensionFuture<'a, Option<std::time::Duration>> {
-        Box::pin(async { Some(self.0) })
+        Box::pin(async { Some(std::time::Duration::from_secs(60)) })
     }
 }
 
@@ -302,11 +301,8 @@ async fn wait_for_sleep_item_completed(codex: &CodexThread, call_id: &str, durat
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
-    skip_if_no_network!();
-
-    const CONTINUATION: &str = "GOAL_CONTINUATION";
-    const MAIL: &str = "CHILD_UPDATE";
+async fn sampling_error_retries_in_place_and_steer_interrupts_delay() {
+    const INITIAL: &str = "INITIAL_PROMPT";
     const STEER: &str = "USER_STEER";
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -322,9 +318,7 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
     )
     .await;
     let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.turn_lifecycle_contributor(Arc::new(RetryTurnErrors(
-        std::time::Duration::from_secs(60),
-    )));
+    extensions.turn_lifecycle_contributor(Arc::new(RetryTurnErrors));
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| config.model_provider.stream_max_retries = Some(0))
@@ -332,11 +326,7 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
         .await
         .expect("build Codex test session");
 
-    submit_queue_only_agent_mail(&test.codex, MAIL).await;
-    test.codex
-        .try_start_turn_if_idle(vec![responses::user_message_item(CONTINUATION)])
-        .await
-        .expect("start automatic turn");
+    submit_user_input(&test.codex, INITIAL).await;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::StreamError(_))
     })
@@ -345,18 +335,16 @@ async fn automatic_turn_retries_in_place_with_queued_mail_in_first_request() {
     wait_for_turn_complete(&test.codex).await;
 
     let requests = response_mock.requests();
-    let [first, second] = requests.as_slice() else {
+    let [_, second] = requests.as_slice() else {
         panic!("expected two requests, got {}", requests.len());
     };
-    assert_eq!(1, first.inputs_of_type("agent_message").len());
-    assert!(first.body_contains_text(MAIL));
     assert!(second.body_contains_text(STEER));
     assert_eq!(
         1,
         second
             .message_input_texts("user")
             .iter()
-            .filter(|text| text.as_str() == CONTINUATION)
+            .filter(|text| text.as_str() == INITIAL)
             .count()
     );
 }

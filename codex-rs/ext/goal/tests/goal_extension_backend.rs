@@ -574,26 +574,7 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
 }
 
 #[tokio::test]
-async fn turn_error_blocks_goal() -> anyhow::Result<()> {
-    assert_eq!(
-        (codex_state::ThreadGoalStatus::Blocked, false),
-        goal_status_after_turn_error(CodexErrorInfo::Other).await?
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
-    assert_eq!(
-        (codex_state::ThreadGoalStatus::Active, true),
-        goal_status_after_turn_error(CodexErrorInfo::ServerOverloaded).await?
-    );
-    Ok(())
-}
-
-async fn goal_status_after_turn_error(
-    error: CodexErrorInfo,
-) -> anyhow::Result<(codex_state::ThreadGoalStatus, bool)> {
+async fn retryable_error_keeps_goal_active_and_terminal_error_blocks_it() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -609,14 +590,35 @@ async fn goal_status_after_turn_error(
         ))
         .await?;
 
-    let retry_delay = harness.notify_turn_error("turn-1", error).await;
+    let turn_store = ExtensionData::new("turn-1");
+    let retry_delay = harness.registry.turn_lifecycle_contributors()[0]
+        .retry_delay_for_turn_error(TurnErrorInput {
+            turn_id: "turn-1",
+            error: CodexErrorInfo::ServerOverloaded,
+            session_store: &harness.session_store,
+            thread_store: &harness.thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    assert!(retry_delay.is_some());
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+
+    harness
+        .notify_turn_error("turn-1", CodexErrorInfo::Other)
+        .await;
 
     let goal = runtime
         .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-    Ok((goal.status, retry_delay.is_some()))
+    assert_eq!(codex_state::ThreadGoalStatus::Blocked, goal.status);
+    Ok(())
 }
 
 #[tokio::test]
@@ -1321,15 +1323,10 @@ impl GoalExtensionHarness {
         }
     }
 
-    async fn notify_turn_error(
-        &self,
-        turn_id: &str,
-        error: CodexErrorInfo,
-    ) -> Option<std::time::Duration> {
+    async fn notify_turn_error(&self, turn_id: &str, error: CodexErrorInfo) {
         let turn_store = ExtensionData::new(turn_id);
-        let mut retry_delay = None;
         for contributor in self.registry.turn_lifecycle_contributors() {
-            retry_delay = contributor
+            contributor
                 .on_turn_error(TurnErrorInput {
                     turn_id,
                     error: error.clone(),
@@ -1339,7 +1336,6 @@ impl GoalExtensionHarness {
                 })
                 .await;
         }
-        retry_delay
     }
 
     fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {

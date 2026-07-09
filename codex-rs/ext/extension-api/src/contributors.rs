@@ -185,9 +185,9 @@ pub trait TurnLifecycleContributor: Send + Sync {
         })
     }
 
-    /// Called when the host observes an error for a running turn. Returning a
-    /// delay asks the host to retry the failed operation without ending the turn.
-    fn on_turn_error<'a>(
+    /// Returns how long the host should wait before retrying a failed sampling
+    /// request. Returning `None` leaves the error terminal.
+    fn retry_delay_for_turn_error<'a>(
         &'a self,
         input: TurnErrorInput<'a>,
     ) -> ExtensionFuture<'a, Option<Duration>> {
@@ -195,6 +195,14 @@ pub trait TurnLifecycleContributor: Send + Sync {
             let _self = self;
             let _input = input;
             None
+        })
+    }
+
+    /// Called when the host observes a terminal error for a running turn.
+    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
         })
     }
 }

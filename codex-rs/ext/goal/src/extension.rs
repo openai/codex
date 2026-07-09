@@ -47,11 +47,6 @@ use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
 
-// Capacity failures do not consume user tokens. Add jitter around a five-minute
-// average so clients that hit capacity together do not retry in lockstep.
-const DEFERRED_GOAL_RETRY_MIN_SECS: u64 = 4 * 60;
-const DEFERRED_GOAL_RETRY_MAX_SECS: u64 = 6 * 60;
-
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
     pub enabled: bool,
@@ -303,7 +298,7 @@ where
         })
     }
 
-    fn on_turn_error<'a>(
+    fn retry_delay_for_turn_error<'a>(
         &'a self,
         input: TurnErrorInput<'a>,
     ) -> ExtensionFuture<'a, Option<Duration>> {
@@ -316,10 +311,22 @@ where
                     .accounting_state()
                     .turn_is_current_active_goal(input.turn_id)
             {
-                return Some(Duration::from_secs(rand::rng().random_range(
-                    DEFERRED_GOAL_RETRY_MIN_SECS..=DEFERRED_GOAL_RETRY_MAX_SECS,
-                )));
+                // Capacity failures do not consume tokens. Jitter around five minutes
+                // prevents clients that hit capacity together from retrying in lockstep.
+                return Some(Duration::from_secs(
+                    rand::rng().random_range(4 * 60..=6 * 60),
+                ));
             }
+
+            None
+        })
+    }
+
+    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
@@ -337,7 +344,6 @@ where
                     "failed to stop active goal after turn error: {err}"
                 );
             }
-            None
         })
     }
 }

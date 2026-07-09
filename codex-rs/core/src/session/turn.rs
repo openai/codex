@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -152,30 +151,19 @@ pub(crate) async fn run_turn(
 ) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
-    let turn_state = sess
-        .input_queue
-        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
-        .await;
-    let (mut retry_activity_rx, _) = sess
-        .input_queue
-        .subscribe_activity(turn_state.as_deref())
-        .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    while let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
         if matches!(err, CodexErr::TurnAborted) {
             return Err(err);
         }
-        let retry_delay = sess
-            .emit_turn_error_lifecycle(turn_context.as_ref(), err.to_codex_protocol_error())
+        let error = err.to_codex_protocol_error();
+        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
-        let Some(delay) = retry_delay else {
-            return Ok(None);
-        };
-        wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
+        return Ok(None);
     }
 
     // run_turn owns the step used to seed context and make the first sampling request.
@@ -200,9 +188,7 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return Ok(None);
     }
-    let mut can_drain_pending_input = !input
-        .iter()
-        .any(|item| matches!(item, TurnInput::UserInput { .. }));
+    let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
         return Ok(None);
     }
@@ -234,7 +220,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
-    // 1. At the start of a user turn, so the submitted user input gets sampled first.
+    // 1. At the start of a turn, so the fresh turn input in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     let mut next_step_context = Some(first_step_context);
@@ -362,7 +348,7 @@ pub(crate) async fn run_turn(
                 if needs_follow_up
                     && (sess.take_new_context_window_request().await || token_limit_reached)
                 {
-                    while let Err(err) = run_auto_compact(
+                    if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
                         /*fallback_step_context*/ None,
@@ -376,16 +362,10 @@ pub(crate) async fn run_turn(
                         if matches!(err, CodexErr::TurnAborted) {
                             return Err(err);
                         }
-                        let retry_delay = sess
-                            .emit_turn_error_lifecycle(
-                                turn_context.as_ref(),
-                                err.to_codex_protocol_error(),
-                            )
+                        let error = err.to_codex_protocol_error();
+                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
-                        let Some(delay) = retry_delay else {
-                            return Ok(None);
-                        };
-                        wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
+                        return Ok(None);
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -467,9 +447,21 @@ pub(crate) async fn run_turn(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
-                let retry_delay = sess
-                    .emit_turn_error_lifecycle(turn_context.as_ref(), error)
-                    .await;
+                let mut retry_delay = None;
+                for contributor in sess.services.extensions.turn_lifecycle_contributors() {
+                    retry_delay = contributor
+                        .retry_delay_for_turn_error(codex_extension_api::TurnErrorInput {
+                            turn_id: turn_context.sub_id.as_str(),
+                            error: error.clone(),
+                            session_store: &sess.services.session_extension_data,
+                            thread_store: &sess.services.thread_extension_data,
+                            turn_store: turn_context.extension_data.as_ref(),
+                        })
+                        .await;
+                    if retry_delay.is_some() {
+                        break;
+                    }
+                }
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let error_event = e.to_error_event(/*message_prefix*/ None);
                 if let Some(delay) = retry_delay {
@@ -483,11 +475,31 @@ pub(crate) async fn run_turn(
                     )
                     .await;
                     // Keep this turn alive so its recorded input is not appended again.
-                    // Let queued input interrupt the backoff instead of parking the live turn.
-                    wait_for_retry_delay(&sess, delay, &mut retry_activity_rx).await;
+                    // Let queued user input interrupt the backoff instead of parking the turn.
+                    let turn_state = sess
+                        .input_queue
+                        .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
+                        .await;
+                    let (mut activity_rx, pending_activity) = sess
+                        .input_queue
+                        .subscribe_activity(turn_state.as_deref())
+                        .await;
+                    if pending_activity != Some(InputQueueActivity::Steer) {
+                        let _ = tokio::time::timeout(delay, async {
+                            while activity_rx.changed().await.is_ok() {
+                                // Mailbox activity does not represent user intent to retry now.
+                                if *activity_rx.borrow_and_update() == InputQueueActivity::Steer {
+                                    break;
+                                }
+                            }
+                        })
+                        .await;
+                    }
                     can_drain_pending_input = true;
                     continue;
                 }
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
+                    .await;
                 sess.send_event(&turn_context, EventMsg::Error(error_event))
                     .await;
                 // let the user continue the conversation
@@ -497,22 +509,6 @@ pub(crate) async fn run_turn(
     }
 
     Ok(last_agent_message)
-}
-
-async fn wait_for_retry_delay(
-    sess: &Session,
-    delay: Duration,
-    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
-) {
-    let _ = tokio::time::timeout(delay, async {
-        while activity_rx.changed().await.is_ok() {
-            // Ignore mailbox activity that is deferred to the next turn.
-            if sess.input_queue.has_pending_input(&sess.active_turn).await {
-                break;
-            }
-        }
-    })
-    .await;
 }
 
 #[instrument(level = "trace", skip_all)]

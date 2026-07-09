@@ -118,10 +118,13 @@ impl Session {
             ));
         }
 
-        // Keep automatic input task-owned so a pre-turn failure drops this
-        // attempt instead of immediately replaying it from the pending queue.
-        let input = input.into_iter().map(TurnInput::ResponseItem).collect();
-        self.start_task(turn_context, input, RegularTask::new())
+        self.input_queue
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                input.into_iter().map(TurnInput::ResponseItem).collect(),
+            )
+            .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
         Ok(())
     }

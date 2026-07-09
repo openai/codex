@@ -2533,7 +2533,7 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
         fn on_turn_error<'a>(
             &'a self,
             input: codex_extension_api::TurnErrorInput<'a>,
-        ) -> codex_extension_api::ExtensionFuture<'a, Option<std::time::Duration>> {
+        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
             Box::pin(async move {
                 self.records
                     .lock()
@@ -2553,7 +2553,6 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
                             .get::<ThreadTurnErrorMarker>()
                             .is_some(),
                     });
-                None
             })
         }
     }
