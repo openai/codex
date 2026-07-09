@@ -515,6 +515,9 @@ async fn build_skills_and_plugins(
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
     let turn_context = step_context.turn.as_ref();
+    if turn_context.config.features.enabled(Feature::ToolFree) {
+        return Some((Vec::new(), HashSet::new()));
+    }
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
@@ -1220,6 +1223,19 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
+    if turn_context.config.features.enabled(Feature::ToolFree) {
+        return Ok(Arc::new(ToolRouter::from_context(
+            step_context,
+            ToolRouterParams {
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                tool_suggest_candidates: None,
+                extension_tool_executors: Vec::new(),
+                dynamic_tools: &[],
+            },
+            &sess.services.tool_search_handler_cache,
+        )));
+    }
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = step_context

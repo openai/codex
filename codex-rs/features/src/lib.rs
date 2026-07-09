@@ -164,6 +164,8 @@ pub enum Feature {
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
+    /// Disable tool registration and MCP server startup.
+    ToolFree,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -1085,6 +1087,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,
         key: "non_prefixed_mcp_tool_names",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ToolFree,
+        key: "tool_free",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
