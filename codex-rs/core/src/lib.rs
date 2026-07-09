@@ -75,6 +75,7 @@ pub use mention_syntax::TOOL_MENTION_SIGIL;
 pub use utils::path_utils;
 pub mod personality_migration;
 #[allow(dead_code)]
+mod plugin_script_lifecycle;
 mod plugin_script_resolver;
 pub(crate) mod plugins;
 #[doc(hidden)]
