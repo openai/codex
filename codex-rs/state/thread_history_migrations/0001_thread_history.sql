@@ -8,8 +8,8 @@ CREATE TABLE thread_turns (
     PRIMARY KEY (thread_id, turn_id)
 );
 
-CREATE INDEX idx_thread_turns_page
-    ON thread_turns(thread_id, rollout_ordinal, turn_id);
+CREATE UNIQUE INDEX idx_thread_turns_page
+    ON thread_turns(thread_id, rollout_ordinal);
 
 CREATE TABLE thread_items (
     thread_id TEXT NOT NULL,
@@ -20,11 +20,11 @@ CREATE TABLE thread_items (
     PRIMARY KEY (thread_id, item_id)
 );
 
-CREATE INDEX idx_thread_items_page
-    ON thread_items(thread_id, rollout_ordinal, item_id);
+CREATE UNIQUE INDEX idx_thread_items_page
+    ON thread_items(thread_id, rollout_ordinal);
 
 CREATE INDEX idx_thread_items_by_turn_page
-    ON thread_items(thread_id, turn_id, rollout_ordinal, item_id);
+    ON thread_items(thread_id, turn_id, rollout_ordinal);
 
 CREATE TABLE thread_history_projection_state (
     thread_id TEXT PRIMARY KEY,
