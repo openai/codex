@@ -833,26 +833,23 @@ impl AccountRequestProcessor {
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
-        // Cancel any active login attempt.
-        {
-            let mut guard = self.active_login.lock().await;
-            if let Some(active) = guard.take() {
-                drop(active);
-            }
-        }
-
         let managed_bedrock_auth = matches!(
             self.auth_manager.auth_cached(),
             Some(CodexAuth::BedrockApiKey(_))
         );
         let config = self.load_latest_config().await;
         if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
-            return Ok(self
-                .auth_manager
-                .auth_cached()
-                .as_ref()
-                .map(CodexAuth::api_auth_mode)
-                .map(auth_mode_to_api));
+            return Err(invalid_request(
+                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
+            ));
+        }
+
+        // Cancel any active login attempt.
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                drop(active);
+            }
         }
 
         match self.auth_manager.logout_with_revoke().await {

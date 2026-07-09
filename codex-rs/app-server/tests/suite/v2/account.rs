@@ -1387,7 +1387,7 @@ async fn logout_managed_bedrock_restores_default_account() -> Result<()> {
 }
 
 #[tokio::test]
-async fn logout_aws_managed_bedrock_preserves_openai_auth_and_config() -> Result<()> {
+async fn logout_aws_managed_bedrock_errors_without_changing_auth_or_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), aws_managed_bedrock_config())?;
     login_with_api_key(
@@ -1407,18 +1407,18 @@ async fn logout_aws_managed_bedrock_preserves_openai_auth_and_config() -> Result
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp.send_logout_account_request().await?;
-    let response = timeout(
+    let error = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
+    assert_eq!(error.error.code, -32600);
     assert_eq!(
-        to_response::<LogoutAccountResponse>(response)?,
-        LogoutAccountResponse {}
+        error.error.message,
+        "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication"
     );
     assert_eq!(load_file_auth(codex_home.path())?, expected_auth);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
-    assert_account_updated(&mut mcp, Some(AuthMode::ApiKey)).await?;
     Ok(())
 }
 
