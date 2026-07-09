@@ -94,3 +94,7 @@ pub(super) fn remove_sensitive_headers(
         headers.remove("cookie2");
     }
 }
+
+#[cfg(test)]
+#[path = "route_aware_redirect_tests.rs"]
+mod tests;
