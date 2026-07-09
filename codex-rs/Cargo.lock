@@ -2491,6 +2491,7 @@ name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
  "codex-code-mode-protocol",
+ "codex-install-context",
  "codex-protocol",
  "deno_core_icudata",
  "futures",

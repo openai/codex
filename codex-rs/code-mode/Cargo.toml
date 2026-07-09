@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 codex-code-mode-protocol = { workspace = true }
+codex-install-context = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
 futures = { workspace = true }

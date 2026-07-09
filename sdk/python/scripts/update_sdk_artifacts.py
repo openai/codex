@@ -280,9 +280,9 @@ def _validate_codex_package_layout(package_dir: Path, package_archive: Path) -> 
     package_binary = package_dir / "bin" / runtime_binary_name()
     if not package_binary.is_file():
         missing_entries.append(str(Path("bin") / runtime_binary_name()))
-    code_mode_host = package_dir / "bin" / runtime_code_mode_host_name()
+    code_mode_host = package_dir / "codex-resources" / runtime_code_mode_host_name()
     if not code_mode_host.is_file():
-        missing_entries.append(str(Path("bin") / runtime_code_mode_host_name()))
+        missing_entries.append(str(Path("codex-resources") / runtime_code_mode_host_name()))
     if missing_entries:
         missing = ", ".join(missing_entries)
         raise RuntimeError(f"Missing Codex package layout entries in {package_archive}: {missing}")

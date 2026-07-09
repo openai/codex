@@ -538,8 +538,8 @@ function Test-PackageContentsAreComplete {
     $expectedFiles = @(
         "codex-package.json",
         "bin\codex.exe",
-        "bin\codex-code-mode-host.exe",
         "codex-path\rg.exe",
+        "codex-resources\codex-code-mode-host.exe",
         "codex-resources\codex-command-runner.exe",
         "codex-resources\codex-windows-sandbox-setup.exe"
     )

@@ -1,4 +1,6 @@
 use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -6,6 +8,7 @@ use std::sync::OnceLock;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const BIN_DIRNAME: &str = "bin";
+const CODE_MODE_HOST_PATH_ENV: &str = "CODEX_CODE_MODE_HOST_PATH";
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -147,6 +150,37 @@ impl InstallContext {
         default_rg_command()
     }
 
+    /// Resolves the code-mode host executable for the current installation.
+    pub fn code_mode_host_program(&self) -> PathBuf {
+        self.resolve_code_mode_host_program(
+            std::env::var_os(CODE_MODE_HOST_PATH_ENV),
+            std::env::current_exe(),
+        )
+    }
+
+    fn resolve_code_mode_host_program(
+        &self,
+        override_path: Option<OsString>,
+        current_exe: io::Result<PathBuf>,
+    ) -> PathBuf {
+        if let Some(path) = override_path {
+            return PathBuf::from(path);
+        }
+
+        let executable_name = code_mode_host_executable_name();
+        if let Some(path) = self.bundled_resource(executable_name) {
+            return path.into_path_buf();
+        }
+
+        if let Ok(current_exe) = current_exe
+            && let Some(parent) = current_exe.parent()
+        {
+            return parent.join(executable_name);
+        }
+
+        PathBuf::from(executable_name)
+    }
+
     pub fn bundled_resource(&self, file_name: impl AsRef<Path>) -> Option<AbsolutePathBuf> {
         if let Some(package_layout) = &self.package_layout
             && let Some(resources_dir) = &package_layout.resources_dir
@@ -279,6 +313,14 @@ fn default_rg_command() -> PathBuf {
     }
 }
 
+fn code_mode_host_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "codex-code-mode-host.exe"
+    } else {
+        "codex-code-mode-host"
+    }
+}
+
 fn zsh_resource_path() -> PathBuf {
     PathBuf::from(ZSH_DIRNAME).join(BIN_DIRNAME).join("zsh")
 }
@@ -290,6 +332,74 @@ mod tests {
     use std::fs;
 
     const TEST_RESOURCE_NAME: &str = "codex-test-helper";
+
+    #[test]
+    fn code_mode_host_program_prefers_override_then_bundled_resource() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(BIN_DIRNAME);
+        let resources_dir = package_dir.path().join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&resources_dir)?;
+        fs::write(package_dir.path().join(PACKAGE_METADATA_FILENAME), "{}")?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+        let host_path = resources_dir.join(code_mode_host_executable_name());
+        fs::write(&host_path, "")?;
+        let canonical_host_path = host_path.canonicalize()?;
+        let context = InstallContext::from_exe(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*method_override*/ None,
+        );
+
+        assert_eq!(
+            context.resolve_code_mode_host_program(
+                Some("custom-code-mode-host".into()),
+                Ok(exe_path.clone()),
+            ),
+            PathBuf::from("custom-code-mode-host")
+        );
+        assert_eq!(
+            context.resolve_code_mode_host_program(/*override_path*/ None, Ok(exe_path),),
+            canonical_host_path
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn code_mode_host_program_uses_adjacent_binary_for_legacy_layout() {
+        let context = InstallContext {
+            method: InstallMethod::Other,
+            package_layout: None,
+        };
+
+        assert_eq!(
+            context.resolve_code_mode_host_program(
+                /*override_path*/ None,
+                Ok(PathBuf::from("/opt/codex/bin/codex")),
+            ),
+            PathBuf::from("/opt/codex/bin").join(code_mode_host_executable_name())
+        );
+    }
+
+    #[test]
+    fn code_mode_host_program_falls_back_to_executable_name() {
+        let context = InstallContext {
+            method: InstallMethod::Other,
+            package_layout: None,
+        };
+
+        assert_eq!(
+            context.resolve_code_mode_host_program(
+                /*override_path*/ None,
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "missing executable"
+                )),
+            ),
+            PathBuf::from(code_mode_host_executable_name())
+        );
+    }
 
     #[test]
     fn detects_standalone_install_from_release_layout() -> std::io::Result<()> {

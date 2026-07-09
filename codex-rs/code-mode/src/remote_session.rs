@@ -1,5 +1,3 @@
-use std::ffi::OsString;
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -18,6 +16,7 @@ use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::SessionId;
+use codex_install_context::InstallContext;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
@@ -28,8 +27,6 @@ use self::connection::SessionCleanup;
 use crate::NoopCodeModeSessionDelegate;
 
 mod connection;
-
-const CODE_MODE_HOST_PATH_ENV: &str = "CODEX_CODE_MODE_HOST_PATH";
 
 type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 
@@ -66,7 +63,7 @@ impl ProcessOwnedCodeModeSessionProvider {
 
 impl Default for ProcessOwnedCodeModeSessionProvider {
     fn default() -> Self {
-        Self::with_host_program(default_host_program())
+        Self::with_host_program(InstallContext::current().code_mode_host_program())
     }
 }
 
@@ -195,7 +192,9 @@ impl ProcessOwnedCodeModeSession {
     pub fn new() -> Self {
         Self::with_process_host(
             Arc::new(NoopCodeModeSessionDelegate),
-            Arc::new(OwnedProcessHost::new(default_host_program())),
+            Arc::new(OwnedProcessHost::new(
+                InstallContext::current().code_mode_host_program(),
+            )),
         )
     }
 
@@ -492,33 +491,6 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
         Box::pin(ProcessOwnedCodeModeSession::shutdown(self))
     }
-}
-
-fn default_host_program() -> PathBuf {
-    resolve_host_program(
-        std::env::var_os(CODE_MODE_HOST_PATH_ENV),
-        std::env::current_exe(),
-    )
-}
-
-fn resolve_host_program(
-    override_path: Option<OsString>,
-    current_exe: io::Result<PathBuf>,
-) -> PathBuf {
-    if let Some(path) = override_path {
-        return PathBuf::from(path);
-    }
-    let executable_name = if cfg!(windows) {
-        "codex-code-mode-host.exe"
-    } else {
-        "codex-code-mode-host"
-    };
-    if let Ok(current_exe) = current_exe
-        && let Some(parent) = current_exe.parent()
-    {
-        return parent.join(executable_name);
-    }
-    PathBuf::from(executable_name)
 }
 
 #[cfg(test)]

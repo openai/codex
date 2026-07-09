@@ -15,36 +15,61 @@ from codex_package.targets import TARGET_SPECS
 
 
 class PackageLayoutTest(unittest.TestCase):
-    def test_app_server_package_places_code_mode_host_beside_entrypoint(self) -> None:
+    def test_app_server_package_places_code_mode_host_in_resources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            package_dir = root / "package"
-            package_dir.mkdir()
-            inputs = PackageInputs(
-                entrypoint_bin=touch_executable(root / "codex-app-server"),
-                code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
-                rg_bin=touch_executable(root / "rg"),
-                zsh_bin=None,
-                bwrap_bin=touch_executable(root / "bwrap"),
-                codex_command_runner_bin=None,
-                codex_windows_sandbox_setup_bin=None,
-            )
+            for target in (
+                "x86_64-unknown-linux-musl",
+                "x86_64-pc-windows-msvc",
+            ):
+                with self.subTest(target=target):
+                    root = Path(temp_dir) / target
+                    root.mkdir()
+                    package_dir = root / "package"
+                    package_dir.mkdir()
+                    spec = TARGET_SPECS[target]
+                    inputs = PackageInputs(
+                        entrypoint_bin=touch_executable(root / "codex-app-server"),
+                        code_mode_host_bin=touch_executable(
+                            root / "codex-code-mode-host"
+                        ),
+                        rg_bin=touch_executable(root / "rg"),
+                        zsh_bin=None,
+                        bwrap_bin=(
+                            touch_executable(root / "bwrap") if spec.is_linux else None
+                        ),
+                        codex_command_runner_bin=(
+                            touch_executable(root / "codex-command-runner.exe")
+                            if spec.is_windows
+                            else None
+                        ),
+                        codex_windows_sandbox_setup_bin=(
+                            touch_executable(root / "codex-windows-sandbox-setup.exe")
+                            if spec.is_windows
+                            else None
+                        ),
+                    )
 
-            build_package_dir(
-                package_dir,
-                "1.2.3",
-                PACKAGE_VARIANTS["codex-app-server"],
-                TARGET_SPECS["x86_64-unknown-linux-musl"],
-                inputs,
-            )
-            validate_package_dir(
-                package_dir,
-                PACKAGE_VARIANTS["codex-app-server"],
-                TARGET_SPECS["x86_64-unknown-linux-musl"],
-                include_zsh=False,
-            )
+                    build_package_dir(
+                        package_dir,
+                        "1.2.3",
+                        PACKAGE_VARIANTS["codex-app-server"],
+                        spec,
+                        inputs,
+                    )
+                    validate_package_dir(
+                        package_dir,
+                        PACKAGE_VARIANTS["codex-app-server"],
+                        spec,
+                        include_zsh=False,
+                    )
 
-            self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())
+                    self.assertTrue(
+                        (
+                            package_dir
+                            / "codex-resources"
+                            / f"codex-code-mode-host{spec.exe_suffix}"
+                        ).is_file()
+                    )
 
 
 def touch_executable(path: Path) -> Path:

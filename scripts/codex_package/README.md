@@ -10,10 +10,10 @@ The builder creates a canonical Codex package directory:
 .
 ├── codex-package.json
 ├── bin
-│   ├── <entrypoint>[.exe]
-│   └── codex-code-mode-host[.exe]
+│   └── <entrypoint>[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
+│   ├── codex-code-mode-host[.exe]
 │   ├── zsh/bin/zsh                       # supported Unix targets only
 │   ├── codex-command-runner.exe          # Windows only
 │   └── codex-windows-sandbox-setup.exe   # Windows only
@@ -53,7 +53,7 @@ entrypoint should pass `--entrypoint-bin` so the package contains that exact
 binary instead of rebuilding it.
 
 Release jobs should likewise pass `--code-mode-host-bin` so the package contains
-the signed host executable beside the signed entrypoint.
+the signed host executable in `codex-resources`.
 
 Release jobs that already built package resource binaries should also pass the
 corresponding resource flags: `--bwrap-bin` for Linux packages, and
