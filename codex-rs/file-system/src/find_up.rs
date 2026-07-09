@@ -7,9 +7,14 @@ use futures::StreamExt;
 use std::io;
 
 const MAX_CONCURRENT_PROBES: usize = 8;
+const MAX_CONCURRENT_FIND_UP_REQUESTS: usize = 8;
 pub const MAX_FIND_UP_CANDIDATES: usize = 16;
 pub const MAX_FIND_UP_CANDIDATE_BYTES: usize = 256;
 pub const MAX_FIND_UP_TOTAL_CANDIDATE_BYTES: usize = 2 * 1024;
+pub const MAX_FIND_UP_IGNORED_ERRORS: usize = 64;
+pub const MAX_FIND_UP_IGNORED_ERROR_MESSAGE_BYTES: usize = 1024;
+pub const MAX_FIND_UP_IGNORED_ERROR_DETAILS_BYTES: usize = 64 * 1024;
+const FIND_UP_IGNORED_ERROR_ITEM_OVERHEAD_BYTES: usize = 64;
 
 /// Controls how an upward marker search handles metadata errors other than `NotFound`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -50,12 +55,28 @@ pub struct FindUpOptions {
     pub non_not_found_error_policy: FindUpErrorPolicy,
 }
 
+/// One independent upward filesystem search in a batch.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindUpRequest {
+    pub start: PathUri,
+    pub options: FindUpOptions,
+}
+
 /// First qualifying path found by an upward filesystem search.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FindUpMatch {
     pub ancestor: PathUri,
     pub path: PathUri,
+}
+
+/// A recoverable metadata error encountered during an upward filesystem search.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindUpError {
+    pub path: PathUri,
+    pub message: String,
 }
 
 /// Result and generic work counters from an upward filesystem search.
@@ -65,7 +86,14 @@ pub struct FindUpOutcome {
     pub matched: Option<FindUpMatch>,
     pub visited_ancestor_count: usize,
     pub metadata_probe_count: usize,
+    /// Total number of ignored errors, including any omitted from `ignored_errors`.
     pub ignored_error_count: usize,
+    /// Ordered prefix of ignored errors, bounded by count, message size, and aggregate bytes.
+    #[serde(default)]
+    pub ignored_errors: Vec<FindUpError>,
+    /// Whether one or more ignored errors could not be returned within the bounds.
+    #[serde(default)]
+    pub ignored_errors_truncated: bool,
 }
 
 pub(super) async fn find_up_via_metadata(
@@ -77,6 +105,7 @@ pub(super) async fn find_up_via_metadata(
     validate_find_up_options(start, options)?;
 
     let mut outcome = FindUpOutcome::default();
+    let mut ignored_error_detail_bytes = 0usize;
     for ancestor in start.ancestors() {
         outcome.visited_ancestor_count += 1;
         for candidate in &options.candidate_relative_paths {
@@ -91,12 +120,133 @@ pub(super) async fn find_up_via_metadata(
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => match options.non_not_found_error_policy {
                     FindUpErrorPolicy::Propagate => return Err(err),
-                    FindUpErrorPolicy::Ignore => outcome.ignored_error_count += 1,
+                    FindUpErrorPolicy::Ignore => {
+                        outcome.ignored_error_count += 1;
+                        record_ignored_error(
+                            &mut outcome,
+                            &mut ignored_error_detail_bytes,
+                            path,
+                            &err,
+                        );
+                    }
                 },
             }
         }
     }
     Ok(outcome)
+}
+
+fn record_ignored_error(
+    outcome: &mut FindUpOutcome,
+    detail_bytes: &mut usize,
+    path: PathUri,
+    err: &io::Error,
+) {
+    if outcome.ignored_errors_truncated {
+        return;
+    }
+    let Some(message) = bounded_error_message(err) else {
+        outcome.ignored_errors_truncated = true;
+        return;
+    };
+    if outcome.ignored_errors.len() == MAX_FIND_UP_IGNORED_ERRORS {
+        outcome.ignored_errors_truncated = true;
+        return;
+    }
+    let Some(fixed_item_bytes) = message
+        .len()
+        .checked_add(FIND_UP_IGNORED_ERROR_ITEM_OVERHEAD_BYTES)
+    else {
+        outcome.ignored_errors_truncated = true;
+        return;
+    };
+    let Some(remaining_path_bytes) = MAX_FIND_UP_IGNORED_ERROR_DETAILS_BYTES
+        .checked_sub(*detail_bytes)
+        .and_then(|remaining| remaining.checked_sub(fixed_item_bytes))
+    else {
+        outcome.ignored_errors_truncated = true;
+        return;
+    };
+    let Some(path_bytes) = formatted_len_at_most(&path, remaining_path_bytes) else {
+        outcome.ignored_errors_truncated = true;
+        return;
+    };
+    *detail_bytes += fixed_item_bytes + path_bytes;
+    outcome.ignored_errors.push(FindUpError { path, message });
+}
+
+fn formatted_len_at_most(value: &impl std::fmt::Display, max_bytes: usize) -> Option<usize> {
+    struct BoundedLength {
+        bytes: usize,
+        max_bytes: usize,
+        exceeded: bool,
+    }
+
+    impl std::fmt::Write for BoundedLength {
+        fn write_str(&mut self, value: &str) -> std::fmt::Result {
+            let Some(bytes) = self.bytes.checked_add(value.len()) else {
+                self.exceeded = true;
+                return Ok(());
+            };
+            if bytes > self.max_bytes {
+                self.exceeded = true;
+            } else if !self.exceeded {
+                self.bytes = bytes;
+            }
+            Ok(())
+        }
+    }
+
+    let mut length = BoundedLength {
+        bytes: 0,
+        max_bytes,
+        exceeded: false,
+    };
+    std::fmt::write(&mut length, format_args!("{value}")).ok()?;
+    (!length.exceeded).then_some(length.bytes)
+}
+
+fn bounded_error_message(err: &io::Error) -> Option<String> {
+    struct BoundedMessage {
+        value: String,
+        truncated: bool,
+    }
+
+    impl std::fmt::Write for BoundedMessage {
+        fn write_str(&mut self, value: &str) -> std::fmt::Result {
+            if self.value.len().saturating_add(value.len())
+                > MAX_FIND_UP_IGNORED_ERROR_MESSAGE_BYTES
+            {
+                self.truncated = true;
+            } else if !self.truncated {
+                self.value.push_str(value);
+            }
+            Ok(())
+        }
+    }
+
+    let mut message = BoundedMessage {
+        value: String::new(),
+        truncated: false,
+    };
+    std::fmt::write(&mut message, format_args!("{err:#}")).ok()?;
+    (!message.truncated).then_some(message.value)
+}
+
+pub(super) async fn find_up_batch_via_individual(
+    file_system: &(impl ExecutorFileSystem + ?Sized),
+    requests: &[FindUpRequest],
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<Vec<FileSystemResult<FindUpOutcome>>> {
+    Ok(futures::stream::iter(requests.iter().cloned())
+        .map(|request| async move {
+            file_system
+                .find_up(&request.start, &request.options, sandbox)
+                .await
+        })
+        .buffered(MAX_CONCURRENT_FIND_UP_REQUESTS)
+        .collect()
+        .await)
 }
 
 fn validate_find_up_options(start: &PathUri, options: &FindUpOptions) -> FileSystemResult<()> {

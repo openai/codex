@@ -5,6 +5,7 @@ pub use find_up::FindUpMatch;
 pub use find_up::FindUpMatchKind;
 pub use find_up::FindUpOptions;
 pub use find_up::FindUpOutcome;
+pub use find_up::FindUpRequest;
 pub use find_up::MAX_FIND_UP_CANDIDATE_BYTES;
 pub use find_up::MAX_FIND_UP_CANDIDATES;
 pub use find_up::MAX_FIND_UP_TOTAL_CANDIDATE_BYTES;
@@ -339,6 +340,21 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FindUpOutcome> {
         self.find_up_via_metadata(start, options, sandbox)
+    }
+
+    /// Runs multiple independent upward searches, preserving request order and per-search errors.
+    ///
+    /// Implementations with an optimized batch transport can override this method. The default
+    /// preserves compatibility by running the existing single-search operation with bounded
+    /// concurrency.
+    fn find_up_batch<'a>(
+        &'a self,
+        requests: &'a [FindUpRequest],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FindUpOutcome>>> {
+        Box::pin(find_up::find_up_batch_via_individual(
+            self, requests, sandbox,
+        ))
     }
 
     /// Performs an ordered upward search using primitive metadata operations.

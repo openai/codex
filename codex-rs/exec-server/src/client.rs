@@ -53,6 +53,7 @@ use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_FIND_UP_BATCH_METHOD;
 use crate::protocol::FS_FIND_UP_METHOD;
 use crate::protocol::FS_GET_METADATA_BATCH_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -71,6 +72,8 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsFindUpBatchParams;
+use crate::protocol::FsFindUpBatchResponse;
 use crate::protocol::FsFindUpParams;
 use crate::protocol::FsFindUpResponse;
 use crate::protocol::FsGetMetadataBatchParams;
@@ -724,6 +727,13 @@ impl ExecServerClient {
         params: FsFindUpParams,
     ) -> Result<FsFindUpResponse, ExecServerError> {
         self.call(FS_FIND_UP_METHOD, &params).await
+    }
+
+    pub async fn fs_find_up_batch(
+        &self,
+        params: FsFindUpBatchParams,
+    ) -> Result<FsFindUpBatchResponse, ExecServerError> {
+        self.call(FS_FIND_UP_BATCH_METHOD, &params).await
     }
 
     pub async fn fs_canonicalize(

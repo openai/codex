@@ -6,6 +6,7 @@ pub use codex_file_system::FindUpErrorPolicy;
 pub use codex_file_system::FindUpMatchKind;
 pub use codex_file_system::FindUpOptions;
 pub use codex_file_system::FindUpOutcome;
+pub use codex_file_system::FindUpRequest;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -38,6 +39,7 @@ pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_GET_METADATA_BATCH_METHOD: &str = "fs/getMetadataBatch";
 pub const FS_FIND_UP_METHOD: &str = "fs/findUp";
+pub const FS_FIND_UP_BATCH_METHOD: &str = "fs/findUpBatch";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_WALK_METHOD: &str = "fs/walk";
@@ -386,6 +388,32 @@ pub struct FsFindUpParams {
 
 pub type FsFindUpResponse = FindUpOutcome;
 
+/// Maximum number of independent searches accepted by one `fs/findUpBatch` request.
+pub const FS_FIND_UP_BATCH_MAX_REQUESTS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindUpBatchParams {
+    /// Searches are evaluated and returned in this order.
+    pub requests: Vec<FindUpRequest>,
+    /// One sandbox context shared by every search in the batch.
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FsFindUpBatchResult {
+    Outcome { outcome: FindUpOutcome },
+    Error { error: JSONRPCErrorError },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindUpBatchResponse {
+    /// One result for each requested search, in request order.
+    pub results: Vec<FsFindUpBatchResult>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
@@ -617,6 +645,8 @@ mod tests {
     use super::ExecParams;
     use super::FindUpErrorPolicy;
     use super::FindUpMatchKind;
+    use super::FsFindUpBatchParams;
+    use super::FsFindUpBatchResponse;
     use super::FsFindUpParams;
     use super::FsGetMetadataBatchResponse;
     use super::FsReadFileParams;
@@ -730,6 +760,18 @@ mod tests {
             "sandbox": null,
         }))
         .expect_err("native absolute find-up start should not deserialize as a URI");
+        serde_json::from_value::<FsFindUpBatchParams>(serde_json::json!({
+            "requests": [{
+                "start": native_path.to_string_lossy(),
+                "options": {
+                    "candidateRelativePaths": ["marker"],
+                    "matchKind": FindUpMatchKind::Any,
+                    "nonNotFoundErrorPolicy": FindUpErrorPolicy::Propagate,
+                },
+            }],
+            "sandbox": null,
+        }))
+        .expect_err("native absolute batched find-up start should not deserialize as a URI");
 
         let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
@@ -760,6 +802,22 @@ mod tests {
             .expect("deserialize metadata batch");
         assert_eq!(
             serde_json::to_value(response).expect("serialize metadata batch"),
+            serialized
+        );
+    }
+
+    #[test]
+    fn find_up_batch_error_result_round_trips() {
+        let serialized = serde_json::json!({
+            "results": [{
+                "type": "error",
+                "error": { "code": -32000, "message": "failed" },
+            }],
+        });
+        let response = serde_json::from_value::<FsFindUpBatchResponse>(serialized.clone())
+            .expect("deserialize find-up batch");
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize find-up batch"),
             serialized
         );
     }

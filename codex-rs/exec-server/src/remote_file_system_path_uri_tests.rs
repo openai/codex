@@ -1,7 +1,11 @@
 #![allow(clippy::expect_used)]
 
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::FindUpMatchKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -25,7 +29,12 @@ use tokio_tungstenite::tungstenite::Message;
 use super::*;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
+use crate::protocol::FS_FIND_UP_BATCH_METHOD;
+use crate::protocol::FS_FIND_UP_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FsFindUpBatchParams;
+use crate::protocol::FsFindUpBatchResponse;
+use crate::protocol::FsFindUpParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::INITIALIZE_METHOD;
@@ -79,6 +88,188 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         captured_params.await.expect("captured params"),
         expected_params
     );
+    server.await.expect("recording server should succeed");
+}
+
+#[tokio::test]
+async fn find_up_batch_method_not_found_falls_back_concurrently_and_preserves_order() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let starts = vec![
+        PathUri::parse("file:///C:/Users/Alice/src").expect("valid drive URI"),
+        PathUri::parse("file://server/share/src").expect("valid UNC URI"),
+    ];
+    let expected_starts = starts.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket).await;
+
+        let batch_request = match read_jsonrpc_websocket(&mut websocket).await {
+            JSONRPCMessage::Request(request) if request.method == FS_FIND_UP_BATCH_METHOD => {
+                request
+            }
+            other => panic!("expected fs/findUpBatch request, got {other:?}"),
+        };
+        let batch_params: FsFindUpBatchParams = serde_json::from_value(
+            batch_request
+                .params
+                .expect("fs/findUpBatch params should exist"),
+        )
+        .expect("fs/findUpBatch params should deserialize");
+        assert_eq!(
+            batch_params
+                .requests
+                .iter()
+                .map(|request| request.start.clone())
+                .collect::<Vec<_>>(),
+            expected_starts
+        );
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Error(JSONRPCError {
+                error: JSONRPCErrorError {
+                    code: -32601,
+                    data: None,
+                    message: "method not found".to_string(),
+                },
+                id: batch_request.id,
+            }),
+        )
+        .await;
+
+        // Read both fallbacks before responding. A serial fallback would time out here.
+        let mut singles = Vec::new();
+        for _ in 0..2 {
+            let request = match read_jsonrpc_websocket(&mut websocket).await {
+                JSONRPCMessage::Request(request) if request.method == FS_FIND_UP_METHOD => request,
+                other => panic!("expected fs/findUp request, got {other:?}"),
+            };
+            let params: FsFindUpParams = serde_json::from_value(
+                request
+                    .params
+                    .clone()
+                    .expect("fs/findUp params should exist"),
+            )
+            .expect("fs/findUp params should deserialize");
+            singles.push((request, params));
+        }
+        for (request, params) in singles.into_iter().rev() {
+            let visited_ancestor_count = if params.start == expected_starts[0] {
+                1
+            } else {
+                2
+            };
+            write_jsonrpc_websocket(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(FindUpOutcome {
+                        matched: None,
+                        visited_ancestor_count,
+                        metadata_probe_count: visited_ancestor_count,
+                        ignored_error_count: 0,
+                        ignored_errors: Vec::new(),
+                        ignored_errors_truncated: false,
+                    })
+                    .expect("find-up response should serialize"),
+                }),
+            )
+            .await;
+        }
+    });
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+    ));
+    let options = FindUpOptions {
+        candidate_relative_paths: vec!["marker".to_string()],
+        match_kind: FindUpMatchKind::Any,
+        non_not_found_error_policy: FindUpErrorPolicy::Propagate,
+    };
+    let requests = starts
+        .into_iter()
+        .map(|start| FindUpRequest {
+            start,
+            options: options.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let outcomes = file_system
+        .find_up_batch(&requests, /*sandbox*/ None)
+        .await
+        .expect("method-not-found should use single-search fallback")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("fallback searches should succeed");
+
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|outcome| outcome.visited_ancestor_count)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    server.await.expect("recording server should succeed");
+}
+
+#[tokio::test]
+async fn find_up_batch_rejects_malformed_response_cardinality_without_legacy_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket).await;
+        let request = match read_jsonrpc_websocket(&mut websocket).await {
+            JSONRPCMessage::Request(request) if request.method == FS_FIND_UP_BATCH_METHOD => {
+                request
+            }
+            other => panic!("expected fs/findUpBatch request, got {other:?}"),
+        };
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(FsFindUpBatchResponse {
+                    results: Vec::new(),
+                })
+                .expect("find-up batch response should serialize"),
+            }),
+        )
+        .await;
+    });
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+    ));
+    let requests = [FindUpRequest {
+        start: PathUri::parse("file:///C:/Users/Alice/src").expect("valid drive URI"),
+        options: FindUpOptions {
+            candidate_relative_paths: vec!["marker".to_string()],
+            match_kind: FindUpMatchKind::Any,
+            non_not_found_error_policy: FindUpErrorPolicy::Propagate,
+        },
+    }];
+
+    let error = file_system
+        .find_up_batch(&requests, /*sandbox*/ None)
+        .await
+        .expect_err("malformed cardinality should be surfaced to the consumer");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     server.await.expect("recording server should succeed");
 }
 

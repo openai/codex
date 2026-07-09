@@ -1,6 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
 use tokio::io;
 use tracing::trace;
 
@@ -15,6 +16,7 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::FindUpOptions;
 use crate::FindUpOutcome;
+use crate::FindUpRequest;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::WalkOptions;
@@ -23,6 +25,8 @@ use crate::client::LazyRemoteExecServerClient;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsFindUpBatchParams;
+use crate::protocol::FsFindUpBatchResult;
 use crate::protocol::FsFindUpParams;
 use crate::protocol::FsGetMetadataBatchParams;
 use crate::protocol::FsGetMetadataBatchResult;
@@ -36,6 +40,7 @@ use crate::protocol::FsWriteFileParams;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
+const MAX_CONCURRENT_FIND_UP_FALLBACKS: usize = 8;
 
 #[path = "remote_file_stream.rs"]
 mod file_stream;
@@ -242,6 +247,53 @@ impl RemoteFileSystem {
         }
     }
 
+    async fn find_up_batch(
+        &self,
+        requests: &[FindUpRequest],
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<FileSystemResult<FindUpOutcome>>> {
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let response = match client
+            .fs_find_up_batch(FsFindUpBatchParams {
+                requests: requests.to_vec(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(ExecServerError::Server {
+                code: METHOD_NOT_FOUND_ERROR_CODE,
+                ..
+            }) => {
+                return find_up_batch_via_individual(self, requests, sandbox).await;
+            }
+            Err(error) => return Err(map_remote_error(error)),
+        };
+        if response.results.len() != requests.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "remote fs/findUpBatch returned {} results for {} requests",
+                    response.results.len(),
+                    requests.len()
+                ),
+            ));
+        }
+        Ok(response
+            .results
+            .into_iter()
+            .map(|result| match result {
+                FsFindUpBatchResult::Outcome { outcome } => Ok(outcome),
+                FsFindUpBatchResult::Error { error } => {
+                    Err(map_remote_error(ExecServerError::Server {
+                        code: error.code,
+                        message: error.message,
+                    }))
+                }
+            })
+            .collect())
+    }
+
     async fn read_directory(
         &self,
         path: &PathUri,
@@ -410,6 +462,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::find_up(self, start, options, sandbox))
     }
 
+    fn find_up_batch<'a>(
+        &'a self,
+        requests: &'a [FindUpRequest],
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<FileSystemResult<FindUpOutcome>>> {
+        Box::pin(RemoteFileSystem::find_up_batch(self, requests, sandbox))
+    }
+
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -451,6 +511,22 @@ impl ExecutorFileSystem for RemoteFileSystem {
             sandbox,
         ))
     }
+}
+
+async fn find_up_batch_via_individual(
+    file_system: &RemoteFileSystem,
+    requests: &[FindUpRequest],
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<Vec<FileSystemResult<FindUpOutcome>>> {
+    Ok(futures::stream::iter(requests.iter().cloned())
+        .map(|request| async move {
+            file_system
+                .find_up(&request.start, &request.options, sandbox)
+                .await
+        })
+        .buffered(MAX_CONCURRENT_FIND_UP_FALLBACKS)
+        .collect()
+        .await)
 }
 
 fn remote_sandbox_context(

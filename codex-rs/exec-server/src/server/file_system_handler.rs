@@ -11,6 +11,7 @@ use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
+use crate::protocol::FS_FIND_UP_BATCH_MAX_REQUESTS;
 use crate::protocol::FS_GET_METADATA_BATCH_MAX_PATHS;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
@@ -21,6 +22,9 @@ use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsFindUpBatchParams;
+use crate::protocol::FsFindUpBatchResponse;
+use crate::protocol::FsFindUpBatchResult;
 use crate::protocol::FsFindUpParams;
 use crate::protocol::FsFindUpResponse;
 use crate::protocol::FsGetMetadataBatchParams;
@@ -215,6 +219,30 @@ impl FileSystemHandler {
             .find_up(&params.start, &params.options, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)
+    }
+
+    pub(crate) async fn find_up_batch(
+        &self,
+        params: FsFindUpBatchParams,
+    ) -> Result<FsFindUpBatchResponse, JSONRPCErrorError> {
+        if params.requests.len() > FS_FIND_UP_BATCH_MAX_REQUESTS {
+            return Err(invalid_request(format!(
+                "find-up batch must not exceed {FS_FIND_UP_BATCH_MAX_REQUESTS} requests"
+            )));
+        }
+        let mut results = Vec::with_capacity(params.requests.len());
+        for request in params.requests {
+            match self
+                .file_system
+                .find_up(&request.start, &request.options, params.sandbox.as_ref())
+                .await
+                .map_err(map_fs_error)
+            {
+                Ok(outcome) => results.push(FsFindUpBatchResult::Outcome { outcome }),
+                Err(error) => results.push(FsFindUpBatchResult::Error { error }),
+            }
+        }
+        Ok(FsFindUpBatchResponse { results })
     }
 
     pub(crate) async fn canonicalize(
@@ -416,6 +444,40 @@ mod tests {
         assert_eq!(
             error.message,
             format!("metadata batch must not exceed {FS_GET_METADATA_BATCH_MAX_PATHS} paths")
+        );
+    }
+
+    #[tokio::test]
+    async fn find_up_batch_rejects_too_many_requests_before_dispatch() {
+        let handler = FileSystemHandler::new(
+            ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("runtime paths"),
+        );
+        let request = crate::FindUpRequest {
+            start: PathUri::from_host_native_path(std::env::current_dir().expect("current dir"))
+                .expect("current dir URI"),
+            options: crate::FindUpOptions {
+                candidate_relative_paths: vec!["marker".to_string()],
+                match_kind: crate::FindUpMatchKind::Any,
+                non_not_found_error_policy: crate::FindUpErrorPolicy::Propagate,
+            },
+        };
+
+        let error = handler
+            .find_up_batch(FsFindUpBatchParams {
+                requests: vec![request; FS_FIND_UP_BATCH_MAX_REQUESTS + 1],
+                sandbox: None,
+            })
+            .await
+            .expect_err("oversized find-up batch should fail");
+
+        assert_eq!(error.code, -32600);
+        assert_eq!(
+            error.message,
+            format!("find-up batch must not exceed {FS_FIND_UP_BATCH_MAX_REQUESTS} requests")
         );
     }
 
