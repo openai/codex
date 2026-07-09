@@ -603,7 +603,15 @@ async fn spawned_agent_can_restrict_inherited_environments() -> Result<()> {
 
     test.submit_turn(TURN_1_PROMPT).await?;
     let _ = wait_for_requests(&child_request_log).await?;
-    let child_followup_requests = wait_for_requests(&child_followup).await?;
+    let local_exec_output = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(output) = child_followup.function_call_output_text(LOCAL_EXEC_CALL_ID) {
+                return output;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
 
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
     let child_thread = test
@@ -615,10 +623,6 @@ async fn spawned_agent_can_restrict_inherited_environments() -> Result<()> {
         child_thread.environment_selections().await,
         vec![expected_remote_selection]
     );
-    let local_exec_output = child_followup_requests
-        .last()
-        .and_then(|request| request.function_call_output_text(LOCAL_EXEC_CALL_ID))
-        .expect("child should report the rejected local exec call");
     assert!(
         local_exec_output.contains("unknown turn environment id `local`"),
         "unexpected local exec rejection: {local_exec_output}"
