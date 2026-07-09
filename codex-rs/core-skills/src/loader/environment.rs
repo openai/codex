@@ -132,6 +132,8 @@ pub async fn load_environment_skills_from_root(
     let discovery = discover_skills(
         file_system,
         root,
+        // Preserve environment discovery behavior by following directory aliases and including
+        // hidden directories exposed by the executor.
         SkillDiscoveryOptions {
             directory_symlinks: DirectorySymlinkPolicy::Follow,
             hidden_directories: HiddenDirectoryPolicy::Include,

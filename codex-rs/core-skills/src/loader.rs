@@ -525,6 +525,8 @@ async fn load_skills_under_root(
     } = discover_skills(
         fs,
         &PathUri::from_abs_path(root),
+        // Preserve host discovery behavior: directory aliases are scope-dependent, while hidden
+        // directories are skipped unless reached through a visible alias.
         SkillDiscoveryOptions {
             directory_symlinks,
             hidden_directories: HiddenDirectoryPolicy::Skip,
