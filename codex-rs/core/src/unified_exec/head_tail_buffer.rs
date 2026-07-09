@@ -116,6 +116,26 @@ impl HeadTailBuffer {
         out
     }
 
+    /// Return the retained output with an explicit marker between the head and
+    /// tail when bytes were omitted.
+    pub(crate) fn to_bytes_with_omission_marker(&self) -> Vec<u8> {
+        if self.omitted_bytes == 0 {
+            return self.to_bytes();
+        }
+
+        let omitted_bytes = self.omitted_bytes;
+        let marker = format!("\n... {omitted_bytes} bytes omitted ...\n");
+        let mut out = Vec::with_capacity(self.retained_bytes().saturating_add(marker.len()));
+        for chunk in self.head.iter() {
+            out.extend_from_slice(chunk);
+        }
+        out.extend_from_slice(marker.as_bytes());
+        for chunk in self.tail.iter() {
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
+
     /// Drain all retained chunks from the buffer and reset its state.
     ///
     /// The drained chunks are returned in head-then-tail order. Omitted bytes

@@ -16,6 +16,10 @@ fn keeps_prefix_and_suffix_when_over_budget() {
     let rendered = String::from_utf8_lossy(&buf.to_bytes()).to_string();
     assert!(rendered.starts_with("01234"));
     assert!(rendered.ends_with("89ab"));
+    assert_eq!(
+        String::from_utf8_lossy(&buf.to_bytes_with_omission_marker()),
+        "01234\n... 2 bytes omitted ...\n789ab"
+    );
 }
 
 #[test]

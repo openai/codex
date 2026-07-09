@@ -1285,7 +1285,7 @@ impl UnifiedExecProcessManager {
             }
         }
 
-        collected.to_bytes()
+        collected.to_bytes_with_omission_marker()
     }
 
     async fn extend_deadlines_while_paused(

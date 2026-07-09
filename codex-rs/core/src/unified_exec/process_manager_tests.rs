@@ -278,8 +278,10 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
     let (collected, ()) = tokio::join!(collect, produce);
     let head_bytes = crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
     let tail_bytes = crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
+    let omitted_bytes = 2 * crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
     let mut expected = vec![b'a'; head_bytes];
-    expected.resize(head_bytes + tail_bytes, b'c');
+    expected.extend_from_slice(format!("\n... {omitted_bytes} bytes omitted ...\n").as_bytes());
+    expected.resize(expected.len() + tail_bytes, b'c');
     assert_eq!(collected, expected);
 }
 

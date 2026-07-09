@@ -326,7 +326,7 @@ async fn resolve_aggregated_output(
         return fallback;
     }
 
-    String::from_utf8_lossy(&guard.to_bytes()).to_string()
+    String::from_utf8_lossy(&guard.to_bytes_with_omission_marker()).to_string()
 }
 
 #[cfg(test)]
