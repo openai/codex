@@ -1,6 +1,6 @@
 ---
 name: "openai-docs"
-description: "Use when the user asks how to build with OpenAI products or APIs, asks about Codex itself or choosing Codex surfaces, needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; use OpenAI docs MCP tools for non-Codex docs questions, use the Codex manual helper first for broad Codex self-knowledge, and restrict fallback browsing to official OpenAI domains."
+description: "Use when the user asks how to build with OpenAI products or APIs, asks about Codex itself or choosing Codex surfaces, needs up-to-date official documentation with citations, help choosing the latest model for a use case, latest/current/default-model prompting guidance, or model upgrade and prompt-upgrade guidance; use OpenAI docs MCP tools for non-Codex docs questions, use the Codex manual helper first for broad Codex self-knowledge, and restrict fallback browsing to official OpenAI domains."
 ---
 
 
@@ -14,19 +14,35 @@ For requests to build, run, configure, debug, or implement an API-backed app, sc
 
 Use this skill directly for docs-only questions, citations, model/API guidance, conceptual explanations, and examples that do not require building or running an API-backed artifact.
 
-## Workflow Configuration
+For latest/current/default/unspecified model migration or prompting-guidance requests, complete the read-only latest-model resolver and guide fetch before the API-key credential gate. The credential gate still blocks edits, tests, and API-backed implementation until resolved; it does not block read-only retrieval of current model, migration, or prompting guidance.
 
-### Source Priority
+## First action for latest-model changes
+
+Before reading memory, inspecting the repo, fetching docs, or checking API credentials, classify the request:
+
+- **Latest/current prompting guidance, or change requested + latest/current/newest/recommended/default/flagship/unspecified target:** immediately run the resolver with the platform-specific command below and inspect its JSON output. This includes asking how to prompt the latest model, changing prompts, a model picker, model references, an SDK integration, replacing an older named model with "the current model", or asking "which model should I migrate/upgrade to?". Do not directly fetch `latest-model.md` for this branch.
+- **Pure model-selection question only, with no prompting guidance or requested change:** directly fetch `https://developers.openai.com/api/docs/guides/latest-model.md`; do not run the resolver.
+- **Change requested + explicit target model:** preserve that target; do not run the latest-model resolver. For an explicit GPT-5.6 Sol or GPT-5.6-family migration, fetch the live GPT-5.6 model-guidance page and read `references/upgrading-to-gpt-5p6-sol.md` for skill-specific migration judgment.
+- **Prompting or migration guidance for an explicitly named GPT-5-family model:** fetch `https://developers.openai.com/api/docs/guides/model-guidance?model=<requested-model>` through Docs MCP and extract the relevant migration section or the `## Prompting Best Practices` section through the next H2 heading. Do not substitute latest-model guidance.
+
+Run the resolver without relying on filesystem executable bits:
+
+- POSIX shells: `sh <skill-dir>/scripts/resolve-latest-model-info`
+- Windows: run the CommonJS implementation with Node.js 18 or newer: `node <skill-dir>\scripts\resolve-latest-model-info.cjs`. If `node` is unavailable or too old and `load_workspace_dependencies` is available, use the Node.js executable it returns for this command. Do not try to execute the extensionless POSIX wrapper directly on Windows.
+
+For the resolver branch, do not suppress or redirect its stdout. Success requires JSON containing `model`, `migrationGuideUrl`, and `promptingGuideUrl`; if the command exits without all three fields, run it once more before any fallback.
+
+## Source Priority
 
 - For Codex self-knowledge, use the Codex source route below; it owns when to use the manual helper, Docs MCP, or bounded uncertainty.
 - For non-Codex OpenAI docs questions, use `mcp__openaiDeveloperDocs__search_openai_docs` to find the most relevant doc pages.
 - For non-Codex OpenAI docs questions, fetch the relevant page with `mcp__openaiDeveloperDocs__fetch_openai_doc` before answering. If search is noisy, run a narrower Docs MCP search; when any plausible official OpenAI docs URL is known or found, try fetching that URL through Docs MCP before relying on web-search content.
 - For API reference, schema, parameter, or required-field questions, use `mcp__openaiDeveloperDocs__get_openapi_spec` when available to verify the API shape alongside the relevant guide or reference page.
 - Use `mcp__openaiDeveloperDocs__list_openai_docs` only when you need to browse or discover non-Codex pages without a clear query.
-- For model-selection, "latest model", or default-model questions, fetch `https://developers.openai.com/api/docs/guides/latest-model.md` first. If that is unavailable, load `references/latest-model.md`.
-- For model upgrades or prompt upgrades, run `node scripts/resolve-latest-model-info.js` only when the target is latest/current/default or otherwise unspecified; otherwise preserve the explicitly requested target.
+- For latest/current prompting guidance, model upgrades, or prompt upgrades, apply the first-action classifier above and use its platform-specific resolver command. On POSIX, the wrapper uses a compatible Node.js 18+ runtime from `$NODE`, PATH, or bundled/system fallbacks. On Windows, use a compatible Node.js executable to run the `.cjs` implementation directly. If no compatible runtime is available, call `load_workspace_dependencies` when available and retry the appropriate command once with the returned Node.js executable.
+- For docs-only model-selection questions that do not ask to change an app, project, repo, model configuration, or prompts, fetch `https://developers.openai.com/api/docs/guides/latest-model.md` first. If that is unavailable, load `references/latest-model.md`.
 - Preserve explicit target requests: if the user names a target model like "migrate to GPT-5.4", keep that requested target even if `latest-model.md` names a newer model. Mention newer guidance only as optional.
-- If current remote guidance is needed, fetch both the returned migration and prompting guide URLs directly. If direct fetch fails, use MCP/search fallback; if that also fails, use bundled fallback references and disclose the fallback.
+- If current remote guidance is needed, treat the returned migration and prompting guide URLs as opaque and fetch those exact URLs directly. Do not derive, substitute, or append a model query to them. If a prompting guide URL resolves to a combined model-guidance page, extract only the `## Prompting Best Practices` section through the next H2 heading. If a fetched guide contains only a title or no substantive body, retry the exact markdown URL through MCP/search fallback; if that also fails, use bundled fallback references and disclose the fallback.
 
 ## OpenAI product snapshots
 
@@ -124,17 +140,16 @@ If MCP tools fail or no OpenAI docs resources are available:
 1. Clarify whether the request is general docs lookup, model selection, a model-string upgrade, prompt-upgrade guidance, or broader API/provider migration.
 2. For Codex self-knowledge requests, follow the Codex self-knowledge source procedure above.
 3. For model-selection or upgrade requests, prefer current remote docs over bundled references when the user asks for latest/current/default guidance.
-   - Fetch `https://developers.openai.com/api/docs/guides/latest-model.md`.
-   - Find the latest model ID and explicit migration or prompt-guidance links.
-   - Prefer explicit links from the latest-model page over derived URLs.
+   - For docs-only model-selection questions, fetch `https://developers.openai.com/api/docs/guides/latest-model.md`, find the latest model ID and explicit migration or prompt-guidance links, and prefer explicit links over derived URLs.
    - For explicit named-model requests, preserve the requested model target. Mention newer remote guidance only as optional.
-   - For dynamic latest/current/default upgrades, run `node scripts/resolve-latest-model-info.js`, then fetch both returned guide URLs directly when possible.
-   - If direct guide fetch fails, use the developer-docs MCP tools or official OpenAI-domain search to find the same guide content.
+   - For latest/current/default prompting guidance or dynamic upgrades, run the resolver with the platform-specific command above as the first docs operation before any direct latest-model.md fetch or API-key credential gate, then fetch both returned guide URLs directly when possible.
+   - Fetch returned guide URLs exactly; do not derive or substitute model-specific URLs.
+   - If a direct guide fetch fails or returns only a title, use the developer-docs MCP tools or official OpenAI-domain search to find the same guide content.
    - If remote docs are unavailable, use bundled fallback references and say that fallback guidance was used.
-4. For model upgrades, keep changes narrow: update active OpenAI API model defaults and directly related prompts only when safe.
-5. Leave historical docs, examples, eval baselines, fixtures, provider comparisons, provider registries, pricing tables, alias defaults, low-cost fallback paths, and ambiguous older model usage unchanged unless the user explicitly asks to upgrade them.
+4. For model upgrades, keep changes behavior-preserving and scoped: update active OpenAI API model defaults, directly related prompts, and the registries, routing, pricing, capability, or picker surfaces that the user actually placed in scope.
+5. Leave historical docs, examples, eval baselines, fixtures, provider comparisons, intentionally pinned fallbacks, and ambiguous older model usage unchanged unless the user explicitly asks to upgrade them. Do not collapse a multi-model router or picker into one flagship model; preserve the existing cost, latency, and quality roles.
 6. Keep SDK, tooling, IDE, plugin, shell, auth, and provider-environment migrations out of a model-and-prompt upgrade unless the user explicitly asks for them.
-7. If an upgrade needs API-surface changes, schema rewiring, tool-handler changes, or implementation work beyond a literal model-string replacement and prompt edits, report it as blocked or confirmation-needed.
+7. If a safe upgrade needs API-surface changes, schema rewiring, tool-handler changes, or broader implementation work, classify it explicitly. Make those changes when implementation is within the user's requested scope; otherwise report the exact blocker or confirmation needed instead of silently changing behavior.
 8. For general docs lookup, start with a compact, title-like search query of 2-6 essential terms. Do not turn the full user question into a keyword list. Fetch the best page and exact section needed, and answer with concise citations.
 
 ## Reference map
@@ -145,8 +160,9 @@ Read only what you need:
 - `scripts/fetch-codex-manual.mjs` -> current Codex manual fetch, verification, local temp cache, and outline generation.
 - `https://developers.openai.com/codex/codex-manual.md` -> current Codex self-knowledge synthesis, including setup, customization, skills, plugins, MCP, hooks, `AGENTS.md`, automations, and surface behavior; normally access it through the helper path and targeted file reads when temp caching is available.
 - `references/latest-model.md` -> bundled fallback for model-selection and "best/latest/current model" questions.
-- `references/upgrade-guide.md` -> bundled fallback for model upgrade and upgrade-planning requests.
-- `references/prompting-guide.md` -> bundled fallback for prompt rewrites and prompt-behavior upgrades.
+- `references/upgrade-guide.md` -> bundled routing fallback for model upgrade and upgrade-planning requests.
+- `references/upgrading-to-gpt-5p6-sol.md` -> GPT-5.6 Sol/family migration judgment, compatibility gates, optional feature boundaries, and validation.
+- `references/prompting-guide.md` -> bundled GPT-5.6 prompting fallback plus the live Prompting Best Practices extraction contract.
 
 ## Quality rules
 

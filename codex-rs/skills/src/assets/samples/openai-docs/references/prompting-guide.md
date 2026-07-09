@@ -1,244 +1,287 @@
-GPT-5.5 works best when prompts define the outcome and leave room for the model to choose an efficient solution path. Compared with earlier models, you can often use shorter, more outcome-oriented prompts: describe what good looks like, what constraints matter, what evidence is available, and what the final answer should contain.
+## Retrieve the live GPT-5.6 prompting guidance
 
-Avoid carrying over every instruction from an older prompt stack. Legacy prompts often over-specify the process because earlier models needed more help staying on track. With GPT-5.5, that can add noise, narrow the model's search space, or lead to overly mechanical answers.
+Use the OpenAI Docs MCP to fetch the live GPT-5.6 prompting guidance from:
 
-For more detail on GPT-5.5 behavior changes, start with the [Using GPT-5.5 guide](/api/docs/guides/latest-model). This guide focuses on prompt changes that follow from those behavior changes.
+https://developers.openai.com/api/docs/guides/model-guidance?model=gpt-5.6#prompting-best-practices
 
-The patterns here are starting points. Adapt them to your product surface, tools, evals, and user experience goals.
+Read only the `## Prompting Best Practices` section, stopping at the next H2 heading. The URL anchor points to the section visually, but the Docs MCP may return the full page, so explicitly extract only that section.
 
-## Personality and behavior
+Treat the live section as the canonical model-specific prompting guidance. Use the local guidance below only for skill-specific migration judgment: deciding what to preserve, remove, rewrite, or test when adapting an existing prompt stack to GPT-5.6.
 
-GPT-5.5's default style is efficient, direct, and task-oriented. This is useful for production systems: responses stay focused, behavior is easier to steer, and the model avoids unnecessary conversational padding.
+## Skill-specific migration judgment
 
-For customer-facing assistants, support workflows, coaching experiences, and other conversational products, define both personality and collaboration style.
+GPT-5.6 works best when prompts define the outcome, important constraints, available evidence, and completion bar, then leave room for the model to choose an efficient path. Compared with earlier GPT-5 models, many applications can use shorter prompts and smaller tool sets without losing quality.
 
-- **Personality** controls how the assistant sounds: tone, warmth, directness, formality, humor, empathy, and level of polish.
-- **Collaboration style** controls how the assistant works: when it asks questions, when it makes assumptions, how proactive it should be, how much context it gives, when it checks work, and how it handles uncertainty or risk.
+Do not carry over every instruction from an older prompt stack. Legacy prompts often repeat rules, prescribe unnecessary steps, expose irrelevant tools, or include examples that no longer change behavior. With GPT-5.6, this can encourage extra exploration, repeated validation, and larger accumulated context.
 
-Keep both short. Personality instructions should shape the user experience. Collaboration instructions should shape task behavior. Neither should replace clear goals, success criteria, tool rules, or stopping conditions.
+Start with the smallest prompt and tool set that passes your evals. Add an instruction, example, or tool only when it fixes a measured failure mode.
 
-Example personality block for a steady task-focused assistant:
+## Simplify prompts first
 
-```text
-# Personality
-You are a capable collaborator: approachable, steady, and direct. Assume the user is competent and acting in good faith, and respond with patience, respect, and practical helpfulness.
+When migrating an existing prompt, remove redundant scaffolding before adding new GPT-5.6-specific instructions.
 
-Prefer making progress over stopping for clarification when the request is already clear enough to attempt. Use context and reasonable assumptions to move forward. Ask for clarification only when the missing information would materially change the answer or create meaningful risk, and keep any question narrow.
+Trim:
 
-Stay concise without becoming curt. Give enough context for the user to understand and trust the answer, then stop. Use examples, comparisons, or simple analogies when they make the point easier to grasp. When correcting the user or disagreeing, be candid but constructive. When an error is pointed out, acknowledge it plainly and focus on fixing it.
+- repeated statements of the same rule;
+- generic “be thorough,” “be concise,” or “think step by step” language;
+- examples that do not change behavior;
+- process instructions for behavior the model already performs reliably;
+- tools and tool descriptions unrelated to the task.
 
-Match the user's tone within professional bounds. Avoid emojis and profanity by default, unless the user explicitly asks for that style or has clearly established it as appropriate for the conversation.
-```
+Keep:
 
-Example personality block for an expressive collaborative assistant:
+- the user-visible outcome;
+- success criteria and stopping conditions;
+- safety, business, evidence, and permission constraints;
+- tool-routing rules when the correct route is not obvious;
+- required output shape and validation requirements.
 
-```text
-# Personality
-Adopt a vivid conversational presence: intelligent, curious, playful when appropriate, and attentive to the user's thinking. Ask good questions when the problem is blurry, then become decisive once there is enough context.
-
-Be warm, collaborative, and polished. Conversation should feel easy and alive, but not chatty for its own sake. Offer a real point of view rather than merely mirroring the user, while staying responsive to their goals and constraints.
-
-Be thoughtful and grounded when the task calls for synthesis or advice. State a clear recommendation when you have enough context, explain important tradeoffs, and name uncertainty without becoming evasive.
-```
-
-For more expressive products, add warmth, curiosity, humor, or point of view explicitly, but keep the block short. Use personality to shape the experience, not to compensate for unclear goals or missing task instructions.
-
-## Improve time to first visible token with a preamble
-
-In streaming applications, users notice how long it takes before the first visible response appears. GPT-5.5 may spend time reasoning, planning, or preparing tool calls before emitting visible text.
-
-For longer or tool-heavy tasks, prompt the model to start with a short preamble: a brief visible update that acknowledges the request and states the first step. This can improve perceived responsiveness without changing the underlying task.
-
-Use this pattern when the task may take more than one step, require tool calls, or involve a long-running agent workflow.
-
-```text
-Before any tool calls for a multi-step task, send a short user-visible update that acknowledges the request and states the first step. Keep it to one or two sentences.
-```
-
-For coding agents that expose separate message phases, you can be more explicit:
-
-```text
-You must always start with an intermediary update before any content in the analysis channel if the task will require calling tools. The user update should acknowledge the request and explain your first step.
-```
+Review the remaining instructions for contradictions. GPT-5-class models follow prompt contracts closely, so conflicting rules can create more instability than missing detail.
 
 ## Outcome-first prompts and stopping conditions
 
-GPT-5.5 is strongest when the prompt defines the target outcome, success criteria, constraints, and available context, then lets the model choose the path.
+Describe the destination rather than prescribing every step. GPT-5.6 can usually choose an efficient search, tool, or reasoning path when the prompt states what good looks like.
 
-For many tasks, describe the destination rather than every step. This gives the model room to choose the right search, tool, or reasoning strategy for the task.
+Prefer:
 
-Prefer this:
+    Resolve the customer's issue end to end.
 
-```text
-Resolve the customer's issue end to end.
+    Success means:
+    - make the eligibility decision from available policy and account evidence
+    - complete any allowed action before responding
+    - return completed_actions, customer_message, and blockers
+    - if required evidence is missing, ask for the smallest missing field
 
-Success means:
-- the eligibility decision is made from the available policy and account data
-- any allowed action is completed before responding
-- the final answer includes completed_actions, customer_message, and blockers
-- if evidence is missing, ask for the smallest missing field
-```
+Avoid unnecessary absolute rules. Use ALWAYS, NEVER, must, and only for true invariants such as safety rules, required fields, or actions that should never happen. For judgment calls, such as when to search, ask, use a tool, or keep iterating, prefer decision rules.
 
-**Avoid unnecessary absolute rules.** Older prompts often use strict instructions like `ALWAYS`, `NEVER`, `must`, and `only` to control model behavior. Use those words for true invariants, such as safety rules, required output fields, or actions that should never happen. For judgment calls, such as when to search, ask for clarification, use a tool, or keep iterating, prefer decision rules instead.
+Preserve explicit user values. When the correct value is implicit, provide decision criteria and let the model reason from context or schema. Avoid universal defaults, keyword maps, and broad semantic shortcuts.
 
-Avoid this style of instruction unless every step is truly required:
+Add stopping conditions:
 
-```text
-First inspect A, then inspect B, then compare every field, then think through
-all possible exceptions, then decide which tool to call, then call the tool,
-then explain the entire process to the user.
-```
+    Resolve the request in the fewest useful tool loops, but do not let loop
+    minimization outrank correctness, required evidence, calculations, or
+    required citations.
 
-Add explicit stopping conditions:
+    After each result, ask whether the core request can now be answered with
+    useful evidence. If yes, answer. If required evidence is still missing,
+    name the missing fact and use the smallest useful fallback.
 
-```text
-Resolve the user query in the fewest useful tool loops, but do not let loop minimization outrank correctness, accessible fallback evidence, calculations, or required citation tags for factual claims.
+## Personality, collaboration, and response length
 
-After each result, ask: "Can I answer the user's core request now with useful evidence and citations for the factual claims?" If yes, answer.
-```
+GPT-5.6 is efficient, direct, and more compressed than recent models. For customer-facing assistants and collaborative products, define both personality and collaboration style.
 
-Define missing-evidence behavior:
+- Personality controls tone, warmth, directness, formality, humor, empathy, and polish.
+- Collaboration style controls when the model asks questions, makes assumptions, takes initiative, explains tradeoffs, checks work, and handles uncertainty.
 
-```text
-Use the minimum evidence sufficient to answer correctly, cite it precisely, then stop.
-```
+Keep both short. Personality should shape the user experience; collaboration instructions should shape task behavior. Neither should replace clear goals, success criteria, tool rules, or stopping conditions.
 
-## Formatting
+Use concrete writing controls:
 
-GPT-5.5 is highly steerable on output format and structure. Use that control when it improves comprehension or product fit.
+    Lead with the conclusion. Include the evidence needed to support it, any
+    material caveat, and the next action. Keep all required facts, decisions,
+    caveats, and next steps. Trim introductions, repetition, generic reassurance,
+    and optional background first.
 
-Set `text.verbosity`, describe the expected output shape, and reserve heavier structure for cases where it improves comprehension or your product UI needs a stable artifact. The API default for `text.verbosity` is `medium`; use `low` when you prefer shorter, more concise responses.
+Avoid generic “be brief,” “keep it short,” or “use minimal text” instructions. GPT-5.6 is already biased toward compression, and generic brevity can make it omit required evidence or parts of an artifact.
 
-Plain conversational formatting:
+For customer-facing tone, prefer concrete guidance:
 
-```text
-Let formatting serve comprehension. Use plain paragraphs as the default format for normal conversation, explanations, reports, documentation, and technical writeups. Keep the presentation clean and readable without making the structure feel heavier than the content.
+    Be direct and tactful. Acknowledge friction specifically when relevant.
+    Avoid canned reassurance and unnecessary sign-offs.
 
-Use headers, bold text, bullets, and numbered lists sparingly. Reach for them when the user requests them, when the answer needs clear comparison or ranking, or when the information would be harder to scan as prose. Otherwise, favor short paragraphs and natural transitions.
+Avoid blanket language rules such as “always respond in the user's language” unless that is truly the product requirement. Specify the intended output language and when it should change.
 
-Respect formatting preferences from the user. If they ask for a terse answer, minimal formatting, no bullets, no headers, or a specific structure, follow that preference unless there is a strong reason not to.
-```
+For editing, rewriting, summaries, and customer-facing drafts, tell the model what to preserve:
 
-Add explicit audience and length guidance:
+    Preserve the requested artifact, length, structure, genre, and factual claims
+    first. Improve clarity, flow, and correctness without adding new claims,
+    sections, or a more promotional tone unless requested.
 
-```text
-Write for a senior business audience. Keep the answer under 400 words. Use short paragraphs and only include bullets when they improve scannability. Prioritize the conclusion first, then the reasoning, then caveats.
-```
+## Autonomy and permissions
 
-For editing, rewriting, summaries, or customer-facing messages, tell the model what to preserve before asking it to improve style. This pattern is useful when you want polish without expansion.
+GPT-5.6 can be proactive and persistent. Define which level of action each request authorizes.
 
-```text
-Preserve the requested artifact, length, structure, and genre first. Quietly improve clarity, flow, and correctness. Do not add new claims, extra sections, or a more promotional tone unless explicitly requested.
-```
+    For requests to answer, explain, review, diagnose, or plan, inspect the
+    relevant materials and report the result. Do not implement changes unless
+    the request also asks for them.
+
+    For requests to change, build, or fix, make the requested in-scope local
+    changes and run relevant non-destructive validation without asking first.
+
+    Require confirmation for external writes, destructive actions, purchases,
+    or a material expansion of scope.
+
+Specify which local actions are safe without approval, such as reading files, inspecting logs, searching, editing in-scope code, and running non-destructive tests.
+
+Avoid repeating “ask first” throughout the prompt. Repetition can cause unnecessary permission checks even for safe, expected actions.
+
+For long-running work, define the current layer of work. Distinguish research, design, implementation, review, and external coordination so the model does not silently move from one layer to another.
+
+## Tool routing
+
+Expose only task-relevant tools. Tool descriptions should state what the tool does, when to use it, important return fields, and error behavior.
+
+When correctness depends on prerequisite retrieval or lookup, say so:
+
+    Before taking an action, resolve required discovery, retrieval, and
+    validation steps. Do not skip a prerequisite because the intended final
+    state seems obvious.
+
+When several reads are independent, parallelize them. When one result determines the next action, keep the work sequential. After parallel retrieval, synthesize before acting.
+
+If a tool returns empty, partial, or suspiciously narrow results, try one or two meaningful fallbacks before concluding that no result exists.
+
+## Programmatic Tool Calling
+
+Programmatic Tool Calling is useful when code can reduce large, structured intermediate results before they return to model context.
+
+Use it for:
+
+- filtering, joining, sorting, ranking, deduplication, and aggregation;
+- batching across many similar records;
+- repeated deterministic validation;
+- large structured results that can be reduced to a compact schema.
+
+Prefer direct tool calls when:
+
+- one call is sufficient;
+- intermediate outputs are already small;
+- each result may change the next decision;
+- an action requires approval;
+- the final answer must preserve citations or native artifacts;
+- the workflow requires semantic judgment between calls.
+
+Do not rely on generic instructions such as “use Programmatic Tool Calling efficiently.” State the bounded stage, eligible tools, output schema, retry limit, stop condition, and handoff back to direct model judgment.
+
+    Use Programmatic Tool Calling only for the bounded record-reduction stage.
+    Call only the documented read-only tools. Filter and deduplicate the
+    intermediate results, then emit exactly the required compact schema with
+    evidence fields. Retry transient failures at most twice. Use direct tool
+    calls for approval, semantic judgment, citations, and final validation.
+
+Evaluate the final user-visible answer, not only the program result. Lower tokens, latency, calls, or turns are improvements only when the final answer still meets the required quality bar.
 
 ## Grounding, citations, and retrieval budgets
 
-For grounded answers, citation behavior should be part of the prompt. Define what needs support, what counts as enough evidence, and how the model should behave when evidence is missing. Absence of evidence shouldn't automatically become a factual "no." For more details and examples, see the [citation formatting guide](/api/docs/guides/citation-formatting).
+For grounded answers, citation behavior should be part of the prompt. Define what needs support, what counts as enough evidence, and how to behave when evidence is missing. Absence of evidence should not automatically become a factual “no.”
 
-### Add an explicit retrieval budget
+    For ordinary Q&A, start with one broad search using short, discriminative
+    keywords. If the top results contain enough support for the core request,
+    answer from those results.
 
-Retrieval budgets are stopping rules for search. They tell the model when enough evidence is enough.
+    Make another retrieval call only when a required fact, owner, date, ID, or
+    source is missing; the user asked for exhaustive coverage or comparison; a
+    specific artifact must be read; or an important claim would otherwise be
+    unsupported.
 
-```text
-For ordinary Q&A, start with one broad search using short, discriminative keywords. If the top results contain enough citable support for the core request, answer from those results instead of searching again.
+    Do not search again only to improve phrasing, add examples, or support
+    nonessential detail.
 
-Make another retrieval call only when:
-- The top results do not answer the core question.
-- A required fact, parameter, owner, date, ID, or source is missing.
-- The user asked for exhaustive coverage, a comparison, or a comprehensive list.
-- A specific document, URL, email, meeting, record, or code artifact must be read.
-- The answer would otherwise contain an important unsupported factual claim.
+For research and synthesis:
 
-Do not search again to improve phrasing, add examples, cite nonessential details, or support wording that can safely be made more generic.
-```
+- cite only retrieved sources;
+- attach citations to the claims they support;
+- label inference separately from directly supported facts;
+- state conflicts between sources;
+- narrow the answer or report missing evidence instead of guessing.
 
-## Creative drafting guardrails
+For creative drafting, distinguish source-backed facts from creative wording. Do not invent names, metrics, dates, roadmap status, customer outcomes, or product capabilities to make a draft sound stronger.
 
-For drafting tasks, tell the model which claims must come from sources and which parts may be creatively written. This is especially important for slides, launch copy, customer summaries, talk tracks, leadership blurbs, and narrative framing.
+## Long-running workflows and state
 
-```text
-For creative or generative requests such as slides, leadership blurbs, outbound copy, summaries for sharing, talk tracks, or narrative framing, distinguish source-backed facts from creative wording.
+For multi-step or tool-heavy tasks, prompt for a short visible preamble before the first tool call, then sparse outcome-based updates at major phase changes. Do not ask the model to narrate routine tool calls.
 
-- Use retrieved or provided facts for concrete product, customer, metric, roadmap, date, capability, and competitive claims, and cite those claims.
-- Do not invent specific names, first-party data claims, metrics, roadmap status, customer outcomes, or product capabilities to make the draft sound stronger.
-- If there is little or no citable support, write a useful generic draft with placeholders or clearly labeled assumptions rather than unsupported specifics.
-```
+    Before tool calls for a multi-step task, send a one- or two-sentence
+    user-visible update that states the first step. During the task, update only
+    when a major phase begins or a finding changes the plan. Each update should
+    state one concrete outcome and the next step.
 
-## Frontend engineering and visual taste
+Preserve assistant phase values when replaying history so the model can distinguish commentary from the final answer. If using previous_response_id, prior assistant state is preserved automatically. If replaying history manually, preserve each original phase value unchanged.
 
-For frontend work, refer to the [example instructions](/api/docs/guides/frontend-prompt) for practical ways to steer UI quality. They cover product and user context, design-system alignment, first-screen usability, familiar controls, expected states, responsive behavior, and common generated-UI defaults to avoid, such as generic heroes, nested cards, decorative gradients, visible instructional text, and broken layouts.
+Compact after major milestones rather than every turn. Keep the prompt functionally consistent after compaction and treat compacted items as opaque state.
 
-## Prompt the model to check its work
+Persisted reasoning is useful when the objective, assumptions, and priorities remain stable across turns. Use current-turn behavior when earlier reasoning is no longer relevant. Do not treat persisted reasoning as an always-on optimization: stale reasoning can add tokens, increase latency, and anchor the model to an outdated approach.
 
-Give GPT-5.5 access to tools that let it check outputs when validation is possible.
+Prompt caching also affects prompt construction. Keep reusable prefixes stable and avoid unnecessary churn in large system prompts. Use explicit cache breakpoints only when they improve measured cache behavior and cost for the workload.
 
-For coding agents, ask for concrete validation commands:
+## Reasoning effort
 
-```text
-After making changes, run the most relevant validation available:
-- targeted unit tests for changed behavior
-- type checks or lint checks when applicable
-- build checks for affected packages
-- a minimal smoke test when full validation is too expensive
+Treat reasoning effort as a last-mile tuning knob, not the first response to a weak result.
 
-If validation cannot be run, explain why and describe the next best check.
-```
+- Preserve the current GPT-5.5 or GPT-5.4 reasoning effort as the baseline.
+- Test the same setting and one level lower on representative tasks.
+- Use low for latency-sensitive work when it preserves quality.
+- Use medium as a balanced starting point.
+- Use high or xhigh only when evals show a meaningful gain.
+- Reserve max for the hardest quality-first workloads; do not recommend it globally.
 
-For visual artifacts, ask for inspection after rendering:
+Before increasing reasoning effort, check whether the prompt is missing a success criterion, dependency rule, tool-routing rule, or verification loop.
 
-```text
-Render the artifact before finalizing. Inspect the rendered output for layout, clipping, spacing, missing content, and visual consistency. Revise until the rendered output matches the requirements.
-```
+## Frontend and visual tasks
 
-For engineering and planning tasks, make implementation plans traceable:
+GPT-5.6 has stronger layout, visual hierarchy, and design judgment. Still provide product context, preserve the existing design system, and name the states and constraints that matter.
 
-```text
-For implementation plans, include:
-- requirements and where each is addressed
-- named resources, files, APIs, or systems involved
-- state transitions or data flow where relevant
-- validation commands or checks
-- failure behavior
-- privacy and security considerations
-- open questions that materially affect implementation
-```
+For incremental frontend changes:
 
-## Phase parameter
+- inspect and preserve existing design tokens, components, and patterns;
+- do not add extra features or decorative UI unless requested;
+- preserve responsive behavior and expected states;
+- render and inspect the result before finalizing.
 
-Starting with GPT-5.4, long-running or tool-heavy Responses workflows can use assistant-item `phase` values to distinguish intermediate updates from final answers. GPT-5.5 uses the same pattern.
+For vision, computer use, localization, or OCR tasks where spatial precision matters, choose image detail intentionally. Use original detail for large, dense, or coordinate-sensitive images when the extra input cost and latency are justified.
 
-If you use `previous_response_id`, the API preserves prior assistant state automatically. If your application manually replays assistant output items into the next request, preserve each original `phase` value and pass it back unchanged. This matters most when a response includes preambles, repeated tool calls, or a final answer after intermediate assistant updates.
+## Check work before finishing
 
-```text
-If manually replaying assistant items:
-- Preserve assistant `phase` values exactly.
-- Use `phase: "commentary"` for intermediate user-visible updates.
-- Use `phase: "final_answer"` for the completed answer.
-- Do not add `phase` to user messages.
-```
+Give GPT-5.6 access to tools that can validate the output, and state what validation matters.
+
+For coding:
+
+    After making changes, run the most relevant validation available:
+    - targeted tests for changed behavior
+    - type checks or lint checks when applicable
+    - build checks for affected packages
+    - a minimal smoke test when full validation is too expensive
+
+    If validation cannot be run, explain why and describe the next best check.
+
+For visual artifacts:
+
+    Render the artifact before finalizing. Inspect layout, clipping, spacing,
+    missing content, and visual consistency. Revise until the rendered output
+    matches the requirements.
+
+For implementation plans, include requirements, named resources or files, state transitions or data flow, validation checks, failure behavior, privacy or security considerations, and open questions that materially affect implementation.
 
 ## Suggested prompt structure
 
 Use this structure as a starting point for complex prompts. Keep each section short. Add detail only where it changes behavior.
 
-```text
-Role: [1-2 sentences defining the model's function, context, and job]
+    Role: [the model's function and context]
 
-# Personality
-[tone, demeanor, and collaboration style]
+    Personality: [tone and collaboration style]
 
-# Goal
-[user-visible outcome]
+    Goal: [user-visible outcome]
 
-# Success criteria
-[what must be true before the final answer]
+    Success criteria: [what must be true before the final answer]
 
-# Constraints
-[policy, safety, business, evidence, and side-effect limits]
+    Constraints: [policy, safety, business, evidence, and side-effect limits]
 
-# Output
-[sections, length, and tone]
+    Tools: [which tools to use, when, and what not to use]
 
-# Stop rules
-[when to retry, fallback, abstain, ask, or stop]
-```
+    Output: [sections, length, format, and tone]
+
+    Stop rules: [when to retry, fallback, abstain, ask, or stop]
+
+## Prompt migration workflow
+
+When moving an existing application to GPT-5.6:
+
+1. Switch the model and preserve the current reasoning effort.
+2. Run representative evals before changing the prompt.
+3. Remove obsolete scaffolding, repeated instructions, and irrelevant tools.
+4. Add only the smallest targeted instruction that fixes a measured regression.
+5. Re-run evals after each prompt or reasoning change.
+
+Do not rewrite a working prompt stack all at once. Otherwise you cannot tell whether a behavior change came from the model, reasoning setting, prompt, tool set, or runtime.
+
+When a prompt regresses, debug it with a small set of real traces. Identify the failure mode, find the instruction or contradiction that likely caused it, make a surgical edit, and rerun the same cases.
