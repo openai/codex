@@ -208,8 +208,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.turn_interrupt_inner(request_id, params)
+        self.turn_interrupt_inner(request_id, params, host_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -1389,11 +1390,19 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<TurnInterruptResponse>, JSONRPCErrorError> {
         let TurnInterruptParams { thread_id, turn_id } = params;
         let is_startup_interrupt = turn_id.is_empty();
 
         let (thread_uuid, thread) = self.load_thread(&thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_uuid,
+            thread.as_ref(),
+            &host_capabilities,
+            "interrupt a turn",
+        )
+        .await?;
 
         // Record turn interrupts so we can reply when TurnAborted arrives. Startup
         // interrupts do not have a turn and are acknowledged after submission.

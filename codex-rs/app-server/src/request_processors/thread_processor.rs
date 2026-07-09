@@ -669,12 +669,13 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
         app_server_client_name: Option<&str>,
+        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         if app_server_client_name != Some(CODEX_TUI_CLIENT_NAME) {
             self.send_thread_rollback_deprecation_notice(request_id.connection_id)
                 .await;
         }
-        self.thread_rollback_inner(request_id, params)
+        self.thread_rollback_inner(request_id, params, host_capabilities)
             .await
             .map(|()| None)
     }
@@ -1750,14 +1751,17 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
-        self.thread_rollback_start(request_id, params).await
+        self.thread_rollback_start(request_id, params, host_capabilities)
+            .await
     }
 
     async fn thread_rollback_start(
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
+        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadRollbackParams {
             thread_id,
@@ -1769,6 +1773,13 @@ impl ThreadRequestProcessor {
         }
 
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        ensure_thread_host_capabilities(
+            thread_id,
+            thread.as_ref(),
+            &host_capabilities,
+            "roll back",
+        )
+        .await?;
 
         let request = request_id.clone();
 

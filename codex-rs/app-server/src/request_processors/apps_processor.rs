@@ -52,7 +52,14 @@ impl AppsRequestProcessor {
         let installed_start = Instant::now();
         let reload = params.force_refetch;
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
-            let (_, loaded_thread) = self.load_thread(thread_id).await?;
+            let (thread_id, loaded_thread) = self.load_thread(thread_id).await?;
+            ensure_thread_host_capabilities(
+                thread_id,
+                loaded_thread.as_ref(),
+                &host_capabilities,
+                "list apps",
+            )
+            .await?;
             Some(loaded_thread)
         } else {
             None

@@ -1136,7 +1136,12 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadRollback { params, .. } => {
                 self.thread_processor
-                    .thread_rollback(&request_id, params, app_server_client_info.name.as_deref())
+                    .thread_rollback(
+                        &request_id,
+                        params,
+                        app_server_client_info.name.as_deref(),
+                        host_capabilities.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadList { params, .. } => {
@@ -1280,7 +1285,7 @@ impl MessageProcessor {
             }
             ClientRequest::TurnInterrupt { params, .. } => {
                 self.turn_processor
-                    .turn_interrupt(&request_id, params)
+                    .turn_interrupt(&request_id, params, host_capabilities.clone())
                     .await
             }
             ClientRequest::ThreadRealtimeStart { params, .. } => {

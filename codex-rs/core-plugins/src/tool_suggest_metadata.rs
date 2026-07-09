@@ -206,13 +206,23 @@ async fn load_plugin_metadata(
     )?;
 
     let MarketplacePluginSource::Local { path: plugin_root } = &plugin.source else {
+        let required_host_capabilities = match plugin.manifest_fallback.as_ref() {
+            Some(fallback) => {
+                fallback
+                    .parse_for_listing()
+                    .ok_or_else(|| "invalid marketplace plugin manifest fallback".to_string())?
+                    .requires
+                    .host_capabilities
+            }
+            None => Vec::new(),
+        };
         return Ok(Arc::new(ToolSuggestMetadataFragment {
             config_name: plugin.id.clone(),
             display_name: plugin.name.clone(),
             description: prompt_safe_plugin_description(Some(
                 &remote_plugin_install_required_description(&plugin.source),
             )),
-            required_host_capabilities: Vec::new(),
+            required_host_capabilities,
             mcp_server_names: Vec::new(),
             app_declarations: Vec::new(),
             skill_inventory: None,

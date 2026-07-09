@@ -351,6 +351,101 @@ async fn reprojects_cached_configured_and_fallback_plugins_for_host_capabilities
 }
 
 #[tokio::test]
+async fn filters_unmaterialized_remote_plugins_by_fallback_host_capabilities() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let marketplace_name = "remote-marketplace";
+    let plugin_name = "remote-plugin";
+    let plugin_id = format!("{plugin_name}@{marketplace_name}");
+    let malformed_plugin_name = "malformed-remote-plugin";
+    let malformed_plugin_id = format!("{malformed_plugin_name}@{marketplace_name}");
+    let marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{marketplace_name}"));
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{marketplace_name}",
+  "plugins": [
+    {{
+      "name": "{plugin_name}",
+      "source": {{
+        "source": "git-subdir",
+        "url": "openai/remote-plugin",
+        "path": "plugins/remote-plugin"
+      }},
+      "requires": {{
+        "hostCapabilities": ["{HOST_CAPABILITY_INLINE_VISUALIZATION}"]
+      }}
+    }},
+    {{
+      "name": "{malformed_plugin_name}",
+      "source": {{
+        "source": "git-subdir",
+        "url": "openai/malformed-remote-plugin",
+        "path": "plugins/malformed-remote-plugin"
+      }},
+      "requires": {{
+        "hostCapabilities": "{HOST_CAPABILITY_INLINE_VISUALIZATION}"
+      }}
+    }}
+  ]
+}}
+"#
+        ),
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &format!(
+            r#"[features]
+plugins = true
+
+[marketplaces.{marketplace_name}]
+source_type = "git"
+source = "/tmp/{marketplace_name}"
+"#
+        ),
+    );
+
+    let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let unsupported = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(
+            plugins.clone(),
+            &[plugin_id.as_str(), malformed_plugin_id.as_str()],
+            &[],
+            &[],
+        ),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(unsupported, Vec::new());
+
+    plugins
+        .host_capabilities
+        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION.to_string());
+    let supported = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(
+            plugins,
+            &[plugin_id.as_str(), malformed_plugin_id.as_str()],
+            &[],
+            &[],
+        ),
+        /*auth*/ None,
+    )
+    .await;
+    assert_eq!(
+        supported
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![plugin_id]
+    );
+}
+
+#[tokio::test]
 async fn reprojects_cached_skill_availability_for_current_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());

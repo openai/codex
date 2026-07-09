@@ -356,6 +356,68 @@ async fn host_capabilities_are_normalized_and_sticky_for_loaded_threads() -> Res
         inject_error.error.message
     );
 
+    send_request(
+        &mut mismatched_client,
+        "app/list",
+        /*id*/ 11,
+        Some(json!({
+            "threadId": thread_id,
+        })),
+    )
+    .await?;
+    let apps_error = read_error_for_id(&mut mismatched_client, /*id*/ 11)
+        .await
+        .context("mismatched-client app/list error")?;
+    assert!(apps_error.error.message.contains("cannot list apps"));
+
+    send_request(
+        &mut mismatched_client,
+        "thread/rollback",
+        /*id*/ 12,
+        Some(json!({
+            "threadId": thread_id,
+            "numTurns": 1,
+        })),
+    )
+    .await?;
+    let rollback_error = read_error_for_id(&mut mismatched_client, /*id*/ 12)
+        .await
+        .context("mismatched-client thread/rollback error")?;
+    assert!(rollback_error.error.message.contains("cannot roll back"));
+
+    send_request(
+        &mut mismatched_client,
+        "turn/interrupt",
+        /*id*/ 13,
+        Some(json!({
+            "threadId": thread_id,
+            "turnId": "turn-under-test",
+        })),
+    )
+    .await?;
+    let interrupt_error = read_error_for_id(&mut mismatched_client, /*id*/ 13)
+        .await
+        .context("mismatched-client turn/interrupt error")?;
+    assert!(
+        interrupt_error
+            .error
+            .message
+            .contains("cannot interrupt a turn")
+    );
+
+    send_request(
+        &mut mismatched_client,
+        "thread/settings/update",
+        /*id*/ 14,
+        Some(json!({
+            "threadId": thread_id,
+        })),
+    )
+    .await?;
+    read_response_for_id(&mut mismatched_client, /*id*/ 14)
+        .await
+        .context("mismatched-client thread/settings/update response")?;
+
     process
         .kill()
         .await
@@ -951,7 +1013,13 @@ pub(super) async fn send_initialize_request(
     id: i64,
     client_name: &str,
 ) -> Result<()> {
-    send_initialize_request_with_host_capabilities(stream, id, client_name, None).await
+    send_initialize_request_with_host_capabilities(
+        stream,
+        id,
+        client_name,
+        /*host_capabilities*/ None,
+    )
+    .await
 }
 
 async fn send_initialize_request_with_host_capabilities(

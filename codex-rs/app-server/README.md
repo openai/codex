@@ -98,7 +98,8 @@ Clients declare host features available to runtime plugins with
 compatibility signals, not authorization grants; omitted or `null`
 capabilities are treated as an empty set. The capability set is fixed for the
 lifetime of a loaded thread, so clients must use the same set when resuming or
-starting turns on that thread.
+performing model-visible runtime operations on that thread. Capability-independent
+settings updates remain available; the next `turn/start` enforces compatibility.
 
 Plugin manifests declare all-of host requirements with
 `{"requires":{"hostCapabilities":["codex.inline_visualization"]}}`. A plugin
@@ -1835,7 +1836,7 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 } }
 ```
 
-When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot, and the requesting connection must have the same host capability set as the loaded thread. When omitted, the latest global config is used.
 
 `app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
 
