@@ -4,14 +4,25 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT_PATH="$SCRIPT_DIR/resolve-latest-model-info.cjs"
 
-if [ -n "${NODE:-}" ] && [ -x "$NODE" ]; then
-  "$NODE" "$SCRIPT_PATH" "$@"
-  exit $?
+is_compatible_node() {
+  "$1" -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major >= 18 ? 0 : 1)' >/dev/null 2>&1
+}
+
+run_if_compatible() {
+  CANDIDATE=$1
+  shift
+  if [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ] && is_compatible_node "$CANDIDATE"; then
+    exec "$CANDIDATE" "$SCRIPT_PATH" "$@"
+  fi
+}
+
+if [ -n "${NODE:-}" ]; then
+  run_if_compatible "$NODE" "$@"
 fi
 
-if command -v node >/dev/null 2>&1; then
-  node "$SCRIPT_PATH" "$@"
-  exit $?
+PATH_NODE=$(command -v node 2>/dev/null || true)
+if [ -n "$PATH_NODE" ]; then
+  run_if_compatible "$PATH_NODE" "$@"
 fi
 
 for CANDIDATE in \
@@ -21,11 +32,8 @@ for CANDIDATE in \
   "/usr/local/bin/node" \
   "/usr/bin/node"
 do
-  if [ -x "$CANDIDATE" ]; then
-    "$CANDIDATE" "$SCRIPT_PATH" "$@"
-    exit $?
-  fi
+  run_if_compatible "$CANDIDATE" "$@"
 done
 
-echo "No usable Node runtime found for resolve-latest-model-info.cjs" >&2
+echo "No usable Node.js 18+ runtime found for resolve-latest-model-info.cjs" >&2
 exit 127
