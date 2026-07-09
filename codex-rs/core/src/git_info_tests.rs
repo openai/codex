@@ -6,6 +6,9 @@ use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::FindUpMatch;
+use codex_exec_server::FindUpOptions;
+use codex_exec_server::FindUpOutcome;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
@@ -28,14 +31,25 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-struct FailingMetadataFileSystem {
-    path: PathUri,
+#[derive(Clone, Copy)]
+enum FirstFindUpBehavior {
+    Delegate,
+    CwdMatch,
+    Error,
 }
 
-impl FailingMetadataFileSystem {
+struct GitRootFileSystem {
+    metadata_error: Option<(PathUri, io::ErrorKind)>,
+    first_find_up_behavior: FirstFindUpBehavior,
+    find_up_calls: AtomicUsize,
+}
+
+impl GitRootFileSystem {
     fn unsupported<T>() -> FileSystemResult<T> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -44,7 +58,7 @@ impl FailingMetadataFileSystem {
     }
 }
 
-impl ExecutorFileSystem for FailingMetadataFileSystem {
+impl ExecutorFileSystem for GitRootFileSystem {
     fn canonicalize<'a>(
         &'a self,
         _path: &'a PathUri,
@@ -93,15 +107,46 @@ impl ExecutorFileSystem for FailingMetadataFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
-            if path == &self.path {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "injected metadata failure",
-                ))
-            } else {
-                LOCAL_FS.get_metadata(path, sandbox).await
+            if let Some((error_path, error_kind)) = &self.metadata_error
+                && path == error_path
+            {
+                return Err(io::Error::new(*error_kind, "injected metadata failure"));
             }
+            LOCAL_FS.get_metadata(path, sandbox).await
         })
+    }
+
+    fn find_up<'a>(
+        &'a self,
+        start: &'a PathUri,
+        options: &'a FindUpOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FindUpOutcome> {
+        let call_index = self.find_up_calls.fetch_add(1, Ordering::Relaxed);
+        if call_index == 0 {
+            match self.first_find_up_behavior {
+                FirstFindUpBehavior::Delegate => {}
+                FirstFindUpBehavior::CwdMatch => {
+                    return Box::pin(async move {
+                        Ok(FindUpOutcome {
+                            matched: Some(FindUpMatch {
+                                ancestor: start.clone(),
+                                path: start.join(".git").map_err(io::Error::other)?,
+                            }),
+                            visited_ancestor_count: 1,
+                            metadata_probe_count: 1,
+                            ignored_error_count: 0,
+                            ignored_errors: Vec::new(),
+                            ignored_errors_truncated: false,
+                        })
+                    });
+                }
+                FirstFindUpBehavior::Error => {
+                    return Box::pin(async { Err(io::Error::other("injected find-up failure")) });
+                }
+            }
+        }
+        self.find_up_via_metadata(start, options, sandbox)
     }
 
     fn read_directory<'a>(
@@ -632,20 +677,90 @@ async fn get_git_repo_root_with_fs_starts_at_parent_for_file() {
 }
 
 #[tokio::test]
+async fn get_git_repo_root_with_fs_starts_at_parent_for_missing_cwd() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proj = tmp.path().join("proj");
+    let nested = proj.join("nested");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let missing = nested.join("missing");
+
+    assert_eq!(
+        get_git_repo_root_with_fs(LOCAL_FS.as_ref(), &missing.abs()).await,
+        Some(proj.abs())
+    );
+}
+
+#[tokio::test]
 async fn get_git_repo_root_with_fs_ignores_metadata_errors() {
     let tmp = TempDir::new().expect("tempdir");
     let proj = tmp.path().join("proj");
     let nested = proj.join("nested");
     std::fs::create_dir_all(proj.join(".git")).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
-    let fs = FailingMetadataFileSystem {
-        path: PathUri::from_abs_path(&nested.join(".git").abs()),
+    let fs = GitRootFileSystem {
+        metadata_error: Some((
+            PathUri::from_abs_path(&nested.join(".git").abs()),
+            io::ErrorKind::PermissionDenied,
+        )),
+        first_find_up_behavior: FirstFindUpBehavior::Delegate,
+        find_up_calls: AtomicUsize::new(0),
     };
 
     assert_eq!(
         get_git_repo_root_with_fs(&fs, &nested.abs()).await,
         Some(proj.abs())
     );
+    assert_eq!(fs.find_up_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn get_git_repo_root_with_fs_rejects_spurious_cwd_matches_for_non_directories() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proj = tmp.path().join("proj");
+    let nested = proj.join("nested");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let file = nested.join("file.txt");
+    std::fs::write(&file, "contents").unwrap();
+    let missing = nested.join("missing");
+    let inaccessible = nested.join("inaccessible");
+    std::fs::create_dir_all(&inaccessible).unwrap();
+
+    for (cwd, metadata_error) in [
+        (file.abs(), None),
+        (missing.abs(), None),
+        (inaccessible.abs(), Some(io::ErrorKind::PermissionDenied)),
+    ] {
+        let fs = GitRootFileSystem {
+            metadata_error: metadata_error.map(|kind| (PathUri::from_abs_path(&cwd), kind)),
+            first_find_up_behavior: FirstFindUpBehavior::CwdMatch,
+            find_up_calls: AtomicUsize::new(0),
+        };
+
+        assert_eq!(get_git_repo_root_with_fs(&fs, &cwd).await, Some(proj.abs()));
+        assert_eq!(fs.find_up_calls.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[tokio::test]
+async fn get_git_repo_root_with_fs_falls_back_when_find_up_fails() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proj = tmp.path().join("proj");
+    let nested = proj.join("nested");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let fs = GitRootFileSystem {
+        metadata_error: None,
+        first_find_up_behavior: FirstFindUpBehavior::Error,
+        find_up_calls: AtomicUsize::new(0),
+    };
+
+    assert_eq!(
+        get_git_repo_root_with_fs(&fs, &nested.abs()).await,
+        Some(proj.abs())
+    );
+    assert_eq!(fs.find_up_calls.load(Ordering::Relaxed), 1);
 }
 
 #[cfg(windows)]
