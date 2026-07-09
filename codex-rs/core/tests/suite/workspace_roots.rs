@@ -212,7 +212,9 @@ async fn workspace_roots_allow_file_read_and_command_run() -> Result<()> {
         .context("command result should be present")?;
     assert_ne!(success, Some(false));
     assert!(
-        command_output.is_some_and(|output| output.contains(COMMAND_CONTENTS)),
+        command_output
+            .as_deref()
+            .is_some_and(|output| output.contains(COMMAND_CONTENTS)),
         "command should read the workspace-root file, got {command_output:?}"
     );
 
