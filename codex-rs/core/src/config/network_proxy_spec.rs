@@ -74,15 +74,15 @@ impl ConfigReloader for StaticNetworkProxyReloader {
 
 impl NetworkProxySpec {
     pub(crate) fn enabled(&self) -> bool {
-        self.config.network.enabled
+        self.config.enabled
     }
 
     pub fn proxy_host_and_port(&self) -> String {
-        host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
+        host_and_port_from_network_addr(&self.config.proxy_url, /*default_port*/ 3128)
     }
 
     pub fn socks_enabled(&self) -> bool {
-        self.config.network.enable_socks5
+        self.config.enable_socks5
     }
 
     pub(crate) fn from_config_and_constraints(
@@ -221,31 +221,30 @@ impl NetworkProxySpec {
         let denylist_expansion_enabled = Self::denylist_expansion_enabled(permission_profile);
 
         if let Some(enabled) = requirements.enabled {
-            config.network.enabled = enabled;
+            config.enabled = enabled;
             constraints.enabled = Some(enabled);
         }
         if let Some(http_port) = requirements.http_port {
-            config.network.proxy_url = format!("http://127.0.0.1:{http_port}");
+            config.proxy_url = format!("http://127.0.0.1:{http_port}");
         }
         if let Some(socks_port) = requirements.socks_port {
-            config.network.socks_url = format!("http://127.0.0.1:{socks_port}");
+            config.socks_url = format!("http://127.0.0.1:{socks_port}");
         }
         if let Some(allow_upstream_proxy) = requirements.allow_upstream_proxy {
-            config.network.allow_upstream_proxy = allow_upstream_proxy;
+            config.allow_upstream_proxy = allow_upstream_proxy;
             constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
         }
         if let Some(dangerously_allow_non_loopback_proxy) =
             requirements.dangerously_allow_non_loopback_proxy
         {
-            config.network.dangerously_allow_non_loopback_proxy =
-                dangerously_allow_non_loopback_proxy;
+            config.dangerously_allow_non_loopback_proxy = dangerously_allow_non_loopback_proxy;
             constraints.dangerously_allow_non_loopback_proxy =
                 Some(dangerously_allow_non_loopback_proxy);
         }
         if let Some(dangerously_allow_all_unix_sockets) =
             requirements.dangerously_allow_all_unix_sockets
         {
-            config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
+            config.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
@@ -270,14 +269,12 @@ impl NetworkProxySpec {
             let effective_allowed_domains = if allowlist_expansion_enabled {
                 Self::merge_domain_lists(
                     managed_allowed_domains.clone(),
-                    config.network.allowed_domains().as_deref().unwrap_or(&[]),
+                    config.allowed_domains().as_deref().unwrap_or(&[]),
                 )
             } else {
                 managed_allowed_domains.clone()
             };
-            config
-                .network
-                .set_allowed_domains(effective_allowed_domains);
+            config.set_allowed_domains(effective_allowed_domains);
             constraints.allowed_domains = Some(managed_allowed_domains);
             constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
@@ -289,12 +286,12 @@ impl NetworkProxySpec {
             let effective_denied_domains = if denylist_expansion_enabled {
                 Self::merge_domain_lists(
                     managed_denied_domains.clone(),
-                    config.network.denied_domains().as_deref().unwrap_or(&[]),
+                    config.denied_domains().as_deref().unwrap_or(&[]),
                 )
             } else {
                 managed_denied_domains.clone()
             };
-            config.network.set_denied_domains(effective_denied_domains);
+            config.set_denied_domains(effective_denied_domains);
             constraints.denied_domains = Some(managed_denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
@@ -304,13 +301,11 @@ impl NetworkProxySpec {
                 .as_ref()
                 .map(codex_config::NetworkUnixSocketPermissionsToml::allow_unix_sockets)
                 .unwrap_or_default();
-            config
-                .network
-                .set_allow_unix_sockets(allow_unix_sockets.clone());
+            config.set_allow_unix_sockets(allow_unix_sockets.clone());
             constraints.allow_unix_sockets = Some(allow_unix_sockets);
         }
         if let Some(allow_local_binding) = requirements.allow_local_binding {
-            config.network.allow_local_binding = allow_local_binding;
+            config.allow_local_binding = allow_local_binding;
             constraints.allow_local_binding = Some(allow_local_binding);
         }
 
@@ -359,7 +354,7 @@ fn upsert_network_domains(config: &mut NetworkProxyConfig, hosts: Vec<String>, a
     let mut incoming = HashSet::new();
     for host in hosts {
         if incoming.insert(host.clone()) {
-            config.network.upsert_domain_permission(
+            config.upsert_domain_permission(
                 host,
                 if allow {
                     codex_network_proxy::NetworkDomainPermission::Allow

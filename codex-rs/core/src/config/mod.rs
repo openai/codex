@@ -3368,7 +3368,7 @@ impl Config {
                     network_proxy,
                 );
             }
-            configured_network_proxy_config.network.enabled = true;
+            configured_network_proxy_config.enabled = true;
         }
         let approval_policy_was_explicit =
             approval_policy_override.is_some() || cfg.approval_policy.is_some();
@@ -4128,7 +4128,7 @@ impl Config {
                         network_proxy,
                     );
                 }
-                configured_network_proxy_config.network.enabled = true;
+                configured_network_proxy_config.enabled = true;
             }
             configured_network_proxy_config
         } else {
