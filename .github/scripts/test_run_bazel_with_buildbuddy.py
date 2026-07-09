@@ -214,6 +214,48 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
+    def test_bazel_command_uses_configured_local_caches(self) -> None:
+        env = {
+            "BAZEL_REPO_CONTENTS_CACHE": "/tmp/bazel-repo-contents",
+            "BAZEL_REPOSITORY_CACHE": "/tmp/bazel-repository",
+        }
+
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_command(
+                "build",
+                "--config=local",
+                "//codex-rs/...",
+                env=env,
+            ),
+            [
+                "bazel",
+                "build",
+                "--config=local",
+                "//codex-rs/...",
+                "--repo_contents_cache=/tmp/bazel-repo-contents",
+                "--repository_cache=/tmp/bazel-repository",
+            ],
+        )
+
+    def test_bazel_command_adds_local_caches_before_separator(self) -> None:
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_command(
+                "build",
+                "//codex-rs/...",
+                "--",
+                "--program-arg",
+                env={"BAZEL_REPOSITORY_CACHE": "/tmp/bazel-repository"},
+            ),
+            [
+                "bazel",
+                "build",
+                "//codex-rs/...",
+                "--repository_cache=/tmp/bazel-repository",
+                "--",
+                "--program-arg",
+            ],
+        )
+
     def test_main_preserves_spaced_argument_and_child_exit_status(self) -> None:
         spaced_arg = (
             r"--test_env=PATH=C:\Program Files\PowerShell\7;C:\Program Files\Git\bin"

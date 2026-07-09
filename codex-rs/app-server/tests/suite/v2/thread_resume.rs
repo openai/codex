@@ -14,6 +14,7 @@ use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Utc;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -42,6 +43,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -85,6 +88,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
+use core_test_support::skip_if_wine_exec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs::FileTimes;
@@ -269,6 +274,11 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "cached instruction-source fixture is outside the selected remote cwd"
+    );
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -278,6 +288,7 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // TODO(anp): Move the cached instruction-source fixture into the auto environment cwd.
         .without_auto_env()
         .build()
         .await?;
@@ -360,13 +371,12 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -430,6 +440,192 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
 }
 
 #[tokio::test]
+async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build()
+            .await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+        let start_id = mcp
+            .send_thread_start_request(ThreadStartParams {
+                model: Some("gpt-5.4".to_string()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            })
+            .await?;
+        let start_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "materialize this thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+
+        thread.id
+    };
+
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace(
+            "approval_policy = \"never\"\n",
+            "approval_policy = \"never\"\napprovals_reviewer = \"user\"\n",
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        approvals_reviewer, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build()
+            .await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+        let start_id = mcp
+            .send_thread_start_request(ThreadStartParams {
+                model: Some("gpt-5.4".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let start_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "materialize this thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+
+        let update_id = mcp
+            .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                thread_id: thread.id.clone(),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            })
+            .await?;
+        let update_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+        )
+        .await??;
+        let _: ThreadSettingsUpdateResponse = to_response(update_resp)?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("thread/settings/updated"),
+        )
+        .await??;
+
+        thread.id
+    };
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        approvals_reviewer, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -443,14 +639,13 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ephemeral: Some(true),
             ..Default::default()
@@ -507,7 +702,6 @@ async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> 
         .expect("test codex home should be utf-8");
     let mut mcp = TestAppServer::builder()
         .with_codex_home(&codex_home_path)
-        .without_auto_env()
         .without_managed_config()
         .with_env_overrides(&[("CODEX_SQLITE_HOME", Some(sqlite_home))])
         .build()
@@ -515,7 +709,7 @@ async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> 
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -605,7 +799,6 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
@@ -636,7 +829,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         &thread.id,
         &thread.session_id,
         "codex_work_desktop",
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "resumed",
         "user",
     );
@@ -654,14 +847,13 @@ async fn thread_resume_running_thread_tracks_thread_originator_in_analytics() ->
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             thread_source: Some(ThreadSource::User),
             service_name: Some("codex_work_desktop".to_string()),
@@ -778,7 +970,6 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -977,7 +1168,6 @@ async fn resume_redaction_fixture(client_name: Option<&str>) -> Result<ThreadRes
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     if let Some(client_name) = client_name {
@@ -1091,7 +1281,6 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1142,7 +1331,6 @@ async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1185,14 +1373,13 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -1295,14 +1482,13 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -1399,14 +1585,13 @@ async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -1499,7 +1684,6 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
@@ -1616,14 +1800,13 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT.saturating_mul(2), mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -1806,7 +1989,6 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1863,7 +2045,6 @@ async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> R
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1975,7 +2156,6 @@ async fn thread_resume_token_usage_replay_ignores_stale_interrupted_tail_turn() 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2103,7 +2283,6 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2153,7 +2332,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         &config_toml,
         format!(
             r#"
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -2301,7 +2480,6 @@ stream_max_retries = 0
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2399,7 +2577,6 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2477,7 +2654,6 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2603,13 +2779,12 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -2646,7 +2821,6 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
 
     let mut secondary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
@@ -2720,13 +2894,12 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -2843,13 +3016,12 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -3016,13 +3188,12 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -3151,13 +3322,12 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -3193,7 +3363,6 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
 
     let mut secondary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
@@ -3223,6 +3392,12 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
+    // TODO(anp): Remove after shell approval replay can route target-native cwd across host OSes.
+    skip_if_wine_exec!(
+        Ok(()),
+        "shell approval replay rejects the Windows cwd on the Linux host"
+    );
+
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
         create_shell_command_sse_response(
@@ -3243,13 +3418,12 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -3365,6 +3539,12 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
 #[tokio::test]
 async fn thread_resume_replays_pending_file_change_request_approval() -> Result<()> {
+    // TODO(anp): Remove after apply-patch approval fixtures use a target-native workspace.
+    skip_if_remote!(
+        Ok(()),
+        "apply-patch approval fixture is only materialized on the host"
+    );
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -3386,13 +3566,12 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(&codex_home)
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -3611,7 +3790,6 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -3694,7 +3872,6 @@ async fn thread_resume_surfaces_cloud_config_bundle_load_errors() -> Result<()> 
     let refresh_token_url = format!("{}/oauth/token", server.uri());
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (
@@ -3789,7 +3966,6 @@ async fn thread_resume_can_load_source_by_external_path() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -3883,13 +4059,12 @@ async fn start_materialized_thread_and_restart(
 ) -> Result<RestartedThreadFixture> {
     let mut first_mcp = TestAppServer::builder()
         .with_codex_home(codex_home)
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, first_mcp.initialize()).await??;
 
     let start_id = first_mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
@@ -3946,7 +4121,6 @@ async fn start_materialized_thread_and_restart(
 
     let mut second_mcp = TestAppServer::builder()
         .with_codex_home(codex_home)
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, second_mcp.initialize()).await??;
@@ -3981,14 +4155,13 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.3-codex".to_string()),
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -4023,7 +4196,6 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let mut secondary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
@@ -4031,7 +4203,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
-            model: Some("gpt-5.3-codex".to_string()),
+            model: Some("gpt-5.4".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
@@ -4094,7 +4266,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         config_toml,
         format!(
             r#"
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -4124,7 +4296,7 @@ fn create_config_toml_with_chatgpt_base_url(
         config_toml,
         format!(
             r#"
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
@@ -4154,7 +4326,7 @@ fn create_config_toml_with_required_broken_mcp(
         config_toml,
         format!(
             r#"
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 approval_policy = "never"
 sandbox_mode = "read-only"
 

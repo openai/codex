@@ -42,7 +42,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
-        model: "gpt-5.3-codex".to_string(),
+        model: "gpt-5.2".to_string(),
         model_provider_id: "openai".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
@@ -311,7 +311,7 @@ async fn invalid_url_elicitation_is_declined() {
 
 #[tokio::test]
 async fn thread_settings_updated_updates_visible_state_without_transcript() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     set_fast_mode_test_catalog(&mut chat);
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
@@ -367,7 +367,7 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
 
 #[tokio::test]
 async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
     session.model = "gpt-default".to_string();

@@ -81,14 +81,13 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -203,7 +202,6 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     drop(mcp);
     let mut reloaded_mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build()
         .await?;
