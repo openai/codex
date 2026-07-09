@@ -38,6 +38,25 @@ use codex_protocol::account::PlanType;
 
 pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
 
+#[derive(Clone, Copy)]
+enum RpcResult {
+    Success,
+    Error,
+    Disconnected,
+    Replaced,
+}
+
+impl RpcResult {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Error => "error",
+            Self::Disconnected => "disconnected",
+            Self::Replaced => "replaced",
+        }
+    }
+}
+
 /// Stable identifier for a client request scoped to a transport connection.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionRequestId {
@@ -77,6 +96,14 @@ impl RequestContext {
 
     fn record_turn_id(&self, turn_id: &str) {
         self.span.record("turn.id", turn_id);
+    }
+
+    fn record_result(&self, result: RpcResult) {
+        self.span.record("rpc.result", result.as_str());
+    }
+
+    fn record_error_code(&self, error: &JSONRPCErrorError) {
+        self.span.record("rpc.error_code", error.code);
     }
 }
 
@@ -222,16 +249,21 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn register_request_context(&self, request_context: RequestContext) {
         let mut request_contexts = self.request_contexts.lock().await;
-        if request_contexts
-            .insert(request_context.request_id.clone(), request_context)
-            .is_some()
+        if let Some(replaced) =
+            request_contexts.insert(request_context.request_id.clone(), request_context)
         {
+            replaced.record_result(RpcResult::Replaced);
             warn!("replaced unresolved request context");
         }
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
         let mut request_contexts = self.request_contexts.lock().await;
+        for (request_id, request_context) in request_contexts.iter() {
+            if request_id.connection_id == connection_id {
+                request_context.record_result(RpcResult::Disconnected);
+            }
+        }
         request_contexts.retain(|request_id, _| request_id.connection_id != connection_id);
     }
 
@@ -682,6 +714,9 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         error: JSONRPCErrorError,
     ) {
+        if let Some(request_context) = request_context.as_ref() {
+            request_context.record_error_code(&error);
+        }
         let outgoing_message = OutgoingMessage::Error(OutgoingError {
             id: request_id.request_id,
             error,
@@ -702,19 +737,36 @@ impl OutgoingMessageSender {
         message: OutgoingMessage,
         message_kind: &'static str,
     ) {
+        let completed_result = match &message {
+            OutgoingMessage::Response(_) => Some(RpcResult::Success),
+            OutgoingMessage::Error(_) => Some(RpcResult::Error),
+            OutgoingMessage::Request(_) | OutgoingMessage::AppServerNotification(_) => None,
+        };
         let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {
             connection_id,
             message,
             write_complete_tx: None,
         });
-        let send_result = if let Some(request_context) = request_context {
+        let send_result = if let Some(request_context) = request_context.as_ref() {
             send_fut.instrument(request_context.span()).await
         } else {
             send_fut.await
         };
 
-        if let Err(err) = send_result {
-            warn!("failed to send {message_kind} to client: {err:?}");
+        match send_result {
+            Ok(()) => {
+                if let (Some(request_context), Some(result)) =
+                    (request_context.as_ref(), completed_result)
+                {
+                    request_context.record_result(result);
+                }
+            }
+            Err(err) => {
+                if let Some(request_context) = request_context.as_ref() {
+                    request_context.record_result(RpcResult::Disconnected);
+                }
+                warn!("failed to send {message_kind} to client: {err:?}");
+            }
         }
     }
 }

@@ -615,6 +615,10 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
             assert!(server_request_span.parent_span_is_remote);
             assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
             assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
+            assert_eq!(
+                span_attr(server_request_span, "rpc.result"),
+                Some("success")
+            );
             assert_has_internal_descendant_at_min_depth(
                 &spans,
                 server_request_span,
@@ -704,6 +708,10 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     assert_eq!(
         span_attr(server_request_span, "turn.id"),
         Some(turn_start_response.turn.id.as_str())
+    );
+    assert_eq!(
+        span_attr(server_request_span, "rpc.result"),
+        Some("success")
     );
     assert_span_descends_from(&spans, core_turn_span, server_request_span);
     harness.shutdown().await;
