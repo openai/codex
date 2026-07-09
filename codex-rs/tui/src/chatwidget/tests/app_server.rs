@@ -238,9 +238,6 @@ async fn safety_buffered_retry_preparation_renders_identical_prompt_and_preserve
 
     chat.prepare_safety_buffered_retry_submission(prompt.clone());
     assert!(drain_insert_history(&mut rx).is_empty());
-    assert_eq!(chat.cancel_edit.prompt, Some(prompt.clone()));
-    assert!(chat.cancel_edit.eligible);
-    assert!(!chat.cancel_edit.armed);
 
     let retry_turn_id = "retry-turn";
     chat.record_safety_buffering_turn(retry_turn_id.to_string(), &turn);

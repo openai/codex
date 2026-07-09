@@ -11,8 +11,6 @@ use crate::session_resume::read_session_model;
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
-            // Clear any in-flight rollback guard when switching threads.
-            self.backtrack.pending_rollback = None;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
@@ -516,7 +514,7 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
-            AppCommand::Interrupt { .. } => {
+            AppCommand::Interrupt => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut interrupt_turn_id = turn_id;
                     for retried_after_turn_mismatch in [false, true] {
@@ -691,18 +689,6 @@ impl App {
                 app_server
                     .thread_set_name(thread_id, name.to_string())
                     .await?;
-                Ok(true)
-            }
-            AppCommand::ThreadRollback { num_turns } => {
-                let response = match app_server.thread_rollback(thread_id, *num_turns).await {
-                    Ok(response) => response,
-                    Err(err) => {
-                        self.handle_backtrack_rollback_failed();
-                        return Err(err);
-                    }
-                };
-                self.handle_thread_rollback_response(thread_id, *num_turns, &response)
-                    .await;
                 Ok(true)
             }
             AppCommand::Review { target } => {
@@ -1278,7 +1264,7 @@ impl App {
     /// refreshes from the backend. Refresh failures are treated as "thread is only inspectable by
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
-    pub(super) async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) async fn drain_active_thread_events(&mut self) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
@@ -1301,9 +1287,6 @@ impl App {
             self.clear_active_thread().await;
         }
 
-        if self.backtrack_render_pending {
-            tui.frame_requester().schedule_frame();
-        }
         Ok(())
     }
 
@@ -1424,40 +1407,6 @@ impl App {
         self.chat_widget.handle_skills_list_response(response);
     }
 
-    pub(super) async fn handle_thread_rollback_response(
-        &mut self,
-        thread_id: ThreadId,
-        num_turns: u32,
-        response: &ThreadRollbackResponse,
-    ) {
-        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-            let mut store = channel.store.lock().await;
-            store.apply_thread_rollback(response);
-        }
-        if self.active_thread_id == Some(thread_id)
-            && let Some(mut rx) = self.active_thread_rx.take()
-        {
-            let mut disconnected = false;
-            loop {
-                match rx.try_recv() {
-                    Ok(_) => {}
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            if !disconnected {
-                self.active_thread_rx = Some(rx);
-            } else {
-                self.clear_active_thread().await;
-            }
-        }
-        self.handle_backtrack_rollback_succeeded(num_turns);
-    }
-
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
         let needs_refresh = matches!(
             &event,
@@ -1570,9 +1519,6 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         self.handle_thread_event_now(event);
-        if self.backtrack_render_pending {
-            tui.frame_requester().schedule_frame();
-        }
         Ok(())
     }
 }

@@ -44,7 +44,6 @@ impl ChatWidget {
     /// leave a ghost prompt in the transcript.
     pub(crate) fn prepare_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
         self.input_queue.user_turn_pending_start = true;
-        self.record_cancel_edit_candidate(prompt.clone());
         self.record_safety_buffering_prompt(prompt);
     }
 

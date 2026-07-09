@@ -8,7 +8,6 @@ mod startup;
 use super::*;
 use crate::app::session_lifecycle::ThreadAttachPresentation;
 use crate::app_backtrack::BacktrackState;
-use crate::app_backtrack::user_count;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -41,7 +40,6 @@ use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
-use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -60,7 +58,6 @@ use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
@@ -4167,7 +4164,6 @@ async fn make_test_app() -> App {
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
-        backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -4232,7 +4228,6 @@ async fn make_test_app_with_channels() -> (
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
-            backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -5208,8 +5203,6 @@ async fn backtrack_selection_targets_predecessor_and_preserves_selected_prompt()
         agent_cell("answer edited"),
     ];
 
-    assert_eq!(user_count(&app.transcript_cells), 2);
-
     let base_id = ThreadId::new();
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
@@ -5237,7 +5230,7 @@ async fn backtrack_selection_targets_predecessor_and_preserves_selected_prompt()
 
     app.backtrack.base_id = Some(base_id);
     app.backtrack.primed = true;
-    app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+    app.backtrack.nth_user_message = 1;
 
     let selection = app
         .confirm_backtrack_from_main()
@@ -5316,62 +5309,6 @@ async fn backtrack_branch_failure_restores_selected_prompt() {
             .collect::<Vec<_>>(),
         vec!["■ Failed to branch before the selected prompt: branch unavailable"]
     );
-}
-
-#[tokio::test]
-async fn cancelled_turn_edit_restores_prompt_and_rolls_back_latest_turn() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    app.transcript_cells = vec![Arc::new(UserHistoryCell {
-        turn_id: None,
-        message: "original".to_string(),
-        text_elements: Vec::new(),
-        local_image_paths: Vec::new(),
-        remote_image_urls: Vec::new(),
-    }) as Arc<dyn HistoryCell>];
-    let prompt = crate::chatwidget::UserMessage {
-        text: "edit me".to_string(),
-        local_images: Vec::new(),
-        remote_image_urls: vec!["https://example.com/edit.png".to_string()],
-        text_elements: Vec::new(),
-        mention_bindings: Vec::new(),
-    };
-
-    app.apply_cancelled_turn_edit(prompt);
-
-    assert_eq!(app.chat_widget.composer_text_with_pending(), "edit me");
-    assert_snapshot!(
-        "cancelled_turn_edit_restores_composer",
-        app.chat_widget.composer_text_with_pending()
-    );
-    assert_eq!(
-        app.chat_widget.remote_image_urls(),
-        vec!["https://example.com/edit.png".to_string()]
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
-}
-
-#[tokio::test]
-async fn first_cancelled_turn_edit_restores_prompt_without_local_history() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let prompt = crate::chatwidget::UserMessage {
-        text: "edit first prompt".to_string(),
-        local_images: Vec::new(),
-        remote_image_urls: vec!["https://example.com/edit.png".to_string()],
-        text_elements: Vec::new(),
-        mention_bindings: Vec::new(),
-    };
-
-    app.apply_cancelled_turn_edit(prompt);
-
-    assert_eq!(
-        app.chat_widget.composer_text_with_pending(),
-        "edit first prompt"
-    );
-    assert_eq!(
-        app.chat_widget.remote_image_urls(),
-        vec!["https://example.com/edit.png".to_string()]
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
 }
 
 #[tokio::test]
@@ -5653,86 +5590,6 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
 }
 
 #[tokio::test]
-async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
-    let mut app = make_test_app().await;
-    app.transcript_cells = vec![
-        Arc::new(UserHistoryCell {
-            turn_id: Some("turn-1".to_string()),
-            message: "first".to_string(),
-            text_elements: Vec::new(),
-            local_image_paths: Vec::new(),
-            remote_image_urls: Vec::new(),
-        }) as Arc<dyn HistoryCell>,
-        Arc::new(AgentMessageCell::new(
-            vec![Line::from("after first")],
-            /*is_first_line*/ false,
-        )) as Arc<dyn HistoryCell>,
-        Arc::new(UserHistoryCell {
-            turn_id: Some("turn-2".to_string()),
-            message: "second".to_string(),
-            text_elements: Vec::new(),
-            local_image_paths: Vec::new(),
-            remote_image_urls: Vec::new(),
-        }) as Arc<dyn HistoryCell>,
-        Arc::new(AgentMessageCell::new(
-            vec![Line::from("after second")],
-            /*is_first_line*/ false,
-        )) as Arc<dyn HistoryCell>,
-    ];
-    app.overlay = Some(Overlay::new_transcript(
-        app.transcript_cells.clone(),
-        app.keymap.pager.clone(),
-    ));
-    app.deferred_history_lines = vec![Line::from("stale buffered line").into()];
-    app.backtrack.overlay_preview_active = true;
-    app.backtrack.nth_user_message = 1;
-    app.chat_widget.update_account_state(
-        /*status_account_display*/ None, /*plan_type*/ None,
-        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
-    );
-    app.chat_widget
-        .set_composer_text("/usage daily".to_string(), Vec::new(), Vec::new());
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let pending_usage = app
-        .chat_widget
-        .active_cell_transcript_lines(/*width*/ 80)
-        .expect("pending usage transcript");
-    assert!(lines_to_single_string(&pending_usage).contains("Token activity\n   Loading..."));
-
-    let changed = app.apply_non_pending_thread_rollback(/*num_turns*/ 1);
-
-    assert!(changed);
-    assert!(app.backtrack_render_pending);
-    assert!(app.deferred_history_lines.is_empty());
-    assert!(
-        app.chat_widget
-            .active_cell_transcript_lines(/*width*/ 80)
-            .is_none_or(|lines| !lines_to_single_string(&lines).contains("Token activity"))
-    );
-    assert_eq!(app.backtrack.nth_user_message, 0);
-    let user_messages: Vec<String> = app
-        .transcript_cells
-        .iter()
-        .filter_map(|cell| {
-            cell.as_any()
-                .downcast_ref::<UserHistoryCell>()
-                .map(|cell| cell.message.clone())
-        })
-        .collect();
-    assert_eq!(user_messages, vec!["first".to_string()]);
-    let overlay_cell_count = match app.overlay.as_ref() {
-        Some(Overlay::Transcript(t)) => t.committed_cell_count(),
-        _ => panic!("expected transcript overlay"),
-    };
-    assert_eq!(overlay_cell_count, app.transcript_cells.len());
-}
-
-#[tokio::test]
 async fn late_usage_result_can_follow_finalized_plan() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.chat_widget
@@ -5762,64 +5619,6 @@ async fn late_usage_result_can_follow_finalized_plan() {
             .take_completed_token_activity_output()
             .is_some()
     );
-}
-
-#[tokio::test]
-async fn thread_rollback_response_discards_queued_active_thread_events() {
-    let mut app = make_test_app().await;
-    let thread_id = ThreadId::new();
-    let (tx, rx) = mpsc::channel(8);
-    app.active_thread_id = Some(thread_id);
-    app.active_thread_rx = Some(rx);
-    tx.send(ThreadBufferedEvent::Notification(
-        ServerNotification::ConfigWarning(ConfigWarningNotification {
-            summary: "stale warning".to_string(),
-            details: None,
-            path: None,
-            range: None,
-        }),
-    ))
-    .await
-    .expect("event should queue");
-
-    app.handle_thread_rollback_response(
-        thread_id,
-        /*num_turns*/ 1,
-        &ThreadRollbackResponse {
-            thread: Thread {
-                id: thread_id.to_string(),
-                extra: None,
-                session_id: thread_id.to_string(),
-                forked_from_id: None,
-                parent_thread_id: None,
-                preview: String::new(),
-                ephemeral: false,
-                history_mode: Default::default(),
-                model_provider: "openai".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                recency_at: Some(0),
-                status: codex_app_server_protocol::ThreadStatus::Idle,
-                path: None,
-                cwd: test_path_buf("/tmp/project").abs(),
-                cli_version: "0.0.0".to_string(),
-                source: SessionSource::Cli,
-                thread_source: None,
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: None,
-                turns: Vec::new(),
-            },
-        },
-    )
-    .await;
-
-    let rx = app
-        .active_thread_rx
-        .as_mut()
-        .expect("active receiver should remain attached");
-    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -6282,7 +6081,6 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     app.backtrack.primed = true;
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 0;
-    app.backtrack_render_pending = true;
 
     app.reset_app_ui_state_after_clear();
 
@@ -6292,8 +6090,6 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.has_emitted_history_lines);
     assert!(!app.backtrack.primed);
     assert!(!app.backtrack.overlay_preview_active);
-    assert!(app.backtrack.pending_rollback.is_none());
-    assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
 }

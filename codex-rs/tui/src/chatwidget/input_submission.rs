@@ -400,7 +400,6 @@ impl ChatWidget {
                 },
                 &history_record,
             );
-            self.record_cancel_edit_candidate(prompt.clone());
             self.record_safety_buffering_prompt(prompt);
         }
 

@@ -26,7 +26,6 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use crate::app::App;
-use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::UserMessage;
@@ -63,11 +62,6 @@ pub(crate) struct BacktrackState {
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
-    /// Output-free cancellation rollback awaiting confirmation from app-server.
-    ///
-    /// Transcript prompt editing no longer uses rollback, but the legacy early-interrupt path
-    /// remains until the final PR in the stack.
-    pub(crate) pending_rollback: Option<PendingCancelledTurnRollback>,
 }
 
 /// A completed canonical turn selected for editing on a source-preserving branch.
@@ -77,12 +71,6 @@ pub(crate) struct BacktrackSelection {
     /// Canonical turn immediately before the selected prompt, or `None` for the first prompt.
     pub(crate) last_turn_id: Option<String>,
     pub(crate) prompt: UserMessage,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingCancelledTurnRollback {
-    nth_user_message: usize,
-    thread_id: Option<ThreadId>,
 }
 
 impl App {
@@ -164,24 +152,6 @@ impl App {
         } else if self.backtrack.overlay_preview_active {
             self.step_backtrack_and_highlight(tui);
         }
-    }
-
-    /// Preserve the existing output-free cancellation behavior while transcript editing migrates
-    /// to source-preserving forks.
-    pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
-        if self.backtrack.pending_rollback.is_some() {
-            self.chat_widget
-                .add_error_message("Backtrack rollback already in progress.".to_string());
-            return;
-        }
-
-        self.backtrack.pending_rollback = Some(PendingCancelledTurnRollback {
-            nth_user_message: user_count(&self.transcript_cells).saturating_sub(1),
-            thread_id: self.chat_widget.thread_id(),
-        });
-        self.chat_widget
-            .submit_op(AppCommand::thread_rollback(/*num_turns*/ 1));
-        self.chat_widget.restore_user_message_to_composer(prompt);
     }
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
@@ -495,67 +465,6 @@ impl App {
         ));
     }
 
-    pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
-        if self.backtrack.pending_rollback.is_some() {
-            self.finish_pending_cancelled_turn_rollback();
-        } else {
-            self.app_event_tx
-                .send(AppEvent::ApplyThreadRollback { num_turns });
-        }
-    }
-
-    pub(crate) fn handle_backtrack_rollback_failed(&mut self) {
-        self.backtrack.pending_rollback = None;
-    }
-
-    /// Apply rollback semantics for legacy TUI consumers that have not migrated to forks yet.
-    pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
-        if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
-            return false;
-        }
-        self.chat_widget.clear_pending_token_activity_refreshes();
-        self.chat_widget.clear_pending_rate_limit_reset_hint();
-        self.chat_widget
-            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
-        self.sync_overlay_after_transcript_trim();
-        self.backtrack_render_pending = true;
-        true
-    }
-
-    fn finish_pending_cancelled_turn_rollback(&mut self) {
-        let Some(pending) = self.backtrack.pending_rollback.take() else {
-            return;
-        };
-        if pending.thread_id != self.chat_widget.thread_id() {
-            return;
-        }
-        if trim_transcript_cells_to_nth_user(&mut self.transcript_cells, pending.nth_user_message) {
-            self.chat_widget.clear_pending_token_activity_refreshes();
-            self.chat_widget.clear_pending_rate_limit_reset_hint();
-            self.chat_widget
-                .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
-            self.sync_overlay_after_transcript_trim();
-            self.backtrack_render_pending = true;
-        }
-    }
-
-    fn sync_overlay_after_transcript_trim(&mut self) {
-        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
-            overlay.replace_cells(self.transcript_cells.clone());
-        }
-        if self.backtrack.overlay_preview_active {
-            let count =
-                forkable_turn_count(&self.transcript_cells, self.chat_widget.active_turn_id());
-            let next_selection = if count == 0 {
-                usize::MAX
-            } else {
-                self.backtrack.nth_user_message.min(count.saturating_sub(1))
-            };
-            self.apply_backtrack_selection_internal(next_selection);
-        }
-        self.deferred_history_lines.clear();
-    }
-
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let base_id = self.backtrack.base_id?;
         if self.chat_widget.thread_id() != Some(base_id) {
@@ -601,78 +510,6 @@ impl App {
             },
         })
     }
-}
-
-fn trim_transcript_cells_to_nth_user(
-    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
-    nth_user_message: usize,
-) -> bool {
-    if nth_user_message == usize::MAX {
-        return false;
-    }
-
-    if let Some(cut_idx) = nth_user_position(transcript_cells, nth_user_message) {
-        let original_len = transcript_cells.len();
-        transcript_cells.truncate(cut_idx);
-        return transcript_cells.len() != original_len;
-    }
-    false
-}
-
-pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
-    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
-    num_turns: u32,
-) -> bool {
-    if num_turns == 0 {
-        return false;
-    }
-
-    let user_positions: Vec<usize> = user_positions_iter(transcript_cells).collect();
-    let Some(&first_user_idx) = user_positions.first() else {
-        return false;
-    };
-
-    let turns_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-    let cut_idx = if turns_from_end >= user_positions.len() {
-        first_user_idx
-    } else {
-        user_positions[user_positions.len() - turns_from_end]
-    };
-    let original_len = transcript_cells.len();
-    transcript_cells.truncate(cut_idx);
-    transcript_cells.len() != original_len
-}
-
-pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
-    user_positions_iter(cells).count()
-}
-
-fn nth_user_position(
-    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-    nth: usize,
-) -> Option<usize> {
-    user_positions_iter(cells)
-        .enumerate()
-        .find_map(|(i, idx)| (i == nth).then_some(idx))
-}
-
-fn user_positions_iter(
-    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-) -> impl Iterator<Item = usize> + '_ {
-    let session_start_type = TypeId::of::<SessionInfoCell>();
-    let user_type = TypeId::of::<UserHistoryCell>();
-    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
-
-    let start = cells
-        .iter()
-        .rposition(|cell| type_of(cell) == session_start_type)
-        .map_or(0, |idx| idx + 1);
-
-    cells
-        .iter()
-        .enumerate()
-        .skip(start)
-        .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
 fn has_backtrack_target(
