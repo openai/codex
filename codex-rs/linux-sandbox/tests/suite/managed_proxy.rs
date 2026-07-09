@@ -2,6 +2,8 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::exec_env::create_env;
+use codex_network_proxy::DNS_PROXY_ENV_KEY;
+use codex_network_proxy::DNS_PROXY_SESSION_PREFACE;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::PermissionProfile;
 use pretty_assertions::assert_eq;
@@ -40,6 +42,7 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "PIP_PROXY",
     "DOCKER_HTTP_PROXY",
     "DOCKER_HTTPS_PROXY",
+    DNS_PROXY_ENV_KEY,
 ];
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
@@ -300,4 +303,143 @@ async fn managed_proxy_mode_denies_af_unix_socket_but_allows_socketpair() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[tokio::test]
+async fn managed_proxy_mode_routes_native_dns_through_bridge() {
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
+        return;
+    }
+
+    if !command_available("python3").await {
+        eprintln!("skipping managed proxy DNS test: python3 is unavailable");
+        return;
+    }
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind DNS proxy listener");
+    let proxy_port = listener.local_addr().expect("DNS proxy local addr").port();
+    let (query_tx, query_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept DNS proxy connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("set DNS proxy read timeout");
+        let mut preface = [0_u8; DNS_PROXY_SESSION_PREFACE.len()];
+        stream.read_exact(&mut preface).expect("read DNS preface");
+        assert_eq!(&preface, DNS_PROXY_SESSION_PREFACE);
+        stream
+            .write_all(DNS_PROXY_SESSION_PREFACE)
+            .expect("write DNS preface ack");
+        let query = read_frame(&mut stream).expect("read DNS query");
+        let response = dns_a_response(&query, [203, 0, 113, 9]);
+        query_tx.send(query).expect("send DNS query");
+        write_frame(&mut stream, &response).expect("write DNS response");
+    });
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert(
+        DNS_PROXY_ENV_KEY.to_string(),
+        format!("tcp://127.0.0.1:{proxy_port}"),
+    );
+
+    let output = run_linux_sandbox_direct(
+        &[
+            "python3",
+            "-c",
+            "import os,socket,sys\nif 'CODEX_NETWORK_PROXY_DNS' in os.environ:\n    sys.exit(3)\ninfo = socket.getaddrinfo('fixture.test', 80, socket.AF_INET, socket.SOCK_STREAM)\nprint(info[0][4][0])\n",
+        ],
+        &PermissionProfile::Disabled,
+        /*allow_network_for_proxy*/ true,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "expected native DNS to resolve through bridge; status={:?}; stdout={}; stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "203.0.113.9"
+    );
+    let query = query_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("expected DNS query through proxy bridge");
+    assert!(
+        dns_query_name(&query).is_some_and(|name| name == "fixture.test"),
+        "expected fixture.test DNS query, got wire bytes: {query:?}"
+    );
+}
+
+fn dns_query_name(query: &[u8]) -> Option<String> {
+    let mut offset = 12usize;
+    let mut labels = Vec::new();
+    loop {
+        let len = *query.get(offset)? as usize;
+        offset += 1;
+        if len == 0 {
+            break;
+        }
+        let label = query.get(offset..offset.checked_add(len)?)?;
+        labels.push(std::str::from_utf8(label).ok()?);
+        offset += len;
+    }
+    Some(labels.join("."))
+}
+
+fn dns_a_response(query: &[u8], address: [u8; 4]) -> Vec<u8> {
+    let question_end = dns_question_end(query).expect("DNS question end");
+    let mut response = Vec::new();
+    response.extend_from_slice(&query[..2]);
+    response.extend_from_slice(&[0x81, 0x80]);
+    response.extend_from_slice(&[0x00, 0x01]);
+    response.extend_from_slice(&[0x00, 0x01]);
+    response.extend_from_slice(&[0x00, 0x00]);
+    response.extend_from_slice(&[0x00, 0x00]);
+    response.extend_from_slice(&query[12..question_end]);
+    response.extend_from_slice(&[0xc0, 0x0c]);
+    response.extend_from_slice(&[0x00, 0x01]);
+    response.extend_from_slice(&[0x00, 0x01]);
+    response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    response.extend_from_slice(&[0x00, 0x04]);
+    response.extend_from_slice(&address);
+    response
+}
+
+fn dns_question_end(query: &[u8]) -> Option<usize> {
+    let mut offset = 12usize;
+    loop {
+        let len = *query.get(offset)? as usize;
+        offset += 1;
+        if len == 0 {
+            return offset.checked_add(4).filter(|end| *end <= query.len());
+        }
+        offset = offset.checked_add(len)?;
+    }
+}
+
+fn write_frame(writer: &mut impl Write, payload: &[u8]) -> std::io::Result<()> {
+    let len = u16::try_from(payload.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "DNS message exceeds maximum wire length",
+        )
+    })?;
+    writer.write_all(&len.to_be_bytes())?;
+    writer.write_all(payload)
+}
+
+fn read_frame(reader: &mut impl Read) -> std::io::Result<Vec<u8>> {
+    let mut len = [0; 2];
+    reader.read_exact(&mut len)?;
+    let mut payload = vec![0; usize::from(u16::from_be_bytes(len))];
+    reader.read_exact(&mut payload)?;
+    Ok(payload)
 }

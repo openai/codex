@@ -388,6 +388,7 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
+rustix = { version = "1.1.4", features = ["thread"] }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"

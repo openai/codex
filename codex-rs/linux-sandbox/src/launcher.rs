@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -25,16 +26,19 @@ enum BubblewrapLauncher {
 struct SystemBwrapLauncher {
     program: AbsolutePathBuf,
     supports_argv0: bool,
+    supports_cap_add: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SystemBwrapCapabilities {
     supports_argv0: bool,
+    supports_cap_add: bool,
     supports_perms: bool,
+    is_setuid: bool,
 }
 
 pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
-    match preferred_bwrap_launcher() {
+    match preferred_bwrap_launcher_for_argv(&argv) {
         BubblewrapLauncher::System(launcher) => {
             exec_system_bwrap(&launcher.program, argv, preserved_files)
         }
@@ -46,6 +50,13 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
             )
         }
     }
+}
+
+fn preferred_bwrap_launcher_for_argv(argv: &[String]) -> BubblewrapLauncher {
+    if argv.iter().any(|arg| arg == "--cap-add") {
+        return preferred_bwrap_launcher_supporting_cap_add();
+    }
+    preferred_bwrap_launcher()
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
@@ -66,6 +77,21 @@ fn preferred_bwrap_launcher() -> BubblewrapLauncher {
         .clone()
 }
 
+fn preferred_bwrap_launcher_supporting_cap_add() -> BubblewrapLauncher {
+    match preferred_bwrap_launcher() {
+        BubblewrapLauncher::System(launcher) if launcher.supports_cap_add => {
+            BubblewrapLauncher::System(launcher)
+        }
+        BubblewrapLauncher::System(_) | BubblewrapLauncher::Unavailable => {
+            match bundled_bwrap::launcher() {
+                Some(launcher) => BubblewrapLauncher::Bundled(launcher),
+                None => BubblewrapLauncher::Unavailable,
+            }
+        }
+        bundled @ BubblewrapLauncher::Bundled(_) => bundled,
+    }
+}
+
 fn system_bwrap_launcher_for_path(system_bwrap_path: &Path) -> Option<SystemBwrapLauncher> {
     system_bwrap_launcher_for_path_with_probe(system_bwrap_path, system_bwrap_capabilities)
 }
@@ -80,7 +106,9 @@ fn system_bwrap_launcher_for_path_with_probe(
 
     let Some(SystemBwrapCapabilities {
         supports_argv0,
+        supports_cap_add,
         supports_perms: true,
+        is_setuid,
     }) = system_bwrap_capabilities(system_bwrap_path)
     else {
         return None;
@@ -95,6 +123,7 @@ fn system_bwrap_launcher_for_path_with_probe(
     Some(SystemBwrapLauncher {
         program: system_bwrap_path,
         supports_argv0,
+        supports_cap_add: supports_cap_add && !is_setuid,
     })
 }
 
@@ -102,6 +131,14 @@ pub(crate) fn preferred_bwrap_supports_argv0() -> bool {
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(launcher) => launcher.supports_argv0,
         BubblewrapLauncher::Bundled(_) | BubblewrapLauncher::Unavailable => true,
+    }
+}
+
+pub(crate) fn preferred_bwrap_supports_cap_add() -> bool {
+    match preferred_bwrap_launcher_supporting_cap_add() {
+        BubblewrapLauncher::System(launcher) => launcher.supports_cap_add,
+        BubblewrapLauncher::Bundled(_) => true,
+        BubblewrapLauncher::Unavailable => false,
     }
 }
 
@@ -117,9 +154,12 @@ fn system_bwrap_capabilities(system_bwrap_path: &Path) -> Option<SystemBwrapCapa
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let metadata = system_bwrap_path.metadata().ok()?;
     Some(SystemBwrapCapabilities {
         supports_argv0: stdout.contains("--argv0") || stderr.contains("--argv0"),
+        supports_cap_add: stdout.contains("--cap-add") || stderr.contains("--cap-add"),
         supports_perms: stdout.contains("--perms") || stderr.contains("--perms"),
+        is_setuid: metadata.permissions().mode() & libc::S_ISUID != 0,
     })
 }
 
@@ -167,12 +207,15 @@ mod tests {
             system_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| {
                 Some(SystemBwrapCapabilities {
                     supports_argv0: true,
+                    supports_cap_add: false,
                     supports_perms: true,
+                    is_setuid: false,
                 })
             }),
             Some(SystemBwrapLauncher {
                 program: expected,
                 supports_argv0: true,
+                supports_cap_add: false,
             })
         );
     }
@@ -186,12 +229,15 @@ mod tests {
             system_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| {
                 Some(SystemBwrapCapabilities {
                     supports_argv0: false,
+                    supports_cap_add: false,
                     supports_perms: true,
+                    is_setuid: false,
                 })
             }),
             Some(SystemBwrapLauncher {
                 program: AbsolutePathBuf::from_absolute_path(fake_bwrap_path).expect("absolute"),
                 supports_argv0: false,
+                supports_cap_add: false,
             })
         );
     }
@@ -204,10 +250,31 @@ mod tests {
             system_bwrap_launcher_for_path_with_probe(fake_bwrap.path(), |_| {
                 Some(SystemBwrapCapabilities {
                     supports_argv0: false,
+                    supports_cap_add: false,
                     supports_perms: false,
+                    is_setuid: false,
                 })
             }),
             None
+        );
+    }
+
+    #[test]
+    fn disables_system_cap_add_when_system_bwrap_is_setuid() {
+        let fake_bwrap = NamedTempFile::new().expect("temp file");
+
+        assert_eq!(
+            system_bwrap_launcher_for_path_with_probe(fake_bwrap.path(), |_| {
+                Some(SystemBwrapCapabilities {
+                    supports_argv0: true,
+                    supports_cap_add: true,
+                    supports_perms: true,
+                    is_setuid: true,
+                })
+            })
+            .expect("system launcher")
+            .supports_cap_add,
+            false
         );
     }
 

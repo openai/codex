@@ -1,3 +1,4 @@
+use codex_network_proxy::DNS_PROXY_ENV_KEY;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
 use serde::Deserialize;
@@ -41,6 +42,7 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "PIP_PROXY",
     "DOCKER_HTTP_PROXY",
     "DOCKER_HTTPS_PROXY",
+    DNS_PROXY_ENV_KEY,
 ];
 
 const PROXY_SOCKET_DIR_PREFIX: &str = "codex-linux-sandbox-proxy-";
@@ -672,7 +674,7 @@ fn set_parent_death_signal() -> io::Result<()> {
     }
 }
 
-fn harden_bridge_process() -> io::Result<()> {
+pub(crate) fn harden_bridge_process() -> io::Result<()> {
     set_parent_death_signal()?;
     codex_process_hardening::disable_process_dumping()
 }

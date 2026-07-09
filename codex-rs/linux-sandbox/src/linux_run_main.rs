@@ -20,11 +20,23 @@ use std::time::Duration;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::dns_routing::bind_netns_dns_stub;
+use crate::dns_routing::spawn_netns_dns_stub;
+use crate::dns_setup::LoaderEnvironment;
+use crate::dns_setup::ResolvConfMount;
+use crate::dns_setup::append_bwrap_args as append_dns_bwrap_args;
+use crate::dns_setup::capture_loader_environment;
+use crate::dns_setup::create_resolv_conf_file;
+use crate::dns_setup::drop_and_verify_capabilities;
+use crate::dns_setup::resolv_conf_mount_path;
+use crate::dns_setup::restore_loader_environment;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
+use crate::launcher::preferred_bwrap_supports_cap_add;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use codex_network_proxy::DNS_PROXY_ENV_KEY;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -126,6 +138,10 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Internal loader environment restored after temporary DNS setup capabilities are dropped.
+    #[arg(long = "loader-environment", hide = true)]
+    pub loader_environment: Option<String>,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -153,6 +169,7 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
+        loader_environment,
         no_proc,
         command,
     } = LandlockCommand::parse();
@@ -177,11 +194,34 @@ pub fn run_main() -> ! {
     // established the filesystem view.
     if apply_seccomp_then_exec {
         if allow_network_for_proxy {
+            let bound_dns = if std::env::var_os(DNS_PROXY_ENV_KEY).is_some() {
+                Some(
+                    bind_netns_dns_stub()
+                        .unwrap_or_else(|err| panic!("error binding Linux DNS bridge: {err}")),
+                )
+            } else {
+                None
+            };
+            let loader_environment = parse_loader_environment(loader_environment.as_deref())
+                .unwrap_or_else(|err| panic!("invalid loader environment: {err}"));
+            if bound_dns.is_some() {
+                drop_and_verify_capabilities().unwrap_or_else(|err| {
+                    panic!("error dropping Linux DNS setup capabilities: {err}")
+                });
+                if let Some(loader_environment) = loader_environment {
+                    restore_loader_environment(loader_environment);
+                }
+            }
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
             if let Err(err) = activate_proxy_routes_in_netns(spec) {
                 panic!("error activating Linux proxy routing bridge: {err}");
+            }
+            if let Some(bound_dns) = bound_dns
+                && let Err(err) = spawn_netns_dns_stub(bound_dns)
+            {
+                panic!("error activating Linux DNS bridge: {err}");
             }
         }
         let proxy_routing_active = allow_network_for_proxy;
@@ -214,6 +254,11 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
+        let dns_setup = prepare_dns_setup(
+            allow_network_for_proxy,
+            &file_system_sandbox_policy,
+            &sandbox_policy_cwd,
+        );
         let proxy_route_spec =
             if allow_network_for_proxy {
                 Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
@@ -228,6 +273,9 @@ pub fn run_main() -> ! {
             permission_profile: &permission_profile,
             allow_network_for_proxy,
             proxy_route_spec,
+            loader_environment: dns_setup
+                .as_ref()
+                .map(|setup| serialize_loader_environment(&setup.loader_environment)),
             command,
         });
         run_bwrap_with_proc_fallback(
@@ -238,6 +286,7 @@ pub fn run_main() -> ! {
             inner,
             !no_proc,
             allow_network_for_proxy,
+            dns_setup.map(|setup| setup.resolv_conf),
         );
     }
 
@@ -252,6 +301,11 @@ pub fn run_main() -> ! {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
     exec_or_panic(command);
+}
+
+struct DnsSetup {
+    resolv_conf: ResolvConfMount,
+    loader_environment: LoaderEnvironment,
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +330,45 @@ impl fmt::Display for ResolvePermissionProfileError {
 
 fn parse_permission_profile(value: &str) -> std::result::Result<PermissionProfile, String> {
     serde_json::from_str(value).map_err(|err| format!("invalid permission profile JSON: {err}"))
+}
+
+fn parse_loader_environment(
+    value: Option<&str>,
+) -> std::result::Result<Option<LoaderEnvironment>, String> {
+    value
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|err| format!("invalid loader environment JSON: {err}"))
+}
+
+fn serialize_loader_environment(environment: &LoaderEnvironment) -> String {
+    serde_json::to_string(environment)
+        .unwrap_or_else(|err| panic!("failed to serialize loader environment: {err}"))
+}
+
+fn prepare_dns_setup(
+    allow_network_for_proxy: bool,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> Option<DnsSetup> {
+    if !allow_network_for_proxy || std::env::var_os(DNS_PROXY_ENV_KEY).is_none() {
+        return None;
+    }
+    if !preferred_bwrap_supports_cap_add() {
+        // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
+        // executes the user command.
+        unsafe { std::env::remove_var(DNS_PROXY_ENV_KEY) };
+        return None;
+    }
+    Some(DnsSetup {
+        resolv_conf: ResolvConfMount {
+            file: create_resolv_conf_file()
+                .unwrap_or_else(|err| panic!("failed to create resolver configuration: {err}")),
+            path: resolv_conf_mount_path(file_system_sandbox_policy, sandbox_policy_cwd)
+                .unwrap_or_else(|err| panic!("failed to prepare resolver configuration: {err}")),
+        },
+        loader_environment: capture_loader_environment(),
+    })
 }
 
 fn resolve_permission_profile(
@@ -322,6 +415,7 @@ fn run_bwrap_with_proc_fallback(
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
+    dns_resolv_conf: Option<ResolvConfMount>,
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
@@ -354,6 +448,9 @@ fn run_bwrap_with_proc_fallback(
         options,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+    if let Some(dns_resolv_conf) = dns_resolv_conf {
+        append_dns_bwrap_args(&mut bwrap_args, dns_resolv_conf);
+    }
     apply_inner_command_argv0(&mut bwrap_args.args);
     run_or_exec_bwrap(bwrap_args);
 }
@@ -1394,6 +1491,7 @@ struct InnerSeccompCommandArgs<'a> {
     permission_profile: &'a PermissionProfile,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
+    loader_environment: Option<String>,
     command: Vec<String>,
 }
 
@@ -1405,6 +1503,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         permission_profile,
         allow_network_for_proxy,
         proxy_route_spec,
+        loader_environment,
         command,
     } = args;
     let current_exe = match std::env::current_exe() {
@@ -1436,6 +1535,10 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
             .unwrap_or_else(|| panic!("managed proxy mode requires a proxy route spec"));
         inner.push("--proxy-route-spec".to_string());
         inner.push(proxy_route_spec);
+        if let Some(loader_environment) = loader_environment {
+            inner.push("--loader-environment".to_string());
+            inner.push(loader_environment);
+        }
     }
     inner.push("--".to_string());
     inner.extend(command);
