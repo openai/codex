@@ -154,6 +154,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -4257,11 +4258,21 @@ async fn turn_lifecycle_emits_turn_event() {
         &mut reducer,
         &mut out,
         /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
+        /*include_resolved_config*/ false,
         /*include_started*/ true,
         /*include_token_usage*/ true,
     )
     .await;
+    let mut resolved_config = sample_turn_resolved_config("thread-2", "turn-2");
+    resolved_config.reasoning_effort = Some(ReasoningEffort::Ultra);
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                resolved_config,
+            ))),
+            &mut out,
+        )
+        .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
@@ -4283,6 +4294,7 @@ async fn turn_lifecycle_emits_turn_event() {
         json!("session-thread-2")
     );
     assert_eq!(payload["event_params"]["turn_id"], json!("turn-2"));
+    assert_eq!(payload["event_params"]["reasoning_effort"], json!("ultra"));
     assert_eq!(
         payload["event_params"]["app_server_client"],
         json!({
