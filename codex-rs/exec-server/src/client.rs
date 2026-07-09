@@ -105,6 +105,7 @@ use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 
 pub(crate) mod http_client;
+mod notification_tracing;
 #[path = "client_recovery.rs"]
 mod recovery;
 
@@ -1153,6 +1154,18 @@ async fn fail_all_in_flight_work(inner: &Arc<Inner>, message: String) {
 }
 
 async fn handle_server_notification(
+    inner: &Arc<Inner>,
+    notification: JSONRPCNotification,
+) -> Result<(), ExecServerError> {
+    let notification_span = notification_tracing::notification_span(&notification);
+    let result = handle_server_notification_inner(inner, notification)
+        .instrument(notification_span.clone())
+        .await;
+    notification_span.record("result", if result.is_ok() { "success" } else { "error" });
+    result
+}
+
+async fn handle_server_notification_inner(
     inner: &Arc<Inner>,
     notification: JSONRPCNotification,
 ) -> Result<(), ExecServerError> {
