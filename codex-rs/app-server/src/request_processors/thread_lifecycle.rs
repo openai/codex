@@ -274,7 +274,13 @@ pub(super) async fn ensure_listener_task_running(
         ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
-    tokio::spawn(async move {
+    let listener_span = tracing::info_span!(
+        parent: None,
+        "app_server.thread_listener",
+        codex.thread.id = %conversation_id,
+    );
+    crate::app_server_tracing::link_to_current_span(&listener_span);
+    let listener_task = async move {
         loop {
             tokio::select! {
                 biased;
@@ -382,7 +388,8 @@ pub(super) async fn ensure_listener_task_running(
             thread_state_manager.unregister_listener_command_tx(conversation_id);
             thread_state.clear_listener();
         }
-    });
+    };
+    tokio::spawn(listener_task.instrument(listener_span));
     Ok(())
 }
 
@@ -412,17 +419,41 @@ pub(super) async fn unload_thread_without_subscribers(
         .await;
     thread_state_manager.remove_thread_state(thread_id).await;
 
-    tokio::spawn(async move {
-        match wait_for_thread_shutdown(&thread).await {
-            ThreadShutdownResult::Complete => {
-                if thread_manager.remove_thread(&thread_id).await.is_none() {
-                    info!("thread {thread_id} was already removed before teardown finalized");
-                    thread_watch_manager
-                        .remove_thread(&thread_id.to_string())
-                        .await;
-                    pending_thread_unloads.lock().await.remove(&thread_id);
-                    return;
-                }
+    tokio::spawn(complete_thread_unload(
+        thread_manager,
+        outgoing,
+        pending_thread_unloads,
+        thread_watch_manager,
+        thread_id,
+        thread,
+    ));
+}
+
+#[tracing::instrument(
+    name = "app_server.thread_unload",
+    skip_all,
+    fields(
+        codex.thread.id = %thread_id,
+        thread_unload.outcome = tracing::field::Empty,
+    )
+)]
+async fn complete_thread_unload(
+    thread_manager: Arc<ThreadManager>,
+    outgoing: Arc<OutgoingMessageSender>,
+    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    thread_watch_manager: ThreadWatchManager,
+    thread_id: ThreadId,
+    thread: Arc<CodexThread>,
+) {
+    let outcome = match wait_for_thread_shutdown(&thread).await {
+        ThreadShutdownResult::Complete => {
+            if thread_manager.remove_thread(&thread_id).await.is_none() {
+                info!("thread {thread_id} was already removed before teardown finalized");
+                thread_watch_manager
+                    .remove_thread(&thread_id.to_string())
+                    .await;
+                "already_removed"
+            } else {
                 thread_watch_manager
                     .remove_thread(&thread_id.to_string())
                     .await;
@@ -432,18 +463,20 @@ pub(super) async fn unload_thread_without_subscribers(
                 outgoing
                     .send_server_notification(ServerNotification::ThreadClosed(notification))
                     .await;
-                pending_thread_unloads.lock().await.remove(&thread_id);
-            }
-            ThreadShutdownResult::SubmitFailed => {
-                pending_thread_unloads.lock().await.remove(&thread_id);
-                warn!("failed to submit Shutdown to thread {thread_id}");
-            }
-            ThreadShutdownResult::TimedOut => {
-                pending_thread_unloads.lock().await.remove(&thread_id);
-                warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+                "complete"
             }
         }
-    });
+        ThreadShutdownResult::SubmitFailed => {
+            warn!("failed to submit Shutdown to thread {thread_id}");
+            "submit_failed"
+        }
+        ThreadShutdownResult::TimedOut => {
+            warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+            "timed_out"
+        }
+    };
+    pending_thread_unloads.lock().await.remove(&thread_id);
+    tracing::Span::current().record("thread_unload.outcome", outcome);
 }
 
 #[allow(clippy::too_many_arguments)]

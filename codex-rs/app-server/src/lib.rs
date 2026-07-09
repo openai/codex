@@ -1153,6 +1153,9 @@ pub async fn run_main_with_transport_options(
                 }
             };
 
+            processor.clear_runtime_references();
+            processor.cancel_active_login().await;
+            processor.clear_all_thread_listeners().await;
             if !shutdown_state.forced() {
                 futures::future::join_all(
                     connections
@@ -1166,6 +1169,7 @@ pub async fn run_main_with_transport_options(
             } else {
                 connection_cleanup_tasks.abort();
             }
+            processor.cancel_pending_server_requests().await;
             info!(
                 exit_reason,
                 remaining_connection_count = connections.len(),

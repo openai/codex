@@ -692,6 +692,19 @@ impl MessageProcessor {
         self.thread_processor.shutdown_threads().await;
     }
 
+    pub(crate) async fn cancel_pending_server_requests(&self) {
+        self.outgoing
+            .cancel_all_requests(Some(crate::error_code::internal_error(
+                "app-server is shutting down",
+            )))
+            .await;
+    }
+
+    #[tracing::instrument(
+        name = "app_server.connection_cleanup",
+        skip_all,
+        fields(app_server.connection_id = %connection_id)
+    )]
     pub(crate) async fn connection_closed(
         &self,
         connection_id: ConnectionId,

@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
@@ -328,12 +329,21 @@ impl ProcessExecManager {
             }
         };
 
+        let run_span = tracing::info_span!(
+            parent: None,
+            "app_server.process_spawn.run",
+            rpc.method = "process/spawn",
+            rpc.request_id = %request_id.request_id,
+            app_server.connection_id = %request_id.connection_id,
+            process.outcome = tracing::field::Empty,
+        );
+        crate::app_server_tracing::link_to_current_span(&run_span);
         outgoing
             .send_response(request_id.clone(), ProcessSpawnResponse {})
             .await;
 
         let sessions = Arc::clone(&self.sessions);
-        tokio::spawn(async move {
+        let run_task = async move {
             run_process(RunProcessParams {
                 outgoing,
                 request_id,
@@ -347,7 +357,8 @@ impl ProcessExecManager {
             })
             .await;
             sessions.lock().await.remove(&process_key);
-        });
+        };
+        tokio::spawn(run_task.instrument(run_span));
 
         Ok(())
     }
@@ -572,10 +583,18 @@ async fn run_process(params: RunProcessParams) {
     };
 
     // Give stdout/stderr readers a bounded grace period to drain after process exit.
-    let timeout_handle = tokio::spawn(async move {
+    let timeout_task = async move {
         tokio::time::sleep(Duration::from_millis(IO_DRAIN_TIMEOUT_MS)).await;
         let _ = stdio_timeout_tx.send(true);
-    });
+    };
+    let timeout_handle = tokio::spawn(timeout_task.in_current_span());
+
+    let outcome = match expiration_outcome {
+        Some(ExecExpirationOutcome::TimedOut) => "timed_out",
+        Some(ExecExpirationOutcome::Cancelled) => "cancelled",
+        None => "exited",
+    };
+    tracing::Span::current().record("process.outcome", outcome);
 
     let stdout = stdout_handle.await.unwrap_or_default();
     let stderr = stderr_handle.await.unwrap_or_default();
@@ -609,7 +628,7 @@ fn collect_spawn_process_output(
         stream_output,
         output_bytes_cap,
     } = params;
-    tokio::spawn(async move {
+    let output_task = async move {
         let mut buffer: Vec<u8> = Vec::new();
         let mut observed_num_bytes = 0usize;
         let mut cap_reached = false;
@@ -660,7 +679,8 @@ fn collect_spawn_process_output(
             text: bytes_to_string_smart(&buffer),
             cap_reached,
         }
-    })
+    };
+    tokio::spawn(output_task.in_current_span())
 }
 
 async fn handle_process_write(

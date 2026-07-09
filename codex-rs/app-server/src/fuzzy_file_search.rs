@@ -11,6 +11,8 @@ use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_file_search as file_search;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::warn;
 
 use crate::app_server_tracing::spawn_blocking_in_current_span;
@@ -132,28 +134,36 @@ pub(crate) fn start_fuzzy_file_search_session(
     let search_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
     let canceled = Arc::new(AtomicBool::new(false));
 
+    let session_span = tracing::info_span!(
+        parent: None,
+        "app_server.fuzzy_file_search_session",
+    );
+    crate::app_server_tracing::link_to_current_span(&session_span);
     let shared = Arc::new(SessionShared {
         session_id,
         latest_query: Mutex::new(String::new()),
         outgoing,
         runtime: tokio::runtime::Handle::current(),
         canceled: canceled.clone(),
+        span: session_span.clone(),
     });
 
     let reporter = Arc::new(SessionReporterImpl {
         shared: shared.clone(),
     });
-    let session = file_search::create_session(
-        search_dirs,
-        file_search::FileSearchOptions {
-            limit,
-            threads,
-            compute_indices: true,
-            ..Default::default()
-        },
-        reporter,
-        Some(canceled),
-    )?;
+    let session = session_span.in_scope(|| {
+        file_search::create_session(
+            search_dirs,
+            file_search::FileSearchOptions {
+                limit,
+                threads,
+                compute_indices: true,
+                ..Default::default()
+            },
+            reporter,
+            Some(canceled),
+        )
+    })?;
 
     Ok(FuzzyFileSearchSession { session, shared })
 }
@@ -164,6 +174,7 @@ struct SessionShared {
     outgoing: Arc<OutgoingMessageSender>,
     runtime: tokio::runtime::Handle,
     canceled: Arc<AtomicBool>,
+    span: Span,
 }
 
 struct SessionReporterImpl {
@@ -198,9 +209,12 @@ impl SessionReporterImpl {
             },
         );
         let outgoing = self.shared.outgoing.clone();
-        self.shared.runtime.spawn(async move {
+        let task = async move {
             outgoing.send_server_notification(notification).await;
-        });
+        };
+        self.shared
+            .runtime
+            .spawn(task.instrument(self.shared.span.clone()));
     }
 
     fn send_complete(&self) {
@@ -209,12 +223,15 @@ impl SessionReporterImpl {
         }
         let session_id = self.shared.session_id.clone();
         let outgoing = self.shared.outgoing.clone();
-        self.shared.runtime.spawn(async move {
+        let task = async move {
             let notification = ServerNotification::FuzzyFileSearchSessionCompleted(
                 FuzzyFileSearchSessionCompletedNotification { session_id },
             );
             outgoing.send_server_notification(notification).await;
-        });
+        };
+        self.shared
+            .runtime
+            .spawn(task.instrument(self.shared.span.clone()));
     }
 }
 

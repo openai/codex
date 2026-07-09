@@ -22,6 +22,7 @@ use tokio::sync::Mutex as AsyncMutex;
 #[cfg(test)]
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tracing::Instrument;
 use tracing::warn;
 
 const FS_CHANGED_NOTIFICATION_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -108,7 +109,13 @@ impl FsWatchManager {
         }
 
         let task_watch_id = watch_id.clone();
-        tokio::spawn(async move {
+        let watch_span = tracing::info_span!(
+            parent: None,
+            "app_server.fs_watch",
+            app_server.connection_id = %connection_id,
+        );
+        crate::app_server_tracing::link_to_current_span(&watch_span);
+        let watch_task = async move {
             let mut rx = DebouncedWatchReceiver::new(rx, FS_CHANGED_NOTIFICATION_DEBOUNCE);
             tokio::pin!(terminate_rx);
             loop {
@@ -138,7 +145,8 @@ impl FsWatchManager {
                         .await;
                 }
             }
-        });
+        };
+        tokio::spawn(watch_task.instrument(watch_span));
 
         Ok(FsWatchResponse { path: params.path })
     }

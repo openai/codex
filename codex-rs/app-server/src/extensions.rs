@@ -23,6 +23,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::ThreadStore;
+use tracing::Instrument;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
@@ -134,7 +135,11 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                     );
                 }
                 let outgoing = Arc::clone(&self.outgoing);
-                tokio::spawn(async move {
+                let notification_span = tracing::debug_span!(
+                    "app_server.extension_notification",
+                    codex.thread.id = %thread_id,
+                );
+                let notification_task = async move {
                     outgoing
                         .send_server_notification(ServerNotification::ThreadGoalUpdated(
                             ThreadGoalUpdatedNotification {
@@ -144,7 +149,8 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                             },
                         ))
                         .await;
-                });
+                };
+                tokio::spawn(notification_task.instrument(notification_span));
             }
             msg => {
                 tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");

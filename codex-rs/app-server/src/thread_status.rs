@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub(crate) struct ThreadWatchManager {
@@ -50,11 +51,16 @@ impl Drop for ThreadWatchActiveGuard {
         let manager = self.manager.clone();
         let thread_id = self.thread_id.clone();
         let guard_type = self.guard_type;
-        self.handle.spawn(async move {
+        let release_span = tracing::debug_span!(
+            "app_server.thread_watch_guard_release",
+            codex.thread.id = thread_id.as_str(),
+        );
+        let release_task = async move {
             manager
                 .note_active_guard_released(thread_id, guard_type)
                 .await;
-        });
+        };
+        self.handle.spawn(release_task.instrument(release_span));
     }
 }
 

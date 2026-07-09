@@ -42,10 +42,10 @@ pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorEr
 enum RpcResult {
     Success,
     Error,
-    Cancelled,
-    SendFailed,
     Disconnected,
     Replaced,
+    Cancelled,
+    SendFailed,
 }
 
 impl RpcResult {
@@ -53,10 +53,10 @@ impl RpcResult {
         match self {
             Self::Success => "success",
             Self::Error => "error",
-            Self::Cancelled => "cancelled",
-            Self::SendFailed => "send_failed",
             Self::Disconnected => "disconnected",
             Self::Replaced => "replaced",
+            Self::Cancelled => "cancelled",
+            Self::SendFailed => "send_failed",
         }
     }
 }
