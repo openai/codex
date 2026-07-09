@@ -40,6 +40,8 @@ pub const FS_COPY_METHOD: &str = "fs/copy";
 pub const HTTP_REQUEST_METHOD: &str = "http/request";
 /// JSON-RPC notification method for streamed executor HTTP response bodies.
 pub const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
+/// Maximum decoded response-body bytes carried by one streamed HTTP notification.
+pub const MAX_HTTP_BODY_DELTA_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
