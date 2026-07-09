@@ -159,9 +159,11 @@ async fn build_uploaded_argument_value(
         .unwrap_or("file")
         .to_string();
     let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
+    let http_client_factory = turn_context.config.http_client_factory();
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         upload_auth.as_ref(),
+        &http_client_factory,
         file_name,
         metadata.size,
         contents,
