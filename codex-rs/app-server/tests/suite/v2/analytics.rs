@@ -125,10 +125,50 @@ pub(crate) async fn wait_for_analytics_event(
     read_timeout: Duration,
     event_type: &str,
 ) -> Result<Value> {
-    wait_for_matching_analytics_event(server, read_timeout, |event| {
-        event["event_type"] == event_type
+    wait_for_analytics_events(server, read_timeout, event_type, /*expected_count*/ 1)
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("matching analytics event should be present"))
+}
+
+pub(crate) async fn wait_for_analytics_events(
+    server: &MockServer,
+    read_timeout: Duration,
+    event_type: &str,
+    expected_count: usize,
+) -> Result<Vec<Value>> {
+    timeout(read_timeout, async {
+        loop {
+            let events = captured_analytics_events(server)
+                .await?
+                .into_iter()
+                .filter(|event| event["event_type"] == event_type)
+                .collect::<Vec<_>>();
+            if events.len() >= expected_count {
+                return Ok::<Vec<Value>, anyhow::Error>(events);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     })
-    .await
+    .await?
+}
+
+pub(crate) async fn captured_analytics_events(server: &MockServer) -> Result<Vec<Value>> {
+    let Some(requests) = server.received_requests().await else {
+        return Ok(Vec::new());
+    };
+    let mut events = Vec::new();
+    for request in &requests {
+        if request.method != "POST" || request.url.path() != "/codex/analytics-events/events" {
+            continue;
+        }
+        let payload: Value = serde_json::from_slice(&request.body)
+            .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
+        if let Some(batch) = payload["events"].as_array() {
+            events.extend(batch.iter().cloned());
+        }
+    }
+    Ok(events)
 }
 
 pub(crate) async fn wait_for_goal_event(
