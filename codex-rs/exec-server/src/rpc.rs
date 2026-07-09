@@ -29,9 +29,6 @@ use tokio::time::timeout;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
-use crate::protocol::EXEC_CLOSED_METHOD;
-use crate::protocol::EXEC_EXITED_METHOD;
-use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 const MAX_IN_FLIGHT_REGULAR_CALLS: usize = 1024;
@@ -110,37 +107,16 @@ impl RpcNotificationSender {
         params: &P,
     ) -> Result<(), JSONRPCErrorError> {
         let params = serde_json::to_value(params).map_err(|err| internal_error(err.to_string()))?;
-        let trace = if should_trace_server_notification(method, &params) {
-            codex_otel::current_span_w3c_trace_context()
-        } else {
-            None
-        };
         self.outgoing_tx
             .send(RpcServerOutboundMessage::Notification(
                 JSONRPCNotification {
                     method: method.to_string(),
                     params: Some(params),
-                    trace,
+                    trace: codex_otel::current_span_w3c_trace_context(),
                 },
             ))
             .await
             .map_err(|_| internal_error("RPC connection closed while sending notification".into()))
-    }
-}
-
-pub(crate) fn should_trace_server_notification(method: &str, params: &Value) -> bool {
-    // Output and nonterminal body deltas can be extremely frequent. Carry and
-    // consume trace context only for lifecycle boundaries with bounded volume.
-    match method {
-        EXEC_EXITED_METHOD | EXEC_CLOSED_METHOD => true,
-        HTTP_REQUEST_BODY_DELTA_METHOD => {
-            let Some(params) = params.as_object() else {
-                return false;
-            };
-            params.get("done").and_then(Value::as_bool) == Some(true)
-                || params.get("error").is_some_and(|error| !error.is_null())
-        }
-        _ => false,
     }
 }
 
@@ -756,8 +732,6 @@ mod tests {
     use super::MAX_IN_FLIGHT_REGULAR_CALLS;
     use super::RpcCallError;
     use super::RpcClient;
-    use super::RpcNotificationSender;
-    use super::RpcServerOutboundMessage;
     use crate::connection::JsonRpcConnection;
     use crate::connection::JsonRpcConnectionEvent;
     use crate::connection::JsonRpcTransport;
@@ -1187,68 +1161,5 @@ mod tests {
         assert_eq!(parts[1], expected_parts[1]);
         assert_ne!(parts[2], expected_parts[2]);
         assert_eq!(trace.tracestate, expected_trace.tracestate);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    #[serial_test::serial(exec_server_tracing)]
-    async fn notification_senders_propagate_current_trace_context() {
-        let span_exporter = InMemorySpanExporter::default();
-        let tracer_provider = SdkTracerProvider::builder()
-            .with_simple_exporter(span_exporter)
-            .build();
-        let tracer = tracer_provider.tracer("exec-server-test");
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_opentelemetry::layer()
-                .with_tracer(tracer)
-                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-        );
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-        let parent_span = tracing::info_span!("outbound-notification-parent");
-        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
-            .expect("parent span should have trace context");
-
-        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
-        let sender = RpcNotificationSender::new(outgoing_tx);
-        sender
-            .notify("process/exited", &serde_json::json!({}))
-            .instrument(parent_span.clone())
-            .await
-            .expect("server notification should send");
-        let server_trace = match outgoing_rx.recv().await {
-            Some(RpcServerOutboundMessage::Notification(notification)) => notification.trace,
-            other => panic!("expected server notification, got {other:?}"),
-        }
-        .expect("server notification trace context");
-        sender
-            .notify("process/output", &serde_json::json!({}))
-            .instrument(parent_span.clone())
-            .await
-            .expect("hot-path server notification should send");
-        let hot_path_trace = match outgoing_rx.recv().await {
-            Some(RpcServerOutboundMessage::Notification(notification)) => notification.trace,
-            other => panic!("expected server notification, got {other:?}"),
-        };
-
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (_server_writer, client_stdout) = tokio::io::duplex(4096);
-        let connection =
-            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
-        let (client, _events_rx) = RpcClient::new(connection);
-        client
-            .notify("initialized", &serde_json::json!({}))
-            .instrument(parent_span)
-            .await
-            .expect("client notification should send");
-        let mut lines = BufReader::new(server_reader).lines();
-        let client_trace = match read_jsonrpc_line(&mut lines).await {
-            JSONRPCMessage::Notification(notification) => notification.trace,
-            other => panic!("expected client notification, got {other:?}"),
-        }
-        .expect("client notification trace context");
-
-        assert_eq!(server_trace, expected_trace);
-        assert_eq!(hot_path_trace, None);
-        assert_eq!(client_trace, expected_trace);
     }
 }

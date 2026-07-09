@@ -97,7 +97,3 @@ pub struct JSONRPCErrorError {
     pub data: Option<serde_json::Value>,
     pub message: String,
 }
-
-#[cfg(test)]
-#[path = "rpc_tests.rs"]
-mod tests;
