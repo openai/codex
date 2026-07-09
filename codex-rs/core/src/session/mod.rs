@@ -3838,12 +3838,53 @@ impl Session {
         let response_item = self.response_item_from_user_input(input.to_vec());
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
+        self.emit_user_input_turn_item(turn_context, input, client_id)
+            .await;
+        self.ensure_rollout_materialized().await;
+    }
+
+    pub(crate) async fn record_user_prompt(&self, turn_context: &TurnContext, input: &[UserInput]) {
+        let response_item = self.response_item_from_user_input(input.to_vec());
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+            .await;
+        self.ensure_rollout_materialized().await;
+    }
+
+    /// Persist transcript lifecycle events for a regular turn's initial user input.
+    ///
+    /// Accepted prompts use this after submission hooks. The interrupt fallback uses it with the
+    /// original input when cancellation wins before those hooks reach the persistence boundary.
+    /// This method intentionally does not add the prompt to model-visible history.
+    pub(crate) async fn record_initial_user_input_events(
+        &self,
+        turn_context: &TurnContext,
+        input: &[TurnInput],
+    ) {
+        let mut emitted = false;
+        for input in input {
+            let TurnInput::UserInput { content, client_id } = input else {
+                continue;
+            };
+            self.emit_user_input_turn_item(turn_context, content, client_id.clone())
+                .await;
+            emitted = true;
+        }
+        if emitted {
+            self.ensure_rollout_materialized().await;
+        }
+    }
+
+    async fn emit_user_input_turn_item(
+        &self,
+        turn_context: &TurnContext,
+        input: &[UserInput],
+        client_id: Option<String>,
+    ) {
         let mut user_message_item = UserMessageItem::new(input);
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
-        self.ensure_rollout_materialized().await;
     }
 
     pub(crate) async fn notify_stream_error(
