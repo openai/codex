@@ -6,7 +6,6 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_utils_path_uri::PathUri;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -653,7 +652,6 @@ impl TurnRequestProcessor {
             || collaboration_mode.is_some()
             || personality.is_some();
 
-        let runtime_workspace_roots = runtime_workspace_roots_request;
         let approval_policy =
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
         let approvals_reviewer =
@@ -666,29 +664,10 @@ impl TurnRequestProcessor {
                         "{method} permission selection missing thread snapshot"
                     )));
                 };
-                let workspace_roots = environments
-                    .as_ref()
-                    .map(|environments| {
-                        environments
-                            .environments
-                            .first()
-                            .map(|environment| {
-                                environment
-                                    .workspace_roots
-                                    .iter()
-                                    .map(PathUri::to_abs_path)
-                                    .collect::<std::io::Result<Vec<_>>>()
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or_default()
-                    })
-                    .or_else(|| runtime_workspace_roots.clone())
-                    .unwrap_or_else(|| snapshot.workspace_roots.clone());
                 let overrides = ConfigOverrides {
                     cwd: environments
                         .as_ref()
                         .map(|environments| environments.legacy_fallback_cwd.to_path_buf()),
-                    workspace_roots: Some(workspace_roots),
                     default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),

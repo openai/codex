@@ -141,6 +141,7 @@ impl TestEnv {
             Some(_) => TurnEnvironmentSelection {
                 environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&cwd)],
             },
             None => local(cwd.clone()),
         };
