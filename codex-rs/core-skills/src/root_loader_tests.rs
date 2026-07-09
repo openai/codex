@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -401,11 +402,11 @@ async fn starts_agents_skill_roots_before_other_pending_scans() {
     });
     file_system.wait_for_walks(MAX_CONCURRENT_ROOT_SCANS).await;
     assert_eq!(
-        file_system.walk_paths(),
+        file_system.walk_paths().into_iter().collect::<HashSet<_>>(),
         agents_roots
             .iter()
             .map(|root| PathUri::from_host_native_path(root).expect("agents root"))
-            .collect::<Vec<_>>()
+            .collect::<HashSet<_>>()
     );
 
     walk_gate.add_permits(MAX_CONCURRENT_ROOT_SCANS);

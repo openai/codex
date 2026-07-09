@@ -13,7 +13,7 @@ use crate::loader::SkillRootSnapshot;
 use crate::loader::load_skill_root;
 use crate::model::SkillFileSystemsByPath;
 
-const MAX_CONCURRENT_ROOT_SCANS: usize = 4;
+const MAX_CONCURRENT_ROOT_SCANS: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RootScanPriority {
