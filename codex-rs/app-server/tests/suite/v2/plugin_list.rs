@@ -2872,7 +2872,7 @@ trusted_hash = "sha256:unrelated"
     )
     .await?;
     let no_hooks_bundle_url =
-        mount_remote_plugin_bundle_with_hooks(&server, "no-hooks", None).await?;
+        mount_remote_plugin_bundle_with_hooks(&server, "no-hooks", /*hooks_json*/ None).await?;
     mount_workspace_bundle_sync(
         &server,
         &[
