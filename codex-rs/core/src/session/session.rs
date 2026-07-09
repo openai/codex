@@ -116,19 +116,19 @@ impl SessionConfiguration {
         &self.environments.environments
     }
 
-    pub(super) fn workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+    pub(super) fn primary_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
         self.environments
             .environments
             .first()
-            .and_then(|environment| {
+            .map(|environment| {
                 environment
                     .workspace_roots
                     .iter()
                     .map(PathUri::to_abs_path)
                     .collect::<std::io::Result<Vec<_>>>()
-                    .ok()
+                    .unwrap_or_default()
             })
-            .unwrap_or_else(|| vec![self.cwd().clone()])
+            .unwrap_or_default()
     }
 
     pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
@@ -140,10 +140,12 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile_state
-            .permission_profile()
-            .clone()
-            .materialize_project_roots_with_workspace_roots(&self.workspace_roots())
+        self.permission_profile_state.permission_profile().clone()
+    }
+
+    fn materialized_permission_profile(&self) -> PermissionProfile {
+        self.permission_profile()
+            .materialize_project_roots_with_workspace_roots(&self.primary_workspace_roots())
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -171,7 +173,7 @@ impl SessionConfiguration {
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        let permission_profile = self.permission_profile();
+        let permission_profile = self.materialized_permission_profile();
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &permission_profile,
             self.cwd(),
@@ -179,7 +181,8 @@ impl SessionConfiguration {
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile().file_system_sandbox_policy()
+        self.materialized_permission_profile()
+            .file_system_sandbox_policy()
     }
 
     pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
@@ -198,7 +201,7 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             environments: self.environments.clone(),
-            workspace_roots: self.workspace_roots(),
+            workspace_roots: self.primary_workspace_roots(),
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),

@@ -471,7 +471,7 @@ impl Session {
     pub(crate) fn build_effective_session_config(
         session_configuration: &SessionConfiguration,
     ) -> Config {
-        let workspace_roots = session_configuration.workspace_roots();
+        let workspace_roots = session_configuration.primary_workspace_roots();
         let mut config = Self::build_per_turn_config(
             session_configuration,
             session_configuration.cwd().clone(),
@@ -718,7 +718,7 @@ impl Session {
             .transpose()
             .ok()
             .flatten()
-            .unwrap_or_else(|| session_configuration.workspace_roots());
+            .unwrap_or_default();
         let per_turn_config =
             Self::build_per_turn_config(&session_configuration, cwd.clone(), workspace_roots);
         {
