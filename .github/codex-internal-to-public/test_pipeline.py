@@ -72,6 +72,14 @@ class PipelineIntegrationTest(unittest.TestCase):
                 git_output(fixture.repo, "show", f"{ready}:MODULE.bazel"),
                 'module(name = "candidate")',
             )
+            self.assertEqual(
+                git_output(
+                    fixture.repo,
+                    "show",
+                    f"{ready}:public/.vscode/settings.json",
+                ),
+                '{"fixture": true}',
+            )
             self.assertFalse(git_path_exists(fixture.repo, ready, pipeline.GITHUB_DIR))
             self.assertTrue(
                 git_path_exists(
@@ -111,6 +119,62 @@ class PipelineIntegrationTest(unittest.TestCase):
                     "--format=%an%x00%ae%x00%aI",
                     fixture.candidate,
                 ),
+            )
+
+    def test_state_only_candidate_uses_automatic_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = create_repository_fixture(
+                root,
+                candidate_content="baseline\n",
+                bazel_module_content='module(name = "baseline")\n',
+                public_workflow_content="name: Public CI\n",
+            )
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+            github_output = runner_temp / "github-output"
+
+            run_pipeline(
+                fixture.repo,
+                runner_temp,
+                "prepare",
+                env={"GITHUB_OUTPUT": github_output.as_posix()},
+            )
+
+            self.assertFalse((runner_temp / "message-input").exists())
+            self.assertEqual(
+                (runner_temp / "public-commit-message.md").read_text(
+                    encoding="utf-8"
+                ),
+                f"{pipeline.STATE_ONLY_MESSAGE_SUBJECT}\n",
+            )
+            self.assertEqual(
+                github_output.read_text(encoding="utf-8"),
+                "has_change=true\n"
+                "message_override=false\n"
+                "automatic_message=true\n",
+            )
+
+            run_pipeline(fixture.repo, runner_temp, "validate-message")
+            run_pipeline(fixture.repo, runner_temp, "publish")
+
+            fetch_ready(fixture.repo)
+            ready = git_output(
+                fixture.repo, "rev-parse", f"origin/{pipeline.READY_BRANCH}"
+            )
+            self.assertEqual(
+                git_output(
+                    fixture.repo,
+                    "diff",
+                    "--name-only",
+                    fixture.ready_parent,
+                    ready,
+                ),
+                pipeline.STATE_FILE.as_posix(),
+            )
+            self.assertEqual(
+                git_output(fixture.repo, "show", "--no-patch", "--format=%s", ready),
+                pipeline.STATE_ONLY_MESSAGE_SUBJECT,
             )
 
     def test_publish_rejects_ready_branch_movement(self) -> None:
@@ -254,6 +318,14 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertEqual(
                 git_output(workspace, "show", f"{target}:nested/[second].txt"),
                 "second file",
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}^:.vscode/settings.json"),
+                '{"fixture": true}',
+            )
+            self.assertEqual(
+                git_output(workspace, "show", f"{target}:.vscode/settings.json"),
+                '{"fixture": true}',
             )
             self.assertEqual(
                 git_output(
@@ -416,7 +488,9 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertFalse((runner_temp / "message-input").exists())
             self.assertEqual(
                 github_output.read_text(encoding="utf-8"),
-                "has_change=true\nmessage_override=true\n",
+                "has_change=true\n"
+                "message_override=true\n"
+                "automatic_message=false\n",
             )
             run_pipeline(
                 fixture.repo,
@@ -755,6 +829,12 @@ def create_base_repository(root: Path) -> tuple[Path, str]:
     public_workflow = repo / "public/.github/workflows/public-ci.yml"
     public_workflow.parent.mkdir(parents=True)
     public_workflow.write_text("name: Public CI\n", encoding="utf-8")
+    public_gitignore = repo / "public/.gitignore"
+    public_gitignore.write_text(".vscode/\n", encoding="utf-8")
+    public_editor_settings = repo / "public/.vscode/settings.json"
+    public_editor_settings.parent.mkdir(parents=True)
+    public_editor_settings.write_text('{"fixture": true}\n', encoding="utf-8")
+    git(repo, "add", "--force", "public/.vscode/settings.json")
     baseline = commit_all(repo, "Public baseline")
     git(repo, "push", "-u", "origin", "main")
     return repo, baseline

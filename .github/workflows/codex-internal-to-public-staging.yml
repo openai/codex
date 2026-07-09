@@ -39,6 +39,7 @@ jobs:
     outputs:
       has_change: ${{ steps.prepare.outputs.has_change }}
       message_override: ${{ steps.prepare.outputs.message_override }}
+      automatic_message: ${{ steps.prepare.outputs.automatic_message }}
     steps:
       - name: Checkout internal pipeline implementation
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -73,7 +74,8 @@ jobs:
         if: >-
           ${{
             steps.prepare.outputs.has_change == 'true' &&
-            steps.prepare.outputs.message_override != 'true'
+            steps.prepare.outputs.message_override != 'true' &&
+            steps.prepare.outputs.automatic_message != 'true'
           }}
         run: |
           install -m 0600 \
@@ -84,12 +86,21 @@ jobs:
         if: >-
           ${{
             steps.prepare.outputs.has_change == 'true' &&
-            steps.prepare.outputs.message_override != 'true'
+            steps.prepare.outputs.message_override != 'true' &&
+            steps.prepare.outputs.automatic_message != 'true'
           }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: public-message-input
           path: ${{ runner.temp }}/message-input
+          if-no-files-found: error
+
+      - name: Upload automatic public message
+        if: ${{ steps.prepare.outputs.automatic_message == 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: generated-public-message
+          path: ${{ runner.temp }}/public-commit-message.md
           if-no-files-found: error
 
       - name: Upload publication inputs
@@ -107,7 +118,8 @@ jobs:
     if: >-
       ${{
         needs.prepare.outputs.has_change == 'true' &&
-        needs.prepare.outputs.message_override != 'true'
+        needs.prepare.outputs.message_override != 'true' &&
+        needs.prepare.outputs.automatic_message != 'true'
       }}
     environment: public-commit-message
     runs-on: ubuntu-latest
@@ -188,7 +200,11 @@ jobs:
         always() &&
         needs.prepare.result == 'success' &&
         needs.prepare.outputs.has_change == 'true' &&
-        (needs.prepare.outputs.message_override == 'true' || needs.message.result == 'success')
+        (
+          needs.prepare.outputs.message_override == 'true' ||
+          needs.prepare.outputs.automatic_message == 'true' ||
+          needs.message.result == 'success'
+        )
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

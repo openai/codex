@@ -70,6 +70,7 @@ MESSAGE_WORKSPACE_BUNDLE = "message-workspace.bundle"
 MESSAGE_TARGET_FILE = "target-commit.txt"
 MESSAGE_BASELINE_SUBJECT = "Public staging baseline"
 MESSAGE_PLACEHOLDER_SUBJECT = "PLACEHOLDER: write the public commit message"
+STATE_ONLY_MESSAGE_SUBJECT = "Advance public export cursor"
 GIT_ORIGIN_REVISION_TRAILER = re.compile(
     r"^GitOrigin-RevId: ([0-9a-f]{40})$", re.MULTILINE
 )
@@ -112,6 +113,7 @@ def main() -> int:
             runner_temp / "public-projection.tgz",
             runner_temp / "message-input",
             runner_temp / "publish-metadata.json",
+            public_message_file,
             github_output,
             message_override,
         )
@@ -144,6 +146,7 @@ def prepare(
     projection_archive: Path,
     message_input_dir: Path,
     metadata_file: Path,
+    public_message_file: Path,
     github_output: Path | None,
     message_override: PublicMessageOverride | None,
 ) -> None:
@@ -164,6 +167,7 @@ def prepare(
         print(f"{READY_BRANCH} is already staged through {candidate_head}.")
         write_github_output(github_output, "has_change", "false")
         write_github_output(github_output, "message_override", "false")
+        write_github_output(github_output, "automatic_message", "false")
         return
     if (
         message_override is not None
@@ -184,6 +188,7 @@ def prepare(
     ensure_first_parent_ancestor(
         source_revision, rev_parse(remote_ref(SOURCE_BRANCH))
     )
+    automatic_message = False
     with tempfile.TemporaryDirectory(prefix="codex-public-stage-") as temp_dir:
         temp_root = Path(temp_dir)
         with git_worktree(
@@ -203,13 +208,34 @@ def prepare(
             public_tree = temp_root / "effective-public-tree"
             project_effective_public_tree(candidate_tree, public_tree)
             if message_override is None:
-                write_message_inputs(
-                    public_tree,
-                    ready_parent,
-                    candidate_revision,
-                    metadata.author,
-                    message_input_dir,
-                )
+                baseline_public_tree = temp_root / "effective-public-baseline"
+                with git_worktree(
+                    ready_parent, temp_root / "ready-parent"
+                ) as ready_tree:
+                    remove_github_files(ready_tree)
+                    (ready_tree / STATE_FILE).unlink(missing_ok=True)
+                    reject_internal_paths(ready_tree)
+                    reject_internal_dependency_references(ready_tree)
+                    project_effective_public_tree(
+                        ready_tree, baseline_public_tree
+                    )
+
+                if public_trees_equal(public_tree, baseline_public_tree):
+                    # publish() must still advance the private state marker. The final
+                    # projection excludes that marker, so this bookkeeping commit does
+                    # not warrant a model-written public message.
+                    public_message_file.write_text(
+                        f"{STATE_ONLY_MESSAGE_SUBJECT}\n", encoding="utf-8"
+                    )
+                    automatic_message = True
+                else:
+                    write_message_inputs(
+                        public_tree,
+                        baseline_public_tree,
+                        candidate_revision,
+                        metadata.author,
+                        message_input_dir,
+                    )
 
     write_metadata(metadata_file, metadata)
     write_github_output(github_output, "has_change", "true")
@@ -217,6 +243,11 @@ def prepare(
         github_output,
         "message_override",
         str(message_override is not None).lower(),
+    )
+    write_github_output(
+        github_output,
+        "automatic_message",
+        str(automatic_message).lower(),
     )
     print(f"Prepared {candidate_revision} from {CANDIDATE_BRANCH}.")
 
@@ -466,24 +497,46 @@ def overlay_projection_entry(source: Path, destination: Path) -> None:
     copy_projection_entry(source, destination)
 
 
+def public_trees_equal(left: Path, right: Path) -> bool:
+    result = run(
+        [
+            "git",
+            "diff",
+            "--no-index",
+            "--quiet",
+            "--no-ext-diff",
+            "--",
+            left.as_posix(),
+            right.as_posix(),
+        ],
+        check=False,
+        capture=True,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = f"\n{result.stdout}" if result.stdout else ""
+    raise RuntimeError(
+        f"Unable to compare effective public trees (exit {result.returncode}).{detail}"
+    )
+
+
 def write_message_inputs(
     candidate_public_tree: Path,
-    ready_parent: str,
+    baseline_public_tree: Path,
     candidate_revision: str,
     author: GitAuthor,
     destination: Path,
 ) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="codex-public-message-") as temp_dir:
+    # This scratch tree contains public files only, and the runner is ephemeral. Ignore
+    # cleanup errors so a late Git maintenance process cannot fail preparation after
+    # the bundle and target revision have already been written successfully.
+    with tempfile.TemporaryDirectory(
+        prefix="codex-public-message-", ignore_cleanup_errors=True
+    ) as temp_dir:
         temp_root = Path(temp_dir)
-        baseline_public_tree = temp_root / "effective-public-baseline"
-        with git_worktree(ready_parent, temp_root / "ready-parent") as ready_tree:
-            remove_github_files(ready_tree)
-            (ready_tree / STATE_FILE).unlink(missing_ok=True)
-            reject_internal_paths(ready_tree)
-            reject_internal_dependency_references(ready_tree)
-            project_effective_public_tree(ready_tree, baseline_public_tree)
-
         workspace = temp_root / "message-workspace"
         run(
             [
@@ -498,8 +551,9 @@ def write_message_inputs(
         # The baseline creates thousands of loose objects. Avoid background GC racing
         # TemporaryDirectory cleanup after the message bundle has been written.
         run(["git", "config", "gc.auto", "0"], cwd=workspace)
+        run(["git", "config", "maintenance.auto", "false"], cwd=workspace)
         replace_worktree(workspace, baseline_public_tree)
-        run(["git", "add", "--all"], cwd=workspace)
+        run(["git", "add", "--all", "--force"], cwd=workspace)
         run(
             [
                 "git",
@@ -513,7 +567,7 @@ def write_message_inputs(
         )
 
         replace_worktree(workspace, candidate_public_tree)
-        run(["git", "add", "--all"], cwd=workspace)
+        run(["git", "add", "--all", "--force"], cwd=workspace)
         run(
             [
                 "git",
@@ -593,7 +647,7 @@ def commit_ready_change(
 ) -> None:
     run(["git", "config", "user.name", BOT_NAME], cwd=ready_tree)
     run(["git", "config", "user.email", BOT_EMAIL], cwd=ready_tree)
-    run(["git", "add", "--all"], cwd=ready_tree)
+    run(["git", "add", "--all", "--force"], cwd=ready_tree)
     run(
         [
             "git",

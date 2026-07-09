@@ -2,7 +2,8 @@
 
 This directory implements the middle phase of the Codex export pipeline. It turns one commit from
 `copybara-no-internal-code` into one commit on `copybara-no-internal-references`, regenerating the
-public lockfiles and replacing the source message with a public-safe message written by Codex.
+public lockfiles and replacing the source message with a public-safe message written by Codex when
+the effective public tree changes.
 
 This directory is a self-contained internal staging bundle: it includes the Python pipeline, Codex
 prompt, tests, and this documentation. The first Copyberry hop copies the entire bundle and the
@@ -83,12 +84,20 @@ For each run, `pipeline.py prepare`:
 5. starts with internal `main`'s `Cargo.lock` and the previous ready branch's `MODULE.bazel.lock`,
    minimally reconciles each one for the filtered candidate tree, and verifies both in
    locked/error mode; and
-6. emits separate artifacts for model input, publication metadata, and the projected tree.
+6. compares the candidate and previous effective public trees, including tracked files covered by
+   public `.gitignore` rules; and
+7. emits separate artifacts for publication metadata and the projected tree, plus model input only
+   when the effective public tree changed.
 
 The publish job verifies that neither branch moved unexpectedly, preserves the candidate commit's
 author and author date, updates the state file, verifies that the resulting commit has no root
 `.github` diff, and pushes with `--force-with-lease`. An empty tree diff is still committed so the
 candidate-to-ready mapping remains one-to-one.
+
+If only internal staging files changed, the effective public trees are identical. The workflow
+still appends the required ready-branch state commit, but gives it the fixed subject `Advance public
+export cursor` and skips the Codex message job. The final Copyberry projection omits this state-only
+commit because the internal marker is outside its source scope.
 
 Do not add a revision trailer to the generated ready-branch message. Candidate-to-ready state stays
 in the internal-only state file. On the final hop, Copybara adds its standard
@@ -100,6 +109,7 @@ not to internal `main`.
 ## Model boundary and message validation
 
 The Codex job never checks out `openai/codex-internal` and receives no raw internal commit message.
+It does not run at all for a state-only candidate whose effective public tree is unchanged.
 Its repository file inputs are limited to:
 
 - a Git bundle containing an isolated two-commit branch: a root commit with the exact prior public
