@@ -517,6 +517,26 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at(config, thread_id, /*last_turn_id*/ None)
+            .await
+    }
+
+    pub(crate) async fn fork_thread_after(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: String,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at(config, thread_id, /*last_turn_id*/ Some(last_turn_id))
+            .await
+    }
+
+    async fn fork_thread_at(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: Option<String>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
@@ -528,6 +548,7 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    last_turn_id,
                 ),
             })
             .await
@@ -1472,6 +1493,7 @@ fn thread_fork_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    last_turn_id: Option<String>,
 ) -> ThreadForkParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
     let sandbox = permissions
@@ -1485,6 +1507,7 @@ fn thread_fork_params_from_config(
         .flatten();
     ThreadForkParams {
         thread_id: thread_id.to_string(),
+        last_turn_id,
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
@@ -2029,6 +2052,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*last_turn_id*/ None,
         );
 
         assert_eq!(start.cwd, None);
@@ -2146,6 +2170,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*last_turn_id*/ None,
         );
 
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
@@ -2197,6 +2222,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*last_turn_id*/ None,
         );
 
         let expected_service_tier = Some(Some(ServiceTier::Fast.request_value().to_string()));
@@ -2251,6 +2277,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*last_turn_id*/ None,
         );
 
         assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
@@ -2258,6 +2285,22 @@ mod tests {
             params.developer_instructions.as_deref(),
             Some("Developer override.")
         );
+    }
+
+    #[tokio::test]
+    async fn thread_fork_params_forward_last_turn_id() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+
+        let params = thread_fork_params_from_config(
+            config,
+            ThreadId::new(),
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*last_turn_id*/ Some("turn-2".to_string()),
+        );
+
+        assert_eq!(params.last_turn_id.as_deref(), Some("turn-2"));
     }
 
     #[tokio::test]
@@ -2284,6 +2327,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*last_turn_id*/ None,
         );
 
         assert_eq!(control_start.developer_instructions, None);
@@ -2313,6 +2357,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*last_turn_id*/ None,
         );
         let expected = format!(
             "Developer override.\n\n{}",
@@ -2366,6 +2411,7 @@ mod tests {
                 name: None,
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
+                    is_forkable: true,
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         codex_app_server_protocol::ThreadItem::UserMessage {

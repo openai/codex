@@ -1265,7 +1265,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+    fn on_committed_user_message(
+        &mut self,
+        items: &[UserInput],
+        from_replay: bool,
+        turn_id: Option<String>,
+    ) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1336,7 +1341,7 @@ impl ChatWidget {
                     mention_bindings,
                     pending_pastes: Vec::new(),
                 });
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, turn_id);
             return;
         }
 
@@ -1351,21 +1356,21 @@ impl ChatWidget {
                 self.refresh_pending_input_preview();
                 let pending_display =
                     user_message_display_for_history(pending.user_message, &pending.history_record);
-                self.on_user_message_display(pending_display);
+                self.on_user_message_display(pending_display, turn_id);
             } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
                 tracing::warn!(
                     "pending steer matched compare key but queue was empty when rendering committed user message"
                 );
-                self.on_user_message_display(display);
+                self.on_user_message_display(display, turn_id);
             }
         } else if !self.review.is_review_mode
             && self.last_rendered_user_message_display.as_ref() != Some(&display)
         {
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, turn_id);
         }
     }
 
-    fn on_user_message_display(&mut self, display: UserMessageDisplay) {
+    fn on_user_message_display(&mut self, display: UserMessageDisplay, turn_id: Option<String>) {
         self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
@@ -1374,6 +1379,7 @@ impl ChatWidget {
         {
             self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
+                turn_id,
                 display.message,
                 display.text_elements,
                 display.local_images,
@@ -1745,6 +1751,14 @@ impl ChatWidget {
         self.bottom_pane.is_normal_backtrack_mode()
     }
 
+    /// Canonical id of the turn that is still in progress, if any.
+    pub(crate) fn active_turn_id(&self) -> Option<&str> {
+        self.turn_lifecycle
+            .agent_turn_running
+            .then_some(self.turn_lifecycle.last_turn_id.as_deref())
+            .flatten()
+    }
+
     pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .composer_should_handle_vim_insert_escape(key_event)
@@ -1755,6 +1769,7 @@ impl ChatWidget {
     }
 
     /// Replace the composer content with the provided text and reset cursor.
+    #[cfg(test)]
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,

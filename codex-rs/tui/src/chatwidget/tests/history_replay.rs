@@ -706,6 +706,32 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 }
 
 #[tokio::test]
+async fn prompt_edit_thread_history_line_is_distinct_from_explicit_fork_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.emit_prompt_edit_thread_event();
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => {
+                    panic!("app event channel closed before prompt edit history was emitted")
+                }
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for prompt edit history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert!(combined.contains("You’re continuing from this point"));
+    assert!(!combined.contains("Thread forked from"));
+    assert_chatwidget_snapshot!("prompt_edit_thread_history_line", combined);
+}
+
+#[tokio::test]
 async fn app_server_forked_thread_history_line_uses_app_server_title_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
@@ -815,6 +841,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                is_forkable: true,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -1003,6 +1030,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                is_forkable: true,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -1060,6 +1088,7 @@ async fn live_reasoning_summary_drops_empty_parts_without_losing_content() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                is_forkable: true,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -1148,6 +1177,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            is_forkable: true,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: AppServerTurnStatus::InProgress,
@@ -1166,6 +1196,42 @@ async fn replayed_in_progress_turn_marks_task_running() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
+async fn replayed_synthetic_turn_does_not_anchor_user_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "legacy-turn".to_string(),
+            is_forkable: false,
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
+            items: vec![AppServerThreadItem::UserMessage {
+                id: "legacy-user".to_string(),
+                client_id: None,
+                content: vec![AppServerUserInput::Text {
+                    text: "legacy prompt".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let user_cell = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| {
+        let AppEvent::InsertHistoryCell(cell) = event else {
+            return None;
+        };
+        cell.as_any().downcast_ref::<UserHistoryCell>().cloned()
+    });
+
+    assert_eq!(user_cell.expect("replayed user history cell").turn_id, None);
 }
 
 #[tokio::test]
