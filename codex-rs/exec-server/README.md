@@ -138,8 +138,18 @@ Request params:
 Response:
 
 ```json
-{}
+{
+  "sessionId": "08e2d8e7-8fb7-4495-a8e1-cd729dd68820",
+  "environmentInfo": {
+    "shell": { "name": "bash", "path": "/bin/bash" },
+    "cwd": "file:///workspace"
+  }
+}
 ```
+
+`environmentInfo` describes connection-stable properties of the execution
+environment. Clients must fall back to `environment/info` when talking to an
+older server that omits it.
 
 ### `initialized`
 
@@ -412,7 +422,7 @@ Initialize:
 
 ```json
 {"id":1,"method":"initialize","params":{"clientName":"example-client"}}
-{"id":1,"result":{}}
+{"id":1,"result":{"sessionId":"08e2d8e7-8fb7-4495-a8e1-cd729dd68820","environmentInfo":{"shell":{"name":"bash","path":"/bin/bash"},"cwd":"file:///workspace"}}}
 {"method":"initialized","params":{}}
 ```
 

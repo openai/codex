@@ -207,6 +207,7 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: OnceLock<String>,
+    environment_info: OnceCell<EnvironmentInfo>,
     reconnect_strategy: Option<ExecServerReconnectStrategy>,
 }
 
@@ -575,6 +576,9 @@ impl ExecServerClient {
                     response.session_id
                 )));
             }
+            if let Some(environment_info) = response.environment_info.as_ref() {
+                let _ = self.inner.environment_info.set(environment_info.clone());
+            }
             rpc_client
                 .notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await?;
@@ -591,12 +595,18 @@ impl ExecServerClient {
     }
 
     pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        let rpc_client = self.rpc_client().await?;
-        map_rpc_call_result(
-            rpc_client
-                .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
-                .await,
-        )
+        self.inner
+            .environment_info
+            .get_or_try_init(|| async {
+                let rpc_client = self.inner.rpc_client().await?;
+                map_rpc_call_result(
+                    rpc_client
+                        .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
+                        .await,
+                )
+            })
+            .await
+            .cloned()
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
@@ -853,6 +863,7 @@ impl ExecServerClient {
             http_body_streams_write_lock: Mutex::new(()),
             http_body_stream_next_id: AtomicU64::new(1),
             session_id,
+            environment_info: OnceCell::new(),
             reconnect_strategy,
         });
         let client = Self {
@@ -1431,12 +1442,14 @@ mod tests {
     use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
     use crate::process::ExecProcessEvent;
+    use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_WRITE_METHOD;
+    use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecClosedNotification;
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
@@ -1448,6 +1461,7 @@ mod tests {
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
     use crate::protocol::ReadResponse;
+    use crate::protocol::ShellInfo;
     use crate::protocol::WriteParams;
     use crate::protocol::WriteResponse;
     use crate::protocol::WriteStatus;
@@ -1475,6 +1489,137 @@ mod tests {
             .expect("json-rpc line should write");
     }
 
+    fn sample_environment_info() -> EnvironmentInfo {
+        EnvironmentInfo {
+            shell: ShellInfo {
+                name: "bash".to_string(),
+                path: "/bin/bash".to_string(),
+            },
+            cwd: None,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn environment_info_uses_initialize_response_without_follow_up_rpc() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let expected = sample_environment_info();
+        let server_expected = expected.clone();
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "embedded-info".to_string(),
+                        environment_info: Some(server_expected),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+            match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(
+                client_stdout,
+                client_stdin,
+                "embedded-info-client".to_string(),
+            ),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+        server.await.expect("server task should finish");
+
+        assert_eq!(
+            client.environment_info().await.expect("first info"),
+            expected
+        );
+        assert_eq!(
+            client.environment_info().await.expect("cached info"),
+            expected
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_initialize_falls_back_to_environment_info_once() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let expected = sample_environment_info();
+        let server_expected = expected.clone();
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({ "sessionId": "legacy-info" }),
+                }),
+            )
+            .await;
+            match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+            let info = read_jsonrpc_line(&mut lines).await;
+            let request = match info {
+                JSONRPCMessage::Request(request) if request.method == ENVIRONMENT_INFO_METHOD => {
+                    request
+                }
+                other => panic!("expected one environment/info request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(server_expected)
+                        .expect("environment info should serialize"),
+                }),
+            )
+            .await;
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(
+                client_stdout,
+                client_stdin,
+                "legacy-info-client".to_string(),
+            ),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+        let (first, second) = tokio::join!(client.environment_info(), client.environment_info());
+        assert_eq!(first.expect("first fallback info"), expected);
+        assert_eq!(second.expect("shared fallback info"), expected);
+        server.await.expect("server task should finish");
+        assert_eq!(
+            client
+                .environment_info()
+                .await
+                .expect("cached fallback info"),
+            expected
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn process_start_propagates_caller_trace_context_across_background_task() {
         let (client_stdin, server_reader) = duplex(1 << 20);
@@ -1492,6 +1637,7 @@ mod tests {
                     id: initialize.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "trace-test".to_string(),
+                        environment_info: None,
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1647,6 +1793,7 @@ mod tests {
                 id: request.id,
                 result: serde_json::to_value(InitializeResponse {
                     session_id: session_id.to_string(),
+                    environment_info: None,
                 })
                 .expect("initialize response should serialize"),
             }),
@@ -1867,6 +2014,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        environment_info: None,
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -2012,6 +2160,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        environment_info: None,
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -2292,6 +2441,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        environment_info: None,
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -2522,6 +2672,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        environment_info: None,
                     })
                     .expect("initialize response should serialize"),
                 }),

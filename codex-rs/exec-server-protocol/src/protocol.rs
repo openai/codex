@@ -69,6 +69,9 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub session_id: String,
+    /// Connection-stable execution environment metadata. Older servers omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_info: Option<EnvironmentInfo>,
 }
 
 /// Information about an execution/filesystem environment.
@@ -570,6 +573,7 @@ mod tests {
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
+    use super::InitializeResponse;
     use super::ProcessId;
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
@@ -578,6 +582,22 @@ mod tests {
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+
+    #[test]
+    fn initialize_response_accepts_legacy_response_without_environment_info() {
+        let response: InitializeResponse = serde_json::from_value(serde_json::json!({
+            "sessionId": "legacy-session"
+        }))
+        .expect("legacy initialize response should deserialize");
+
+        assert_eq!(
+            response,
+            InitializeResponse {
+                session_id: "legacy-session".to_string(),
+                environment_info: None,
+            }
+        );
+    }
 
     #[test]
     fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {

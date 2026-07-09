@@ -2,6 +2,7 @@
 
 mod common;
 
+use codex_exec_server::EnvironmentInfo;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server_protocol::JSONRPCMessage;
@@ -30,6 +31,10 @@ async fn exec_server_accepts_initialize() -> anyhow::Result<()> {
     assert_eq!(id, initialize_id);
     let initialize_response: InitializeResponse = serde_json::from_value(result)?;
     Uuid::parse_str(&initialize_response.session_id)?;
+    assert_eq!(
+        initialize_response.environment_info,
+        Some(EnvironmentInfo::local())
+    );
 
     server.shutdown().await?;
     Ok(())

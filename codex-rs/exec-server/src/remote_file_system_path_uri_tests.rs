@@ -153,6 +153,7 @@ async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream
             id: request.id,
             result: serde_json::to_value(InitializeResponse {
                 session_id: "session-1".to_string(),
+                environment_info: None,
             })
             .expect("initialize response should serialize"),
         }),
