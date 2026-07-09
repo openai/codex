@@ -22,6 +22,7 @@ use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use self::connection::Connection;
+use self::connection::ConnectionError;
 use self::connection::RemoteSession;
 use self::connection::SessionCleanup;
 use crate::NoopCodeModeSessionDelegate;
@@ -34,30 +35,32 @@ type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 
 /// Creates code-mode sessions backed by one lazily spawned process host.
 pub struct ProcessOwnedCodeModeSessionProvider {
-    host_program: PathBuf,
-    process_host: StdMutex<Option<Arc<OwnedProcessHost>>>,
+    state: StdMutex<ProviderState>,
+}
+
+enum ProviderState {
+    OwnedProcess(Arc<OwnedProcessHost>),
+    InProcess,
 }
 
 impl ProcessOwnedCodeModeSessionProvider {
     pub fn with_host_program(host_program: PathBuf) -> Self {
         Self {
-            host_program,
-            process_host: StdMutex::new(None),
+            state: StdMutex::new(ProviderState::OwnedProcess(Arc::new(
+                OwnedProcessHost::new(host_program),
+            ))),
         }
     }
 
-    fn process_host(&self) -> Arc<OwnedProcessHost> {
-        let mut process_host = self
-            .process_host
+    fn process_host(&self) -> Option<Arc<OwnedProcessHost>> {
+        match &*self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(process_host) = process_host.as_ref() {
-            return Arc::clone(process_host);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            ProviderState::OwnedProcess(process_host) => Some(Arc::clone(process_host)),
+            ProviderState::InProcess => None,
         }
-
-        let new_process_host = Arc::new(OwnedProcessHost::new(self.host_program.clone()));
-        *process_host = Some(Arc::clone(&new_process_host));
-        new_process_host
     }
 }
 
@@ -72,8 +75,28 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
-        let session = ProcessOwnedCodeModeSession::with_process_host(delegate, self.process_host());
         Box::pin(async move {
+            let Some(process_host) = self.process_host() else {
+                let session: Arc<dyn CodeModeSession> =
+                    Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
+                return Ok(session);
+            };
+
+            match process_host.connection().await {
+                Ok(_) => {}
+                Err(error) if error.host_program_not_found() => {
+                    *self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        ProviderState::InProcess;
+                    let session: Arc<dyn CodeModeSession> =
+                        Arc::new(crate::InProcessCodeModeSession::with_delegate(delegate));
+                    return Ok(session);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+            let session = ProcessOwnedCodeModeSession::with_process_host(delegate, process_host);
             session.connection().await?;
             let session: Arc<dyn CodeModeSession> = Arc::new(session);
             Ok(session)
@@ -98,16 +121,14 @@ impl OwnedProcessHost {
         }
     }
 
-    async fn connection(&self) -> Result<Arc<Connection>, String> {
+    async fn connection(&self) -> Result<Arc<Connection>, ConnectionError> {
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
 
-        let _spawn_permit = self
-            .spawn_permit
-            .acquire()
-            .await
-            .map_err(|_| "code-mode host spawn coordinator closed".to_string())?;
+        let _spawn_permit = self.spawn_permit.acquire().await.map_err(|_| {
+            ConnectionError::Other("code-mode host spawn coordinator closed".into())
+        })?;
         if let Some(connection) = self.live_connection() {
             return Ok(connection);
         }
@@ -284,7 +305,7 @@ impl SessionInner {
                     cleanup,
                 })
             }
-            Err(err) => Err(err),
+            Err(err) => Err(err.to_string()),
         };
         {
             let mut state = self
