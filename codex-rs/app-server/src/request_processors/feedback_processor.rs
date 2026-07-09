@@ -222,7 +222,7 @@ impl FeedbackRequestProcessor {
 
         let session_source = self.thread_manager.session_source();
 
-        let upload_result = tokio::task::spawn_blocking(move || {
+        let upload_result = crate::app_server_tracing::spawn_blocking_in_current_span(move || {
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
             snapshot.upload_feedback(FeedbackUploadOptions {
                 classification: &classification,

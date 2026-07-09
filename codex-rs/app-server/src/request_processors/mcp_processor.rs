@@ -262,7 +262,7 @@ impl McpRequestProcessor {
             }
         };
 
-        tokio::spawn(async move {
+        let status_task = async move {
             Self::list_mcp_server_status_task(
                 outgoing,
                 request,
@@ -273,7 +273,8 @@ impl McpRequestProcessor {
                 codex_apps_tools_cache,
             )
             .await;
-        });
+        };
+        tokio::spawn(status_task.in_current_span());
         Ok(())
     }
 
@@ -399,10 +400,11 @@ impl McpRequestProcessor {
             let (_, thread) = self.load_thread(&thread_id).await?;
             let request_id = request_id.clone();
 
-            tokio::spawn(async move {
+            let read_task = async move {
                 let result = thread.read_mcp_resource(&server, &uri).await;
                 Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
-            });
+            };
+            tokio::spawn(read_task.in_current_span());
             return Ok(());
         }
 
@@ -419,7 +421,7 @@ impl McpRequestProcessor {
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
-        tokio::spawn(async move {
+        let read_task = async move {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
@@ -431,7 +433,8 @@ impl McpRequestProcessor {
             .await
             .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));
             Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
-        });
+        };
+        tokio::spawn(read_task.in_current_span());
         Ok(())
     }
 
@@ -463,14 +466,15 @@ impl McpRequestProcessor {
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 
-        tokio::spawn(async move {
+        let tool_call_task = async move {
             let result = thread
                 .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));
             outgoing.send_result(request_id, result).await;
-        });
+        };
+        tokio::spawn(tool_call_task.in_current_span());
         Ok(())
     }
 }

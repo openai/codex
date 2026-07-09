@@ -98,7 +98,7 @@ impl AppsRequestProcessor {
         let mcp_manager = self.thread_manager.mcp_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let shutdown_token = self.shutdown_token.child_token();
-        tokio::spawn(async move {
+        let apps_list_task = async move {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {}
                 _ = Self::apps_list_task(
@@ -112,7 +112,8 @@ impl AppsRequestProcessor {
                     installed_start,
                 ) => {}
             }
-        });
+        };
+        tokio::spawn(apps_list_task.in_current_span());
         Ok(None)
     }
 
@@ -214,7 +215,7 @@ impl AppsRequestProcessor {
 
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
-        tokio::spawn(async move {
+        let load_accessible_task = async move {
             let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 &accessible_config,
                 force_refetch,
@@ -224,11 +225,12 @@ impl AppsRequestProcessor {
             .await
             .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
-        });
+        };
+        tokio::spawn(load_accessible_task.in_current_span());
 
         let all_config = config.clone();
         let all_plugin_apps = plugin_apps.clone();
-        tokio::spawn(async move {
+        let load_all_task = async move {
             let result = connectors::list_all_connectors_with_options(
                 &all_config,
                 force_refetch,
@@ -237,7 +239,8 @@ impl AppsRequestProcessor {
             .await
             .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
-        });
+        };
+        tokio::spawn(load_all_task.in_current_span());
 
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;

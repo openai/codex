@@ -154,10 +154,12 @@ impl ExternalAgentSessionImporter {
         session: ExternalAgentSessionMigration,
     ) -> Result<Option<PendingSessionImport>, String> {
         let codex_home = self.codex_home.clone();
-        tokio::task::spawn_blocking(move || prepare_validated_session_import(&codex_home, session))
-            .await
-            .map_err(|err| format!("external agent session preparation task failed: {err}"))?
-            .map_err(|err| format!("failed to prepare external agent session: {err}"))
+        crate::app_server_tracing::spawn_blocking_in_current_span(move || {
+            prepare_validated_session_import(&codex_home, session)
+        })
+        .await
+        .map_err(|err| format!("external agent session preparation task failed: {err}"))?
+        .map_err(|err| format!("failed to prepare external agent session: {err}"))
     }
 
     async fn persist_session(

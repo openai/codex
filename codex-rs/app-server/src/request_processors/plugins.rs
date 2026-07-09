@@ -595,7 +595,7 @@ impl PluginRequestProcessor {
             let plugins_manager_for_marketplace_listing = plugins_manager.clone();
             let roots_for_marketplace_listing = roots.clone();
             let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
-            match tokio::task::spawn_blocking(move || {
+            match crate::app_server_tracing::spawn_blocking_in_current_span(move || {
                 let outcome = plugins_manager_for_marketplace_listing
                     .list_marketplaces_for_config(
                         &config_for_marketplace_listing,
@@ -876,7 +876,7 @@ impl PluginRequestProcessor {
     > {
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
-        match tokio::task::spawn_blocking(move || {
+        match crate::app_server_tracing::spawn_blocking_in_current_span(move || {
             let outcome = plugins_manager.list_marketplaces_for_config(
                 &config_for_marketplace_listing,
                 &roots,

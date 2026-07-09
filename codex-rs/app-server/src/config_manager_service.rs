@@ -1,3 +1,4 @@
+use crate::app_server_tracing::spawn_blocking_in_current_span;
 use crate::config_layer::config_layer_metadata_to_api;
 use crate::config_layer::config_layer_to_api;
 use crate::config_manager::ConfigManager;
@@ -34,7 +35,6 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
-use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
@@ -405,7 +405,7 @@ async fn create_empty_user_layer(
 }
 
 async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {
-    task::spawn_blocking(move || write_atomically(&write_path, ""))
+    spawn_blocking_in_current_span(move || write_atomically(&write_path, ""))
         .await
         .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
         .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))

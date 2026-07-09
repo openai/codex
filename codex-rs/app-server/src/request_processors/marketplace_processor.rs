@@ -77,7 +77,7 @@ impl MarketplaceRequestProcessor {
         let MarketplaceUpgradeParams { marketplace_name } = params;
         let plugins_input = config.plugins_config_input();
 
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = crate::app_server_tracing::spawn_blocking_in_current_span(move || {
             plugins_manager.upgrade_configured_marketplaces_for_config(
                 &plugins_input,
                 marketplace_name.as_deref(),

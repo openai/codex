@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tracing::Instrument;
 
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
@@ -200,12 +201,21 @@ impl CommandExecManager {
                 );
             }
             let sessions = Arc::clone(&self.sessions);
-            tokio::spawn(async move {
+            let run_span = tracing::info_span!(
+                "app_server.command_exec.run",
+                rpc.method = "command/exec",
+                rpc.request_id = %request_id.request_id,
+                app_server.connection_id = %request_id.connection_id,
+                command_exec.mode = "windows_restricted_token",
+                command_exec.outcome = tracing::field::Empty,
+            );
+            let run_task = async move {
                 let _started_network_proxy = started_network_proxy;
                 match codex_core::sandboxing::execute_env(exec_request, /*stdout_stream*/ None)
                     .await
                 {
                     Ok(output) => {
+                        tracing::Span::current().record("command_exec.outcome", "exited");
                         outgoing
                             .send_response(
                                 request_id,
@@ -218,13 +228,15 @@ impl CommandExecManager {
                             .await;
                     }
                     Err(err) => {
+                        tracing::Span::current().record("command_exec.outcome", "error");
                         outgoing
                             .send_error(request_id, internal_error(format!("exec failed: {err}")))
                             .await;
                     }
                 }
                 sessions.lock().await.remove(&process_key);
-            });
+            };
+            tokio::spawn(run_task.instrument(run_span));
             return Ok(());
         }
 
@@ -290,7 +302,7 @@ impl CommandExecManager {
                 return Err(internal_error(format!("failed to spawn command: {err}")));
             }
         };
-        tokio::spawn(async move {
+        let run_task = async move {
             let _started_network_proxy = started_network_proxy;
             run_command(RunCommandParams {
                 outgoing,
@@ -305,7 +317,8 @@ impl CommandExecManager {
             })
             .await;
             sessions.lock().await.remove(&process_key);
-        });
+        };
+        tokio::spawn(run_task.in_current_span());
         Ok(())
     }
 
@@ -443,6 +456,17 @@ impl CommandExecManager {
     }
 }
 
+#[tracing::instrument(
+    name = "app_server.command_exec.run",
+    level = "info",
+    skip_all,
+    fields(
+        rpc.method = "command/exec",
+        rpc.request_id = %params.request_id.request_id,
+        app_server.connection_id = %params.request_id.connection_id,
+        command_exec.outcome = tracing::field::Empty,
+    )
+)]
 async fn run_command(params: RunCommandParams) {
     let RunCommandParams {
         outgoing,
@@ -536,10 +560,18 @@ async fn run_command(params: RunCommandParams) {
         }
     };
 
-    let timeout_handle = tokio::spawn(async move {
+    let timeout_task = async move {
         tokio::time::sleep(Duration::from_millis(IO_DRAIN_TIMEOUT_MS)).await;
         let _ = stdio_timeout_tx.send(true);
-    });
+    };
+    let timeout_handle = tokio::spawn(timeout_task.in_current_span());
+
+    let outcome = match expiration_outcome {
+        Some(ExecExpirationOutcome::TimedOut) => "timed_out",
+        Some(ExecExpirationOutcome::Cancelled) => "cancelled",
+        None => "exited",
+    };
+    tracing::Span::current().record("command_exec.outcome", outcome);
 
     let stdout = stdout_handle.await.unwrap_or_default();
     let stderr = stderr_handle.await.unwrap_or_default();
@@ -568,7 +600,7 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
         stream_output,
         output_bytes_cap,
     } = params;
-    tokio::spawn(async move {
+    let output_task = async move {
         let mut buffer: Vec<u8> = Vec::new();
         let mut observed_num_bytes = 0usize;
         loop {
@@ -618,7 +650,8 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
             }
         }
         bytes_to_string_smart(&buffer)
-    })
+    };
+    tokio::spawn(output_task.in_current_span())
 }
 
 async fn handle_process_write(

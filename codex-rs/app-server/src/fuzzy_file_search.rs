@@ -13,6 +13,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_file_search as file_search;
 use tracing::warn;
 
+use crate::app_server_tracing::spawn_blocking_in_current_span;
 use crate::outgoing_message::OutgoingMessageSender;
 
 const MATCH_LIMIT: usize = 50;
@@ -38,7 +39,7 @@ pub(crate) async fn run_fuzzy_file_search(
     let threads = NonZero::new(threads.max(1)).expect("threads should be non-zero");
     let search_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
 
-    let mut files = match tokio::task::spawn_blocking(move || {
+    let mut files = match spawn_blocking_in_current_span(move || {
         file_search::run(
             query.as_str(),
             search_dirs,

@@ -23,6 +23,15 @@ use tracing::Span;
 use tracing::field;
 use tracing::info_span;
 
+pub(crate) fn spawn_blocking_in_current_span<F, T>(function: F) -> tokio::task::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let span = Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(function))
+}
+
 pub(crate) fn request_span(
     request: &JSONRPCRequest,
     transport: &AppServerTransport,
