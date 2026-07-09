@@ -56,11 +56,7 @@ pub(crate) fn prepare_exec_request(
         .iter()
         .map(|root| native_path(root, "sandbox workspace root"))
         .collect::<Result<Vec<_>, _>>()?;
-    let workspace_roots = if native_workspace_roots.is_empty() {
-        std::slice::from_ref(&native_sandbox_policy_cwd)
-    } else {
-        native_workspace_roots.as_slice()
-    };
+    let workspace_roots = native_workspace_roots.as_slice();
     let permissions = permissions.materialize_project_roots_with_workspace_roots(workspace_roots);
     let managed_mitm_ca_trust_bundle_path = params.managed_network.as_ref().and_then(|_| {
         CUSTOM_CA_ENV_KEYS.iter().find_map(|key| {
