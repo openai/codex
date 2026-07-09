@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::FindUpMatchKind;
+use codex_file_system::FindUpOptions;
 use codex_file_system::find_nearest_native_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -50,6 +52,29 @@ pub async fn get_git_repo_root_with_fs(
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
     let cwd_uri = PathUri::from_abs_path(cwd);
+    match find_git_repo_root_via_find_up(fs, cwd, &cwd_uri).await {
+        FindUpGitRoot::Found(root) if &root == cwd => {
+            if fs
+                .get_metadata(&cwd_uri, /*sandbox*/ None)
+                .await
+                .is_ok_and(|metadata| metadata.is_directory)
+            {
+                return Some(root);
+            }
+
+            let parent = cwd.parent()?;
+            let parent_uri = PathUri::from_abs_path(&parent);
+            match find_git_repo_root_via_find_up(fs, &parent, &parent_uri).await {
+                FindUpGitRoot::Found(root) => return Some(root),
+                FindUpGitRoot::NotFound => return None,
+                FindUpGitRoot::Unavailable => {}
+            }
+        }
+        FindUpGitRoot::Found(root) => return Some(root),
+        FindUpGitRoot::NotFound => return None,
+        FindUpGitRoot::Unavailable => {}
+    }
+
     let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
@@ -63,6 +88,67 @@ pub async fn get_git_repo_root_with_fs(
     )
     .await
     .ok()?
+}
+
+enum FindUpGitRoot {
+    Found(AbsolutePathBuf),
+    NotFound,
+    Unavailable,
+}
+
+async fn find_git_repo_root_via_find_up(
+    fs: &dyn ExecutorFileSystem,
+    start: &AbsolutePathBuf,
+    start_uri: &PathUri,
+) -> FindUpGitRoot {
+    let native_ancestors = start.ancestors().collect::<Vec<_>>();
+    let uri_ancestors = start_uri.ancestors().collect::<Vec<_>>();
+    if native_ancestors.len() != uri_ancestors.len()
+        || native_ancestors
+            .iter()
+            .zip(&uri_ancestors)
+            .any(|(native, uri)| !uri.to_abs_path().is_ok_and(|path| &path == native))
+    {
+        return FindUpGitRoot::Unavailable;
+    }
+
+    let Ok(outcome) = fs
+        .find_up(
+            start_uri,
+            &FindUpOptions {
+                candidate_relative_paths: vec![".git".to_string()],
+                match_kind: FindUpMatchKind::Any,
+                non_not_found_error_policy: FindUpErrorPolicy::Ignore,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+    else {
+        return FindUpGitRoot::Unavailable;
+    };
+    let Some(matched) = outcome.matched else {
+        return FindUpGitRoot::NotFound;
+    };
+    let Some(root_depth) = uri_ancestors
+        .iter()
+        .position(|ancestor| ancestor == &matched.ancestor)
+    else {
+        return FindUpGitRoot::Unavailable;
+    };
+    if !matched
+        .ancestor
+        .join(".git")
+        .is_ok_and(|path| path == matched.path)
+    {
+        return FindUpGitRoot::Unavailable;
+    }
+    let Ok(root) = matched.ancestor.to_abs_path() else {
+        return FindUpGitRoot::Unavailable;
+    };
+    if root != native_ancestors[root_depth] {
+        return FindUpGitRoot::Unavailable;
+    }
+    FindUpGitRoot::Found(root)
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
