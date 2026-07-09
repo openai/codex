@@ -29,6 +29,7 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginInstallFailedEventRequest;
 use crate::events::CodexPluginInstallFailedMetadata;
 use crate::events::CodexPluginInstallRequestedEventRequest;
+use crate::events::CodexPluginInstallSuggestionOutcomeEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -62,6 +63,7 @@ use crate::events::codex_compaction_event_params;
 use crate::events::codex_goal_event_params;
 use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_install_requested_metadata;
+use crate::events::codex_plugin_install_suggestion_outcome_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::plugin_state_event_type;
@@ -79,6 +81,7 @@ use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginInstallSuggestionOutcomeInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -539,6 +542,9 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::PluginInstallRequested(input) => {
                     self.ingest_plugin_install_requested(input, out);
                 }
+                CustomAnalyticsFact::PluginInstallSuggestionOutcome(input) => {
+                    self.ingest_plugin_install_suggestion_outcome(input, out);
+                }
                 CustomAnalyticsFact::PluginStateChanged(input) => {
                     self.ingest_plugin_state_changed(input, out);
                 }
@@ -810,6 +816,20 @@ impl AnalyticsReducer {
             CodexPluginInstallRequestedEventRequest {
                 event_type: "codex_plugin_install_requested",
                 event_params: codex_plugin_install_requested_metadata(&tracking, request),
+            },
+        ));
+    }
+
+    fn ingest_plugin_install_suggestion_outcome(
+        &mut self,
+        input: PluginInstallSuggestionOutcomeInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let PluginInstallSuggestionOutcomeInput { tracking, outcome } = input;
+        out.push(TrackEventRequest::PluginInstallSuggestionOutcome(
+            CodexPluginInstallSuggestionOutcomeEventRequest {
+                event_type: "codex_plugin_install_suggestion_outcome",
+                event_params: codex_plugin_install_suggestion_outcome_metadata(&tracking, outcome),
             },
         ));
     }
