@@ -6,7 +6,9 @@ use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use std::io;
 
-const MAX_CONCURRENT_PROBES: usize = 8;
+// Keep enough ordinary metadata calls in flight to cover typical ancestor chains in one remote
+// round trip, while leaving room for independent startup discovery to run at the same time.
+const MAX_CONCURRENT_PROBES: usize = 256;
 
 /// Controls how an upward marker search handles metadata errors other than `NotFound`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
