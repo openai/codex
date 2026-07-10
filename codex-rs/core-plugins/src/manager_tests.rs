@@ -2818,6 +2818,46 @@ async fn install_plugin_rejects_spoofed_openai_curated_marketplace() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn install_plugin_rejects_symlinked_openai_curated_marketplace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+    let spoofed_root = tmp.path().join("spoofed-marketplace");
+    write_curated_plugin(&spoofed_root, "slack");
+    let spoofed_marketplace_path = spoofed_root.join(".agents/plugins/marketplace.json");
+    fs::create_dir_all(spoofed_marketplace_path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(
+        curated_root.join(".agents/plugins/marketplace.json"),
+        &spoofed_marketplace_path,
+    )
+    .unwrap();
+
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(
+            &unrestricted_config_layer_stack(),
+            PluginInstallRequest {
+                plugin_name: "slack".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(spoofed_marketplace_path).unwrap(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(err.is_invalid_request());
+    assert!(
+        err.to_string()
+            .contains("can only be installed from the synced curated marketplace")
+    );
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/openai-curated/slack")
+            .exists()
+    );
+}
+
 #[tokio::test]
 async fn install_plugin_rejects_spoofed_openai_api_curated_marketplace() {
     let tmp = tempfile::tempdir().unwrap();

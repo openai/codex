@@ -1450,14 +1450,8 @@ impl PluginsManager {
             }
             _ => return Ok(()),
         };
-        let expected_path = AbsolutePathBuf::try_from(expected_path)
-            .ok()
-            .and_then(|path| path.canonicalize().ok());
-        let requested_path = marketplace_path.canonicalize().ok();
-        if requested_path
-            .zip(expected_path)
-            .is_none_or(|(requested, expected)| requested != expected)
-        {
+        let expected_path = AbsolutePathBuf::try_from(expected_path).ok();
+        if expected_path.as_ref() != Some(marketplace_path) {
             return Err(PluginStoreError::Invalid(format!(
                 "marketplace '{marketplace_name}' can only be installed from the synced curated marketplace"
             ))
