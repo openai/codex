@@ -17,6 +17,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use codex_utils_path_uri::PathUri;
 use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
@@ -2898,17 +2899,27 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     });
     let test = builder.build_with_auto_env(&server).await?;
 
-    let script = r#"python3 - <<'PY'
+    let output_line = "token token \n";
+    let output_repetitions = 100_000;
+    let original_output_bytes =
+        b"HEAD\n".len() + output_line.len() * output_repetitions + b"TAIL\n".len();
+    let expected_original_token_count =
+        usize::try_from(approx_tokens_from_byte_count(original_output_bytes)).unwrap_or(usize::MAX);
+    let script = format!(
+        r#"python3 - <<'PY'
 import sys
-sys.stdout.write("token token \n" * 5000)
+sys.stdout.write("HEAD\n")
+sys.stdout.write("token token \n" * {output_repetitions})
+sys.stdout.write("TAIL\n")
 PY
-"#;
+"#
+    );
 
     let call_id = "uexec-large-output";
     let args = serde_json::json!({
         "cmd": script,
         "max_output_tokens": 100,
-        "yield_time_ms": 500,
+        "yield_time_ms": 3_000,
     });
 
     let responses = vec![
@@ -2926,6 +2937,18 @@ PY
 
     submit_unified_exec_turn(&test, "summarize large output", PermissionProfile::Disabled).await?;
 
+    let end_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(end_event.aggregated_output.contains("HEAD\n"));
+    assert!(end_event.aggregated_output.contains("TAIL\n"));
+    assert_regex_match(
+        r"\.\.\. \d+ bytes omitted \.\.\.",
+        &end_event.aggregated_output,
+    );
+
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -2942,13 +2965,16 @@ PY
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
     let output_text = large_output.output.replace("\r\n", "\n");
-    let truncated_pattern = r"(?s)^Warning: truncated output \(original token count: \d+\)\nTotal output lines: \d+\n\n(token token \n){5,}.*…\d+ tokens truncated….*(token token \n){5,}$";
-    assert_regex_match(truncated_pattern, &output_text);
-
-    let original_tokens = large_output
-        .original_token_count
-        .expect("missing original_token_count for large output summary");
-    assert!(original_tokens > 0);
+    assert!(output_text.starts_with(&format!(
+        "Warning: truncated output (original token count: {expected_original_token_count})\n"
+    )));
+    assert_regex_match(r"\.\.\. \d+ bytes omitted \.\.\.", &output_text);
+    assert!(output_text.contains("HEAD\n"));
+    assert!(output_text.contains("TAIL\n"));
+    assert_eq!(
+        large_output.original_token_count,
+        Some(expected_original_token_count)
+    );
 
     Ok(())
 }
