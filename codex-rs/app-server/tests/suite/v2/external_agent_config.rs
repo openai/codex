@@ -42,6 +42,9 @@ use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[path = "external_agent_config_source_cu.rs"]
+mod source_cu_tests;
+
 fn external_agent_home(codex_home: &Path) -> PathBuf {
     codex_home.join(concat!(".", "cl", "aude"))
 }

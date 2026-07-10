@@ -34,9 +34,17 @@ pub(super) struct ParsedSessionImport {
 }
 
 pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
+    summarize_session_with_cwd(path, /*fallback_cwd*/ None)
+}
+
+pub(crate) fn summarize_session_with_cwd(
+    path: &Path,
+    fallback_cwd: Option<&Path>,
+) -> io::Result<Option<SessionSummary>> {
     let file = File::open(path)?;
+    let fallback_timestamp = fallback_cwd.and_then(|_| file_modified_at_seconds(&file));
     let reader = BufReader::new(file);
-    let mut cwd = None;
+    let mut cwd = fallback_cwd.map(Path::to_path_buf);
     let mut custom_title = None;
     let mut ai_title = None;
     let mut fallback_title = None;
@@ -65,7 +73,8 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         if let Some(title) = ai_title_from_record(&record) {
             ai_title = Some(title.to_string());
         }
-        let Some(message) = conversation_message_from_owned_record(&mut record) else {
+        let Some(message) = conversation_message_from_owned_record(&mut record, fallback_timestamp)
+        else {
             continue;
         };
         saw_message = true;
@@ -107,10 +116,19 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     }))
 }
 
+#[cfg(test)]
 pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport> {
+    read_session_import_with_cwd(path, /*fallback_cwd*/ None)
+}
+
+pub(super) fn read_session_import_with_cwd(
+    path: &Path,
+    fallback_cwd: Option<&Path>,
+) -> io::Result<ParsedSessionImport> {
     let file = File::open(path)?;
+    let fallback_timestamp = fallback_cwd.and_then(|_| file_modified_at_seconds(&file));
     let mut reader = BufReader::new(file);
-    let mut cwd = None;
+    let mut cwd = fallback_cwd.map(Path::to_path_buf);
     let mut custom_title = None;
     let mut ai_title = None;
     let mut messages = Vec::new();
@@ -141,7 +159,9 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
         if let Some(title) = ai_title_from_record(&record) {
             ai_title = Some(title.to_string());
         }
-        if let Some(message) = conversation_message_from_owned_record(&mut record) {
+        if let Some(message) =
+            conversation_message_from_owned_record(&mut record, fallback_timestamp)
+        {
             messages.push(message);
         }
     }
@@ -170,8 +190,14 @@ fn title_from_record<'a>(record: &'a JsonValue, record_type: &str, field: &str) 
         .filter(|title| !title.is_empty())
 }
 
-fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<ConversationMessage> {
-    let record_type = record.get("type")?.as_str()?;
+fn conversation_message_from_owned_record(
+    record: &mut JsonValue,
+    fallback_timestamp: Option<i64>,
+) -> Option<ConversationMessage> {
+    let record_type = record
+        .get("type")
+        .or_else(|| record.get("role"))?
+        .as_str()?;
     if record_type != "assistant" && record_type != "user" {
         return None;
     }
@@ -185,7 +211,14 @@ fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<Conv
     let timestamp = record
         .get("timestamp")
         .and_then(JsonValue::as_str)
-        .and_then(parse_timestamp);
+        .and_then(parse_timestamp)
+        .or_else(|| {
+            record
+                .get("timestamp_ms")
+                .and_then(JsonValue::as_i64)
+                .map(|value| value / 1_000)
+        })
+        .or(fallback_timestamp);
     let content = record.get_mut("message")?.get_mut("content")?.take();
     let extracted = match content {
         JsonValue::String(text) => {
@@ -208,6 +241,16 @@ fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<Conv
         text: extracted.text,
         timestamp,
     })
+}
+
+fn file_modified_at_seconds(file: &File) -> Option<i64> {
+    file.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
 }
 
 struct ExtractedMessage {

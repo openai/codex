@@ -53,7 +53,15 @@ impl ExternalAgentSource {
             (
                 Self::Cu,
                 SourceFeature::Config | SourceFeature::Plugins | SourceFeature::Sessions,
-            ) => false,
+            ) => true,
+        }
+    }
+
+    pub(super) fn settings_file_name(self, project_scope: bool) -> &'static str {
+        match (self, project_scope) {
+            (Self::Cl, _) => "settings.json",
+            (Self::Cu, false) => source_cu::HOME_CONFIG_FILE,
+            (Self::Cu, true) => source_cu::PROJECT_CONFIG_FILE,
         }
     }
 
@@ -159,14 +167,14 @@ impl ExternalAgentSource {
     ) -> io::Result<Vec<String>> {
         match self {
             Self::Cl => source_cl::source_hook_event_names(source_dir, target_hooks),
-            Self::Cu => Ok(Vec::new()),
+            Self::Cu => source_cu::source_hook_event_names(source_dir, target_hooks),
         }
     }
 
     pub(super) fn import_hooks(self, source_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
         match self {
             Self::Cl => source_cl::import_source_hooks(source_dir, target_hooks),
-            Self::Cu => Ok(false),
+            Self::Cu => source_cu::import_source_hooks(source_dir, target_hooks),
         }
     }
 

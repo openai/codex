@@ -1,5 +1,7 @@
 //! Migration helpers for importing external-agent configuration into Codex.
 
+mod json_hooks;
+
 use codex_hooks::HOOK_EVENT_NAMES;
 use codex_hooks::HOOK_EVENT_NAMES_WITH_MATCHERS;
 use serde_json::Value as JsonValue;
@@ -11,6 +13,9 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
+
+pub use json_hooks::hook_migration_event_names_from_json_file;
+pub use json_hooks::import_hooks_from_json_file;
 
 const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
 const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";
@@ -211,20 +216,7 @@ pub fn import_hooks(
         return Ok(false);
     }
 
-    fs::create_dir_all(parent)?;
-
-    let mut wrote_active_hooks = false;
-    if is_missing_or_empty_text_file(target_hooks)? {
-        copy_hook_scripts(source_external_agent_dir, parent)?;
-        let mut payload = serde_json::Map::new();
-        payload.insert("hooks".to_string(), JsonValue::Object(migration));
-        let rendered = serde_json::to_string_pretty(&JsonValue::Object(payload))
-            .map_err(|err| invalid_data_error(format!("failed to serialize hooks.json: {err}")))?;
-        fs::write(target_hooks, format!("{rendered}\n"))?;
-        wrote_active_hooks = true;
-    }
-
-    Ok(wrote_active_hooks)
+    write_hook_migration(source_external_agent_dir, target_hooks, migration)
 }
 
 pub fn count_missing_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
@@ -664,6 +656,27 @@ fn hook_migration(
     Ok(migration)
 }
 
+fn write_hook_migration(
+    source_external_agent_dir: &Path,
+    target_hooks: &Path,
+    migration: serde_json::Map<String, JsonValue>,
+) -> io::Result<bool> {
+    if migration.is_empty() || !is_missing_or_empty_text_file(target_hooks)? {
+        return Ok(false);
+    }
+    let Some(parent) = target_hooks.parent() else {
+        return Err(invalid_data_error("hooks target path has no parent"));
+    };
+    fs::create_dir_all(parent)?;
+    copy_hook_scripts(source_external_agent_dir, parent)?;
+    let mut payload = serde_json::Map::new();
+    payload.insert("hooks".to_string(), JsonValue::Object(migration));
+    let rendered = serde_json::to_string_pretty(&JsonValue::Object(payload))
+        .map_err(|err| invalid_data_error(format!("failed to serialize hooks.json: {err}")))?;
+    fs::write(target_hooks, format!("{rendered}\n"))?;
+    Ok(true)
+}
+
 fn append_convertible_hook_groups(
     settings: &JsonValue,
     hooks_payload: &mut serde_json::Map<String, JsonValue>,
@@ -794,6 +807,15 @@ fn append_convertible_hook_groups(
 }
 
 fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> String {
+    let source_external_agent_dir = PathBuf::from(external_agent_config_dir());
+    rewrite_hook_command_for_source(command, target_config_dir, &source_external_agent_dir)
+}
+
+fn rewrite_hook_command_for_source(
+    command: &str,
+    target_config_dir: Option<&Path>,
+    source_external_agent_dir: &Path,
+) -> String {
     let Some(target_config_dir) = target_config_dir else {
         return command.to_string();
     };
@@ -801,10 +823,12 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
         return command.to_string();
     }
     let target_hooks_dir = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
-    let source_hooks_path = format!(
-        "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
-        external_agent_config_dir()
-    );
+    let source_config_dir = source_external_agent_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(external_agent_config_dir);
+    let source_hooks_path = format!("{source_config_dir}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/");
     let command = replace_quoted_hook_paths(command, '\'', &source_hooks_path, &target_hooks_dir);
     let command = replace_quoted_hook_paths(&command, '"', &source_hooks_path, &target_hooks_dir);
     replace_unquoted_hook_paths(&command, &source_hooks_path, &target_hooks_dir)

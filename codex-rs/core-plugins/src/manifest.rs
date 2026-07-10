@@ -162,12 +162,18 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
-        skills,
-        mcp_servers,
-        apps,
-        hooks,
+        mut skills,
+        mut mcp_servers,
+        mut apps,
+        mut hooks,
         interface,
     } = serde_json::from_str::<RawPluginManifest>(contents)?;
+    if manifest_path
+        .to_string()
+        .ends_with(".cursor-plugin/plugin.json")
+    {
+        normalize_cursor_manifest_paths(&mut skills, &mut mcp_servers, &mut apps, &mut hooks);
+    }
     let name = plugin_root
         .basename()
         .filter(|_| raw_name.trim().is_empty())
@@ -265,6 +271,45 @@ pub(crate) fn parse_plugin_manifest_uri(
         },
         interface,
     })
+}
+
+fn normalize_cursor_manifest_paths(
+    skills: &mut Option<RawPluginManifestPaths>,
+    mcp_servers: &mut Option<RawPluginManifestMcpServers>,
+    apps: &mut Option<String>,
+    hooks: &mut Option<RawPluginManifestHooks>,
+) {
+    match skills {
+        Some(RawPluginManifestPaths::Path(path)) => normalize_cursor_manifest_path(path),
+        Some(RawPluginManifestPaths::Paths(paths)) => {
+            paths.iter_mut().for_each(normalize_cursor_manifest_path);
+        }
+        Some(RawPluginManifestPaths::Invalid(_)) | None => {}
+    }
+    if let Some(RawPluginManifestMcpServers::Path(path)) = mcp_servers {
+        normalize_cursor_manifest_path(path);
+    }
+    if let Some(apps) = apps {
+        normalize_cursor_manifest_path(apps);
+    }
+    match hooks {
+        Some(RawPluginManifestHooks::Path(path)) => normalize_cursor_manifest_path(path),
+        Some(RawPluginManifestHooks::Paths(paths)) => {
+            paths.iter_mut().for_each(normalize_cursor_manifest_path);
+        }
+        Some(
+            RawPluginManifestHooks::Inline(_)
+            | RawPluginManifestHooks::InlineList(_)
+            | RawPluginManifestHooks::Invalid(_),
+        )
+        | None => {}
+    }
+}
+
+fn normalize_cursor_manifest_path(path: &mut String) {
+    if !path.starts_with("./") {
+        path.insert_str(0, "./");
+    }
 }
 
 fn resolve_manifest_hooks(
@@ -532,6 +577,7 @@ mod tests {
     use crate::ExecutorPluginProvider;
 
     const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+    const CURSOR_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".cursor-plugin/plugin.json";
 
     fn write_manifest(plugin_root: &Path, version: Option<&str>, interface: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
@@ -553,6 +599,13 @@ mod tests {
 
     fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
         let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("create manifest dir");
+        fs::write(manifest_path, contents).expect("write manifest");
+    }
+
+    fn write_cursor_plugin_manifest(plugin_root: &Path, contents: &str) {
+        let manifest_path = plugin_root.join(CURSOR_PLUGIN_MANIFEST_RELATIVE_PATH);
         fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
             .expect("create manifest dir");
         fs::write(manifest_path, contents).expect("write manifest");
@@ -729,6 +782,34 @@ mod tests {
                 .as_ref()
                 .and_then(|interface| interface.display_name.as_deref()),
             Some("Fallback Plugin")
+        );
+    }
+
+    #[test]
+    fn cursor_plugin_manifest_accepts_bare_relative_paths() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_cursor_plugin_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "skills": "skills",
+  "hooks": "hooks/hooks.json"
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(
+            manifest.paths.skills,
+            vec![AbsolutePathBuf::try_from(plugin_root.join("skills")).expect("absolute skills")]
+        );
+        assert_eq!(
+            manifest.paths.hooks,
+            Some(PluginManifestHooks::Paths(vec![
+                AbsolutePathBuf::try_from(plugin_root.join("hooks/hooks.json"))
+                    .expect("absolute hooks")
+            ]))
         );
     }
 

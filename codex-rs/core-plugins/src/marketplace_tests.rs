@@ -6,6 +6,8 @@ use tempfile::tempdir;
 
 const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
 const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+const CURSOR_MARKETPLACE_RELATIVE_PATH: &str = ".cursor-plugin/marketplace.json";
+const CURSOR_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".cursor-plugin/plugin.json";
 fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
     let marketplace_path = repo_root.join(ALTERNATE_MARKETPLACE_RELATIVE_PATH);
     fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
@@ -15,6 +17,19 @@ fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePath
 
 fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
     let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(manifest_path, contents).unwrap();
+}
+
+fn write_cursor_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
+    let marketplace_path = repo_root.join(CURSOR_MARKETPLACE_RELATIVE_PATH);
+    fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
+    fs::write(&marketplace_path, contents).unwrap();
+    AbsolutePathBuf::try_from(marketplace_path).unwrap()
+}
+
+fn write_cursor_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(CURSOR_PLUGIN_MANIFEST_RELATIVE_PATH);
     fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
     fs::write(manifest_path, contents).unwrap();
 }
@@ -121,6 +136,37 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
             manifest: None,
             manifest_fallback: minimal_manifest_fallback("string-source-plugin"),
         }
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_supports_cursor_layout_and_bare_local_source() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/sample");
+    let marketplace_path = write_cursor_marketplace(
+        &repo_root,
+        r#"{
+  "name": "cursor-marketplace",
+  "plugins": [{"name": "sample", "source": "plugins/sample"}]
+}"#,
+    );
+    write_cursor_plugin_manifest(&plugin_root, r#"{"name":"sample"}"#);
+
+    let resolved = find_marketplace_plugin(&marketplace_path, "sample").unwrap();
+
+    assert_eq!(
+        resolved.source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(plugin_root).unwrap(),
+        }
+    );
+    assert_eq!(
+        resolved
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.name.as_str()),
+        Some("sample")
     );
 }
 

@@ -1,6 +1,7 @@
 //! Parsing and export helpers for external-agent session histories.
 
 mod detect;
+mod detect_cursor;
 mod export;
 mod ledger;
 mod records;
@@ -12,6 +13,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub use detect::detect_recent_sessions;
+pub use detect_cursor::detect_recent_cursor_sessions;
 use export::load_session_for_import_with_content_sha256;
 pub use ledger::CompletedExternalAgentSessionImport;
 pub use ledger::has_current_session_been_imported;
@@ -52,7 +54,7 @@ pub fn prepare_validated_session_import(
         return Ok(None);
     }
     let Some((source_path, imported_session, source_content_sha256)) =
-        load_importable_session(&session.path)?
+        load_importable_session(&session.path, &session.cwd)?
     else {
         return Ok(None);
     };
@@ -65,10 +67,11 @@ pub fn prepare_validated_session_import(
 
 fn load_importable_session(
     path: &Path,
+    fallback_cwd: &Path,
 ) -> io::Result<Option<(PathBuf, ImportedExternalAgentSession, String)>> {
     let source_path = std::fs::canonicalize(path)?;
     let Some((imported_session, source_content_sha256)) =
-        load_session_for_import_with_content_sha256(&source_path)?
+        load_session_for_import_with_content_sha256(&source_path, Some(fallback_cwd))?
     else {
         return Ok(None);
     };

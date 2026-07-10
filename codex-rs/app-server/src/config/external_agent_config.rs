@@ -20,6 +20,7 @@ use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use codex_external_agent_migration::count_missing_subagents;
 use codex_external_agent_migration::missing_subagent_names;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
+use codex_external_agent_sessions::detect_recent_cursor_sessions;
 use codex_external_agent_sessions::detect_recent_sessions;
 use codex_plugin::PluginId;
 use codex_protocol::protocol::Product;
@@ -479,7 +480,7 @@ impl ExternalAgentConfigService {
         let cwd = repo_root.map(Path::to_path_buf);
         let source_settings = self.source_settings(repo_root);
         let settings = if self.source.supports(SourceFeature::Config) {
-            effective_external_settings(&source_settings)?
+            self.effective_source_settings(repo_root)?
         } else {
             None
         };
@@ -488,7 +489,7 @@ impl ExternalAgentConfigService {
             |repo_root| repo_root.join(".codex").join("config.toml"),
         );
         if let Some(settings) = settings.as_ref() {
-            let migrated = build_config_from_external(settings)?;
+            let migrated = build_config_from_external(settings, self.source)?;
             if !is_empty_toml_table(&migrated) {
                 let mut should_include = true;
                 if target_config.exists() {
@@ -719,9 +720,7 @@ impl ExternalAgentConfigService {
             );
         }
 
-        if self.source.supports(SourceFeature::Plugins)
-            && let Some(settings) = settings.as_ref()
-        {
+        if self.source.supports(SourceFeature::Plugins) {
             match ConfigBuilder::default()
                 .codex_home(self.codex_home.clone())
                 .fallback_cwd(Some(self.codex_home.clone()))
@@ -748,14 +747,26 @@ impl ExternalAgentConfigService {
                         &config,
                         &PluginsManager::new(self.codex_home.clone()),
                     )?;
-                    if let Some(item) = self.detect_plugin_migration(
-                        source_settings.as_path(),
-                        repo_root.unwrap_or(self.external_agent_home.as_path()),
-                        cwd.clone(),
-                        settings,
-                        &configured_plugin_ids,
-                        &configured_marketplace_plugins,
-                    ) {
+                    let item = match self.source {
+                        ExternalAgentSource::Cl => settings.as_ref().and_then(|settings| {
+                            self.detect_plugin_migration(
+                                source_settings.as_path(),
+                                repo_root.unwrap_or(self.external_agent_home.as_path()),
+                                cwd.clone(),
+                                settings,
+                                &configured_plugin_ids,
+                                &configured_marketplace_plugins,
+                            )
+                        }),
+                        ExternalAgentSource::Cu if repo_root.is_none() => self
+                            .detect_cursor_plugin_migration(
+                                cwd.clone(),
+                                &configured_plugin_ids,
+                                &configured_marketplace_plugins,
+                            )?,
+                        ExternalAgentSource::Cu => None,
+                    };
+                    if let Some(item) = item {
                         items.push(item);
                     }
                 }
@@ -770,7 +781,14 @@ impl ExternalAgentConfigService {
         }
 
         if repo_root.is_none() && self.source.supports(SourceFeature::Sessions) {
-            let sessions = detect_recent_sessions(&self.external_agent_home, &self.codex_home)?;
+            let sessions = match self.source {
+                ExternalAgentSource::Cl => {
+                    detect_recent_sessions(&self.external_agent_home, &self.codex_home)?
+                }
+                ExternalAgentSource::Cu => {
+                    detect_recent_cursor_sessions(&self.external_agent_home, &self.codex_home)?
+                }
+            };
             if !sessions.is_empty() {
                 items.push(ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::Sessions,
@@ -810,7 +828,19 @@ impl ExternalAgentConfigService {
     }
 
     fn source_settings(&self, repo_root: Option<&Path>) -> PathBuf {
-        self.source_config_dir(repo_root).join("settings.json")
+        self.source_config_dir(repo_root)
+            .join(self.source.settings_file_name(repo_root.is_some()))
+    }
+
+    fn effective_source_settings(&self, repo_root: Option<&Path>) -> io::Result<Option<JsonValue>> {
+        let source_settings = self.source_settings(repo_root);
+        match self.source {
+            ExternalAgentSource::Cl => effective_external_settings(&source_settings),
+            ExternalAgentSource::Cu => source_cu::effective_settings(
+                self.source_config_dir(repo_root).as_path(),
+                &source_settings,
+            ),
+        }
     }
 
     fn build_mcp_config(
@@ -849,8 +879,8 @@ impl ExternalAgentConfigService {
         source_settings: Option<JsonValue>,
     ) -> io::Result<Option<JsonValue>> {
         if repo_root.is_some() && source_settings.is_none() {
-            let home_settings = self.external_agent_home.join("settings.json");
-            match effective_external_settings(&home_settings) {
+            let home_settings = self.source_settings(/*repo_root*/ None);
+            match self.effective_source_settings(/*repo_root*/ None) {
                 Ok(settings) => Ok(settings),
                 Err(err) => {
                     tracing::warn!(
@@ -908,16 +938,86 @@ impl ExternalAgentConfigService {
         })
     }
 
+    fn detect_cursor_plugin_migration(
+        &self,
+        cwd: Option<PathBuf>,
+        configured_plugin_ids: &HashSet<String>,
+        configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
+    ) -> io::Result<Option<ExternalAgentConfigMigrationItem>> {
+        let mut plugins = Vec::new();
+        for marketplace in source_cu::cached_marketplace_plugins(&self.external_agent_home)? {
+            let configured_marketplace = configured_marketplace_plugins.get(&marketplace.name);
+            let plugin_names = marketplace
+                .plugin_names
+                .into_iter()
+                .filter(|plugin_name| {
+                    !configured_plugin_ids.contains(&format!("{plugin_name}@{}", marketplace.name))
+                        && !configured_marketplace
+                            .is_some_and(|plugins| plugins.contains(plugin_name))
+                })
+                .collect::<Vec<_>>();
+            if !plugin_names.is_empty() {
+                plugins.push(PluginsMigration {
+                    marketplace_name: marketplace.name,
+                    plugin_names,
+                });
+            }
+        }
+        if plugins.is_empty() {
+            return Ok(None);
+        }
+        emit_migration_metric(
+            EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+            ExternalAgentConfigMigrationItemType::Plugins,
+            /*skills_count*/ None,
+        );
+        Ok(Some(ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate cached plugins from {}",
+                self.external_agent_home.join("plugins/cache").display()
+            ),
+            cwd,
+            details: Some(MigrationDetails {
+                plugins,
+                ..Default::default()
+            }),
+        }))
+    }
+
+    fn cursor_marketplace_import_sources(
+        &self,
+    ) -> io::Result<BTreeMap<String, MarketplaceImportSource>> {
+        Ok(
+            source_cu::cached_marketplace_plugins(&self.external_agent_home)?
+                .into_iter()
+                .map(|marketplace| {
+                    (
+                        marketplace.name,
+                        MarketplaceImportSource {
+                            source: marketplace.source.display().to_string(),
+                            ref_name: None,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn partition_plugin_migration_details(
         &self,
         cwd: Option<&Path>,
         details: MigrationDetails,
     ) -> io::Result<(Option<MigrationDetails>, Option<MigrationDetails>)> {
-        let source_settings = self.source_settings(cwd);
-        let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-        let import_sources = effective_external_settings(&source_settings)?
-            .map(|settings| self.marketplace_import_sources(&settings, source_root))
-            .unwrap_or_default();
+        let import_sources = match self.source {
+            ExternalAgentSource::Cl => {
+                let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
+                self.effective_source_settings(cwd)?
+                    .map(|settings| self.marketplace_import_sources(&settings, source_root))
+                    .unwrap_or_default()
+            }
+            ExternalAgentSource::Cu => self.cursor_marketplace_import_sources()?,
+        };
 
         let mut local_plugins = Vec::new();
         let mut remote_plugins = Vec::new();
@@ -978,11 +1078,15 @@ impl ExternalAgentConfigService {
         if let Some(analytics_events_client) = self.analytics_events_client.clone() {
             plugins_manager.set_analytics_events_client(analytics_events_client);
         }
-        let source_settings = self.source_settings(cwd);
-        let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-        let import_sources = effective_external_settings(&source_settings)?
-            .map(|settings| self.marketplace_import_sources(&settings, source_root))
-            .unwrap_or_default();
+        let import_sources = match self.source {
+            ExternalAgentSource::Cl => {
+                let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
+                self.effective_source_settings(cwd)?
+                    .map(|settings| self.marketplace_import_sources(&settings, source_root))
+                    .unwrap_or_default()
+            }
+            ExternalAgentSource::Cu => self.cursor_marketplace_import_sources()?,
+        };
         for plugin_group in plugins {
             let marketplace_name = plugin_group.marketplace_name.clone();
             let plugin_names = plugin_group.plugin_names;
@@ -1215,14 +1319,14 @@ impl ExternalAgentConfigService {
             return Ok(None);
         } else {
             (
-                self.external_agent_home.join("settings.json"),
+                self.source_settings(/*repo_root*/ None),
                 self.codex_home.join("config.toml"),
             )
         };
-        let Some(settings) = effective_external_settings(&source_settings)? else {
+        let Some(settings) = self.effective_source_settings(repo_root.as_deref())? else {
             return Ok(None);
         };
-        let migrated = build_config_from_external(&settings)?;
+        let migrated = build_config_from_external(&settings, self.source)?;
         if is_empty_toml_table(&migrated) {
             return Ok(None);
         }
@@ -1261,21 +1365,15 @@ impl ExternalAgentConfigService {
 
     fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
         let repo_root = find_repo_root(cwd)?;
-        let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
-            (
-                self.source_settings(Some(repo_root)),
-                repo_root.join(".codex").join("config.toml"),
-            )
+        let target_config = if let Some(repo_root) = repo_root.as_ref() {
+            repo_root.join(".codex").join("config.toml")
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(Vec::new());
         } else {
-            (
-                self.external_agent_home.join("settings.json"),
-                self.codex_home.join("config.toml"),
-            )
+            self.codex_home.join("config.toml")
         };
         let settings = if self.source.supports(SourceFeature::Config) {
-            effective_external_settings(&source_settings)?
+            self.effective_source_settings(repo_root.as_deref())?
         } else {
             None
         };
@@ -1840,7 +1938,10 @@ fn is_non_empty_text_file(path: &Path) -> io::Result<bool> {
     Ok(!fs::read_to_string(path)?.trim().is_empty())
 }
 
-fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
+fn build_config_from_external(
+    settings: &JsonValue,
+    source: ExternalAgentSource,
+) -> io::Result<TomlValue> {
     let Some(settings_obj) = settings.as_object() else {
         return Err(invalid_data_error(
             "external agent settings root must be an object",
@@ -1864,17 +1965,22 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
         );
     }
 
-    if let Some(sandbox_enabled) = settings_obj
-        .get("sandbox")
-        .and_then(JsonValue::as_object)
-        .and_then(|sandbox| sandbox.get("enabled"))
-        .and_then(JsonValue::as_bool)
-        && sandbox_enabled
-    {
-        root.insert(
-            "sandbox_mode".to_string(),
-            TomlValue::String("workspace-write".to_string()),
-        );
+    match source {
+        ExternalAgentSource::Cl => {
+            if settings_obj
+                .get("sandbox")
+                .and_then(JsonValue::as_object)
+                .and_then(|sandbox| sandbox.get("enabled"))
+                .and_then(JsonValue::as_bool)
+                == Some(true)
+            {
+                root.insert(
+                    "sandbox_mode".to_string(),
+                    TomlValue::String("workspace-write".to_string()),
+                );
+            }
+        }
+        ExternalAgentSource::Cu => source_cu::append_sandbox_config(&mut root, settings_obj),
     }
 
     Ok(TomlValue::Table(root))
