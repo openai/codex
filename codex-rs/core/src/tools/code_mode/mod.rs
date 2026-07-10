@@ -367,7 +367,9 @@ mod tests {
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CodeModeToolKind;
     use codex_code_mode::ExecuteRequest;
+    use codex_code_mode::FunctionCallOutputContentItem as CodeModeOutputContentItem;
     use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
+    use codex_code_mode::RuntimeResponse;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
     use serde_json::json;
@@ -426,26 +428,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_process_host_is_reported_without_failing_service_creation() {
+    async fn missing_process_host_falls_back_to_in_process_session() {
         let service = CodeModeService::new(Arc::new(
             ProcessOwnedCodeModeSessionProvider::with_host_program(
                 "codex-code-mode-host-does-not-exist".into(),
             ),
         ));
 
-        let error = service
+        let response = service
             .execute(ExecuteRequest {
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
-                source: "text('unreachable')".to_string(),
+                source: "text('fallback')".to_string(),
                 yield_time_ms: None,
                 max_output_tokens: None,
             })
             .await
-            .err()
-            .expect("missing host should reject execution");
+            .expect("missing host should fall back to an in-process session")
+            .initial_response()
+            .await
+            .expect("read fallback response");
 
-        assert!(error.contains("failed to spawn code-mode host"));
-        service.shutdown().await.expect("shutdown unused service");
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: codex_code_mode::CellId::new("1".to_string()),
+                content_items: vec![CodeModeOutputContentItem::InputText {
+                    text: "fallback".to_string(),
+                }],
+                error_text: None,
+            }
+        );
+        service.shutdown().await.expect("shutdown service");
     }
 }

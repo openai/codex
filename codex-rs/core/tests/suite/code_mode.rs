@@ -230,7 +230,7 @@ async fn run_code_mode_turn_with_builder(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_process_host_returns_a_tool_error() -> Result<()> {
+async fn missing_process_host_falls_back_to_in_process_code_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -244,16 +244,15 @@ async fn missing_process_host_returns_a_tool_error() -> Result<()> {
                 .expect("code mode should be enabled");
         });
     let (_test, follow_up_mock) =
-        run_code_mode_turn_with_builder(&server, "Run code mode", "text('unreachable')", builder)
+        run_code_mode_turn_with_builder(&server, "Run code mode", "text('fallback')", builder)
             .await?;
 
-    let output = follow_up_mock
-        .single_request()
-        .custom_tool_call_output("call-1");
-    assert!(
-        output["output"]
-            .as_str()
-            .is_some_and(|output| output.contains("failed to spawn code-mode host"))
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&follow_up_mock.single_request(), "call-1"),
+            /*index*/ 1,
+        ),
+        "fallback"
     );
 
     Ok(())
