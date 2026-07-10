@@ -968,6 +968,195 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
     Ok(())
 }
 
+/// What this tests: every response stream on one executor connection shares
+/// the same queued-body byte budget.
+#[tokio::test]
+async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
+    let (finish_tx, finish_rx) = oneshot::channel();
+    let server = spawn_scripted_exec_server(|mut peer| async move {
+        for (request_id, url) in [
+            ("http-1", "https://example.test/mcp/shared-budget-one"),
+            ("http-2", "https://example.test/mcp/shared-budget-two"),
+        ] {
+            let (rpc_request_id, params) = peer.read_http_request().await?;
+            assert_eq!(
+                params,
+                HttpRequestParams {
+                    method: "GET".to_string(),
+                    url: url.to_string(),
+                    headers: Vec::new(),
+                    body: None,
+                    timeout_ms: None,
+                    redirect_policy: HttpRedirectPolicy::Follow,
+                    request_id: request_id.to_string(),
+                    stream_response: true,
+                }
+            );
+            peer.write_response(
+                rpc_request_id,
+                HttpRequestResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: Vec::new().into(),
+                },
+            )
+            .await?;
+        }
+
+        let frames_per_stream = HTTP_BODY_DELTA_BYTE_BUDGET / MAX_HTTP_BODY_DELTA_BYTES / 2;
+        for request_id in ["http-1", "http-2"] {
+            for seq in 1..=frames_per_stream as u64 {
+                peer.write_body_delta(HttpRequestBodyDeltaNotification {
+                    request_id: request_id.to_string(),
+                    seq,
+                    delta: vec![0; MAX_HTTP_BODY_DELTA_BYTES].into(),
+                    done: false,
+                    error: None,
+                })
+                .await?;
+            }
+        }
+        peer.write_body_delta(HttpRequestBodyDeltaNotification {
+            request_id: "http-2".to_string(),
+            seq: frames_per_stream as u64 + 1,
+            delta: vec![0; MAX_HTTP_BODY_DELTA_BYTES].into(),
+            done: false,
+            error: None,
+        })
+        .await?;
+
+        let (barrier_request_id, barrier_params) = peer.read_http_request().await?;
+        assert_eq!(
+            barrier_params,
+            HttpRequestParams {
+                method: "GET".to_string(),
+                url: "https://example.test/mcp/shared-budget-barrier".to_string(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: None,
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "http-3".to_string(),
+                stream_response: true,
+            }
+        );
+        peer.write_response(
+            barrier_request_id,
+            HttpRequestResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            },
+        )
+        .await?;
+        for (request_id, seq) in [
+            ("http-3", 1),
+            ("http-1", frames_per_stream as u64 + 1),
+            ("http-2", frames_per_stream as u64 + 2),
+        ] {
+            peer.write_body_delta(HttpRequestBodyDeltaNotification {
+                request_id: request_id.to_string(),
+                seq,
+                delta: Vec::new().into(),
+                done: true,
+                error: None,
+            })
+            .await?;
+        }
+        finish_rx.await.expect("test should finish server task");
+        Ok(())
+    })
+    .await?;
+    let client = server.connect_client().await?;
+
+    let (_response, mut first_stream) = timeout(
+        TEST_TIMEOUT,
+        client.http_request_stream(HttpRequestParams {
+            method: "GET".to_string(),
+            url: "https://example.test/mcp/shared-budget-one".to_string(),
+            headers: Vec::new(),
+            body: None,
+            timeout_ms: None,
+            redirect_policy: HttpRedirectPolicy::Follow,
+            request_id: "caller-stream-one".to_string(),
+            stream_response: false,
+        }),
+    )
+    .await
+    .context("first streamed http/request should return headers")??;
+    let (_response, mut second_stream) = timeout(
+        TEST_TIMEOUT,
+        client.http_request_stream(HttpRequestParams {
+            method: "GET".to_string(),
+            url: "https://example.test/mcp/shared-budget-two".to_string(),
+            headers: Vec::new(),
+            body: None,
+            timeout_ms: None,
+            redirect_policy: HttpRedirectPolicy::Follow,
+            request_id: "caller-stream-two".to_string(),
+            stream_response: false,
+        }),
+    )
+    .await
+    .context("second streamed http/request should return headers")??;
+
+    // This terminal notification is ordered after both streams contend for the
+    // budget, so neither stream is drained before the overflow is observed.
+    let (_response, mut barrier_stream) = timeout(
+        TEST_TIMEOUT,
+        client.http_request_stream(HttpRequestParams {
+            method: "GET".to_string(),
+            url: "https://example.test/mcp/shared-budget-barrier".to_string(),
+            headers: Vec::new(),
+            body: None,
+            timeout_ms: None,
+            redirect_policy: HttpRedirectPolicy::Follow,
+            request_id: "caller-barrier-id".to_string(),
+            stream_response: false,
+        }),
+    )
+    .await
+    .context("barrier http/request should return headers")??;
+    assert_eq!(
+        timeout(TEST_TIMEOUT, barrier_stream.recv())
+            .await
+            .context("barrier body stream should finish")??,
+        None
+    );
+
+    let mut failed_stream_bytes = 0;
+    let error = loop {
+        match timeout(TEST_TIMEOUT, second_stream.recv())
+            .await
+            .context("second body stream should finish")?
+        {
+            Ok(Some(chunk)) => failed_stream_bytes += chunk.len(),
+            Ok(None) => bail!("shared byte-budget exhaustion should not look like clean EOF"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(
+        (failed_stream_bytes, error.to_string()),
+        (
+            HTTP_BODY_DELTA_BYTE_BUDGET / 2,
+            "exec-server protocol error: http response stream `http-2` failed: queued body deltas exceed 16777216 bytes".to_string(),
+        )
+    );
+
+    let mut surviving_stream_bytes = 0;
+    while let Some(chunk) = timeout(TEST_TIMEOUT, first_stream.recv())
+        .await
+        .context("first body stream should finish")??
+    {
+        surviving_stream_bytes += chunk.len();
+    }
+    assert_eq!(surviving_stream_bytes, HTTP_BODY_DELTA_BYTE_BUDGET / 2);
+
+    finish_tx.send(()).expect("server task should stay active");
+    drop(client);
+    server.finish().await?;
+    Ok(())
+}
+
 /// What this tests: transport disconnect still records a terminal stream
 /// failure even when the client-side body-delta queue is already full.
 #[tokio::test]
