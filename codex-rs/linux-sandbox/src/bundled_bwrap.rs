@@ -226,15 +226,20 @@ mod tests {
     }
 
     #[test]
-    fn finds_legacy_standalone_bundled_bwrap_next_to_exe_resources() {
+    fn finds_direct_bundle_bwrap_from_install_context() {
         let temp_dir = tempdir().expect("temp dir");
         let exe = temp_dir.path().join("codex");
         let expected_bwrap = temp_dir.path().join("codex-resources").join("bwrap");
         write_executable(&exe);
         write_executable(&expected_bwrap);
+        let context = InstallContext::from_exe(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe),
+            /*method_override*/ None,
+        );
 
         assert_eq!(
-            find_legacy_for_exe(&exe),
+            find_for_install_context(&context),
             Some(AbsolutePathBuf::from_absolute_path(&expected_bwrap).expect("absolute"))
         );
     }

@@ -34,7 +34,7 @@ impl UpdateAction {
                 StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
                 StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
             }),
-            InstallMethod::Other => None,
+            InstallMethod::DirectBundle { .. } | InstallMethod::Other => None,
         }
     }
 

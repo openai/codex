@@ -119,6 +119,7 @@ pub(super) fn search_check() -> DoctorCheck {
 fn install_method_name(context: &InstallContext) -> &'static str {
     match &context.method {
         InstallMethod::Standalone { .. } => "standalone",
+        InstallMethod::DirectBundle { .. } => "direct bundle",
         InstallMethod::Npm => "npm",
         InstallMethod::Bun => "bun",
         InstallMethod::Pnpm => "pnpm",

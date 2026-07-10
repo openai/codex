@@ -52,6 +52,12 @@ pub enum InstallMethod {
         /// The platform of the standalone release, either `Unix` or `Windows`.
         platform: StandalonePlatform,
     },
+    /// A directly extracted Linux bundle with `codex` at its root and managed
+    /// resources under `codex-resources/`.
+    DirectBundle {
+        bundle_dir: AbsolutePathBuf,
+        resources_dir: AbsolutePathBuf,
+    },
     /// A Codex binary launched through the npm-managed `codex.js` shim.
     Npm,
     /// A Codex binary launched through the bun-managed `codex.js` shim.
@@ -136,7 +142,8 @@ impl InstallContext {
         if let InstallMethod::Standalone {
             resources_dir: Some(resources_dir),
             ..
-        } = &self.method
+        }
+        | InstallMethod::DirectBundle { resources_dir, .. } = &self.method
         {
             let bundled_rg = resources_dir.join(default_rg_command());
             if bundled_rg.is_file() {
@@ -147,7 +154,7 @@ impl InstallContext {
         default_rg_command()
     }
 
-    /// Returns the code-mode host when it is part of the detected package layout.
+    /// Returns the code-mode host when it is part of the detected installation.
     pub fn code_mode_host_program(&self) -> Option<PathBuf> {
         self.bundled_resource(code_mode_host_executable_name())
             .map(AbsolutePathBuf::into_path_buf)
@@ -166,7 +173,8 @@ impl InstallContext {
         if let InstallMethod::Standalone {
             resources_dir: Some(resources_dir),
             ..
-        } = &self.method
+        }
+        | InstallMethod::DirectBundle { resources_dir, .. } = &self.method
         {
             let resource = resources_dir.join(file_name);
             if resource.is_file() {
@@ -225,12 +233,40 @@ fn install_method_from_exe(
     {
         return standalone_method;
     }
+    if let Some(direct_bundle_method) = direct_bundle_install_method(exe_path, package_layout) {
+        return direct_bundle_method;
+    }
 
     if is_macos && (exe_path.starts_with("/opt/homebrew") || exe_path.starts_with("/usr/local")) {
         InstallMethod::Brew
     } else {
         InstallMethod::Other
     }
+}
+
+fn direct_bundle_install_method(
+    exe_path: &Path,
+    package_layout: Option<&CodexPackageLayout>,
+) -> Option<InstallMethod> {
+    if !cfg!(target_os = "linux") || package_layout.is_some() {
+        return None;
+    }
+
+    let canonical_exe = canonical_absolute_path(exe_path)?;
+    if canonical_exe.file_name() != Some(OsStr::new("codex")) {
+        return None;
+    }
+
+    let bundle_dir = canonical_exe.parent()?;
+    let resources_dir = bundle_dir.join(RESOURCES_DIRNAME);
+    if !resources_dir.is_dir() {
+        return None;
+    }
+
+    Some(InstallMethod::DirectBundle {
+        bundle_dir,
+        resources_dir,
+    })
 }
 
 fn standalone_install_method(
@@ -336,6 +372,49 @@ mod tests {
         };
 
         assert_eq!(context.code_mode_host_program(), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_direct_bundle_and_resolves_resources() -> std::io::Result<()> {
+        let bundle_dir = tempfile::tempdir()?;
+        let resources_dir = bundle_dir.path().join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&resources_dir)?;
+        let exe_path = bundle_dir.path().join("codex");
+        let host_path = resources_dir.join(code_mode_host_executable_name());
+        fs::write(&exe_path, "")?;
+        fs::write(&host_path, "")?;
+        let canonical_bundle_dir =
+            AbsolutePathBuf::from_absolute_path(bundle_dir.path().canonicalize()?)?;
+        let canonical_resources_dir =
+            AbsolutePathBuf::from_absolute_path(resources_dir.canonicalize()?)?;
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*method_override*/ None,
+            /*codex_home*/ None,
+        );
+
+        assert_eq!(
+            context,
+            InstallContext {
+                method: InstallMethod::DirectBundle {
+                    bundle_dir: canonical_bundle_dir,
+                    resources_dir: canonical_resources_dir.clone(),
+                },
+                package_layout: None,
+            }
+        );
+        assert_eq!(
+            context.code_mode_host_program(),
+            Some(
+                canonical_resources_dir
+                    .join(code_mode_host_executable_name())
+                    .into_path_buf()
+            )
+        );
+        Ok(())
     }
 
     #[test]

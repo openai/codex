@@ -136,6 +136,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
         InstallMethod::Pnpm => "pnpm add -g @openai/codex",
         InstallMethod::Brew => "brew upgrade --cask codex",
         InstallMethod::Standalone { .. } => "standalone installer",
+        InstallMethod::DirectBundle { .. } => "manual direct bundle",
         InstallMethod::Other => "manual or unknown",
     }
 }
@@ -147,6 +148,7 @@ fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
         | InstallMethod::Bun
         | InstallMethod::Pnpm
         | InstallMethod::Standalone { .. }
+        | InstallMethod::DirectBundle { .. }
         | InstallMethod::Other => fetch_latest_github_release_version(),
     }
 }

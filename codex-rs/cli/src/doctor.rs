@@ -936,6 +936,14 @@ fn describe_install_context(context: &InstallContext) -> String {
                 }
             }
         }
+        InstallMethod::DirectBundle {
+            bundle_dir,
+            resources_dir,
+        } => format!(
+            "direct bundle (root {}, resources {})",
+            bundle_dir.display(),
+            resources_dir.display()
+        ),
         InstallMethod::Npm => {
             describe_method_with_package_layout("npm", context.package_layout.as_ref())
         }
