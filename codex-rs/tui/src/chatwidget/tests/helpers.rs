@@ -276,7 +276,6 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
-        "supports_reasoning_summaries": false,
         "default_reasoning_summary": "none",
         "support_verbosity": false,
         "default_verbosity": null,

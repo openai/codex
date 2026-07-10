@@ -27,7 +27,6 @@ const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
 const CUSTOM_MODE_HINT_TEXT: &str = "Use the configured delegation policy.";
 
 fn add_ultra_reasoning(model_info: &mut ModelInfo) {
-    model_info.supports_reasoning_summaries = true;
     model_info
         .supported_reasoning_levels
         .push(ReasoningEffortPreset {

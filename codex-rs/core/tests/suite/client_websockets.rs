@@ -681,8 +681,7 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut normal_model_info = harness.model_info.clone();
-    normal_model_info.supports_reasoning_summaries = true;
+    let normal_model_info = harness.model_info.clone();
     let mut lite_model_info = normal_model_info.clone();
     lite_model_info.use_responses_lite = true;
     let mut session = harness.client.new_session();
