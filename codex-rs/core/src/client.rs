@@ -809,11 +809,9 @@ impl ModelClient {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
                 .map(reasoning_effort_for_request),
-            summary: if summary == ReasoningSummaryConfig::None {
-                None
-            } else {
-                Some(summary)
-            },
+            summary: (model_info.supports_reasoning_summary_parameter
+                && summary != ReasoningSummaryConfig::None)
+                .then_some(summary),
             // When Responses Lite is disabled, omit context so Responses uses the default,
             // which is currently `current_turn`.
             context: model_info
@@ -863,11 +861,13 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let stream_options = (self.state.concurrent_reasoning_summaries_enabled && is_openai)
-            .then_some(StreamOptions {
-                reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::SequentialCutoff,
-            });
-        let reasoning = Some(Self::build_reasoning(model_info, effort, summary));
+        let reasoning = Self::build_reasoning(model_info, effort, summary);
+        let stream_options = (self.state.concurrent_reasoning_summaries_enabled
+            && is_openai
+            && reasoning.summary.is_some())
+        .then_some(StreamOptions {
+            reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::SequentialCutoff,
+        });
         let include = vec!["reasoning.encrypted_content".to_string()];
         let verbosity = if model_info.support_verbosity {
             self.state.model_verbosity.or(model_info.default_verbosity)
@@ -894,7 +894,7 @@ impl ModelClient {
             tools,
             tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
-            reasoning,
+            reasoning: Some(reasoning),
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             stream_options,

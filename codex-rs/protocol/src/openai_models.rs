@@ -349,6 +349,15 @@ const fn default_effective_context_window_percent() -> i64 {
     95
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_true(value: &bool) -> bool {
+    *value
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
@@ -375,6 +384,9 @@ pub struct ModelInfo {
     pub model_messages: Option<ModelMessages>,
     #[serde(default)]
     pub include_skills_usage_instructions: bool,
+    /// Whether the model accepts the Responses API `reasoning.summary` parameter.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub supports_reasoning_summary_parameter: bool,
     #[serde(default)]
     pub default_reasoning_summary: ReasoningSummary,
     pub support_verbosity: bool,
@@ -680,6 +692,7 @@ mod tests {
             base_instructions: "base".to_string(),
             model_messages: spec,
             include_skills_usage_instructions: false,
+            supports_reasoning_summary_parameter: true,
             default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
             default_verbosity: None,
@@ -1002,6 +1015,7 @@ mod tests {
 
         assert_eq!(model.availability_nux, None);
         assert!(!model.include_skills_usage_instructions);
+        assert!(model.supports_reasoning_summary_parameter);
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
