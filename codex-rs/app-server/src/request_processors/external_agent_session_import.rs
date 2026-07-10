@@ -26,6 +26,7 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::UpdateThreadMetadataParams;
 use futures::StreamExt;
 use tokio::sync::Semaphore;
+use tracing::warn;
 
 use crate::config::external_agent_config::ExternalAgentConfigImportItemResult;
 use crate::config::external_agent_config::record_import_error;
@@ -41,6 +42,59 @@ pub(super) struct ExternalAgentSessionImporter {
     thread_store: Arc<dyn ThreadStore>,
     config_manager: ConfigManager,
     arg0_paths: Arg0DispatchPaths,
+}
+
+/// Owns an imported thread writer while the post-create pipeline is still fallible.
+///
+/// Starting terminal cleanup disarms the drop fallback before awaiting so cancellation cannot
+/// launch a later discard against a replacement writer.
+struct ImportedThreadCleanupGuard {
+    thread_store: Arc<dyn ThreadStore>,
+    thread_id: ThreadId,
+    terminal_cleanup_started: bool,
+}
+
+impl ImportedThreadCleanupGuard {
+    fn new(thread_store: Arc<dyn ThreadStore>, thread_id: ThreadId) -> Self {
+        Self {
+            thread_store,
+            thread_id,
+            terminal_cleanup_started: false,
+        }
+    }
+
+    async fn discard(&mut self) {
+        let cleanup = self.thread_store.discard_thread(self.thread_id);
+        self.terminal_cleanup_started = true;
+        if let Err(err) = cleanup.await {
+            warn!("failed to discard imported session after persistence error: {err}");
+        }
+    }
+
+    async fn shutdown(&mut self) -> Result<(), String> {
+        let cleanup = self.thread_store.shutdown_thread(self.thread_id);
+        self.terminal_cleanup_started = true;
+        if let Err(err) = cleanup.await {
+            let discard = self.thread_store.discard_thread(self.thread_id);
+            if let Err(discard_err) = discard.await {
+                return Err(format!(
+                    "failed to shutdown imported session: {err}; failed to discard imported session: {discard_err}"
+                ));
+            }
+            return Err(format!("failed to shutdown imported session: {err}"));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ImportedThreadCleanupGuard {
+    fn drop(&mut self) {
+        if self.terminal_cleanup_started {
+            return;
+        }
+        self.terminal_cleanup_started = true;
+        drop(self.thread_store.discard_thread(self.thread_id));
+    }
 }
 
 impl ExternalAgentSessionImporter {
@@ -257,35 +311,39 @@ impl ExternalAgentSessionImporter {
             .create_thread(create_params)
             .await
             .map_err(|err| format!("failed to import session: {err}"))?;
-        if !rollout_items.is_empty()
-            && let Err(err) = self
-                .thread_store
-                .append_items(AppendThreadItemsParams {
+        let mut cleanup =
+            ImportedThreadCleanupGuard::new(Arc::clone(&self.thread_store), thread_id);
+        let persist_result: Result<(), String> = async {
+            if !rollout_items.is_empty() {
+                self.thread_store
+                    .append_items(AppendThreadItemsParams {
+                        thread_id,
+                        items: rollout_items,
+                    })
+                    .await
+                    .map_err(|err| format!("failed to import session: {err}"))?;
+            }
+
+            self.thread_store
+                .update_thread_metadata(UpdateThreadMetadataParams {
                     thread_id,
-                    items: rollout_items,
+                    patch: metadata,
+                    include_archived: false,
                 })
                 .await
-        {
-            let _ = self.thread_store.discard_thread(thread_id).await;
-            return Err(format!("failed to import session: {err}"));
+                .map_err(|err| format!("failed to update imported session: {err}"))?;
+            self.thread_store
+                .persist_thread(thread_id)
+                .await
+                .map_err(|err| format!("failed to persist imported session: {err}"))?;
+            Ok(())
         }
-
-        self.thread_store
-            .update_thread_metadata(UpdateThreadMetadataParams {
-                thread_id,
-                patch: metadata,
-                include_archived: false,
-            })
-            .await
-            .map_err(|err| format!("failed to update imported session: {err}"))?;
-        self.thread_store
-            .persist_thread(thread_id)
-            .await
-            .map_err(|err| format!("failed to persist imported session: {err}"))?;
-        self.thread_store
-            .shutdown_thread(thread_id)
-            .await
-            .map_err(|err| format!("failed to shutdown imported session: {err}"))?;
+        .await;
+        if let Err(err) = persist_result {
+            cleanup.discard().await;
+            return Err(err);
+        }
+        cleanup.shutdown().await?;
         Ok(thread_id)
     }
 }

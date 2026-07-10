@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -15,6 +16,7 @@ use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::ThreadStoreCleanup;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::error::reject_paginated_history_mode;
@@ -158,35 +160,71 @@ pub(super) async fn flush_thread(
     sync_materialized_rollout_path(store, thread_id).await
 }
 
-pub(super) async fn shutdown_thread(
-    store: &LocalThreadStore,
+pub(super) fn shutdown_thread(store: LocalThreadStore, thread_id: ThreadId) -> ThreadStoreCleanup {
+    let generation_cutoff = store.live_recorder_generation_cutoff();
+    ThreadStoreCleanup::spawn("shutdown", thread_id, async move {
+        let recorder = store
+            .live_recorder_before_generation(thread_id, generation_cutoff)
+            .await?;
+        shutdown_cleanup(store, thread_id, recorder).await
+    })
+}
+
+pub(super) fn discard_thread(store: LocalThreadStore, thread_id: ThreadId) -> ThreadStoreCleanup {
+    let generation_cutoff = store.live_recorder_generation_cutoff();
+    ThreadStoreCleanup::spawn("discard", thread_id, async move {
+        let recorder = match store
+            .live_recorder_before_generation(thread_id, generation_cutoff)
+            .await
+        {
+            Ok(recorder) => recorder,
+            Err(ThreadStoreError::ThreadNotFound { .. }) => return Ok(()),
+            Err(err) => return Err(err),
+        };
+        discard_cleanup(store, thread_id, recorder).await
+    })
+}
+
+pub(super) async fn shutdown_cleanup(
+    store: LocalThreadStore,
     thread_id: ThreadId,
+    recorder: Arc<RolloutRecorder>,
 ) -> ThreadStoreResult<()> {
-    let recorder = store.live_recorder(thread_id).await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
     recorder.shutdown().await.map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await?;
+    sync_materialized_rollout_path(&store, thread_id).await?;
     if let Some(metrics) = codex_otel::global()
         && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
     {
         let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
         let _ = metrics.histogram(ROLLOUT_SIZE_BYTES_METRIC, size_bytes, &[]);
     }
-    store.live_recorders.lock().await.remove(&thread_id);
+    remove_live_recorder_if_current(&store, thread_id, &recorder).await;
     Ok(())
 }
 
-pub(super) async fn discard_thread(
+pub(super) async fn discard_cleanup(
+    store: LocalThreadStore,
+    thread_id: ThreadId,
+    recorder: Arc<RolloutRecorder>,
+) -> ThreadStoreResult<()> {
+    recorder.discard().await;
+    remove_live_recorder_if_current(&store, thread_id, &recorder).await;
+    Ok(())
+}
+
+async fn remove_live_recorder_if_current(
     store: &LocalThreadStore,
     thread_id: ThreadId,
-) -> ThreadStoreResult<()> {
-    store
-        .live_recorders
-        .lock()
-        .await
-        .remove(&thread_id)
-        .map(|_| ())
-        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    recorder: &Arc<RolloutRecorder>,
+) {
+    let mut live_recorders = store.live_recorders.lock().await;
+    if live_recorders
+        .get(&thread_id)
+        .is_some_and(|entry| Arc::ptr_eq(&entry.recorder, recorder))
+    {
+        live_recorders.remove(&thread_id);
+    }
 }
 
 pub(super) async fn rollout_path(

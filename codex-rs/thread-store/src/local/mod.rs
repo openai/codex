@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 
 use crate::AppendThreadItemsParams;
@@ -37,6 +39,7 @@ use crate::StoredThreadHistory;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStore;
+use crate::ThreadStoreCleanup;
 use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
@@ -59,11 +62,15 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderEntry>>>,
+    next_live_recorder_generation: Arc<AtomicU64>,
     state_db: Option<StateDbHandle>,
 }
 
 struct LiveRecorderEntry {
-    recorder: RolloutRecorder,
+    recorder: Arc<RolloutRecorder>,
+    // Detached terminal cleanup captures an exclusive cutoff before it spawns, so a delayed task
+    // cannot bind itself to a writer inserted after the cleanup request.
+    generation: u64,
     // Local rollout files are materialized lazily, but metadata updates can arrive before the
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
@@ -106,6 +113,7 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            next_live_recorder_generation: Arc::new(AtomicU64::new(0)),
             state_db,
         }
     }
@@ -139,12 +147,31 @@ impl LocalThreadStore {
     pub(super) async fn live_recorder(
         &self,
         thread_id: ThreadId,
-    ) -> ThreadStoreResult<RolloutRecorder> {
+    ) -> ThreadStoreResult<Arc<RolloutRecorder>> {
         self.live_recorders
             .lock()
             .await
             .get(&thread_id)
-            .map(|entry| entry.recorder.clone())
+            .map(|entry| Arc::clone(&entry.recorder))
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    }
+
+    /// Returns the exclusive generation bound for a terminal cleanup requested now.
+    pub(super) fn live_recorder_generation_cutoff(&self) -> u64 {
+        self.next_live_recorder_generation.load(Ordering::SeqCst)
+    }
+
+    pub(super) async fn live_recorder_before_generation(
+        &self,
+        thread_id: ThreadId,
+        generation_cutoff: u64,
+    ) -> ThreadStoreResult<Arc<RolloutRecorder>> {
+        self.live_recorders
+            .lock()
+            .await
+            .get(&thread_id)
+            .filter(|entry| entry.generation < generation_cutoff)
+            .map(|entry| Arc::clone(&entry.recorder))
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
     }
 
@@ -171,8 +198,12 @@ impl LocalThreadStore {
                 message: format!("thread {} already has a live local writer", entry.key()),
             }),
             Entry::Vacant(entry) => {
+                let generation = self
+                    .next_live_recorder_generation
+                    .fetch_add(1, Ordering::SeqCst);
                 entry.insert(LiveRecorderEntry {
-                    recorder,
+                    recorder: Arc::new(recorder),
+                    generation,
                     history_mode,
                 });
                 Ok(())
@@ -262,12 +293,12 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { live_writer::flush_thread(self, thread_id).await })
     }
 
-    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::shutdown_thread(self, thread_id).await })
+    fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup {
+        live_writer::shutdown_thread(self.clone(), thread_id)
     }
 
-    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::discard_thread(self, thread_id).await })
+    fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreCleanup {
+        live_writer::discard_thread(self.clone(), thread_id)
     }
 
     fn load_history(
@@ -807,7 +838,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discard_thread_drops_unmaterialized_live_writer() {
+    async fn discard_thread_stops_cloned_recorder_and_drops_unmaterialized_live_writer() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
@@ -820,11 +851,23 @@ mod tests {
             .live_rollout_path(thread_id)
             .await
             .expect("load rollout path");
+        let stale_recorder = store
+            .live_recorder(thread_id)
+            .await
+            .expect("clone live recorder");
         store
             .discard_thread(thread_id)
             .await
             .expect("discard live thread");
+        store
+            .discard_thread(thread_id)
+            .await
+            .expect("discard should be idempotent");
 
+        stale_recorder
+            .record_canonical_items(&[user_message_item("write through stale recorder")])
+            .await
+            .expect_err("discard should stop stale recorder clones");
         assert!(
             !tokio::fs::try_exists(rollout_path.as_path())
                 .await
@@ -840,6 +883,242 @@ mod tests {
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
         );
+    }
+
+    #[tokio::test]
+    async fn discard_thread_preserves_durable_prefix_for_resume() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let thread_id = ThreadId::default();
+
+        let first_store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
+        first_store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create initial thread");
+        first_store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("before discard")],
+            })
+            .await
+            .expect("append durable prefix");
+        first_store
+            .persist_thread(thread_id)
+            .await
+            .expect("persist durable prefix");
+        first_store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush durable prefix");
+        let rollout_path = first_store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("load rollout path");
+        first_store
+            .discard_thread(thread_id)
+            .await
+            .expect("discard live thread");
+
+        let resumed_store = LocalThreadStore::new(config, /*state_db*/ None);
+        resumed_store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: None,
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("resume live thread");
+        resumed_store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("after resume")],
+            })
+            .await
+            .expect("append resumed item");
+        resumed_store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush resumed thread");
+
+        assert_rollout_contains_message(rollout_path.as_path(), "before discard").await;
+        assert_rollout_contains_message(rollout_path.as_path(), "after resume").await;
+    }
+
+    #[tokio::test]
+    async fn discard_cleanup_handle_removes_closed_writer_after_caller_cancels() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let recorder = store
+            .live_recorder(thread_id)
+            .await
+            .expect("clone live recorder");
+        let stale_recorder = Arc::clone(&recorder);
+        let live_recorders = Arc::clone(&store.live_recorders).lock_owned().await;
+        let (release_lock, lock_released) = std::sync::mpsc::channel();
+        let lock_holder = tokio::task::spawn_blocking(move || {
+            let _live_recorders = live_recorders;
+            lock_released
+                .recv()
+                .expect("receive live recorder lock release");
+        });
+        let cleanup = ThreadStoreCleanup::spawn(
+            "discard",
+            thread_id,
+            live_writer::discard_cleanup(store.clone(), thread_id, recorder),
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if stale_recorder
+                    .record_canonical_items(&[user_message_item("write through stale recorder")])
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("discard should close the stale recorder");
+        drop(cleanup);
+        release_lock.send(()).expect("release live recorder lock");
+        lock_holder.await.expect("join live recorder lock holder");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.live_rollout_path(thread_id).await,
+                    Err(ThreadStoreError::ThreadNotFound { thread_id: missing })
+                        if missing == thread_id
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("discard cleanup handle should release the live writer");
+    }
+
+    #[tokio::test]
+    async fn shutdown_cleanup_handle_removes_closed_writer_after_caller_cancels() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let recorder = store
+            .live_recorder(thread_id)
+            .await
+            .expect("clone live recorder");
+        let stale_recorder = Arc::clone(&recorder);
+        let live_recorders = Arc::clone(&store.live_recorders).lock_owned().await;
+        let (release_lock, lock_released) = std::sync::mpsc::channel();
+        let lock_holder = tokio::task::spawn_blocking(move || {
+            let _live_recorders = live_recorders;
+            lock_released
+                .recv()
+                .expect("receive live recorder lock release");
+        });
+        let cleanup = ThreadStoreCleanup::spawn(
+            "shutdown",
+            thread_id,
+            live_writer::shutdown_cleanup(store.clone(), thread_id, recorder),
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if stale_recorder
+                    .record_canonical_items(&[user_message_item("write through stale recorder")])
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown should close the stale recorder");
+        drop(cleanup);
+        release_lock.send(()).expect("release live recorder lock");
+        lock_holder.await.expect("join live recorder lock holder");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.live_rollout_path(thread_id).await,
+                    Err(ThreadStoreError::ThreadNotFound { thread_id: missing })
+                        if missing == thread_id
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown cleanup handle should release the live writer");
+    }
+
+    #[tokio::test]
+    async fn stale_cleanup_generation_does_not_discard_replacement_writer() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create initial live thread");
+        let stale_generation_cutoff = store.live_recorder_generation_cutoff();
+        store
+            .discard_thread(thread_id)
+            .await
+            .expect("discard initial live thread");
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create replacement live thread");
+
+        let delayed_store = store.clone();
+        ThreadStoreCleanup::spawn("discard", thread_id, async move {
+            let recorder = match delayed_store
+                .live_recorder_before_generation(thread_id, stale_generation_cutoff)
+                .await
+            {
+                Ok(recorder) => recorder,
+                Err(ThreadStoreError::ThreadNotFound { .. }) => return Ok(()),
+                Err(err) => return Err(err),
+            };
+            live_writer::discard_cleanup(delayed_store, thread_id, recorder).await
+        })
+        .await
+        .expect("stale cleanup should not touch the replacement writer");
+
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("write through replacement writer")],
+            })
+            .await
+            .expect("replacement writer should remain live");
+        store
+            .discard_thread(thread_id)
+            .await
+            .expect("discard replacement live thread");
     }
 
     #[tokio::test]

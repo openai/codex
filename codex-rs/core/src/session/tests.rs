@@ -7047,6 +7047,149 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     );
 }
 
+async fn make_session_with_unflushable_thread_persistence() -> (
+    tempfile::TempDir,
+    Session,
+    Arc<codex_thread_store::LocalThreadStore>,
+    async_channel::Receiver<Event>,
+) {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let (session, _turn_context, rx_event) = make_session_and_context_with_auth_config_home_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        codex_home.path(),
+        |_config| {},
+    )
+    .await;
+    let mut session = Arc::into_inner(session).expect("test session should be uniquely owned");
+    let config = session.get_config().await;
+    let store = Arc::new(codex_thread_store::LocalThreadStore::new(
+        codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+        /*state_db*/ None,
+    ));
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            session_id: session.session_id(),
+            thread_id: session.thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            history_mode: Default::default(),
+            initial_window_id: Uuid::now_v7().to_string(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    let sessions_blocker_path = config.codex_home.join("sessions");
+    std::fs::File::create(&sessions_blocker_path).expect("block sessions directory");
+    live_thread
+        .append_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                client_id: None,
+                message: "buffered before failed shutdown".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            },
+        ))])
+        .await
+        .expect_err("blocked sessions directory should fail append");
+    session.services.thread_store = thread_store;
+    session.services.live_thread = Some(live_thread);
+    (codex_home, session, store, rx_event)
+}
+
+#[tokio::test]
+async fn shutdown_discards_unflushable_thread_persistence_before_completing() {
+    let (_codex_home, session, store, rx_event) =
+        make_session_with_unflushable_thread_persistence().await;
+    let thread_id = session.thread_id;
+    let config = session.get_config().await;
+    let session = Arc::new(session);
+    let (tx_sub, rx_sub) = async_channel::bounded(4);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let session_for_loop = Arc::clone(&session);
+    let session_loop_handle = tokio::spawn(async move {
+        submission_loop(session_for_loop, config, rx_sub).await;
+    });
+    let codex = Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session,
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    };
+
+    codex
+        .submit(Op::Shutdown)
+        .await
+        .expect("submit terminal shutdown");
+
+    let mut saw_persistence_error = false;
+    loop {
+        let event = timeout(StdDuration::from_secs(2), codex.next_event())
+            .await
+            .expect("timeout waiting for shutdown event")
+            .expect("receive shutdown event");
+        match event.msg {
+            EventMsg::Error(_) => saw_persistence_error = true,
+            EventMsg::ShutdownComplete => break,
+            _ => {}
+        }
+    }
+    assert!(
+        saw_persistence_error,
+        "failed graceful shutdown should report its persistence error"
+    );
+    let err = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect_err("terminal shutdown should release the live writer");
+    assert!(
+        matches!(err, codex_thread_store::ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
+    );
+    codex.session_loop_termination.clone().await;
+}
+
+#[tokio::test]
+async fn submission_loop_channel_close_discards_unflushable_thread_persistence() {
+    let (_codex_home, session, store, _rx_event) =
+        make_session_with_unflushable_thread_persistence().await;
+    let thread_id = session.thread_id;
+    let config = session.get_config().await;
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+
+    submission_loop(Arc::new(session), config, rx_sub).await;
+
+    let err = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect_err("channel close should release the live writer");
+    assert!(
+        matches!(err, codex_thread_store::ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
+    );
+}
+
 #[tokio::test]
 async fn submission_loop_channel_close_runs_full_thread_teardown() {
     struct SessionStopMarker;
