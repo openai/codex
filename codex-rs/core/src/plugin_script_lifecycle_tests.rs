@@ -13,8 +13,10 @@ fn execution() -> PluginScriptExecution {
     PluginScriptExecution::new(
         AnalyticsEventsClient::disabled(),
         PluginScriptEvent {
+            session_id: "session".to_string(),
             thread_id: "thread".to_string(),
             turn_id: "turn".to_string(),
+            product_client_id: "codex-test".to_string(),
             plugin_id: "plugin".to_string(),
             execution_id: "execution".to_string(),
             script_path: "scripts/run.py".to_string(),
@@ -47,7 +49,7 @@ fn statuses(execution: &PluginScriptExecution) -> Vec<&'static str> {
 fn finish_before_start_emits_no_transition() {
     let execution = execution();
 
-    execution.finish(Some(0), /*failed*/ false);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
 
     assert_eq!(statuses(&execution), Vec::<&str>::new());
 }
@@ -67,17 +69,20 @@ fn exit_zero_completes() {
     let execution = execution();
 
     execution.mark_started();
-    execution.finish(Some(0), /*failed*/ false);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
 
     assert_eq!(statuses(&execution), vec!["started", "completed"]);
 }
 
 #[test]
-fn nonzero_exit_and_executor_error_fail() {
-    for (exit_code, failed) in [(Some(9), false), (None, true)] {
+fn nonzero_exit_and_failed_outcome_fail() {
+    for outcome in [
+        PluginScriptTerminalOutcome::Exited { exit_code: 9 },
+        PluginScriptTerminalOutcome::Failed { exit_code: None },
+    ] {
         let execution = execution();
         execution.mark_started();
-        execution.finish(exit_code, failed);
+        execution.finish(outcome);
 
         assert_eq!(statuses(&execution), vec!["started", "failed"]);
     }
@@ -89,7 +94,7 @@ fn cancellation_wins_over_terminal_classification() {
 
     execution.mark_started();
     execution.mark_interrupted();
-    execution.finish(Some(0), /*failed*/ false);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
 
     assert_eq!(statuses(&execution), vec!["started", "interrupted"]);
 }
@@ -99,8 +104,8 @@ fn terminal_transition_is_idempotent() {
     let execution = execution();
 
     execution.mark_started();
-    execution.finish(Some(0), /*failed*/ false);
-    execution.finish(Some(9), /*failed*/ true);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
+    execution.finish(PluginScriptTerminalOutcome::Failed { exit_code: Some(9) });
 
     assert_eq!(statuses(&execution), vec!["started", "completed"]);
 }
@@ -112,7 +117,7 @@ fn duration_begins_at_actual_start() {
 
     thread::sleep(Duration::from_millis(25));
     execution.mark_started();
-    execution.finish(Some(0), /*failed*/ false);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
 
     let duration_ms = emitted(&execution)[1].duration_ms.expect("duration");
     let total_elapsed_ms = before_pre_start_delay.elapsed().as_millis();
@@ -120,12 +125,16 @@ fn duration_begins_at_actual_start() {
 }
 
 #[test]
-fn start_and_terminal_facts_retain_one_execution_id() {
+fn start_and_terminal_facts_retain_execution_and_session_identity() {
     let execution = execution();
 
     execution.mark_started();
-    execution.finish(Some(0), /*failed*/ false);
+    execution.finish(PluginScriptTerminalOutcome::Exited { exit_code: 0 });
     let events = emitted(&execution);
 
     assert_eq!(events[0].execution_id, events[1].execution_id);
+    assert_eq!(events[0].session_id, "session");
+    assert_eq!(events[1].session_id, "session");
+    assert_eq!(events[0].product_client_id, "codex-test");
+    assert_eq!(events[1].product_client_id, "codex-test");
 }

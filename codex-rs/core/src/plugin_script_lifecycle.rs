@@ -34,10 +34,18 @@ pub(crate) struct PluginScriptExecution {
     emitted: std::sync::Mutex<Vec<CodexPluginScriptLifecycleEvent>>,
 }
 
+/// Terminal process result used to classify one plugin script execution.
+pub(crate) enum PluginScriptTerminalOutcome {
+    Exited { exit_code: i32 },
+    Failed { exit_code: Option<i32> },
+}
+
 #[derive(Clone)]
 struct PluginScriptEvent {
+    session_id: String,
     thread_id: String,
     turn_id: String,
+    product_client_id: String,
     plugin_id: String,
     execution_id: String,
     script_path: String,
@@ -66,8 +74,10 @@ impl PluginScriptExecution {
         Some(Arc::new(Self::new(
             session.services.analytics_events_client.clone(),
             PluginScriptEvent {
+                session_id: session.session_id().to_string(),
                 thread_id: session.thread_id.to_string(),
                 turn_id: turn.sub_id.clone(),
+                product_client_id: turn.originator.clone(),
                 plugin_id: resolved.plugin_id,
                 execution_id: Uuid::new_v4().to_string(),
                 script_path: resolved.script_path,
@@ -91,7 +101,7 @@ impl PluginScriptExecution {
         self.interrupted.store(true, Ordering::Release);
     }
 
-    pub(crate) fn finish(&self, exit_code: Option<i32>, failed: bool) {
+    pub(crate) fn finish(&self, outcome: PluginScriptTerminalOutcome) {
         let Some(started_at) = self.started_at.get() else {
             return;
         };
@@ -99,12 +109,21 @@ impl PluginScriptExecution {
             return;
         }
 
+        let (exit_code, terminal_status) = match outcome {
+            PluginScriptTerminalOutcome::Exited { exit_code: 0 } => {
+                (Some(0), PluginScriptLifecycleStatus::Completed)
+            }
+            PluginScriptTerminalOutcome::Exited { exit_code } => {
+                (Some(exit_code), PluginScriptLifecycleStatus::Failed)
+            }
+            PluginScriptTerminalOutcome::Failed { exit_code } => {
+                (exit_code, PluginScriptLifecycleStatus::Failed)
+            }
+        };
         let status = if self.interrupted.load(Ordering::Acquire) {
             PluginScriptLifecycleStatus::Interrupted
-        } else if !failed && exit_code == Some(0) {
-            PluginScriptLifecycleStatus::Completed
         } else {
-            PluginScriptLifecycleStatus::Failed
+            terminal_status
         };
         let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.emit(self.event(status, Some(duration_ms), exit_code));
@@ -129,8 +148,10 @@ impl PluginScriptExecution {
         exit_code: Option<i32>,
     ) -> CodexPluginScriptLifecycleEvent {
         CodexPluginScriptLifecycleEvent {
+            session_id: self.event.session_id.clone(),
             thread_id: self.event.thread_id.clone(),
             turn_id: self.event.turn_id.clone(),
+            product_client_id: self.event.product_client_id.clone(),
             plugin_id: self.event.plugin_id.clone(),
             execution_id: self.event.execution_id.clone(),
             script_path: self.event.script_path.clone(),
