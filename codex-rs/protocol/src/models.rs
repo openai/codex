@@ -143,6 +143,30 @@ impl<PathType> FileSystemPermissions<PathType> {
         })
     }
 
+    /// Maps explicit filesystem paths while preserving glob and special-path entries.
+    pub fn map_paths<OutputPath>(
+        self,
+        mut map: impl FnMut(PathType) -> OutputPath,
+    ) -> FileSystemPermissions<OutputPath> {
+        FileSystemPermissions {
+            entries: self
+                .entries
+                .into_iter()
+                .map(|entry| FileSystemSandboxEntry {
+                    path: match entry.path {
+                        FileSystemPath::Path { path } => FileSystemPath::Path { path: map(path) },
+                        FileSystemPath::GlobPattern { pattern } => {
+                            FileSystemPath::GlobPattern { pattern }
+                        }
+                        FileSystemPath::Special { value } => FileSystemPath::Special { value },
+                    },
+                    access: entry.access,
+                })
+                .collect(),
+            glob_scan_max_depth: self.glob_scan_max_depth,
+        }
+    }
+
     pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots<PathType>>
     where
         PathType: Clone,
@@ -263,15 +287,60 @@ impl NetworkPermissions {
 
 /// Partial permission overlay used for per-command requests and approved
 /// session/turn grants.
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct AdditionalPermissionProfile {
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(bound(
+    serialize = "PathType: Clone + Serialize",
+    deserialize = "PathType: Deserialize<'de>"
+))]
+pub struct AdditionalPermissionProfile<PathType = AbsolutePathBuf> {
     pub network: Option<NetworkPermissions>,
-    pub file_system: Option<FileSystemPermissions>,
+    pub file_system: Option<FileSystemPermissions<PathType>>,
 }
 
-impl AdditionalPermissionProfile {
+impl<PathType> AdditionalPermissionProfile<PathType> {
     pub fn is_empty(&self) -> bool {
         self.network.is_none() && self.file_system.is_none()
+    }
+
+    /// Maps explicit filesystem paths while preserving the rest of the overlay.
+    pub fn map_paths<OutputPath>(
+        self,
+        map: impl FnMut(PathType) -> OutputPath,
+    ) -> AdditionalPermissionProfile<OutputPath> {
+        AdditionalPermissionProfile {
+            network: self.network,
+            file_system: self
+                .file_system
+                .map(|file_system| file_system.map_paths(map)),
+        }
+    }
+}
+
+impl<PathType> Default for AdditionalPermissionProfile<PathType> {
+    fn default() -> Self {
+        Self {
+            network: None,
+            file_system: None,
+        }
+    }
+}
+
+impl From<AdditionalPermissionProfile<AbsolutePathBuf>> for AdditionalPermissionProfile<PathUri> {
+    fn from(value: AdditionalPermissionProfile<AbsolutePathBuf>) -> Self {
+        value.map_paths(|path| PathUri::from_abs_path(&path))
+    }
+}
+
+impl TryFrom<AdditionalPermissionProfile<PathUri>>
+    for AdditionalPermissionProfile<AbsolutePathBuf>
+{
+    type Error = io::Error;
+
+    fn try_from(value: AdditionalPermissionProfile<PathUri>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            network: value.network,
+            file_system: value.file_system.map(TryInto::try_into).transpose()?,
+        })
     }
 }
 

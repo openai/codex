@@ -15,21 +15,47 @@ pub enum PermissionGrantScope {
     Session,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct RequestPermissionProfile {
+#[serde(bound(
+    serialize = "PathType: Clone + Serialize",
+    deserialize = "PathType: Deserialize<'de>"
+))]
+pub struct RequestPermissionProfile<PathType = AbsolutePathBuf> {
     pub network: Option<NetworkPermissions>,
-    pub file_system: Option<FileSystemPermissions>,
+    pub file_system: Option<FileSystemPermissions<PathType>>,
 }
 
-impl RequestPermissionProfile {
+impl<PathType> RequestPermissionProfile<PathType> {
     pub fn is_empty(&self) -> bool {
         self.network.is_none() && self.file_system.is_none()
     }
+
+    /// Maps explicit filesystem paths while preserving the rest of the request.
+    pub fn map_paths<OutputPath>(
+        self,
+        map: impl FnMut(PathType) -> OutputPath,
+    ) -> RequestPermissionProfile<OutputPath> {
+        RequestPermissionProfile {
+            network: self.network,
+            file_system: self
+                .file_system
+                .map(|file_system| file_system.map_paths(map)),
+        }
+    }
 }
 
-impl From<RequestPermissionProfile> for AdditionalPermissionProfile {
-    fn from(value: RequestPermissionProfile) -> Self {
+impl<PathType> Default for RequestPermissionProfile<PathType> {
+    fn default() -> Self {
+        Self {
+            network: None,
+            file_system: None,
+        }
+    }
+}
+
+impl<PathType> From<RequestPermissionProfile<PathType>> for AdditionalPermissionProfile<PathType> {
+    fn from(value: RequestPermissionProfile<PathType>) -> Self {
         Self {
             network: value.network,
             file_system: value.file_system,
@@ -37,8 +63,8 @@ impl From<RequestPermissionProfile> for AdditionalPermissionProfile {
     }
 }
 
-impl From<AdditionalPermissionProfile> for RequestPermissionProfile {
-    fn from(value: AdditionalPermissionProfile) -> Self {
+impl<PathType> From<AdditionalPermissionProfile<PathType>> for RequestPermissionProfile<PathType> {
+    fn from(value: AdditionalPermissionProfile<PathType>) -> Self {
         Self {
             network: value.network,
             file_system: value.file_system,
@@ -47,7 +73,11 @@ impl From<AdditionalPermissionProfile> for RequestPermissionProfile {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct RequestPermissionsArgs {
+#[serde(bound(
+    serialize = "PathType: Clone + Serialize",
+    deserialize = "PathType: Deserialize<'de>"
+))]
+pub struct RequestPermissionsArgs<PathType = AbsolutePathBuf> {
     #[serde(
         default,
         rename = "environment_id",
@@ -58,17 +88,34 @@ pub struct RequestPermissionsArgs {
     pub environment_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub permissions: RequestPermissionProfile,
+    pub permissions: RequestPermissionProfile<PathType>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct RequestPermissionsResponse {
-    pub permissions: RequestPermissionProfile,
+#[serde(bound(
+    serialize = "PathType: Clone + Serialize",
+    deserialize = "PathType: Deserialize<'de>"
+))]
+pub struct RequestPermissionsResponse<PathType = AbsolutePathBuf> {
+    pub permissions: RequestPermissionProfile<PathType>,
     #[serde(default)]
     pub scope: PermissionGrantScope,
     /// Review every subsequent command in this turn before normal sandboxed execution.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict_auto_review: bool,
+}
+
+impl<PathType> RequestPermissionsResponse<PathType> {
+    pub fn map_paths<OutputPath>(
+        self,
+        map: impl FnMut(PathType) -> OutputPath,
+    ) -> RequestPermissionsResponse<OutputPath> {
+        RequestPermissionsResponse {
+            permissions: self.permissions.map_paths(map),
+            scope: self.scope,
+            strict_auto_review: self.strict_auto_review,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
