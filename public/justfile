@@ -99,6 +99,19 @@ bench *args:
 bench-smoke:
     just bench -- --test
 
+# Run Bazel-backed end-to-end macrobenchmarks with optimized binaries.
+bench-e2e:
+    # Keep measured binaries comparable to production-style optimized builds.
+    bazel test --compilation_mode=opt --cache_test_results=no --test_output=streamed //codex-rs:e2e-benchmarks
+
+# Run Bazel-backed end-to-end macrobenchmarks once per case with release-like
+# Rust cfg paths but fastbuild codegen.
+bench-e2e-smoke:
+    # Avoid optimizer cost because smoke runs only check that benchmarks work.
+    # Compile target Rust code through the same release-only cfg paths as opt.
+    # Compile exec-platform Rust tools through those release-only cfg paths too.
+    bazel test --compilation_mode=fastbuild --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no --cache_test_results=no --test_output=streamed --test_arg=--test //codex-rs:e2e-benchmarks
+
 # Build and run Codex from source using Bazel.
 # On Unix, use `[no-cd]` and `--run_under="cd $PWD &&"` to ensure Bazel runs
 # the command in the current working directory.
