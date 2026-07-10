@@ -170,6 +170,59 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
 }
 
 #[tokio::test]
+async fn safety_buffering_retry_uses_the_visible_history_override() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let turn_id = "turn-visible-history";
+    chat.thread_id = Some(thread_id);
+    assert!(chat.submit_user_message_with_history_record(
+        UserMessage::from("hidden raw prompt"),
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: "visible prompt".to_string(),
+            text_elements: Vec::new(),
+        }),
+    ));
+    let turn = next_submit_op(&mut op_rx);
+    chat.record_safety_buffering_turn(turn_id.to_string(), &turn);
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: AppServerTurn {
+                id: turn_id.to_string(),
+                is_forkable: true,
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
+            thread_id,
+            turn_id,
+            Some("faster-model"),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let prompt = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::RetrySafetyBufferedTurn { prompt, .. }) => break prompt,
+            Ok(_) => continue,
+            Err(err) => panic!("expected safety-buffering retry event: {err}"),
+        }
+    };
+
+    assert_eq!(prompt, UserMessage::from("visible prompt"));
+}
+
+#[tokio::test]
 async fn safety_buffered_retry_preparation_renders_identical_prompt_and_preserves_retry_state() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
@@ -185,6 +238,9 @@ async fn safety_buffered_retry_preparation_renders_identical_prompt_and_preserve
 
     chat.prepare_safety_buffered_retry_submission(prompt.clone());
     assert!(drain_insert_history(&mut rx).is_empty());
+    assert_eq!(chat.cancel_edit.prompt, Some(prompt.clone()));
+    assert!(chat.cancel_edit.eligible);
+    assert!(!chat.cancel_edit.armed);
 
     let retry_turn_id = "retry-turn";
     chat.record_safety_buffering_turn(retry_turn_id.to_string(), &turn);

@@ -390,13 +390,16 @@ impl ChatWidget {
         }
 
         if render_in_history {
-            let prompt = UserMessage {
-                text: text.clone(),
-                local_images: local_images.clone(),
-                remote_image_urls: remote_image_urls.clone(),
-                text_elements: text_elements.clone(),
-                mention_bindings: mention_bindings.clone(),
-            };
+            let prompt = user_message_for_restore(
+                UserMessage {
+                    text: text.clone(),
+                    local_images: local_images.clone(),
+                    remote_image_urls: remote_image_urls.clone(),
+                    text_elements: text_elements.clone(),
+                    mention_bindings: mention_bindings.clone(),
+                },
+                &history_record,
+            );
             self.record_cancel_edit_candidate(prompt.clone());
             self.record_safety_buffering_prompt(prompt);
         }

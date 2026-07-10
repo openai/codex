@@ -39,6 +39,9 @@ impl App {
             return;
         }
 
+        let retry_config = self.chat_widget.config_ref().clone();
+        let input_state = self.chat_widget.capture_thread_input_state();
+
         let AppCommand::UserTurn {
             model: turn_model,
             effort,
@@ -85,14 +88,15 @@ impl App {
             }
         };
 
+        self.config = retry_config.clone();
         let started = if let Some(last_turn_id) = fork_point {
             app_server
-                .fork_thread_after(self.config.clone(), thread_id, last_turn_id)
+                .fork_thread_after(retry_config.clone(), thread_id, last_turn_id)
                 .await
         } else {
             app_server
                 .start_thread_with_session_start_source(
-                    &self.config,
+                    &retry_config,
                     /*session_start_source*/ None,
                 )
                 .await
@@ -121,6 +125,7 @@ impl App {
             return;
         }
 
+        self.chat_widget.restore_thread_input_state(input_state);
         self.chat_widget
             .prepare_safety_buffered_retry_submission(prompt.clone());
         if let Err(err) = self
