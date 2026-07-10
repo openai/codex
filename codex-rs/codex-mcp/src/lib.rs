@@ -84,7 +84,6 @@ mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 mod connector_runtime;
-mod connector_runtime_persistence;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
 mod plugin_config;

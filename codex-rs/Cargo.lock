@@ -2580,15 +2580,20 @@ name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "codex-config",
+ "codex-otel",
  "codex-plugin",
+ "codex-protocol",
  "indexmap 2.14.0",
  "pretty_assertions",
  "serde",
  "serde_json",
  "sha1 0.10.6",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "urlencoding",
 ]

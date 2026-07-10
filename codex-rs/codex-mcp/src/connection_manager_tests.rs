@@ -76,12 +76,21 @@ fn create_codex_apps_tools_cache_context(
 ) -> CodexAppsToolsCacheContext {
     CodexAppsToolsCache::default().context(
         codex_home,
-        CodexAppsToolsCacheKey {
-            account_id: account_id.map(ToOwned::to_owned),
-            chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            account_id.map(ToOwned::to_owned),
+            chatgpt_user_id.map(ToOwned::to_owned),
+        ),
     )
+}
+
+fn store_current_tools(cache_context: &CodexAppsToolsCacheContext, tools: Vec<ToolInfo>) {
+    cache_context
+        .publish_if_newest_accepted(
+            cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh),
+            &create_test_server_info("Codex Apps"),
+            tools,
+        )
+        .expect("publish cached tools");
 }
 
 fn create_test_server_info(title: &str) -> McpServerInfo {
@@ -200,7 +209,7 @@ fn create_test_manager_with_failed_apps_startup(
         Some("reconnect-test-account"),
         Some("reconnect-test-user"),
     );
-    cache_context.store_current_tools_for_test(cached_tools);
+    store_current_tools(&cache_context, cached_tools);
     let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
@@ -812,10 +821,13 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(vec![create_test_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
-    )]);
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+        )],
+    );
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -1116,7 +1128,7 @@ async fn list_all_tools_does_not_block_when_shared_codex_apps_cache_is_empty() {
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(Vec::new());
+    store_current_tools(&cache_context, Vec::new());
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -1157,10 +1169,13 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(vec![create_test_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
-    )]);
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+        )],
+    );
     let server_info = create_test_server_info("Codex Apps");
     let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
         StartupOutcomeError::Failed {
@@ -1219,11 +1234,10 @@ async fn context_discard_while_checking_failed_startup_does_not_reconnect() {
     let cache = CodexAppsToolsCache::default();
     let context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-one".to_string()),
+            Some("user-one".to_string()),
+        ),
     );
     let (failure_started_tx, failure_started_rx) = tokio::sync::oneshot::channel();
     let release_failure = Arc::new(tokio::sync::Notify::new());
@@ -1272,11 +1286,10 @@ async fn context_discard_while_checking_failed_startup_does_not_reconnect() {
         .expect("failed startup check should begin");
     let _new_context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-two".to_string()),
-            chatgpt_user_id: Some("user-two".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-two".to_string()),
+            Some("user-two".to_string()),
+        ),
     );
     release_failure.notify_one();
     reconnect_task.await.expect("reconnect check should finish");
@@ -1566,11 +1579,10 @@ async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
     let cache = CodexAppsToolsCache::default();
     let context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-one".to_string()),
+            Some("user-one".to_string()),
+        ),
     );
     let mut client = create_ready_async_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
@@ -1594,11 +1606,10 @@ async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
 
     let _new_context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-two".to_string()),
-            chatgpt_user_id: Some("user-two".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-two".to_string()),
+            Some("user-two".to_string()),
+        ),
     );
 
     assert!(manager.list_all_tools().await.is_empty());
@@ -1623,11 +1634,10 @@ async fn context_discard_during_startup_hides_codex_apps_tools() {
     let cache = CodexAppsToolsCache::default();
     let context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-one".to_string()),
+            Some("user-one".to_string()),
+        ),
     );
     let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
         vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
@@ -1656,11 +1666,10 @@ async fn context_discard_during_startup_hides_codex_apps_tools() {
         .expect("tool listing should await startup");
     let _new_context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-two".to_string()),
-            chatgpt_user_id: Some("user-two".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-two".to_string()),
+            Some("user-two".to_string()),
+        ),
     );
     release_startup.notify_one();
 
@@ -1677,11 +1686,10 @@ async fn context_discard_during_startup_is_not_reported_ready() {
     let cache = CodexAppsToolsCache::default();
     let context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-one".to_string()),
+            Some("user-one".to_string()),
+        ),
     );
     let (client, startup_started, release_startup) =
         create_blocked_codex_apps_client(Vec::new(), context, ToolFilter::default()).await;
@@ -1710,11 +1718,10 @@ async fn context_discard_during_startup_is_not_reported_ready() {
         .expect("readiness check should await startup");
     let _new_context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-two".to_string()),
-            chatgpt_user_id: Some("user-two".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-two".to_string()),
+            Some("user-two".to_string()),
+        ),
     );
     release_startup.notify_one();
 
@@ -1732,11 +1739,10 @@ async fn context_discard_during_startup_rejects_codex_apps_calls() {
     let cache = CodexAppsToolsCache::default();
     let context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-one".to_string()),
+            Some("user-one".to_string()),
+        ),
     );
     let (client, startup_started, release_startup) = create_blocked_codex_apps_client(
         vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "old_tool")],
@@ -1777,11 +1783,10 @@ async fn context_discard_during_startup_rejects_codex_apps_calls() {
         .expect("tool call should await startup");
     let _new_context = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-two".to_string()),
-            chatgpt_user_id: Some("user-two".to_string()),
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(
+            Some("account-two".to_string()),
+            Some("user-two".to_string()),
+        ),
     );
     release_startup.notify_one();
 
@@ -1934,11 +1939,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ),
         codex_home.path().to_path_buf(),
         CodexAppsToolsCache::default(),
-        CodexAppsToolsCacheKey {
-            account_id: None,
-            chatgpt_user_id: None,
-            is_workspace_account: false,
-        },
+        CodexAppsToolsCacheKey::personal(/*account_id*/ None, /*chatgpt_user_id*/ None),
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,

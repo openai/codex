@@ -1,9 +1,9 @@
-//! Shared runtime snapshot for the host-owned Codex Apps MCP server.
+//! Shared runtime snapshot for connector-backed MCP tools.
 //!
-//! Runtime snapshots are process-local live state scoped by the active Codex
-//! auth context. Disk is best-effort cold-start persistence; a context reads it
-//! once when activated and never rereads it. Full connector metadata is owned by
-//! the connector metadata store, not by this module.
+//! Runtime snapshots are process-local live state scoped by the active account
+//! and workspace. Disk is best-effort cold-start persistence; a context reads
+//! it once when activated and never rereads it. Full connector metadata is
+//! owned by the connector metadata store, not by this module.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,34 +15,69 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use arc_swap::ArcSwapOption;
-use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio_util::sync::CancellationToken;
 
-use crate::connector_runtime_persistence::load_cached_codex_apps_server_info;
-use crate::connector_runtime_persistence::load_cached_connector_runtime_for_identity;
-use crate::connector_runtime_persistence::persist_codex_apps_cache;
-use crate::connector_runtime_persistence::server_info_cache_path;
-use crate::connector_runtime_persistence::tools_cache_path;
-use crate::runtime::emit_duration;
-use crate::tools::ToolInfo;
+use self::persistence::load_cached_codex_apps_server_info;
+use self::persistence::load_cached_connector_runtime_for_identity;
+use self::persistence::persist_codex_apps_cache;
+use self::persistence::server_info_cache_path;
+use self::persistence::tools_cache_path;
 
 const MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC: &str = "codex.mcp.tools.cache_publish.duration_ms";
+
+/// Defines the stable on-disk contract for one connector runtime payload.
+///
+/// Implementations must use cache directories that are unique to their payload
+/// shape and bump the corresponding schema version whenever that shape changes.
+pub trait ConnectorRuntimePayload: Clone + Serialize + DeserializeOwned {
+    const TOOLS_CACHE_DIR: &'static str;
+    const TOOLS_CACHE_SCHEMA_VERSION: u8;
+    const SERVER_INFO_CACHE_DIR: &'static str;
+    const SERVER_INFO_CACHE_SCHEMA_VERSION: u8;
+}
+
+/// The account and workspace identity of a connector runtime catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ConnectorRuntimeContextKey {
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    is_workspace_account: bool,
+}
+
+impl ConnectorRuntimeContextKey {
+    pub fn personal(account_id: Option<String>, chatgpt_user_id: Option<String>) -> Self {
+        Self {
+            account_id,
+            chatgpt_user_id,
+            is_workspace_account: false,
+        }
+    }
+
+    pub fn workspace(account_id: Option<String>, chatgpt_user_id: Option<String>) -> Self {
+        Self {
+            account_id,
+            chatgpt_user_id,
+            is_workspace_account: true,
+        }
+    }
+}
 
 /// One atomically published connector runtime state.
 ///
 /// Tools remain raw and in response order. Local and managed configuration is
 /// intentionally applied by readers rather than persisted in this snapshot.
 #[derive(Debug, Clone)]
-pub struct ConnectorRuntimeSnapshot {
-    pub(crate) tools: Vec<ToolInfo>,
-    pub(crate) refreshed_at: SystemTime,
+pub struct ConnectorRuntimeSnapshot<T> {
+    tools: Vec<T>,
+    refreshed_at: SystemTime,
 }
 
-impl ConnectorRuntimeSnapshot {
-    pub fn tools(&self) -> &[ToolInfo] {
+impl<T> ConnectorRuntimeSnapshot<T> {
+    pub fn tools(&self) -> &[T] {
         &self.tools
     }
 
@@ -57,61 +92,45 @@ impl ConnectorRuntimeSnapshot {
     }
 }
 
-/// The CodexAuth bits that identify a connector runtime catalog.
-///
-/// Debug bearer-token overrides bypass the shared runtime manager, so shared
-/// snapshots only need the CodexAuth-backed identity.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ConnectorRuntimeContextKey {
-    pub(crate) account_id: Option<String>,
-    pub(crate) chatgpt_user_id: Option<String>,
-    pub(crate) is_workspace_account: bool,
-}
-
-/// Builds the CodexAuth-backed connector runtime context key.
-pub fn connector_runtime_context_key(auth: Option<&CodexAuth>) -> ConnectorRuntimeContextKey {
-    ConnectorRuntimeContextKey {
-        account_id: auth.and_then(CodexAuth::get_account_id),
-        chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
-        is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
-    }
-}
-
-/// Compatibility alias for existing cache call sites.
-pub type CodexAppsToolsCacheKey = ConnectorRuntimeContextKey;
-
-/// Compatibility helper for existing cache call sites.
-pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
-    connector_runtime_context_key(auth)
-}
-
 /// Process-scoped owner of the active account/workspace connector runtime.
 ///
 /// Activating a different context discards the prior in-memory entry. Handles
 /// to a discarded context can no longer read or publish its snapshot, which
 /// prevents account A state from bleeding into account B.
-#[derive(Clone, Default)]
-pub struct ConnectorRuntimeManager {
-    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry>>>>,
+pub struct ConnectorRuntimeManager<T: ConnectorRuntimePayload> {
+    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry<T>>>>>,
 }
 
-/// Compatibility alias for existing cache call sites.
-pub type CodexAppsToolsCache = ConnectorRuntimeManager;
+impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeManager<T> {
+    fn clone(&self) -> Self {
+        Self {
+            active: Arc::clone(&self.active),
+        }
+    }
+}
 
-impl ConnectorRuntimeManager {
+impl<T: ConnectorRuntimePayload> Default for ConnectorRuntimeManager<T> {
+    fn default() -> Self {
+        Self {
+            active: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
     pub fn current_snapshot(
         &self,
         codex_home: PathBuf,
         key: ConnectorRuntimeContextKey,
-    ) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+    ) -> Option<Arc<ConnectorRuntimeSnapshot<T>>> {
         self.context(codex_home, key).current_snapshot()
     }
 
-    pub(crate) fn context(
+    pub fn context(
         &self,
         codex_home: PathBuf,
         key: ConnectorRuntimeContextKey,
-    ) -> ConnectorRuntimeContext {
+    ) -> ConnectorRuntimeContext<T> {
         let identity = ConnectorRuntimeIdentity { codex_home, key };
         let mut active = lock_unpoisoned(&self.active);
         if let Some(active) = active.as_ref()
@@ -136,50 +155,39 @@ impl ConnectorRuntimeManager {
 }
 
 /// Handle to the active account/workspace connector runtime.
-#[derive(Clone)]
-pub(crate) struct ConnectorRuntimeContext {
-    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry>>>>,
-    pub(crate) entry: Arc<ConnectorRuntimeEntry>,
+pub struct ConnectorRuntimeContext<T: ConnectorRuntimePayload> {
+    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry<T>>>>>,
+    entry: Arc<ConnectorRuntimeEntry<T>>,
 }
 
-/// Compatibility alias for existing cache call sites.
-pub(crate) type CodexAppsToolsCacheContext = ConnectorRuntimeContext;
+impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeContext<T> {
+    fn clone(&self) -> Self {
+        Self {
+            active: Arc::clone(&self.active),
+            entry: Arc::clone(&self.entry),
+        }
+    }
+}
 
-impl ConnectorRuntimeContext {
-    pub fn current_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot>> {
+impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
+    pub fn current_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot<T>>> {
         let active = lock_unpoisoned(&self.active);
         self.matches_active(active.as_ref())
             .then(|| self.entry.current_snapshot.load_full())
             .flatten()
     }
 
-    pub(crate) fn tools_cache_path(&self) -> PathBuf {
-        tools_cache_path(&self.entry.identity)
-    }
-
-    pub(crate) fn server_info_cache_path(&self) -> PathBuf {
-        server_info_cache_path(&self.entry.identity)
-    }
-
-    pub(crate) fn current_tools(&self) -> Option<Vec<ToolInfo>> {
-        self.current_snapshot()
-            .map(|snapshot| snapshot.tools.clone())
-    }
-
-    pub(crate) fn has_current_tools(&self) -> bool {
+    pub fn has_current_tools(&self) -> bool {
         self.current_snapshot().is_some()
     }
 
-    /// Shared by MCP clients attached to this context and cancelled before an identity switch.
-    pub(crate) fn routing_cancellation_token(&self) -> CancellationToken {
+    /// Shared by clients attached to this context and cancelled before an identity switch.
+    pub fn routing_cancellation_token(&self) -> CancellationToken {
         self.entry.routing_cancellation_token.clone()
     }
 
-    pub(crate) fn begin_fetch(
-        &self,
-        source: CodexAppsToolsFetchSource,
-    ) -> CodexAppsToolsFetchTicket {
-        CodexAppsToolsFetchTicket {
+    pub fn begin_fetch(&self, source: ConnectorRuntimeFetchSource) -> ConnectorRuntimeFetchTicket {
+        ConnectorRuntimeFetchTicket {
             generation: self
                 .entry
                 .next_fetch_generation
@@ -189,12 +197,33 @@ impl ConnectorRuntimeContext {
         }
     }
 
-    pub(crate) fn publish_runtime_if_newest_accepted(
+    pub fn cached_server_info(&self) -> Option<McpServerInfo> {
+        load_cached_codex_apps_server_info(self)
+    }
+
+    fn tools_cache_path(&self) -> PathBuf {
+        tools_cache_path::<T>(&self.entry.identity)
+    }
+
+    fn server_info_cache_path(&self) -> PathBuf {
+        server_info_cache_path::<T>(&self.entry.identity)
+    }
+
+    fn matches_active(&self, active: Option<&Arc<ConnectorRuntimeEntry<T>>>) -> bool {
+        active.is_some_and(|active| Arc::ptr_eq(active, &self.entry))
+    }
+
+    pub fn current_tools(&self) -> Option<Vec<T>> {
+        self.current_snapshot()
+            .map(|snapshot| snapshot.tools.clone())
+    }
+
+    pub fn publish_runtime_if_newest_accepted(
         &self,
-        ticket: CodexAppsToolsFetchTicket,
+        ticket: ConnectorRuntimeFetchTicket,
         server_info: &McpServerInfo,
-        tools: Vec<ToolInfo>,
-    ) -> Result<Arc<ConnectorRuntimeSnapshot>, ConnectorRuntimeContextDiscarded> {
+        tools: Vec<T>,
+    ) -> Result<Arc<ConnectorRuntimeSnapshot<T>>, ConnectorRuntimeDiscarded> {
         self.publish_runtime_if_newest_accepted_with(
             ticket,
             server_info,
@@ -205,11 +234,11 @@ impl ConnectorRuntimeContext {
 
     fn publish_runtime_if_newest_accepted_with(
         &self,
-        ticket: CodexAppsToolsFetchTicket,
+        ticket: ConnectorRuntimeFetchTicket,
         server_info: &McpServerInfo,
-        tools: Vec<ToolInfo>,
-        persist: impl FnOnce(&ConnectorRuntimeContext, &McpServerInfo, &ConnectorRuntimeSnapshot),
-    ) -> Result<Arc<ConnectorRuntimeSnapshot>, ConnectorRuntimeContextDiscarded> {
+        tools: Vec<T>,
+        persist: impl FnOnce(&ConnectorRuntimeContext<T>, &McpServerInfo, &ConnectorRuntimeSnapshot<T>),
+    ) -> Result<Arc<ConnectorRuntimeSnapshot<T>>, ConnectorRuntimeDiscarded> {
         let publish_start = Instant::now();
         let active = lock_unpoisoned(&self.active);
         if !self.matches_active(active.as_ref()) {
@@ -219,7 +248,7 @@ impl ConnectorRuntimeContext {
                 publish_start.elapsed(),
                 &[("source", ticket.source.as_str()), ("result", "discarded")],
             );
-            return Err(ConnectorRuntimeContextDiscarded);
+            return Err(ConnectorRuntimeDiscarded);
         }
 
         let mut last_accepted_generation = lock_unpoisoned(&self.entry.last_accepted_generation);
@@ -231,9 +260,7 @@ impl ConnectorRuntimeContext {
                 publish_start.elapsed(),
                 &[("source", ticket.source.as_str()), ("result", "stale")],
             );
-            return self
-                .current_snapshot()
-                .ok_or(ConnectorRuntimeContextDiscarded);
+            return self.current_snapshot().ok_or(ConnectorRuntimeDiscarded);
         }
 
         let snapshot = Arc::new(ConnectorRuntimeSnapshot {
@@ -258,40 +285,24 @@ impl ConnectorRuntimeContext {
         Ok(snapshot)
     }
 
-    pub(crate) fn publish_if_newest_accepted(
+    pub fn publish_if_newest_accepted(
         &self,
-        ticket: CodexAppsToolsFetchTicket,
+        ticket: ConnectorRuntimeFetchTicket,
         server_info: &McpServerInfo,
-        tools: Vec<ToolInfo>,
-    ) -> Result<Vec<ToolInfo>, ConnectorRuntimeContextDiscarded> {
+        tools: Vec<T>,
+    ) -> Result<Vec<T>, ConnectorRuntimeDiscarded> {
         self.publish_runtime_if_newest_accepted(ticket, server_info, tools)
             .map(|snapshot| snapshot.tools.clone())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn store_current_tools_for_test(&self, tools: Vec<ToolInfo>) {
-        if !self.matches_active(lock_unpoisoned(&self.active).as_ref()) {
-            return;
-        }
-        let snapshot = ConnectorRuntimeSnapshot {
-            tools,
-            refreshed_at: SystemTime::now(),
-        };
-        self.entry.current_snapshot.store(Some(Arc::new(snapshot)));
-    }
-
-    fn matches_active(&self, active: Option<&Arc<ConnectorRuntimeEntry>>) -> bool {
-        active.is_some_and(|active| Arc::ptr_eq(active, &self.entry))
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum CodexAppsToolsFetchSource {
+pub enum ConnectorRuntimeFetchSource {
     Startup,
     HardRefresh,
 }
 
-impl CodexAppsToolsFetchSource {
+impl ConnectorRuntimeFetchSource {
     fn as_str(self) -> &'static str {
         match self {
             Self::Startup => "startup",
@@ -300,25 +311,25 @@ impl CodexAppsToolsFetchSource {
     }
 }
 
-pub(crate) struct CodexAppsToolsFetchTicket {
+pub struct ConnectorRuntimeFetchTicket {
     generation: u64,
-    source: CodexAppsToolsFetchSource,
+    source: ConnectorRuntimeFetchSource,
 }
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("connector runtime context was discarded")]
-pub(crate) struct ConnectorRuntimeContextDiscarded;
+pub struct ConnectorRuntimeDiscarded;
 
 /// All live state owned by one activated connector identity.
-pub(crate) struct ConnectorRuntimeEntry {
-    pub(crate) identity: ConnectorRuntimeIdentity,
-    pub(crate) current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot>,
+struct ConnectorRuntimeEntry<T: ConnectorRuntimePayload> {
+    identity: ConnectorRuntimeIdentity,
+    current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot<T>>,
     routing_cancellation_token: CancellationToken,
     next_fetch_generation: AtomicU64,
     last_accepted_generation: Mutex<u64>,
 }
 
-impl ConnectorRuntimeEntry {
+impl<T: ConnectorRuntimePayload> ConnectorRuntimeEntry<T> {
     fn new(identity: ConnectorRuntimeIdentity) -> Self {
         let current_snapshot = load_cached_connector_runtime_for_identity(&identity).map(Arc::new);
         Self {
@@ -336,15 +347,15 @@ impl ConnectorRuntimeEntry {
 /// The auth key says whose runtime catalog we are reading. `codex_home` keeps
 /// the persisted cache under the right home directory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ConnectorRuntimeIdentity {
-    pub(crate) codex_home: PathBuf,
-    pub(crate) key: ConnectorRuntimeContextKey,
+struct ConnectorRuntimeIdentity {
+    codex_home: PathBuf,
+    key: ConnectorRuntimeContextKey,
 }
 
-pub(crate) fn load_startup_cached_codex_apps_server_info(
-    cache_context: &CodexAppsToolsCacheContext,
-) -> Option<McpServerInfo> {
-    load_cached_codex_apps_server_info(cache_context)
+fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
+    if let Some(metrics) = codex_otel::global() {
+        let _ = metrics.record_duration(metric, duration, tags);
+    }
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -353,6 +364,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+mod persistence;
+
 #[cfg(test)]
-#[path = "connector_runtime_tests.rs"]
 mod tests;
