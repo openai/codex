@@ -45,9 +45,17 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn standalone_web_search_round_trips_output() -> Result<()> {
     let call_id = "web-run-1";
+    let expected_model_id = "model-id-from-search-context";
+    let search_context = json!({
+        "telemetry_attributes": {
+            "model_id": expected_model_id,
+            "model_slug": "mock-model",
+        }
+    })
+    .to_string();
     let client_metadata = HashMap::from([(
-        "client-metadata-key".to_string(),
-        "client-metadata-value".to_string(),
+        "mcp_request_meta".to_string(),
+        json!({ "openai/search_context": search_context }).to_string(),
     )]);
     let server = responses::start_mock_server().await;
     mount_search_response(&server).await;
@@ -186,9 +194,21 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         .context("x-codex-turn-metadata should be valid ASCII")?;
     let turn_metadata: Value = serde_json::from_str(turn_metadata_header)
         .context("x-codex-turn-metadata should be valid JSON")?;
+    let mcp_request_meta = turn_metadata["mcp_request_meta"]
+        .as_str()
+        .context("mcp_request_meta should be a JSON string")?;
+    let mcp_request_meta: Value = serde_json::from_str(mcp_request_meta)
+        .context("mcp_request_meta should contain valid JSON")?;
+    let search_context = mcp_request_meta["openai/search_context"]
+        .as_str()
+        .context("openai/search_context should be a JSON string")?;
+    let search_context: Value = serde_json::from_str(search_context)
+        .context("openai/search_context should contain valid JSON")?;
     assert_eq!(
-        turn_metadata["client-metadata-key"],
-        json!("client-metadata-value")
+        search_context
+            .pointer("/telemetry_attributes/model_id")
+            .and_then(Value::as_str),
+        Some(expected_model_id)
     );
 
     assert_eq!(
