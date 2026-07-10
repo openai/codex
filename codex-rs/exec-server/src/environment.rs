@@ -1174,9 +1174,7 @@ mod tests {
                 pipe_stdin: false,
                 arg0: None,
                 sandbox: None,
-                enforce_managed_network: false,
-                managed_network: None,
-                network_proxy: None,
+                managed_network: crate::ExecManagedNetwork::disabled(),
             })
             .await
             .expect("start process");
@@ -1215,9 +1213,7 @@ mod tests {
                 pipe_stdin: false,
                 arg0: None,
                 sandbox: Some(sandbox),
-                enforce_managed_network: false,
-                managed_network: None,
-                network_proxy: None,
+                managed_network: crate::ExecManagedNetwork::disabled(),
             })
             .await;
         let Err(err) = result else {

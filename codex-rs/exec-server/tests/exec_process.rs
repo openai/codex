@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
+use codex_exec_server::ExecManagedNetwork;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
@@ -82,9 +83,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -228,9 +227,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -263,9 +260,7 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -314,9 +309,7 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -366,9 +359,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -443,9 +434,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -484,9 +473,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
             pipe_stdin: true,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -521,9 +508,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -559,9 +544,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -616,9 +599,7 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
 
@@ -660,9 +641,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
 
@@ -722,9 +701,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
             pipe_stdin: true,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
 

@@ -33,6 +33,7 @@ use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
+use codex_exec_server::ExecManagedNetwork;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
@@ -508,9 +509,7 @@ impl ExecutorStdioServerLauncher {
                 pipe_stdin: true,
                 arg0: None,
                 sandbox: None,
-                enforce_managed_network: false,
-                managed_network: None,
-                network_proxy: None,
+                managed_network: ExecManagedNetwork::disabled(),
             })
             .await
             .map_err(io::Error::other)?;

@@ -98,6 +98,7 @@ pub use protocol::EnvironmentInfo;
 pub use protocol::ExecClosedNotification;
 pub use protocol::ExecEnvPolicy;
 pub use protocol::ExecExitedNotification;
+pub use protocol::ExecManagedNetwork;
 pub use protocol::ExecOutputDeltaNotification;
 pub use protocol::ExecOutputStream;
 pub use protocol::ExecParams;

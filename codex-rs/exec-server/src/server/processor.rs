@@ -745,9 +745,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: crate::protocol::ExecManagedNetwork::disabled(),
         }
     }
 

@@ -183,8 +183,11 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
 
     assert_eq!(params.process_id.as_str(), "123");
     assert_eq!(params.cwd, request.cwd);
-    assert!(params.enforce_managed_network);
-    assert_eq!(params.managed_network, Some(managed_network));
+    assert!(params.managed_network.enforce());
+    assert_eq!(
+        params.managed_network.sandbox_context(),
+        Some(&managed_network)
+    );
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,

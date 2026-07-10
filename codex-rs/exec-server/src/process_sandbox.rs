@@ -42,8 +42,8 @@ pub(crate) async fn prepare_exec_request(
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     let (env, managed_network, network_proxy_handle) = prepare_managed_network(
-        params.managed_network.as_ref(),
-        params.network_proxy.as_ref(),
+        params.managed_network.sandbox_context(),
+        params.managed_network.launch_config(),
         env,
         network_policy_decider,
     )
@@ -101,7 +101,7 @@ pub(crate) async fn prepare_exec_request(
         network_policy,
         SandboxablePreference::Require,
         sandbox_context.windows_sandbox_level,
-        params.enforce_managed_network,
+        params.managed_network.enforce(),
     );
     match sandbox {
         SandboxType::None => {
@@ -140,7 +140,7 @@ pub(crate) async fn prepare_exec_request(
                 },
                 permissions: &permissions,
                 sandbox,
-                enforce_managed_network: params.enforce_managed_network,
+                enforce_managed_network: params.managed_network.enforce(),
                 environment_id: None,
                 network: None,
                 sandbox_policy_cwd,

@@ -191,9 +191,26 @@ fn exec_server_params_for_request(
         pipe_stdin: false,
         arg0: request.arg0.clone(),
         sandbox: request.exec_server_sandbox.clone(),
-        enforce_managed_network: request.exec_server_enforce_managed_network,
-        managed_network: request.exec_server_managed_network.clone(),
-        network_proxy: request.exec_server_network_proxy.clone(),
+        managed_network: exec_server_managed_network_for_request(request),
+    }
+}
+
+fn exec_server_managed_network_for_request(
+    request: &ExecRequest,
+) -> codex_exec_server::ExecManagedNetwork {
+    debug_assert!(
+        request.exec_server_managed_network.is_none()
+            || request.exec_server_network_proxy.is_none(),
+        "exec-server managed network sandbox facts and launch config must be mutually exclusive"
+    );
+    if let Some(network_proxy) = request.exec_server_network_proxy.clone() {
+        codex_exec_server::ExecManagedNetwork::launch_proxy(network_proxy)
+    } else if let Some(managed_network) = request.exec_server_managed_network.clone() {
+        codex_exec_server::ExecManagedNetwork::existing_proxy(managed_network)
+    } else if request.exec_server_enforce_managed_network {
+        codex_exec_server::ExecManagedNetwork::enforce_without_proxy()
+    } else {
+        codex_exec_server::ExecManagedNetwork::disabled()
     }
 }
 

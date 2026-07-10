@@ -257,8 +257,8 @@ impl LocalProcess {
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
         let network_policy_decider = params
-            .network_proxy
-            .as_ref()
+            .managed_network
+            .launch_config()
             .is_some_and(|launch| launch.proxy.request_policy_decisions)
             .then(|| {
                 self.inner
@@ -1057,9 +1057,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: crate::ExecManagedNetwork::disabled(),
         }
     }
 

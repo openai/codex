@@ -17,6 +17,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use super::prepare_exec_request;
+use crate::ExecManagedNetwork;
 use crate::ExecParams;
 #[cfg(unix)]
 use crate::ExecServerRuntimePaths;
@@ -53,9 +54,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         pipe_stdin: false,
         arg0: None,
         sandbox: Some(sandbox),
-        enforce_managed_network: false,
-        managed_network: None,
-        network_proxy: None,
+        managed_network: ExecManagedNetwork::disabled(),
     };
 
     let prepared = prepare_exec_request(
@@ -121,12 +120,10 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         pipe_stdin: false,
         arg0: None,
         sandbox: Some(sandbox),
-        enforce_managed_network: true,
-        managed_network: Some(ManagedNetworkSandboxContext {
+        managed_network: ExecManagedNetwork::existing_proxy(ManagedNetworkSandboxContext {
             loopback_ports: vec![43123],
             allow_local_binding: false,
         }),
-        network_proxy: None,
     };
 
     let prepared = prepare_exec_request(
@@ -164,9 +161,7 @@ async fn native_request_preserves_native_launch_fields() {
         pipe_stdin: false,
         arg0: Some("custom-arg0".to_string()),
         sandbox: None,
-        enforce_managed_network: false,
-        managed_network: None,
-        network_proxy: None,
+        managed_network: ExecManagedNetwork::disabled(),
     };
 
     let prepared = prepare_exec_request(
@@ -207,9 +202,7 @@ async fn remote_proxy_config_starts_executor_local_proxy() {
         pipe_stdin: false,
         arg0: None,
         sandbox: None,
-        enforce_managed_network: false,
-        managed_network: None,
-        network_proxy: Some(
+        managed_network: ExecManagedNetwork::launch_proxy(
             RemoteNetworkProxyLaunchConfig::new(proxy_config)
                 .for_execution("remote".to_string(), "execution-1".to_string()),
         ),
