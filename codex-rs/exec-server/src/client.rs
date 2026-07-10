@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyDecider;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -17,6 +19,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
@@ -91,6 +94,11 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NETWORK_POLICY_DECISION_TIMEOUT;
+use crate::protocol::NETWORK_POLICY_REQUEST_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
+use crate::protocol::NetworkPolicyRequestNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
@@ -162,6 +170,8 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
+    network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    network_policy_decisions_cancelled: CancellationToken,
 }
 
 #[derive(Default)]
@@ -649,6 +659,24 @@ impl ExecServerClient {
         &self,
         params: ExecParams,
     ) -> Result<Session, ExecServerError> {
+        self.start_process_inner(params, /*network_policy_decider*/ None)
+            .await
+    }
+
+    pub(crate) async fn start_process_with_network_policy_decider(
+        &self,
+        params: ExecParams,
+        network_policy_decider: Arc<dyn NetworkPolicyDecider>,
+    ) -> Result<Session, ExecServerError> {
+        self.start_process_inner(params, Some(network_policy_decider))
+            .await
+    }
+
+    async fn start_process_inner(
+        &self,
+        params: ExecParams,
+        network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    ) -> Result<Session, ExecServerError> {
         loop {
             let rpc_client = self.inner.rpc_client().await?;
             if !self.inner.begin_process_start(&rpc_client) {
@@ -656,7 +684,10 @@ impl ExecServerClient {
             }
 
             let process_id = params.process_id.clone();
-            let state = Arc::new(SessionState::new(/*recoverable*/ false));
+            let state = Arc::new(SessionState::new(
+                /*recoverable*/ false,
+                network_policy_decider.clone(),
+            ));
             if let Err(error) = self.inner.insert_session(&process_id, Arc::clone(&state)) {
                 self.inner.finish_process_start();
                 return Err(error);
@@ -710,7 +741,9 @@ impl ExecServerClient {
         &self,
         process_id: &ProcessId,
     ) -> Result<Session, ExecServerError> {
-        let state = Arc::new(SessionState::new(/*recoverable*/ true));
+        let state = Arc::new(SessionState::new(
+            /*recoverable*/ true, /*network_policy_decider*/ None,
+        ));
         self.inner.insert_session(process_id, Arc::clone(&state))?;
         Ok(Session {
             client: self.clone(),
@@ -835,7 +868,10 @@ impl From<RpcCallError> for ExecServerError {
 }
 
 impl SessionState {
-    fn new(recoverable: bool) -> Self {
+    fn new(
+        recoverable: bool,
+        network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    ) -> Self {
         let (wake_tx, _wake_rx) = watch::channel(0);
         Self {
             wake_tx,
@@ -846,6 +882,8 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
+            network_policy_decider,
+            network_policy_decisions_cancelled: CancellationToken::new(),
         }
     }
 
@@ -902,6 +940,9 @@ impl SessionState {
             ordered_events.last_published_seq = next_seq;
             ordered_events.exit_published |= matches!(&event, ExecProcessEvent::Exited { .. });
             let is_closed = matches!(&event, ExecProcessEvent::Closed { .. });
+            if matches!(&event, ExecProcessEvent::Exited { .. }) || is_closed {
+                self.network_policy_decisions_cancelled.cancel();
+            }
             ordered_events.closed_published |= is_closed;
             published_closed |= is_closed;
             self.events.publish(event);
@@ -910,6 +951,7 @@ impl SessionState {
     }
 
     fn set_failure(&self, message: String) {
+        self.network_policy_decisions_cancelled.cancel();
         let mut ordered_events = self
             .ordered_events
             .lock()
@@ -1089,6 +1131,7 @@ impl Inner {
         let mut next_sessions = sessions.as_ref().clone();
         next_sessions.remove(process_id);
         self.sessions.store(Arc::new(next_sessions));
+        expected.network_policy_decisions_cancelled.cancel();
     }
 
     fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
@@ -1195,6 +1238,51 @@ async fn handle_server_notification(
             inner
                 .handle_http_body_delta_notification(notification.params)
                 .await?;
+        }
+        NETWORK_POLICY_REQUEST_METHOD => {
+            let params: NetworkPolicyRequestNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let (decider, cancellation) = inner.get_session(&params.process_id).map_or_else(
+                || (None, CancellationToken::new()),
+                |session| {
+                    (
+                        session.network_policy_decider.clone(),
+                        session.network_policy_decisions_cancelled.clone(),
+                    )
+                },
+            );
+            let inner = Arc::clone(inner);
+            tokio::spawn(async move {
+                let decision = tokio::select! {
+                    _ = cancellation.cancelled() => return,
+                    decision = timeout(NETWORK_POLICY_DECISION_TIMEOUT, async {
+                        match decider {
+                            Some(decider) => decider.decide(params.request).await,
+                            None => NetworkDecision::deny("not_allowed"),
+                        }
+                    }) => decision.unwrap_or_else(|_| NetworkDecision::deny("not_allowed")),
+                };
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let response = NetworkPolicyDecisionNotification {
+                    request_id: params.request_id,
+                    process_id: params.process_id,
+                    decision,
+                };
+                let Ok(rpc_client) = inner.rpc_client().await else {
+                    return;
+                };
+                if let Err(err) = rpc_client
+                    .notify(NETWORK_POLICY_DECISION_METHOD, &response)
+                    .await
+                {
+                    debug!(
+                        ?err,
+                        "failed to send network policy decision to exec-server"
+                    );
+                }
+            });
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");
@@ -1385,9 +1473,7 @@ mod tests {
                 pipe_stdin: false,
                 arg0: None,
                 sandbox: None,
-                enforce_managed_network: false,
-                managed_network: None,
-                network_proxy: None,
+                managed_network: crate::protocol::ExecManagedNetwork::disabled(),
             })
             .instrument(parent_span)
             .await
@@ -1402,8 +1488,11 @@ mod tests {
         let traceparent = trace.traceparent.as_deref().expect("request traceparent");
         let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
         let parts = traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(expected_parts.len(), 4);
+        assert_eq!(parts[0], expected_parts[0]);
         assert_eq!(parts[1], expected_parts[1]);
-        assert_ne!(parts[2], expected_parts[2]);
+        assert_eq!(parts[3], expected_parts[3]);
         assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::ExecServerHandler;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
+use crate::protocol::ExecManagedNetwork;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
@@ -35,9 +36,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         pipe_stdin: false,
         arg0: None,
         sandbox: None,
-        enforce_managed_network: false,
-        managed_network: None,
-        network_proxy: None,
+        managed_network: ExecManagedNetwork::disabled(),
     }
 }
 

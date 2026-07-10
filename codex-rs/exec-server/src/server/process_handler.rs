@@ -4,6 +4,7 @@ use crate::ExecServerRuntimePaths;
 use crate::local_process::LocalProcess;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::SignalParams;
@@ -41,6 +42,13 @@ impl ProcessHandler {
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.process.exec(params).await
+    }
+
+    pub(crate) fn resolve_network_policy_decision(
+        &self,
+        params: NetworkPolicyDecisionNotification,
+    ) -> Result<(), String> {
+        self.process.resolve_network_policy_decision(params)
     }
 
     pub(crate) async fn exec_read(

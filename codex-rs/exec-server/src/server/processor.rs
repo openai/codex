@@ -1,7 +1,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::warn;
@@ -20,6 +23,8 @@ use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
 use crate::telemetry::ConnectionTransport;
 use crate::telemetry::ExecServerTelemetry;
+
+const MAX_CONCURRENT_REQUESTS: usize = 256;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
@@ -89,6 +94,9 @@ async fn run_connection(
         notifications,
         runtime_paths,
     ));
+    let concurrent_request_shutdown = CancellationToken::new();
+    let concurrent_request_tasks = TaskTracker::new();
+    let concurrent_request_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -130,6 +138,79 @@ async fn run_connection(
                     let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
                         let request_span = request_span(method, &request);
+                        if router.request_runs_concurrently(method) {
+                            let permit = match Arc::clone(&concurrent_request_permits)
+                                .try_acquire_owned()
+                            {
+                                Ok(permit) => permit,
+                                Err(_) => {
+                                    let result = "error";
+                                    let message = RpcServerOutboundMessage::Error {
+                                        request_id: request.id,
+                                        error: invalid_request(
+                                            "too many concurrent exec-server requests".to_string(),
+                                        ),
+                                    };
+                                    if outgoing_tx.send(message).await.is_err() {
+                                        request_span.record("result", "disconnected");
+                                        telemetry.request_completed(
+                                            method,
+                                            "disconnected",
+                                            request_started_at.elapsed(),
+                                        );
+                                        break;
+                                    }
+                                    request_span.record("result", result);
+                                    telemetry.request_completed(
+                                        method,
+                                        result,
+                                        request_started_at.elapsed(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let request = route(Arc::clone(&handler), request)
+                                .instrument(request_span.clone());
+                            let outgoing_tx = outgoing_tx.clone();
+                            let mut disconnected_rx = disconnected_rx.clone();
+                            let shutdown = concurrent_request_shutdown.clone();
+                            let telemetry = telemetry.clone();
+                            concurrent_request_tasks.spawn(async move {
+                                let _permit = permit;
+                                let message = tokio::select! {
+                                    message = request => message,
+                                    _ = disconnected_rx.changed() => {
+                                        request_span.record("result", "disconnected");
+                                        telemetry.request_completed(
+                                            method,
+                                            "disconnected",
+                                            request_started_at.elapsed(),
+                                        );
+                                        return;
+                                    }
+                                    _ = shutdown.cancelled() => return,
+                                };
+                                let result = request_result(&message);
+                                if let Some(message) = message
+                                    && outgoing_tx.send(message).await.is_err()
+                                {
+                                    request_span.record("result", "disconnected");
+                                    telemetry.request_completed(
+                                        method,
+                                        "disconnected",
+                                        request_started_at.elapsed(),
+                                    );
+                                    return;
+                                }
+                                request_span.record("result", result);
+                                telemetry.request_completed(
+                                    method,
+                                    result,
+                                    request_started_at.elapsed(),
+                                );
+                            });
+                            continue;
+                        }
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
@@ -231,6 +312,9 @@ async fn run_connection(
         }
     }
 
+    concurrent_request_shutdown.cancel();
+    concurrent_request_tasks.close();
+    concurrent_request_tasks.wait().await;
     handler.shutdown().await;
     drop(handler);
     drop(outgoing_tx);
@@ -318,6 +402,8 @@ mod tests {
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
+    use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+    use crate::protocol::NetworkPolicyDecisionNotification;
     use crate::protocol::ReadParams;
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
@@ -496,6 +582,73 @@ mod tests {
             .expect("second processor should join");
     }
 
+    #[tokio::test]
+    async fn network_policy_decision_is_not_queued_behind_long_poll_read() {
+        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let (mut writer, mut lines, task) =
+            spawn_test_connection(registry, "network-policy-long-poll");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let process_id = ProcessId::from("proc-policy-long-poll");
+        send_request(
+            &mut writer,
+            /*id*/ 2,
+            EXEC_METHOD,
+            &exec_params(process_id.clone()),
+        )
+        .await;
+        let _: ExecResponse = read_response(&mut lines, /*expected_id*/ 2).await;
+        send_request(
+            &mut writer,
+            /*id*/ 3,
+            EXEC_READ_METHOD,
+            &ReadParams {
+                process_id: process_id.clone(),
+                after_seq: Some(0),
+                max_bytes: None,
+                wait_ms: Some(5_000),
+            },
+        )
+        .await;
+        send_notification(
+            &mut writer,
+            NETWORK_POLICY_DECISION_METHOD,
+            &NetworkPolicyDecisionNotification {
+                request_id: "already-completed".to_string(),
+                process_id,
+                decision: codex_network_proxy::NetworkDecision::Allow,
+            },
+        )
+        .await;
+        send_request(&mut writer, /*id*/ 4, ENVIRONMENT_INFO_METHOD, &()).await;
+
+        let _: EnvironmentInfo = timeout(
+            Duration::from_millis(250),
+            read_response(&mut lines, /*expected_id*/ 4),
+        )
+        .await
+        .expect("policy decision and following requests must bypass long-poll read");
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
+
     fn spawn_test_connection(
         registry: Arc<SessionRegistry>,
         label: &str,
@@ -592,9 +745,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: crate::protocol::ExecManagedNetwork::disabled(),
         }
     }
 

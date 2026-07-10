@@ -51,6 +51,7 @@ pub(crate) enum NetworkApprovalMode {
 pub(crate) struct NetworkApprovalSpec {
     pub network: Option<NetworkProxy>,
     pub mode: NetworkApprovalMode,
+    pub execution_scoped_proxy: bool,
     pub trigger: GuardianNetworkAccessTrigger,
     pub command: String,
     pub environment_id: String,
@@ -857,6 +858,7 @@ pub(crate) async fn begin_network_approval(
     let NetworkApprovalSpec {
         network,
         mode,
+        execution_scoped_proxy,
         trigger,
         command,
         environment_id,
@@ -872,7 +874,8 @@ pub(crate) async fn begin_network_approval(
     }
 
     let registration_id = Uuid::new_v4().to_string();
-    let execution_proxy = if selected_sandbox == SandboxType::LinuxSeccomp {
+    let execution_proxy = if execution_scoped_proxy || selected_sandbox == SandboxType::LinuxSeccomp
+    {
         let attribution_token = Uuid::new_v4().to_string();
         network
             .for_execution(&environment_id, &registration_id, attribution_token)

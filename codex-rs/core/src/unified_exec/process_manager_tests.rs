@@ -175,6 +175,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         exec_server_enforce_managed_network: true,
         exec_server_managed_network: Some(managed_network.clone()),
         exec_server_network_proxy: None,
+        network_policy_decider: None,
     };
 
     let params =
@@ -182,8 +183,11 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
 
     assert_eq!(params.process_id.as_str(), "123");
     assert_eq!(params.cwd, request.cwd);
-    assert!(params.enforce_managed_network);
-    assert_eq!(params.managed_network, Some(managed_network));
+    assert!(params.managed_network.enforce());
+    assert_eq!(
+        params.managed_network.sandbox_context(),
+        Some(&managed_network)
+    );
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,

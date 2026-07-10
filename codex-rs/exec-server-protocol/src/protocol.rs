@@ -1,16 +1,21 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 
 use crate::ProcessId;
 
@@ -24,6 +29,9 @@ pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
+pub const NETWORK_POLICY_REQUEST_METHOD: &str = "network/policyRequest";
+pub const NETWORK_POLICY_DECISION_METHOD: &str = "network/policyDecision";
+pub const NETWORK_POLICY_DECISION_TIMEOUT: Duration = Duration::from_secs(30);
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_OPEN_METHOD: &str = "fs/open";
@@ -136,18 +144,165 @@ pub struct ExecParams {
     /// Portable sandbox intent. Concrete wrapper argv is resolved by the exec-server.
     #[serde(default)]
     pub sandbox: Option<FileSystemSandboxContext>,
-    /// Whether the eventual executor-side sandbox must enforce managed networking.
+    /// Managed-network intent. This serializes to the legacy `enforceManagedNetwork`,
+    /// `managedNetwork`, and `networkProxy` fields, but Rust callers cannot set those
+    /// independently.
+    #[serde(flatten)]
+    pub managed_network: ExecManagedNetwork,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecManagedNetwork {
+    mode: ExecManagedNetworkMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExecManagedNetworkMode {
+    Disabled,
+    EnforceWithoutProxy,
+    ExistingProxy(ManagedNetworkSandboxContext),
+    LaunchProxy(Box<RemoteNetworkProxyLaunchConfig>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecManagedNetworkWire {
     #[serde(default)]
-    pub enforce_managed_network: bool,
-    /// Optional details for enforcing managed networking without a live proxy object.
-    ///
-    /// When `enforce_managed_network` is true and these details are absent, the executor must
-    /// continue to fail closed. This preserves compatibility with older clients.
+    enforce_managed_network: bool,
     #[serde(default)]
-    pub managed_network: Option<ManagedNetworkSandboxContext>,
-    /// Optional instructions for starting an executor-local managed-network proxy.
+    managed_network: Option<ManagedNetworkSandboxContext>,
     #[serde(default)]
-    pub network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
+    network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
+}
+
+impl ExecManagedNetwork {
+    pub fn disabled() -> Self {
+        Self {
+            mode: ExecManagedNetworkMode::Disabled,
+        }
+    }
+
+    pub fn enforce_without_proxy() -> Self {
+        Self {
+            mode: ExecManagedNetworkMode::EnforceWithoutProxy,
+        }
+    }
+
+    pub fn existing_proxy(managed_network: ManagedNetworkSandboxContext) -> Self {
+        Self {
+            mode: ExecManagedNetworkMode::ExistingProxy(managed_network),
+        }
+    }
+
+    pub fn launch_proxy(network_proxy: RemoteNetworkProxyLaunchConfig) -> Self {
+        Self {
+            mode: ExecManagedNetworkMode::LaunchProxy(Box::new(network_proxy)),
+        }
+    }
+
+    pub fn from_parts(
+        enforce_managed_network: bool,
+        managed_network: Option<ManagedNetworkSandboxContext>,
+        network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
+    ) -> Result<Self, String> {
+        Self::try_from(ExecManagedNetworkWire {
+            enforce_managed_network,
+            managed_network,
+            network_proxy,
+        })
+    }
+
+    pub fn enforce(&self) -> bool {
+        !matches!(self.mode, ExecManagedNetworkMode::Disabled)
+    }
+
+    pub fn sandbox_context(&self) -> Option<&ManagedNetworkSandboxContext> {
+        match &self.mode {
+            ExecManagedNetworkMode::Disabled
+            | ExecManagedNetworkMode::EnforceWithoutProxy
+            | ExecManagedNetworkMode::LaunchProxy(_) => None,
+            ExecManagedNetworkMode::ExistingProxy(managed_network) => Some(managed_network),
+        }
+    }
+
+    pub fn launch_config(&self) -> Option<&RemoteNetworkProxyLaunchConfig> {
+        match &self.mode {
+            ExecManagedNetworkMode::Disabled
+            | ExecManagedNetworkMode::EnforceWithoutProxy
+            | ExecManagedNetworkMode::ExistingProxy(_) => None,
+            ExecManagedNetworkMode::LaunchProxy(network_proxy) => Some(network_proxy.as_ref()),
+        }
+    }
+}
+
+impl Default for ExecManagedNetwork {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+impl TryFrom<ExecManagedNetworkWire> for ExecManagedNetwork {
+    type Error = String;
+
+    fn try_from(wire: ExecManagedNetworkWire) -> Result<Self, Self::Error> {
+        match (wire.enforce_managed_network, wire.managed_network, wire.network_proxy) {
+            (_, Some(_), Some(_)) => Err(
+                "`managedNetwork` sandbox facts and `networkProxy` launch config are mutually exclusive"
+                    .to_string(),
+            ),
+            (_, None, Some(network_proxy)) => Ok(Self::launch_proxy(network_proxy)),
+            (_, Some(managed_network), None) => Ok(Self::existing_proxy(managed_network)),
+            (true, None, None) => Ok(Self::enforce_without_proxy()),
+            (false, None, None) => Ok(Self::disabled()),
+        }
+    }
+}
+
+impl From<&ExecManagedNetwork> for ExecManagedNetworkWire {
+    fn from(managed_network: &ExecManagedNetwork) -> Self {
+        match &managed_network.mode {
+            ExecManagedNetworkMode::Disabled => Self {
+                enforce_managed_network: false,
+                managed_network: None,
+                network_proxy: None,
+            },
+            ExecManagedNetworkMode::EnforceWithoutProxy => Self {
+                enforce_managed_network: true,
+                managed_network: None,
+                network_proxy: None,
+            },
+            ExecManagedNetworkMode::ExistingProxy(managed_network) => Self {
+                enforce_managed_network: true,
+                managed_network: Some(managed_network.clone()),
+                network_proxy: None,
+            },
+            ExecManagedNetworkMode::LaunchProxy(network_proxy) => Self {
+                enforce_managed_network: true,
+                managed_network: None,
+                network_proxy: Some((**network_proxy).clone()),
+            },
+        }
+    }
+}
+
+impl Serialize for ExecManagedNetwork {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        ExecManagedNetworkWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecManagedNetwork {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        ExecManagedNetworkWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +319,22 @@ pub struct ExecEnvPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyRequestNotification {
+    pub request_id: String,
+    pub process_id: ProcessId,
+    pub request: NetworkPolicyRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyDecisionNotification {
+    pub request_id: String,
+    pub process_id: ProcessId,
+    pub decision: NetworkDecision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -571,6 +742,7 @@ mod base64_bytes {
 mod tests {
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
+    use super::ExecManagedNetwork;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -588,7 +760,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn exec_params_keeps_proxy_launch_separate_from_sandbox_facts() {
+    fn exec_params_serializes_proxy_launch_as_legacy_wire_fields() {
         let cwd =
             PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                 .expect("cwd URI");
@@ -602,12 +774,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: true,
-            managed_network: Some(ManagedNetworkSandboxContext {
-                loopback_ports: vec![43123, 48081],
-                allow_local_binding: false,
-            }),
-            network_proxy: Some(
+            managed_network: ExecManagedNetwork::launch_proxy(
                 RemoteNetworkProxyLaunchConfig::new(
                     RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
                         .expect("supported remote config"),
@@ -621,13 +788,8 @@ mod tests {
         };
 
         let mut serialized = serde_json::to_value(&params).expect("serialize exec params");
-        assert_eq!(
-            serialized["managedNetwork"],
-            serde_json::json!({
-                "loopbackPorts": [43123, 48081],
-                "allowLocalBinding": false,
-            })
-        );
+        assert_eq!(serialized["enforceManagedNetwork"], serde_json::json!(true));
+        assert_eq!(serialized["managedNetwork"], serde_json::json!(null));
         assert_eq!(
             serialized["networkProxy"]["auditMetadata"]["conversationId"],
             "conversation-1"
@@ -639,16 +801,105 @@ mod tests {
         serialized
             .as_object_mut()
             .expect("exec params object")
-            .remove("managedNetwork");
-        serialized
-            .as_object_mut()
-            .expect("exec params object")
             .remove("networkProxy");
         let legacy: ExecParams =
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
-        assert!(legacy.enforce_managed_network);
-        assert_eq!(legacy.managed_network, None);
-        assert_eq!(legacy.network_proxy, None);
+        assert_eq!(
+            legacy.managed_network,
+            ExecManagedNetwork::enforce_without_proxy()
+        );
+    }
+
+    #[test]
+    fn exec_params_serializes_existing_proxy_sandbox_facts_as_legacy_wire_fields() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let sandbox_context = ManagedNetworkSandboxContext {
+            loopback_ports: vec![43123, 48081],
+            allow_local_binding: false,
+        };
+        let params = ExecParams {
+            process_id: ProcessId::from("managed-network"),
+            argv: vec!["true".to_string()],
+            cwd,
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            managed_network: ExecManagedNetwork::existing_proxy(sandbox_context.clone()),
+        };
+
+        let serialized = serde_json::to_value(&params).expect("serialize exec params");
+        assert_eq!(
+            serialized["managedNetwork"],
+            serde_json::json!({
+                "loopbackPorts": [43123, 48081],
+                "allowLocalBinding": false,
+            })
+        );
+        assert_eq!(serialized["networkProxy"], serde_json::json!(null));
+        let round_trip: ExecParams =
+            serde_json::from_value(serialized).expect("deserialize exec params");
+        assert_eq!(round_trip, params);
+
+        let legacy = ExecManagedNetwork::from_parts(
+            /*enforce_managed_network*/ false,
+            Some(sandbox_context),
+            /*network_proxy*/ None,
+        )
+        .expect("legacy managedNetwork facts imply enforcement");
+        assert_eq!(legacy.enforce(), true);
+    }
+
+    #[test]
+    fn exec_params_defaults_missing_managed_network_fields_to_disabled() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let params: ExecParams = serde_json::from_value(serde_json::json!({
+            "processId": "legacy-without-managed-network",
+            "argv": ["true"],
+            "cwd": cwd,
+            "env": {},
+            "tty": false,
+            "arg0": null,
+            "sandbox": null
+        }))
+        .expect("deserialize legacy exec params");
+
+        assert_eq!(params.managed_network, ExecManagedNetwork::disabled());
+    }
+
+    #[test]
+    fn exec_params_rejects_both_proxy_launch_and_existing_proxy_facts() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let launch = RemoteNetworkProxyLaunchConfig::new(
+            RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+                .expect("supported remote config"),
+        )
+        .for_execution("remote".to_string(), "execution-1".to_string());
+        let result = serde_json::from_value::<ExecParams>(serde_json::json!({
+            "processId": "invalid-managed-network",
+            "argv": ["true"],
+            "cwd": cwd,
+            "env": {},
+            "tty": false,
+            "arg0": null,
+            "sandbox": null,
+            "enforceManagedNetwork": true,
+            "managedNetwork": {
+                "loopbackPorts": [43123],
+                "allowLocalBinding": false,
+            },
+            "networkProxy": launch
+        }));
+
+        assert!(result.is_err());
     }
 
     #[test]

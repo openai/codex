@@ -66,6 +66,9 @@ pub struct RemoteNetworkProxyConfig {
     pub domains: Option<NetworkDomainPermissions>,
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: bool,
+    /// Whether the executor may send policy misses back to the client for a decision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub request_policy_decisions: bool,
 }
 
 impl RemoteNetworkProxyConfig {
@@ -88,6 +91,7 @@ impl RemoteNetworkProxyConfig {
             domains: settings.domains.clone(),
             unix_sockets: settings.unix_sockets.clone(),
             allow_local_binding: settings.allow_local_binding,
+            request_policy_decisions: false,
         })
     }
 

@@ -44,6 +44,7 @@ use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::SignalParams;
@@ -159,6 +160,16 @@ impl ExecServerHandler {
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec(params).await
+    }
+
+    pub(crate) fn resolve_network_policy_decision(
+        &self,
+        params: NetworkPolicyDecisionNotification,
+    ) -> Result<(), String> {
+        let session = self
+            .require_initialized_for("network policy decision")
+            .map_err(|error| error.message)?;
+        session.process().resolve_network_policy_decision(params)
     }
 
     pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {

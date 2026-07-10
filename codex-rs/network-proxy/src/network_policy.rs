@@ -19,7 +19,8 @@ const POLICY_REASON_ALLOW: &str = "allow";
 const DEFAULT_METHOD: &str = "none";
 const DEFAULT_CLIENT_ADDRESS: &str = "unknown";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkProtocol {
     Http,
     HttpsConnect,
@@ -74,7 +75,8 @@ impl NetworkDecisionSource {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyRequest {
     pub protocol: NetworkProtocol,
     pub host: String,
@@ -124,7 +126,8 @@ impl NetworkPolicyRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum NetworkDecision {
     Allow,
     Deny {

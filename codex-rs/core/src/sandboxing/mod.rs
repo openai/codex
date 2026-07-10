@@ -16,6 +16,7 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -30,6 +31,7 @@ use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct ExecOptions {
@@ -67,6 +69,26 @@ pub struct ExecRequest {
     pub(crate) exec_server_enforce_managed_network: bool,
     pub(crate) exec_server_managed_network: Option<ManagedNetworkSandboxContext>,
     pub(crate) exec_server_network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
+    pub(crate) network_policy_decider: Option<ExecNetworkPolicyDecider>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ExecNetworkPolicyDecider(Arc<dyn NetworkPolicyDecider>);
+
+impl ExecNetworkPolicyDecider {
+    pub(crate) fn new(decider: Arc<dyn NetworkPolicyDecider>) -> Self {
+        Self(decider)
+    }
+
+    pub(crate) fn get(&self) -> Arc<dyn NetworkPolicyDecider> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl std::fmt::Debug for ExecNetworkPolicyDecider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("ExecNetworkPolicyDecider").finish()
+    }
 }
 
 impl ExecRequest {
@@ -113,6 +135,7 @@ impl ExecRequest {
             exec_server_enforce_managed_network: false,
             exec_server_managed_network: None,
             exec_server_network_proxy: None,
+            network_policy_decider: None,
         }
     }
 
@@ -173,6 +196,7 @@ impl ExecRequest {
             exec_server_enforce_managed_network: false,
             exec_server_managed_network: None,
             exec_server_network_proxy: None,
+            network_policy_decider: None,
         }
     }
 }

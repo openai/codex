@@ -13,6 +13,7 @@ use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
+use codex_exec_server::ExecManagedNetwork;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ExecServerClient;
@@ -151,9 +152,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
-            enforce_managed_network: false,
-            managed_network: None,
-            network_proxy: None,
+            managed_network: ExecManagedNetwork::disabled(),
         })
         .await?;
     assert_eq!(
