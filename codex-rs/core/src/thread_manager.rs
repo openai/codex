@@ -89,6 +89,7 @@ use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+const CODEX_CLOUD_AGENT_SESSION_SOURCE: &str = "codex-cloud-agent";
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
 ///
@@ -333,11 +334,23 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
+        let models_manager = if matches!(
+            &session_source,
+            SessionSource::Custom(source) if source == CODEX_CLOUD_AGENT_SESSION_SOURCE
+        ) {
+            create_model_provider(
+                config.model_provider.clone(),
+                Some(Arc::clone(&auth_manager)),
+            )
+            .models_manager_without_disk_cache(config.model_catalog.clone())
+        } else {
+            build_models_manager(config, Arc::clone(&auth_manager))
+        };
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(config, auth_manager.clone()),
+                models_manager,
                 environment_manager,
                 skills_service,
                 plugins_manager,

@@ -235,7 +235,30 @@ impl OpenAiModelsManager {
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
-        let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        Self::new_with_cache_manager(
+            ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL),
+            endpoint_client,
+            auth_manager,
+        )
+    }
+
+    /// Construct an OpenAI-compatible model manager with memory-only catalog state.
+    pub fn new_without_disk_cache(
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
+        Self::new_with_cache_manager(
+            ModelsCacheManager::without_disk_cache(DEFAULT_MODEL_CACHE_TTL),
+            endpoint_client,
+            auth_manager,
+        )
+    }
+
+    fn new_with_cache_manager(
+        cache_manager: ModelsCacheManager,
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let remote_models = load_remote_models_from_file().unwrap_or_default();
         Self {
             remote_models: RwLock::new(remote_models),
