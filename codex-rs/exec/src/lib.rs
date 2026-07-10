@@ -2,6 +2,7 @@
 //   stdout is the final message (if any).
 // - In --json mode, stdout must be valid JSONL, one event per line.
 // For both modes, any other output must be written to stderr.
+#![recursion_limit = "256"]
 #![deny(clippy::print_stdout)]
 
 mod cli;
