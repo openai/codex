@@ -41,6 +41,10 @@ use crate::oauth::test_support::TempCodexHome;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
+// Contention is proven by the tracing event emitted after a real WouldBlock. Keep the timeout
+// generous because it only bounds a failed test; it must not turn worker scheduling latency into
+// a false failure on loaded CI hosts.
+const STORE_LOCK_CONTENTION_EVENT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 
 fn assert_tokens_match_without_expiry(actual: &StoredOAuthTokens, expected: &StoredOAuthTokens) {
     assert_eq!(actual.server_name, expected.server_name);
@@ -294,7 +298,9 @@ where
 
     // This event is emitted only after `try_lock()` returns WouldBlock, so the test fails if the
     // operation stops acquiring the aggregate-store lock.
-    contended_rx.recv_timeout(Duration::from_secs(/*secs*/ 1))?;
+    contended_rx
+        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
+        .context("timed out waiting for actual OAuth store lock contention")?;
     drop(held_lock);
     let result = result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
     worker
@@ -327,7 +333,9 @@ fn file_store_lock_preserves_updates_for_different_servers() -> Result<()> {
         });
     });
 
-    contended_rx.recv_timeout(Duration::from_secs(/*secs*/ 1))?;
+    contended_rx
+        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
+        .context("timed out waiting for actual OAuth store lock contention")?;
     save_oauth_tokens_to_file_with_lock_held(&first)?;
     drop(held_lock);
     result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
@@ -396,7 +404,9 @@ fn secrets_store_lock_preserves_updates_for_different_servers() -> Result<()> {
         });
     });
 
-    contended_rx.recv_timeout(Duration::from_secs(/*secs*/ 1))?;
+    contended_rx
+        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
+        .context("timed out waiting for actual OAuth store lock contention")?;
     let first_serialized = serde_json::to_string(&first)?;
     save_oauth_tokens_to_secrets_keyring_with_lock_held(
         &keyring_store,
