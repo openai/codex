@@ -19,6 +19,7 @@ use reqwest::Url;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::HttpResponseBodyStream;
@@ -209,67 +210,89 @@ impl ReqwestHttpRequestRunner {
         ))
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.http_response_body",
+        parent = None,
+        skip(pending_stream, notifications, shutdown, initiating_span),
+        follows_from = [&initiating_span],
+        fields(
+            otel.kind = "internal",
+            exec_server.http_request_id = %pending_stream.request_id,
+            result = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn stream_body(
         pending_stream: PendingReqwestHttpBodyStream,
         notifications: RpcNotificationSender,
+        shutdown: CancellationToken,
+        initiating_span: tracing::Span,
     ) {
-        let PendingReqwestHttpBodyStream {
-            request_id,
-            response,
-        } = pending_stream;
-        let mut seq = 1;
-        let mut body = response.bytes_stream();
-        while let Some(chunk) = body.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    if !send_body_delta(
-                        &notifications,
-                        HttpRequestBodyDeltaNotification {
-                            request_id: request_id.clone(),
-                            seq,
-                            delta: bytes.to_vec().into(),
-                            done: false,
-                            error: None,
-                        },
-                    )
-                    .await
-                    {
-                        tracing::Span::current().record("result", "disconnected");
-                        return;
-                    }
-                    seq += 1;
-                }
-                Err(error) => {
-                    tracing::Span::current().record("result", "error");
-                    tracing::Span::current().record("error.type", "response_body");
-                    let _ = send_body_delta(
-                        &notifications,
-                        HttpRequestBodyDeltaNotification {
-                            request_id,
-                            seq,
-                            delta: Vec::new().into(),
-                            done: true,
-                            error: Some(error.to_string()),
-                        },
-                    )
-                    .await;
-                    return;
-                }
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                tracing::Span::current().record("result", "cancelled");
             }
-        }
+            _ = async move {
+                let PendingReqwestHttpBodyStream {
+                    request_id,
+                    response,
+                } = pending_stream;
+                let mut seq = 1;
+                let mut body = response.bytes_stream();
+                while let Some(chunk) = body.next().await {
+                    match chunk {
+                        Ok(bytes) => {
+                            if !send_body_delta(
+                                &notifications,
+                                HttpRequestBodyDeltaNotification {
+                                    request_id: request_id.clone(),
+                                    seq,
+                                    delta: bytes.to_vec().into(),
+                                    done: false,
+                                    error: None,
+                                },
+                            )
+                            .await
+                            {
+                                tracing::Span::current().record("result", "disconnected");
+                                return;
+                            }
+                            seq += 1;
+                        }
+                        Err(error) => {
+                            tracing::Span::current().record("result", "error");
+                            tracing::Span::current().record("error.type", "response_body");
+                            let _ = send_body_delta(
+                                &notifications,
+                                HttpRequestBodyDeltaNotification {
+                                    request_id,
+                                    seq,
+                                    delta: Vec::new().into(),
+                                    done: true,
+                                    error: Some(error.to_string()),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                }
 
-        let sent = send_body_delta(
-            &notifications,
-            HttpRequestBodyDeltaNotification {
-                request_id,
-                seq,
-                delta: Vec::new().into(),
-                done: true,
-                error: None,
-            },
-        )
-        .await;
-        tracing::Span::current().record("result", if sent { "success" } else { "disconnected" });
+                let sent = send_body_delta(
+                    &notifications,
+                    HttpRequestBodyDeltaNotification {
+                        request_id,
+                        seq,
+                        delta: Vec::new().into(),
+                        done: true,
+                        error: None,
+                    },
+                )
+                .await;
+                tracing::Span::current()
+                    .record("result", if sent { "success" } else { "disconnected" });
+            } => {}
+        }
     }
 
     fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {

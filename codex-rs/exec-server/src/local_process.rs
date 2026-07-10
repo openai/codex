@@ -22,7 +22,6 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
-use tracing::Instrument;
 
 use crate::ExecBackend;
 use crate::ExecBackendFuture;
@@ -342,69 +341,39 @@ impl LocalProcess {
                 })),
             );
         }
-        let (stdout_stream, stdout_stream_name) = if params.tty {
-            (ExecOutputStream::Pty, "pty")
+        let stdout_stream = if params.tty {
+            ExecOutputStream::Pty
         } else {
-            (ExecOutputStream::Stdout, "stdout")
+            ExecOutputStream::Stdout
         };
-        let stdout_span = tracing::info_span!(
-            parent: None,
-            "codex.exec_server.process_output",
-            otel.kind = "internal",
-            exec_server.process_id = %process_id,
-            exec_server.output_stream = stdout_stream_name,
-        );
-        stdout_span.follows_from(tracing::Span::current());
-        tokio::spawn(
-            stream_output(
-                process_id.clone(),
-                stdout_stream,
-                spawned.stdout_rx,
-                Arc::clone(&self.inner),
-                Arc::clone(&output_notify),
-            )
-            .instrument(stdout_span),
-        );
-        let (stderr_stream, stderr_stream_name) = if params.tty {
-            (ExecOutputStream::Pty, "pty")
+        tokio::spawn(stream_output(
+            process_id.clone(),
+            stdout_stream,
+            spawned.stdout_rx,
+            Arc::clone(&self.inner),
+            Arc::clone(&output_notify),
+            tracing::Span::current(),
+        ));
+        let stderr_stream = if params.tty {
+            ExecOutputStream::Pty
         } else {
-            (ExecOutputStream::Stderr, "stderr")
+            ExecOutputStream::Stderr
         };
-        let stderr_span = tracing::info_span!(
-            parent: None,
-            "codex.exec_server.process_output",
-            otel.kind = "internal",
-            exec_server.process_id = %process_id,
-            exec_server.output_stream = stderr_stream_name,
-        );
-        stderr_span.follows_from(tracing::Span::current());
-        tokio::spawn(
-            stream_output(
-                process_id.clone(),
-                stderr_stream,
-                spawned.stderr_rx,
-                Arc::clone(&self.inner),
-                Arc::clone(&output_notify),
-            )
-            .instrument(stderr_span),
-        );
-        let wait_span = tracing::info_span!(
-            parent: None,
-            "codex.exec_server.process_wait",
-            otel.kind = "internal",
-            exec_server.process_id = %process_id,
-            process.exit_code = tracing::field::Empty,
-        );
-        wait_span.follows_from(tracing::Span::current());
-        tokio::spawn(
-            watch_exit(
-                process_id.clone(),
-                spawned.exit_rx,
-                Arc::clone(&self.inner),
-                output_notify,
-            )
-            .instrument(wait_span),
-        );
+        tokio::spawn(stream_output(
+            process_id.clone(),
+            stderr_stream,
+            spawned.stderr_rx,
+            Arc::clone(&self.inner),
+            Arc::clone(&output_notify),
+            tracing::Span::current(),
+        ));
+        tokio::spawn(watch_exit(
+            process_id.clone(),
+            spawned.exit_rx,
+            Arc::clone(&self.inner),
+            output_notify,
+            tracing::Span::current(),
+        ));
 
         Ok((ExecResponse { process_id }, wake_tx, events))
     }
@@ -794,13 +763,33 @@ fn map_handler_error(error: JSONRPCErrorError) -> ExecServerError {
     }
 }
 
+#[tracing::instrument(
+    name = "codex.exec_server.process_output",
+    parent = None,
+    skip(receiver, inner, output_notify, initiating_span),
+    follows_from = [&initiating_span],
+    fields(
+        otel.kind = "internal",
+        exec_server.process_id = %process_id,
+        exec_server.output_stream = tracing::field::Empty,
+    )
+)]
 async fn stream_output(
     process_id: ProcessId,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
+    initiating_span: tracing::Span,
 ) {
+    tracing::Span::current().record(
+        "exec_server.output_stream",
+        match stream {
+            ExecOutputStream::Stdout => "stdout",
+            ExecOutputStream::Stderr => "stderr",
+            ExecOutputStream::Pty => "pty",
+        },
+    );
     while let Some(chunk) = receiver.recv().await {
         let _chunk_len = chunk.len();
         let notification = {
@@ -852,11 +841,23 @@ async fn stream_output(
     finish_output_stream(process_id, inner).await;
 }
 
+#[tracing::instrument(
+    name = "codex.exec_server.process_wait",
+    parent = None,
+    skip(exit_rx, inner, output_notify, initiating_span),
+    follows_from = [&initiating_span],
+    fields(
+        otel.kind = "internal",
+        exec_server.process_id = %process_id,
+        process.exit_code = tracing::field::Empty,
+    )
+)]
 async fn watch_exit(
     process_id: ProcessId,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
+    initiating_span: tracing::Span,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
     tracing::Span::current().record("process.exit_code", exit_code);
@@ -1358,6 +1359,7 @@ mod tests {
             stdout_rx,
             Arc::clone(&backend.inner),
             Arc::clone(&output_notify),
+            tracing::Span::current(),
         ));
         tokio::spawn(stream_output(
             process_id.clone(),
@@ -1365,12 +1367,14 @@ mod tests {
             stderr_rx,
             Arc::clone(&backend.inner),
             Arc::clone(&output_notify),
+            tracing::Span::current(),
         ));
         tokio::spawn(watch_exit(
             process_id.clone(),
             exit_rx,
             Arc::clone(&backend.inner),
             output_notify,
+            tracing::Span::current(),
         ));
 
         TestProcess {

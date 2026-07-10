@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::Instrument;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
@@ -391,27 +390,17 @@ impl ExecServerHandler {
         let handler = Arc::clone(self);
         let notifications = self.notifications.clone();
         let shutdown = self.background_task_shutdown.clone();
-        let stream_span = tracing::info_span!(
-            parent: None,
-            "codex.exec_server.http_response_body",
-            otel.kind = "internal",
-            exec_server.http_request_id = request_id,
-            result = tracing::field::Empty,
-            error.type = tracing::field::Empty,
-        );
-        stream_span.follows_from(tracing::Span::current());
-        self.background_tasks.spawn(
-            async move {
-                tokio::select! {
-                    _ = shutdown.cancelled() => {
-                        tracing::Span::current().record("result", "cancelled");
-                    }
-                    _ = ReqwestHttpRequestRunner::stream_body(pending_stream, notifications) => {}
-                }
-                handler.release_http_body_stream(&finished_request_id).await;
-            }
-            .instrument(stream_span),
-        );
+        let initiating_span = tracing::Span::current();
+        self.background_tasks.spawn(async move {
+            ReqwestHttpRequestRunner::stream_body(
+                pending_stream,
+                notifications,
+                shutdown,
+                initiating_span,
+            )
+            .await;
+            handler.release_http_body_stream(&finished_request_id).await;
+        });
     }
 
     async fn release_http_body_stream(&self, request_id: &str) {
