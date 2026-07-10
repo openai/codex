@@ -590,7 +590,14 @@ impl TurnRequestProcessor {
         if let Some(environment_selections) = environment_selections {
             let legacy_fallback_cwd = match cwd {
                 Some(cwd) => cwd,
-                None => thread.config_snapshot().await.cwd().clone(),
+                None => match environment_selections
+                    .iter()
+                    .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
+                    .and_then(|selection| selection.cwd.to_abs_path().ok())
+                {
+                    Some(cwd) => cwd,
+                    None => thread.config_snapshot().await.cwd().clone(),
+                },
             };
             return Some(TurnEnvironmentSelections::new(
                 legacy_fallback_cwd,

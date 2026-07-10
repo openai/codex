@@ -48,6 +48,7 @@ use codex_app_server_protocol::ThreadDeletedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -64,6 +65,7 @@ use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_core::test_support::all_model_presets;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -2532,7 +2534,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
+async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns() -> Result<()> {
     // TODO(anp): Materialize cwd and shell-display fixtures in the selected remote environment.
     skip_if_remote!(Ok(()), "cwd fixtures are only materialized on the host");
     skip_if_no_network!(Ok(()));
@@ -2636,10 +2638,15 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     mcp.clear_message_buffer();
 
-    // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
+    // Select a new local cwd without the top-level compatibility parameter. The inherited
+    // workspace-write sandbox must follow the local environment cwd.
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
-            environments: None,
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: second_cwd.abs().into(),
+                runtime_workspace_roots: None,
+            }]),
             thread_id: thread.id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
@@ -2648,11 +2655,11 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             additional_context: None,
-            cwd: Some(second_cwd.clone()),
+            cwd: None,
             runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            sandbox_policy: None,
             permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
@@ -2669,6 +2676,17 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(second_turn)),
     )
     .await??;
+    let settings_updated = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/settings/updated"),
+    )
+    .await??;
+    let settings_updated: ThreadSettingsUpdatedNotification = serde_json::from_value(
+        settings_updated
+            .params
+            .context("thread/settings/updated should include params")?,
+    )?;
+    assert_eq!(settings_updated.thread_settings.cwd, second_cwd.abs());
 
     let command_exec_item = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
