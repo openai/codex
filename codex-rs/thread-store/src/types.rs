@@ -19,6 +19,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -90,6 +91,9 @@ pub struct CreateThreadParams {
     /// Environment-qualified capability roots selected for this thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    /// Initial environment selections attached to this thread.
+    #[serde(default)]
+    pub environment_selections: Vec<TurnEnvironmentSelection>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Persisted thread history contract selected when the thread was created.

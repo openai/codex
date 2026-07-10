@@ -41,6 +41,7 @@ pub(super) async fn create_thread(
         )
         .with_session_id(params.session_id)
         .with_selected_capability_roots(params.selected_capability_roots)
+        .with_environment_selections(params.environment_selections)
         .with_multi_agent_version(params.multi_agent_version)
         .with_history_mode(params.history_mode)
         .with_initial_window_id(params.initial_window_id),

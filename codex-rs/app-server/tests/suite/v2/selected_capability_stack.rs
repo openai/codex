@@ -433,6 +433,150 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restricted_subagent_drops_omitted_selected_capabilities_from_child_request() -> Result<()>
+{
+    const CHILD_PROMPT: &str = "Inspect only local capabilities.";
+    const PARENT_PROMPT: &str = "Use $executor-demo:deploy and spawn a local-only child.";
+    const SPAWN_CALL_ID: &str = "spawn-local-only-child";
+
+    let responses_server = responses::start_mock_server().await;
+    let (apps_url, apps_server_handle) = start_apps_server_with_delays(
+        vec![AppInfo {
+            id: CONNECTOR_ID.to_string(),
+            name: "Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }],
+        vec![connector_tool(CONNECTOR_ID, "Calendar")?],
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let fixture = selected_capability_fixture(&responses_server.uri(), &apps_url)?;
+    let config_path = fixture.codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?.replacen(
+        "deferred_executor = true",
+        "deferred_executor = true\nmulti_agent_v2 = true",
+        1,
+    );
+    std::fs::write(config_path, config)?;
+
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "local_child",
+        "environment_ids": [LOCAL_ENVIRONMENT_ID],
+        "fork_turns": "all",
+    }))?;
+    let parent_turn = responses::mount_sse_once_match(
+        &responses_server,
+        |request: &wiremock::Request| request_body_contains(request, PARENT_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("parent-spawn"),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "collaboration",
+                "spawn_agent",
+                &spawn_args,
+            ),
+            responses::ev_completed("parent-spawn"),
+        ]),
+    )
+    .await;
+    let child_turn = responses::mount_sse_once_match(
+        &responses_server,
+        |request: &wiremock::Request| {
+            request_body_contains(request, CHILD_PROMPT)
+                && !request_body_contains(request, SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("child-done"),
+            responses::ev_assistant_message("child-message", "Done"),
+            responses::ev_completed("child-done"),
+        ]),
+    )
+    .await;
+    let _parent_follow_up = responses::mount_sse_once_match(
+        &responses_server,
+        |request: &wiremock::Request| request_body_contains(request, SPAWN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("parent-done"),
+            responses::ev_assistant_message("parent-message", "Done"),
+            responses::ev_completed("parent-done"),
+        ]),
+    )
+    .await;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(fixture.codex_home.path())
+        // This fixture owns environments.toml and selects its environments explicitly.
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(READ_TIMEOUT, app_server.initialize()).await??;
+    let thread_id = start_thread(
+        &mut app_server,
+        fixture.selected_root,
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+
+    let mut exec_server =
+        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
+
+    run_turn(
+        &mut app_server,
+        &thread_id,
+        PARENT_PROMPT,
+        fixture.environment_cwd,
+    )
+    .await?;
+    let parent_request = parent_turn.single_request();
+    assert_selected_skill_is_injected(&parent_request, /*expected_count*/ 1);
+    assert_selected_plugin_tools(&parent_request);
+
+    let child_request = timeout(READ_TIMEOUT, async {
+        loop {
+            if let Some(request) = child_turn.last_request() {
+                return request;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    let child_skill_update = latest_selected_skill_update(&child_request)
+        .expect("child request should update selected skills after restricting environments");
+    assert!(child_skill_update.contains(NO_SELECTED_SKILLS_MESSAGE));
+    assert_selected_plugin_tools_absent(&child_request);
+    assert!(!child_request.body_contains_text(SKILL_DESCRIPTION));
+    assert!(!child_request.body_contains_text(&format!("skill://{PLUGIN_ID}/")));
+    assert!(
+        child_request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text.starts_with("<skill>"))
+            .all(|text| !text.contains(SKILL_BODY_MARKER))
+    );
+
+    exec_server.kill().await?;
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
 struct SelectedCapabilityFixture {
     codex_home: TempDir,
     _plugin: TempDir,
@@ -558,6 +702,10 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
     );
     assert_selected_plugin_tools_absent(request);
     assert_plugin_guidance_count(request, /*expected_count*/ 0);
+}
+
+fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
+    String::from_utf8_lossy(&request.body).contains(text)
 }
 
 fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {

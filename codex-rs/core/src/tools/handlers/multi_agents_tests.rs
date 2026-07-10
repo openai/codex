@@ -7,6 +7,7 @@ use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
@@ -256,6 +257,36 @@ async fn spawn_agent_environment_ids_rejects_duplicate_environment() {
         err,
         FunctionCallError::RespondToModel("duplicate spawn environment id `windows`".to_string())
     );
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_unknown_environment_before_started_event() {
+    let (session, turn, rx) = make_session_and_context_with_rx().await;
+    let session = Arc::new(session);
+    let invocation = invocation(
+        Arc::clone(&session),
+        turn,
+        "spawn_agent",
+        function_payload(json!({
+            "message": "hello",
+            "environment_ids": ["missing"]
+        })),
+    );
+
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
+        panic!("unknown environment id should be rejected");
+    };
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spawn environment id `missing` is not a ready parent-turn environment".to_string()
+        )
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Err(async_channel::TryRecvError::Empty)
+    ));
 }
 
 #[derive(Debug, Deserialize)]

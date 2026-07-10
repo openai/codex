@@ -2,6 +2,7 @@ use super::residency::is_v2_resident_session_source;
 use super::*;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -491,7 +492,20 @@ impl AgentControl {
                 Some(meta_line.meta.selected_capability_roots.clone())
             })
             .unwrap_or_default();
+        let mut omitted_selected_skill_path_prefixes = Vec::new();
+        let mut omitted_selected_skill_catalog_locators = Vec::new();
         if let Some(restricted_environment_ids) = options.restricted_environment_ids.as_ref() {
+            // Forked selected-skill bodies and catalog fragments use the root ID in their
+            // `skill://` locator. Drop context owned by omitted environments while retaining
+            // allowed selected skills.
+            for root in &selected_capability_roots {
+                let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+                if !restricted_environment_ids.contains(environment_id) {
+                    let locator = format!("skill://{}/", root.id);
+                    omitted_selected_skill_path_prefixes.push(format!("<path>{locator}"));
+                    omitted_selected_skill_catalog_locators.push(locator);
+                }
+            }
             selected_capability_roots.retain(|root| {
                 let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
                 restricted_environment_ids.contains(environment_id)
@@ -534,6 +548,44 @@ impl AgentControl {
                 Vec::new()
             };
         let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        let is_omitted_selected_skill_message = |response_item: &ResponseItem| {
+            let ResponseItem::Message { role, content, .. } = response_item else {
+                return false;
+            };
+            role == "user"
+                && content.iter().any(|content_item| {
+                    let ContentItem::InputText { text } = content_item else {
+                        return false;
+                    };
+                    text.trim_start().starts_with("<skill>")
+                        && omitted_selected_skill_path_prefixes
+                            .iter()
+                            .any(|prefix| text.contains(prefix))
+                })
+        };
+        let strip_omitted_selected_skill_catalog = |response_item: &mut ResponseItem| {
+            let ResponseItem::Message { role, content, .. } = response_item else {
+                return;
+            };
+            if role != "developer" {
+                return;
+            }
+            content.retain(|content_item| {
+                let ContentItem::InputText { text } = content_item else {
+                    return true;
+                };
+                !(text.trim_start().starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
+                    && omitted_selected_skill_catalog_locators
+                        .iter()
+                        .any(|locator| text.contains(locator)))
+            });
+        };
+        let is_empty_message = |response_item: &ResponseItem| {
+            matches!(
+                response_item,
+                ResponseItem::Message { content, .. } if content.is_empty()
+            )
+        };
         forked_rollout_items.retain(|item| {
             keep_forked_rollout_item(item, preserve_reference_context_item)
                 && !matches!(
@@ -544,19 +596,41 @@ impl AgentControl {
                             &multi_agent_v2_usage_hint_texts_to_filter,
                         )
                 )
+                && !matches!(
+                    item,
+                    RolloutItem::ResponseItem(response_item)
+                        if is_omitted_selected_skill_message(response_item)
+                )
         });
         for item in &mut forked_rollout_items {
-            if let RolloutItem::Compacted(compacted) = item
-                && let Some(replacement_history) = compacted.replacement_history.as_mut()
-            {
-                replacement_history.retain(|response_item| {
-                    !is_multi_agent_v2_usage_hint_message(
-                        response_item,
-                        &multi_agent_v2_usage_hint_texts_to_filter,
-                    )
-                });
+            match item {
+                RolloutItem::ResponseItem(response_item) => {
+                    strip_omitted_selected_skill_catalog(response_item);
+                }
+                RolloutItem::Compacted(compacted) => {
+                    let Some(replacement_history) = compacted.replacement_history.as_mut() else {
+                        continue;
+                    };
+                    replacement_history.retain(|response_item| {
+                        !is_multi_agent_v2_usage_hint_message(
+                            response_item,
+                            &multi_agent_v2_usage_hint_texts_to_filter,
+                        ) && !is_omitted_selected_skill_message(response_item)
+                    });
+                    for response_item in replacement_history.iter_mut() {
+                        strip_omitted_selected_skill_catalog(response_item);
+                    }
+                    replacement_history.retain(|response_item| !is_empty_message(response_item));
+                }
+                _ => {}
             }
         }
+        forked_rollout_items.retain(|item| {
+            !matches!(
+                item,
+                RolloutItem::ResponseItem(response_item) if is_empty_message(response_item)
+            )
+        });
         if preserve_reference_context_item
             && multi_agent_version == MultiAgentVersion::V2
             && let Some(subagent_usage_hint_text) =

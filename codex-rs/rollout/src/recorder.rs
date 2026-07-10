@@ -63,6 +63,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
 
@@ -82,6 +83,9 @@ pub struct RolloutRecorder {
 }
 
 #[derive(Clone)]
+// These params are consumed once during recorder startup, so boxing the larger creation
+// variant would add allocation churn without reducing long-lived storage.
+#[allow(clippy::large_enum_variant)]
 pub enum RolloutRecorderParams {
     Create {
         session_id: SessionId,
@@ -94,6 +98,7 @@ pub enum RolloutRecorderParams {
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
+        environment_selections: Vec<TurnEnvironmentSelection>,
         multi_agent_version: Option<MultiAgentVersion>,
         history_mode: ThreadHistoryMode,
         initial_window_id: Option<String>,
@@ -187,6 +192,7 @@ impl RolloutRecorderParams {
             base_instructions,
             dynamic_tools,
             selected_capability_roots: Vec::new(),
+            environment_selections: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
             initial_window_id: None,
@@ -210,6 +216,20 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *roots = selected_capability_roots;
+        }
+        self
+    }
+
+    pub fn with_environment_selections(
+        mut self,
+        environment_selections: Vec<TurnEnvironmentSelection>,
+    ) -> Self {
+        if let Self::Create {
+            environment_selections: selections,
+            ..
+        } = &mut self
+        {
+            *selections = environment_selections;
         }
         self
     }
@@ -763,6 +783,7 @@ impl RolloutRecorder {
                 base_instructions,
                 dynamic_tools,
                 selected_capability_roots,
+                environment_selections,
                 multi_agent_version,
                 history_mode,
                 initial_window_id,
@@ -802,6 +823,7 @@ impl RolloutRecorder {
                         Some(dynamic_tools)
                     },
                     selected_capability_roots,
+                    environment_selections: Some(environment_selections),
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
                     history_mode,
                     multi_agent_version,

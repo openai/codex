@@ -130,7 +130,7 @@ pub fn strip_user_message_prefix(text: &str) -> &str {
 
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
 // identifiers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: PathUri,
@@ -2658,6 +2658,11 @@ impl InitialHistory {
             .and_then(|meta| meta.thread_source.clone())
     }
 
+    pub fn get_resumed_environment_selections(&self) -> Option<Vec<TurnEnvironmentSelection>> {
+        self.get_resumed_session_meta()
+            .and_then(|meta| meta.environment_selections.clone())
+    }
+
     pub fn get_session_originator(&self) -> Option<String> {
         self.get_session_meta()
             .map(|meta| meta.originator.clone())
@@ -3050,6 +3055,11 @@ pub struct SessionMeta {
     /// Capability roots selected for this thread by the hosting platform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    /// Initial environment selections attached to this thread.
+    ///
+    /// `None` is reserved for rollouts created before selections were persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
     #[serde(default)]
@@ -3082,6 +3092,7 @@ impl Default for SessionMeta {
             base_instructions: None,
             dynamic_tools: None,
             selected_capability_roots: Vec::new(),
+            environment_selections: None,
             memory_mode: None,
             history_mode: ThreadHistoryMode::default(),
             multi_agent_version: None,

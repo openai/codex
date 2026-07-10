@@ -175,6 +175,7 @@ fn write_rollout_with_user_message(
                     base_instructions: None,
                     dynamic_tools: None,
                     selected_capability_roots: Vec::new(),
+                    environment_selections: None,
                     memory_mode: None,
                     history_mode: Default::default(),
                     multi_agent_version: None,

@@ -130,6 +130,7 @@ mod tests {
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
                     selected_capability_roots: Vec::new(),
+                    environment_selections: Vec::new(),
                     multi_agent_version: None,
                     history_mode: ThreadHistoryMode::Legacy,
                     initial_window_id: uuid::Uuid::now_v7().to_string(),
@@ -325,6 +326,7 @@ mod tests {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
+            environment_selections: Vec::new(),
             multi_agent_version: None,
             history_mode,
             initial_window_id: uuid::Uuid::now_v7().to_string(),
@@ -439,6 +441,7 @@ impl InMemoryThreadStore {
             base_instructions: Some(params.base_instructions.clone()),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
             selected_capability_roots: params.selected_capability_roots.clone(),
+            environment_selections: Some(params.environment_selections.clone()),
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
             history_mode: params.history_mode,

@@ -69,6 +69,8 @@ async fn handle_spawn_agent(
             "Agent depth limit reached. Solve the task yourself.".to_string(),
         ));
     }
+    let environments =
+        spawn_agent_environment_selections(turn.as_ref(), args.environment_ids.as_deref())?;
     session
         .emit_turn_item_started(
             &turn,
@@ -118,8 +120,6 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    let environments =
-        spawn_agent_environment_selections(turn.as_ref(), args.environment_ids.as_deref())?;
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,

@@ -1281,6 +1281,7 @@ mod tests {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
+            environment_selections: Vec::new(),
             multi_agent_version: None,
             history_mode: ThreadHistoryMode::Legacy,
             initial_window_id: uuid::Uuid::now_v7().to_string(),

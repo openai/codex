@@ -601,6 +601,9 @@ impl Session {
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             selected_capability_roots: selected_capability_roots.clone(),
+                            environment_selections: session_configuration
+                                .environment_selections()
+                                .to_vec(),
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
                             initial_window_id: initial_auto_compact_window_ids
