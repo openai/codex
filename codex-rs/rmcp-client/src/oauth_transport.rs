@@ -1,34 +1,35 @@
 //! Codex-owned OAuth policy for RMCP Streamable HTTP traffic.
 //!
-//! RMCP remains responsible for transport mechanics and bearer-token injection. Codex owns the
-//! credential lifecycle: every POST, SSE GET/reconnect, and session DELETE receives proactive
-//! refresh from its owning Codex layer, and each path has at most one 401 recovery. The
-//! authorization manager only receives request-safe credentials, so it cannot independently
-//! refresh outside Codex's serialized transaction.
+//! RMCP remains responsible for transport mechanics and bearer-token injection. Its authorization
+//! manager receives only request-safe credentials, so it cannot independently refresh outside
+//! Codex's serialized transaction.
 //!
-//! POST recovery is split at an intentional ownership boundary. Client-originated requests and
-//! notifications retain their outer `RmcpClient` recovery, which knows the startup/tool deadline
-//! and can avoid replaying a request after its caller timed out. RMCP-owned responses to
-//! server-initiated requests have no such outer operation, so they recover here. GET/reconnect and
-//! DELETE are always RMCP-owned and also recover here.
+//! Client-originated requests retain their outer `RmcpClient` recovery, which owns caller
+//! deadlines and replay decisions. RMCP-owned responses, SSE GET/reconnects, and session DELETEs
+//! have no public caller; this transport reports their exact rejected token to the parent
+//! `RmcpClient` and stops RMCP's unbounded SSE reconnect loop. The parent then owns any refresh
+//! and session rebuild before the next public operation.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+use std::time::Duration;
 
+use oauth2::AccessToken;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::JsonRpcMessage;
 use rmcp::transport::auth::AuthClient;
-use rmcp::transport::auth::AuthError;
+use rmcp::transport::common::client_side_sse::ExponentialBackoff;
+use rmcp::transport::common::client_side_sse::SseRetryPolicy;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
-use tracing::debug;
 
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
-use crate::oauth::OAuthPersistor;
 
 type TransportResult<T> =
     std::result::Result<T, StreamableHttpError<StreamableHttpClientAdapterError>>;
@@ -36,53 +37,97 @@ type TransportResult<T> =
 #[derive(Clone)]
 pub(crate) struct OAuthTransportClient {
     auth_client: AuthClient<StreamableHttpClientAdapter>,
-    persistor: OAuthPersistor,
+    failure_state: OAuthTransportFailureState,
 }
 
 impl OAuthTransportClient {
     pub(crate) fn new(
         auth_client: AuthClient<StreamableHttpClientAdapter>,
-        persistor: OAuthPersistor,
+        failure_state: OAuthTransportFailureState,
     ) -> Self {
         Self {
             auth_client,
-            persistor,
+            failure_state,
+        }
+    }
+}
+
+/// Shared state between RMCP's bearer-only transport and Codex's OAuth session owner.
+///
+/// RMCP may issue GET reconnects, DELETE cleanup, and server-response POSTs outside a public
+/// `RmcpClient` operation. Those requests may report which access token was rejected, but they
+/// must not refresh it: Codex owns the credential transaction and transport rebuild. The state
+/// also stops RMCP's unbounded SSE reconnect policy after an auth failure so it cannot repeatedly
+/// re-enter this transport with a rejected token while Codex is recovering the session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OAuthTransportFailureState {
+    inner: Arc<OAuthTransportFailureStateInner>,
+}
+
+#[derive(Debug, Default)]
+struct OAuthTransportFailureStateInner {
+    pending_rejected_access_token: Mutex<Option<AccessToken>>,
+}
+
+impl OAuthTransportFailureState {
+    pub(crate) fn record_rejected_access_token(&self, rejected_access_token: AccessToken) {
+        *self
+            .inner
+            .pending_rejected_access_token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(rejected_access_token);
+    }
+
+    pub(crate) fn pending_rejected_access_token(&self) -> Option<AccessToken> {
+        self.inner
+            .pending_rejected_access_token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn finish_recovery(&self, rejected_access_token: &AccessToken) {
+        let mut pending = self
+            .inner
+            .pending_rejected_access_token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if pending
+            .as_ref()
+            .is_some_and(|pending| pending.secret() == rejected_access_token.secret())
+        {
+            *pending = None;
         }
     }
 
-    pub(crate) fn persistor(&self) -> OAuthPersistor {
-        self.persistor.clone()
+    pub(crate) fn retry_policy(&self) -> OAuthSseRetryPolicy {
+        OAuthSseRetryPolicy {
+            failure_state: self.clone(),
+            fallback: ExponentialBackoff::default(),
+        }
     }
+}
 
-    async fn preflight(&self, operation: &'static str) -> TransportResult<()> {
-        debug!(
-            operation,
-            "checking MCP OAuth credentials before transport request"
-        );
-        self.persistor
-            .refresh_if_needed()
-            .await
-            .map_err(oauth_transport_error)
-    }
+#[derive(Debug)]
+pub(crate) struct OAuthSseRetryPolicy {
+    failure_state: OAuthTransportFailureState,
+    fallback: ExponentialBackoff,
+}
 
-    async fn recover_after_unauthorized(
-        &self,
-        operation: &'static str,
-        rejected_access_token: Option<oauth2::AccessToken>,
-    ) -> TransportResult<bool> {
-        let Some(rejected_access_token) = rejected_access_token else {
-            return Ok(false);
-        };
-
-        debug!(
-            operation,
-            "recovering once after MCP transport rejected an OAuth access token"
-        );
-        self.persistor
-            .refresh_after_unauthorized(rejected_access_token)
-            .await
-            .map_err(oauth_transport_error)?;
-        Ok(true)
+impl SseRetryPolicy for OAuthSseRetryPolicy {
+    fn retry(&self, current_times: usize) -> Option<Duration> {
+        if self
+            .failure_state
+            .inner
+            .pending_rejected_access_token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+        {
+            None
+        } else {
+            self.fallback.retry(current_times)
+        }
     }
 }
 
@@ -101,40 +146,22 @@ impl StreamableHttpClient for OAuthTransportClient {
             message,
             JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
         );
-        if is_rmcp_owned_response {
-            self.preflight("post_message").await?;
-        }
         let result = self
             .auth_client
-            .post_message(
-                Arc::clone(&uri),
-                message.clone(),
-                session_id.clone(),
-                auth_token.clone(),
-                custom_headers.clone(),
-            )
+            .post_message(uri, message, session_id, auth_token, custom_headers)
             .await;
 
-        // RMCP queues client-originated requests independently of the caller waiting on them. If
-        // recovery happened here, a timed-out public tool call could still be replayed after its
-        // refresh finished. The outer RmcpClient path owns those deadlines. Responses to
-        // server-initiated requests have no outer operation and therefore recover here.
-        if !is_rmcp_owned_response {
-            return result;
-        }
-        let rejected_access_token = result.as_ref().err().and_then(rejected_access_token);
-        if self
-            .recover_after_unauthorized("post_message", rejected_access_token)
-            .await?
+        // Client-originated requests retain their outer `RmcpClient` recovery boundary, which
+        // owns caller deadlines and replay decisions. Server responses have no public caller, so
+        // surface their rejected token to the Codex session owner instead of refreshing here.
+        if is_rmcp_owned_response
+            && let Some(rejected_access_token) =
+                result.as_ref().err().and_then(rejected_access_token)
         {
-            authorization_required_after_retry(
-                self.auth_client
-                    .post_message(uri, message, session_id, auth_token, custom_headers)
-                    .await,
-            )
-        } else {
-            result
+            self.failure_state
+                .record_rejected_access_token(rejected_access_token);
         }
+        result
     }
 
     async fn delete_session(
@@ -144,29 +171,15 @@ impl StreamableHttpClient for OAuthTransportClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> TransportResult<()> {
-        self.preflight("delete_session").await?;
         let result = self
             .auth_client
-            .delete_session(
-                Arc::clone(&uri),
-                Arc::clone(&session_id),
-                auth_token.clone(),
-                custom_headers.clone(),
-            )
+            .delete_session(uri, session_id, auth_token, custom_headers)
             .await;
-        let rejected_access_token = result.as_ref().err().and_then(rejected_access_token);
-        if self
-            .recover_after_unauthorized("delete_session", rejected_access_token)
-            .await?
-        {
-            authorization_required_after_retry(
-                self.auth_client
-                    .delete_session(uri, session_id, auth_token, custom_headers)
-                    .await,
-            )
-        } else {
-            result
+        if let Some(rejected_access_token) = result.as_ref().err().and_then(rejected_access_token) {
+            self.failure_state
+                .record_rejected_access_token(rejected_access_token);
         }
+        result
     }
 
     async fn get_stream(
@@ -179,43 +192,15 @@ impl StreamableHttpClient for OAuthTransportClient {
     ) -> TransportResult<
         futures::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
     > {
-        self.preflight("get_stream").await?;
         let result = self
             .auth_client
-            .get_stream(
-                Arc::clone(&uri),
-                Arc::clone(&session_id),
-                last_event_id.clone(),
-                auth_token.clone(),
-                custom_headers.clone(),
-            )
+            .get_stream(uri, session_id, last_event_id, auth_token, custom_headers)
             .await;
-        let rejected_access_token = result.as_ref().err().and_then(rejected_access_token);
-        if self
-            .recover_after_unauthorized("get_stream", rejected_access_token)
-            .await?
-        {
-            authorization_required_after_retry(
-                self.auth_client
-                    .get_stream(uri, session_id, last_event_id, auth_token, custom_headers)
-                    .await,
-            )
-        } else {
-            result
+        if let Some(rejected_access_token) = result.as_ref().err().and_then(rejected_access_token) {
+            self.failure_state
+                .record_rejected_access_token(rejected_access_token);
         }
-    }
-}
-
-fn authorization_required_after_retry<T>(result: TransportResult<T>) -> TransportResult<T> {
-    match result {
-        // The first 401 carries the token that was actually rejected so concurrent recovery can
-        // distinguish A from a newer B. Once the single retry also rejects B, attribution is no
-        // longer useful: surface the existing reauthentication marker instead of leaking the
-        // adapter-only error past the Codex-owned recovery boundary.
-        Err(StreamableHttpError::Client(
-            StreamableHttpClientAdapterError::AccessTokenRejected { .. },
-        )) => Err(StreamableHttpError::Auth(AuthError::AuthorizationRequired)),
-        result => result,
+        result
     }
 }
 
@@ -228,25 +213,6 @@ fn rejected_access_token(
         }) => Some(rejected_access_token.clone()),
         _ => None,
     }
-}
-
-fn oauth_transport_error(
-    error: anyhow::Error,
-) -> StreamableHttpError<StreamableHttpClientAdapterError> {
-    if let Some(auth_error) =
-        error
-            .chain()
-            .find_map(|source| match source.downcast_ref::<AuthError>() {
-                Some(AuthError::AuthorizationRequired) => Some(AuthError::AuthorizationRequired),
-                Some(AuthError::TokenExpired) => Some(AuthError::TokenExpired),
-                _ => None,
-            })
-    {
-        // Preserve RMCP's established reauthentication variants across Codex's transport policy
-        // boundary. Other OAuth failures retain their context-rich adapter error.
-        return StreamableHttpError::Auth(auth_error);
-    }
-    StreamableHttpError::Client(StreamableHttpClientAdapterError::OAuth(error))
 }
 
 #[cfg(test)]

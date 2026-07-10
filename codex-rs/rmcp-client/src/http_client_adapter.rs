@@ -65,8 +65,6 @@ pub(crate) enum StreamableHttpClientAdapterError {
     SessionExpired404,
     #[error("MCP server rejected the access token with HTTP 401 Unauthorized")]
     AccessTokenRejected { rejected_access_token: AccessToken },
-    #[error("MCP OAuth operation failed: {0:#}")]
-    OAuth(#[source] anyhow::Error),
     #[error(transparent)]
     HttpRequest(#[from] ExecServerError),
     #[error("invalid HTTP header: {0}")]

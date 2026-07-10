@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use keyring::Error as KeyringError;
 use oauth2::AccessToken;
+use oauth2::RefreshToken;
 use oauth2::TokenResponse;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthError;
@@ -205,6 +206,81 @@ async fn delayed_unauthorized_retries_adopt_the_winning_token() -> Result<()> {
     let (_client_id, adopted) = guard.get_credentials().await?;
     let adopted = adopted.expect("second manager should adopt the winning token");
     assert_eq!(adopted.access_token().secret(), "refreshed-access-token");
+    assert!(adopted.refresh_token().is_none());
+    Ok(())
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "AuthorizationManager async access must be serialized through its Tokio mutex"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn second_unauthorized_retry_adopts_newer_credentials_without_refreshing() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains("refresh_token=refresh-token-a"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-token-b",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-token-b",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains("refresh_token=refresh-token-b"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-token-c",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-token-c",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut initial = expired_tokens(&format!("{}/mcp", server.uri()));
+    initial.expires_at = None;
+    initial.token_response.0.set_expires_in(None);
+    initial
+        .token_response
+        .0
+        .set_refresh_token(Some(RefreshToken::new("refresh-token-a".to_string())));
+    save_oauth_tokens_to_file(&initial)?;
+
+    let first_manager = authorization_manager_for(&initial).await?;
+    let first = OAuthPersistor::new(
+        initial.server_name.clone(),
+        initial.url.clone(),
+        Arc::clone(&first_manager),
+        ResolvedOAuthCredentialStore::File,
+        Some(initial.clone()),
+    );
+    let second = persistor_for(&initial).await?;
+    let access_token_a = initial.token_response.0.access_token().clone();
+    first.refresh_after_unauthorized(access_token_a).await?;
+
+    let access_token_b = AccessToken::new("access-token-b".to_string());
+    second
+        .refresh_after_unauthorized(access_token_b.clone())
+        .await?;
+    assert!(
+        first
+            .adopt_newer_credentials_after_unauthorized(&access_token_b)
+            .await?
+    );
+
+    server.verify().await;
+    let guard = first_manager.lock().await;
+    let (_client_id, adopted) = guard.get_credentials().await?;
+    let adopted = adopted.expect("first manager should adopt the newest token");
+    assert_eq!(adopted.access_token().secret(), "access-token-c");
     assert!(adopted.refresh_token().is_none());
     Ok(())
 }

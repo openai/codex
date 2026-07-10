@@ -54,6 +54,47 @@ impl OAuthPersistor {
         .await
     }
 
+    /// Adopts a credential committed by another serialized refresh after this caller already used
+    /// its one provider refresh. A delayed 401 for B must not force reauthorization if C is now
+    /// authoritative, but this path must never rotate B a second time.
+    pub(crate) async fn adopt_newer_credentials_after_unauthorized(
+        &self,
+        rejected_access_token: &AccessToken,
+    ) -> Result<bool> {
+        let _lock =
+            RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
+                .await?;
+        let Some(latest) = self.inner.credential_store.load(
+            &DefaultKeyringStore,
+            &self.inner.server_name,
+            &self.inner.url,
+        )?
+        else {
+            let manager = self.inner.authorization_manager.clone();
+            manager
+                .lock()
+                .await
+                .set_credential_store(InMemoryCredentialStore::new());
+            *self.inner.last_credentials.lock().await = None;
+            return Err(AuthError::AuthorizationRequired).with_context(|| {
+                format!(
+                    "OAuth tokens for server {} were removed before recovery; authorization required",
+                    self.inner.server_name
+                )
+            });
+        };
+        if latest.token_response.0.access_token().secret() == rejected_access_token.secret() {
+            return Ok(false);
+        }
+
+        debug!("adopting newer MCP OAuth credentials after a delayed unauthorized response");
+        let manager = self.inner.authorization_manager.clone();
+        let mut guard = manager.lock().await;
+        install_tokens_in_manager_guard(&mut guard, &latest, CredentialExposure::Request).await?;
+        *self.inner.last_credentials.lock().await = Some(latest);
+        Ok(true)
+    }
+
     /// Injects the credential backend and provider timeout for deterministic failure-path tests.
     pub(super) async fn refresh_in<K: KeyringStore + Clone + 'static>(
         &self,

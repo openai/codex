@@ -33,24 +33,19 @@ use streamable_http_test_support::initialize_client;
 
 const SERVER_NAME: &str = "test-streamable-http-oauth-internal";
 const SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_INTERNAL_SERVER_URL";
-const GET_RETRY_MARKER_ENV: &str = "MCP_TEST_OAUTH_INTERNAL_GET_RETRY_MARKER";
-const DELETE_RETRY_MARKER_ENV: &str = "MCP_TEST_OAUTH_INTERNAL_DELETE_RETRY_MARKER";
+const GET_FAILURE_MARKER_ENV: &str = "MCP_TEST_OAUTH_INTERNAL_GET_FAILURE_MARKER";
 const ACCESS_TOKEN_A: &str = "internal-access-a";
 const REFRESH_TOKEN_A: &str = "internal-refresh-a";
 const ACCESS_TOKEN_B: &str = "internal-access-b";
 const REFRESH_TOKEN_B: &str = "internal-refresh-b";
-const ACCESS_TOKEN_C: &str = "internal-access-c";
-const REFRESH_TOKEN_C: &str = "internal-refresh-c";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn rmcp_owned_get_and_delete_receive_oauth_recovery() -> anyhow::Result<()> {
+async fn rmcp_owned_get_reports_auth_failure_for_parent_recovery() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
-    let get_retry_marker = codex_home.path().join("get-retry-observed");
-    let delete_retry_marker = codex_home.path().join("delete-retry-observed");
+    let get_failure_marker = codex_home.path().join("get-failure-observed");
     let server = MockServer::start().await;
     mount_oauth_metadata(&server).await;
     mount_refresh(&server, REFRESH_TOKEN_A, ACCESS_TOKEN_B, REFRESH_TOKEN_B).await;
-    mount_refresh(&server, REFRESH_TOKEN_B, ACCESS_TOKEN_C, REFRESH_TOKEN_C).await;
 
     Mock::given(method("POST"))
         .and(path("/mcp"))
@@ -70,59 +65,64 @@ async fn rmcp_owned_get_and_delete_receive_oauth_recovery() -> anyhow::Result<()
     Mock::given(method("GET"))
         .and(path("/mcp"))
         .and(header("authorization", format!("Bearer {ACCESS_TOKEN_A}")))
-        .respond_with(ResponseTemplate::new(401))
+        .respond_with({
+            let get_failure_marker = get_failure_marker.clone();
+            move |_request: &Request| {
+                std::fs::write(&get_failure_marker, b"observed")
+                    .expect("record RMCP-owned GET auth failure");
+                ResponseTemplate::new(401)
+            }
+        })
+        // RMCP's default SSE reconnect policy is unbounded. The Codex failure latch must make
+        // this logical reconnect terminal instead of repeatedly re-entering get_stream with A.
         .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header("authorization", format!("Bearer {ACCESS_TOKEN_B}")))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => initialize_response(&body),
+                Some("notifications/initialized") => ResponseTemplate::new(202),
+                Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": { "tools": [] },
+                })),
+                method => ResponseTemplate::new(400)
+                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+            }
+        })
+        .expect(3)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/mcp"))
         .and(header("authorization", format!("Bearer {ACCESS_TOKEN_B}")))
-        // A 405 tells RMCP that the optional common SSE stream is unsupported. Reaching this
-        // response proves that the wrapper retried the RMCP-owned GET with B after refreshing A.
-        .respond_with({
-            let get_retry_marker = get_retry_marker.clone();
-            move |_request: &Request| {
-                std::fs::write(&get_retry_marker, b"observed")
-                    .expect("record retried RMCP-owned GET");
-                ResponseTemplate::new(405)
-            }
-        })
+        .respond_with(ResponseTemplate::new(405))
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
         .and(path("/mcp"))
         .and(header("authorization", format!("Bearer {ACCESS_TOKEN_B}")))
-        .respond_with(ResponseTemplate::new(401))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("DELETE"))
-        .and(path("/mcp"))
-        .and(header("authorization", format!("Bearer {ACCESS_TOKEN_C}")))
-        .respond_with({
-            let delete_retry_marker = delete_retry_marker.clone();
-            move |_request: &Request| {
-                std::fs::write(&delete_retry_marker, b"observed")
-                    .expect("record retried RMCP-owned DELETE");
-                ResponseTemplate::new(204)
-            }
-        })
+        .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)
         .await;
 
     let status = Command::new(std::env::current_exe()?)
         .args([
-            "oauth_internal_get_delete_child",
+            "oauth_internal_get_child",
             "--exact",
             "--ignored",
             "--nocapture",
         ])
         .env("CODEX_HOME", codex_home.path())
         .env(SERVER_URL_ENV, format!("{}/mcp", server.uri()))
-        .env(GET_RETRY_MARKER_ENV, &get_retry_marker)
-        .env(DELETE_RETRY_MARKER_ENV, &delete_retry_marker)
+        .env(GET_FAILURE_MARKER_ENV, &get_failure_marker)
         .status()
         .await?;
     anyhow::ensure!(status.success(), "OAuth internal child failed: {status}");
@@ -131,13 +131,17 @@ async fn rmcp_owned_get_and_delete_receive_oauth_recovery() -> anyhow::Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[ignore = "spawned by rmcp_owned_get_and_delete_receive_oauth_recovery"]
-async fn oauth_internal_get_delete_child() -> anyhow::Result<()> {
+#[ignore = "spawned by rmcp_owned_get_reports_auth_failure_for_parent_recovery"]
+async fn oauth_internal_get_child() -> anyhow::Result<()> {
     let client = create_oauth_client().await?;
     initialize_client(&client).await?;
-    wait_for_marker(GET_RETRY_MARKER_ENV).await?;
+    wait_for_marker(GET_FAILURE_MARKER_ENV).await?;
+
+    let tools = client
+        .list_tools(/*params*/ None, Some(Duration::from_secs(/*secs*/ 5)))
+        .await?;
+    assert!(tools.tools.is_empty());
     client.shutdown().await;
-    wait_for_marker(DELETE_RETRY_MARKER_ENV).await?;
     Ok(())
 }
 

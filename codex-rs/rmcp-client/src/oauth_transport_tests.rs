@@ -1,80 +1,41 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use codex_config::types::AuthKeyringBackendKind;
-use codex_config::types::OAuthCredentialsStoreMode;
-use codex_exec_server::Environment;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenType;
 use reqwest::header::HeaderMap;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::auth::AuthClient;
-use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
+use rmcp::transport::common::client_side_sse::SseRetryPolicy;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
-use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use serde_json::json;
-use tempfile::TempDir;
-use tokio::process::Command;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::OAuthTransportClient;
-use super::authorization_required_after_retry;
-use super::oauth_transport_error;
+use super::OAuthTransportFailureState;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
-use crate::oauth::OAuthPersistor;
-use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::request_oauth_token_response;
-use crate::oauth::save_oauth_tokens;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 
 const SERVER_NAME: &str = "oauth-transport-response-test";
-const SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_RESPONSE_SERVER_URL";
 const ACCESS_TOKEN_A: &str = "response-access-a";
 const REFRESH_TOKEN_A: &str = "response-refresh-a";
-const ACCESS_TOKEN_B: &str = "response-access-b";
-const REFRESH_TOKEN_B: &str = "response-refresh-b";
-
-#[test]
-fn exhausted_transport_retry_requires_reauthentication() {
-    let result = authorization_required_after_retry::<()>(Err(StreamableHttpError::Client(
-        StreamableHttpClientAdapterError::AccessTokenRejected {
-            rejected_access_token: AccessToken::new(ACCESS_TOKEN_B.to_string()),
-        },
-    )));
-
-    assert!(matches!(
-        result,
-        Err(StreamableHttpError::Auth(AuthError::AuthorizationRequired))
-    ));
-}
-
-#[test]
-fn oauth_transport_preserves_reauthentication_errors() {
-    let error = anyhow::Error::new(AuthError::AuthorizationRequired)
-        .context("refreshing rejected MCP access token");
-
-    assert!(matches!(
-        oauth_transport_error(error),
-        StreamableHttpError::Auth(AuthError::AuthorizationRequired)
-    ));
-}
 
 #[tokio::test]
-async fn server_response_post_receives_one_shot_oauth_recovery() -> anyhow::Result<()> {
+async fn rmcp_owned_response_reports_rejected_token_without_refreshing() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -87,18 +48,8 @@ async fn server_response_post_receives_one_shot_oauth_recovery() -> anyhow::Resu
         .await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .and(body_string_contains("grant_type=refresh_token"))
-        .and(body_string_contains(format!(
-            "refresh_token={REFRESH_TOKEN_A}"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": ACCESS_TOKEN_B,
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "refresh_token": REFRESH_TOKEN_B,
-            "scope": "scope-a",
-        })))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -108,44 +59,10 @@ async fn server_response_post_receives_one_shot_oauth_recovery() -> anyhow::Resu
         .expect(1)
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/mcp"))
-        .and(header("authorization", format!("Bearer {ACCESS_TOKEN_B}")))
-        .respond_with(ResponseTemplate::new(202))
-        .expect(1)
-        .mount(&server)
-        .await;
 
-    let codex_home = TempDir::new()?;
-    let status = Command::new(std::env::current_exe()?)
-        .args([
-            "oauth_transport::tests::server_response_post_child",
-            "--exact",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env("CODEX_HOME", codex_home.path())
-        .env(SERVER_URL_ENV, format!("{}/mcp", server.uri()))
-        .status()
-        .await?;
-    anyhow::ensure!(status.success(), "OAuth response child failed: {status}");
-    server.verify().await;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "spawned by server_response_post_receives_one_shot_oauth_recovery"]
-async fn server_response_post_child() -> anyhow::Result<()> {
-    let server_url = std::env::var(SERVER_URL_ENV)?;
+    let server_url = format!("{}/mcp", server.uri());
     let initial_tokens = initial_tokens(&server_url);
-    save_oauth_tokens(
-        SERVER_NAME,
-        &initial_tokens,
-        OAuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
-
-    let http_client = Environment::default_for_tests().get_http_client();
+    let http_client = codex_exec_server::Environment::default_for_tests().get_http_client();
     let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
         Arc::clone(&http_client),
         HeaderMap::new(),
@@ -171,14 +88,8 @@ async fn server_response_post_child() -> anyhow::Result<()> {
         .with_rejected_token_attribution(),
         manager,
     );
-    let persistor = OAuthPersistor::new(
-        SERVER_NAME.to_string(),
-        server_url.clone(),
-        Arc::clone(&auth_client.auth_manager),
-        ResolvedOAuthCredentialStore::File,
-        Some(initial_tokens),
-    );
-    let client = OAuthTransportClient::new(auth_client, persistor);
+    let failure_state = OAuthTransportFailureState::default();
+    let client = OAuthTransportClient::new(auth_client, failure_state.clone());
     let response_message: ClientJsonRpcMessage = serde_json::from_value(json!({
         "jsonrpc": "2.0",
         "id": "server-request-1",
@@ -188,7 +99,7 @@ async fn server_response_post_child() -> anyhow::Result<()> {
         }
     }))?;
 
-    let response = client
+    let error = client
         .post_message(
             Arc::from(server_url),
             response_message,
@@ -196,10 +107,47 @@ async fn server_response_post_child() -> anyhow::Result<()> {
             /*auth_token*/ None,
             HashMap::new(),
         )
-        .await?;
+        .await
+        .expect_err("the server should reject the response token");
 
-    assert!(matches!(response, StreamableHttpPostResponse::Accepted));
+    assert!(matches!(
+        error,
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::AccessTokenRejected { .. })
+    ));
+    assert_eq!(
+        failure_state
+            .pending_rejected_access_token()
+            .as_ref()
+            .map(|token| token.secret().as_str()),
+        Some(ACCESS_TOKEN_A)
+    );
+    assert_eq!(
+        failure_state.retry_policy().retry(/*current_times*/ 1),
+        None
+    );
+    server.verify().await;
     Ok(())
+}
+
+#[test]
+fn pending_auth_failure_stops_sse_retry_until_recovery_finishes() {
+    let failure_state = OAuthTransportFailureState::default();
+    let rejected_access_token = AccessToken::new(ACCESS_TOKEN_A.to_string());
+
+    failure_state.record_rejected_access_token(rejected_access_token.clone());
+    assert_eq!(
+        failure_state.retry_policy().retry(/*current_times*/ 1),
+        None
+    );
+
+    failure_state.finish_recovery(&rejected_access_token);
+    assert!(failure_state.pending_rejected_access_token().is_none());
+    assert!(
+        failure_state
+            .retry_policy()
+            .retry(/*current_times*/ 1)
+            .is_some()
+    );
 }
 
 fn initial_tokens(server_url: &str) -> StoredOAuthTokens {
