@@ -233,7 +233,7 @@ async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_guardian_receives_exact_trigger_for_network_request() -> Result<()> {
+async fn remote_guardian_allows_and_denies_executor_network_requests() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
@@ -261,7 +261,7 @@ async fn remote_guardian_receives_exact_trigger_for_network_request() -> Result<
         ]),
     )
     .await;
-    let guardian = mount_sse_once_match(
+    let deny_guardian = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             guardian_request_is_for(request, "exec-network-remote-guardian")
@@ -292,7 +292,7 @@ async fn remote_guardian_receives_exact_trigger_for_network_request() -> Result<
     submit_managed_network_turn(
         &test,
         "run one remote network request",
-        vec![remote],
+        vec![remote.clone()],
         ApprovalsReviewer::AutoReview,
         AskForApproval::OnRequest,
     )
@@ -302,8 +302,76 @@ async fn remote_guardian_receives_exact_trigger_for_network_request() -> Result<
         .context("remote Guardian denial should return before the command network timeout")?;
 
     assert_eq!(
-        guardian_network_triggers(&[&guardian])?,
+        guardian_network_triggers(&[&deny_guardian])?,
         vec![("exec-network-remote-guardian".to_string(), command)]
+    );
+
+    let allow_command = "python3 -c \"import urllib.request; response = urllib.request.build_opener(urllib.request.ProxyHandler()).open('http://example.com', timeout=10); print('REMOTE_GUARDIAN_ALLOW_OK:' + str(response.status))\"".to_string();
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "allow one remote network request")
+                && !request_body_contains(request, "exec-network-remote-allow")
+        },
+        sse(vec![
+            ev_response_created("resp-network-remote-allow"),
+            ev_function_call(
+                "exec-network-remote-allow",
+                "exec_command",
+                &serde_json::to_string(&network_exec_args(&allow_command))?,
+            ),
+            ev_completed("resp-network-remote-allow"),
+        ]),
+    )
+    .await;
+    let allow_guardian = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| guardian_request_is_for(request, "exec-network-remote-allow"),
+        sse(vec![
+            ev_response_created("resp-network-remote-allow-guardian"),
+            ev_assistant_message(
+                "msg-network-remote-allow-guardian",
+                r#"{"outcome":"allow"}"#,
+            ),
+            ev_completed("resp-network-remote-allow-guardian"),
+        ]),
+    )
+    .await;
+    let allow_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "REMOTE_GUARDIAN_ALLOW_OK:")
+        },
+        sse(vec![
+            ev_response_created("resp-network-remote-allow-done"),
+            ev_assistant_message("msg-network-remote-allow-done", "done"),
+            ev_completed("resp-network-remote-allow-done"),
+        ]),
+    )
+    .await;
+
+    submit_managed_network_turn(
+        &test,
+        "allow one remote network request",
+        vec![remote],
+        ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(15), wait_for_turn_complete(&test))
+        .await
+        .context("remote Guardian allow should let the executor request complete")?;
+
+    assert_eq!(
+        guardian_network_triggers(&[&allow_guardian])?,
+        vec![("exec-network-remote-allow".to_string(), allow_command)]
+    );
+    assert!(
+        allow_completion
+            .single_request()
+            .body_contains_text("REMOTE_GUARDIAN_ALLOW_OK:")
     );
 
     Ok(())
