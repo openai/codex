@@ -4,7 +4,8 @@ expression: popup
 ---
   Our systems are thinking a bit more about this request before responding.
 
-› 1. Keep waiting
+› 1. Dismiss and keep waiting
   2. Learn more
 
-  Press enter to confirm or esc to go back
+  No action is required. Codex will keep waiting, and this menu will close when
+  the response is ready.

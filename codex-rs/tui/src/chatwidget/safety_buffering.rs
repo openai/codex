@@ -9,6 +9,7 @@ const SAFETY_BUFFERING_LEARN_MORE_URL: &str = "https://help.openai.com/en/articl
 const SAFETY_BUFFERING_HEADER: &str =
     "Our systems are thinking a bit more about this request before responding.";
 const SAFETY_BUFFERING_MESSAGE_WITH_RETRY: &str = "Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests.";
+const SAFETY_BUFFERING_FOOTER: &str = "No action is required. Codex will keep waiting, and this menu will close when the response is ready.";
 
 #[derive(Debug)]
 struct ActiveSafetyBuffering {
@@ -184,7 +185,7 @@ impl ChatWidget {
         }
         items.extend([
             SelectionItem {
-                name: "Keep waiting".to_string(),
+                name: "Dismiss and keep waiting".to_string(),
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -201,6 +202,8 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(SAFETY_BUFFERING_PROMPT_VIEW_ID),
             header: Box::new(header),
+            footer_note: Some(Line::from(SAFETY_BUFFERING_FOOTER).dim()),
+            footer_hint: Some(Line::default()),
             items,
             ..Default::default()
         });
