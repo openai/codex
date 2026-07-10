@@ -69,6 +69,7 @@ use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
+use crate::stdio_server_launcher::StdioServerCwd;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
 use crate::stdio_server_launcher::StdioServerTransport;
@@ -353,7 +354,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[McpServerEnvVar],
-        cwd: Option<String>,
+        cwd: Option<StdioServerCwd>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {

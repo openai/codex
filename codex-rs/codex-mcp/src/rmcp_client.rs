@@ -55,9 +55,11 @@ use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::StdioServerCwd;
 use codex_rmcp_client::StdioServerLauncher;
 use codex_rmcp_client::ToolWithConnectorId;
 use codex_rmcp_client::is_authentication_required_error;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -970,25 +972,54 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = if is_local_environment {
+            let (cwd, launcher) = if is_local_environment {
                 // TODO(starr): Unify local stdio MCP launch with
                 // `ExecutorStdioServerLauncher` once the executor-backed path
                 // preserves `LocalStdioServerLauncher` semantics.
-                Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.local_stdio_fallback_cwd(),
-                )) as Arc<dyn StdioServerLauncher>
+                let cwd = cwd
+                    .map(|cwd| {
+                        let configured_cwd = cwd.as_str().to_string();
+                        cwd.to_host_abs_path()
+                            .map(|cwd| StdioServerCwd::Local(cwd.into_path_buf()))
+                            .map_err(|err| {
+                                StartupOutcomeError::from(anyhow!(
+                                    "invalid cwd `{configured_cwd}` for local stdio MCP server `{server_name}`: {err}"
+                                ))
+                            })
+                    })
+                    .transpose()?;
+                (
+                    cwd,
+                    Arc::new(LocalStdioServerLauncher::new(
+                        runtime_context.local_stdio_fallback_cwd(),
+                    )) as Arc<dyn StdioServerLauncher>,
+                )
             } else {
                 let Some(environment) = resolved_environment.as_ref() else {
                     unreachable!(
                         "non-local stdio MCP servers resolve an environment before launch"
                     );
                 };
-                Arc::new(ExecutorStdioServerLauncher::new(
-                    environment.get_exec_backend(),
-                )) as Arc<dyn StdioServerLauncher>
+                let cwd = cwd
+                    .map(|cwd| {
+                        let configured_cwd = cwd.as_str().to_string();
+                        PathUri::try_from(cwd)
+                            .map(StdioServerCwd::Executor)
+                            .map_err(|err| {
+                                StartupOutcomeError::from(anyhow!(
+                                    "invalid cwd `{configured_cwd}` for executor stdio MCP server `{server_name}`: {err}"
+                                ))
+                            })
+                    })
+                    .transpose()?;
+                (
+                    cwd,
+                    Arc::new(ExecutorStdioServerLauncher::new(
+                        environment.get_exec_backend(),
+                    )) as Arc<dyn StdioServerLauncher>,
+                )
             };
 
-            let cwd = cwd.map(codex_utils_path_uri::LegacyAppPathString::into_string);
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
