@@ -586,32 +586,46 @@ impl TurnRequestProcessor {
         if cwd.is_none() && workspace_roots.is_none() && environment_selections.is_none() {
             return None;
         }
+
+        // Explicit environment selections own their roots and pass through unchanged. Top-level
+        // `runtimeWorkspaceRoots` is only a compatibility input for default environments.
+        if let Some(environment_selections) = environment_selections {
+            let legacy_fallback_cwd = match cwd {
+                Some(cwd) => cwd,
+                None => thread.config_snapshot().await.cwd().clone(),
+            };
+            return Some(TurnEnvironmentSelections::new(
+                legacy_fallback_cwd,
+                environment_selections,
+            ));
+        }
+
         let snapshot = thread.config_snapshot().await;
         let current_cwd = snapshot.cwd().clone();
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
-        let environment_selections = environment_selections.unwrap_or_else(|| {
-            let workspace_roots = workspace_roots.unwrap_or_else(|| {
-                let workspace_roots = snapshot.workspace_roots;
-                if legacy_fallback_cwd != current_cwd && workspace_roots.contains(&current_cwd) {
-                    let mut retargeted_workspace_roots = Vec::with_capacity(workspace_roots.len());
-                    for root in workspace_roots {
-                        let root = if root == current_cwd {
-                            legacy_fallback_cwd.clone()
-                        } else {
-                            root
-                        };
-                        if !retargeted_workspace_roots.contains(&root) {
-                            retargeted_workspace_roots.push(root);
-                        }
+        let workspace_roots = match workspace_roots {
+            Some(workspace_roots) => workspace_roots,
+            None => {
+                // Match the pre-environment partial-update behavior: a cwd-only update retargets
+                // the old cwd root while preserving any additional roots. Deduplicate because the
+                // new cwd may already be present as an additional root.
+                let mut retargeted_workspace_roots = Vec::new();
+                for root in snapshot.workspace_roots {
+                    let root = if root == current_cwd {
+                        legacy_fallback_cwd.clone()
+                    } else {
+                        root
+                    };
+                    if !retargeted_workspace_roots.contains(&root) {
+                        retargeted_workspace_roots.push(root);
                     }
-                    retargeted_workspace_roots
-                } else {
-                    workspace_roots
                 }
-            });
-            self.thread_manager
-                .default_environment_selections(&legacy_fallback_cwd, &workspace_roots)
-        });
+                retargeted_workspace_roots
+            }
+        };
+        let environment_selections = self
+            .thread_manager
+            .default_environment_selections(&legacy_fallback_cwd, &workspace_roots);
         Some(TurnEnvironmentSelections::new(
             legacy_fallback_cwd,
             environment_selections,
