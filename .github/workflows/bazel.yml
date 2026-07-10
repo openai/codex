@@ -131,9 +131,6 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   e2e-benchmark-smoke:
-    # Bazel-backed macrobenchmarks pay a cold build cost that would consume
-    # most of the ordinary Bazel test job's 30-minute budget.
-    timeout-minutes: 45
     runs-on: ubuntu-24.04
     name: Bazel end-to-end benchmark smoke
     environment:
