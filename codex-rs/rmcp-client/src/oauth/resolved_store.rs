@@ -9,10 +9,6 @@ use tracing::warn;
 
 use super::OAuthKeyringLoadError;
 use super::StoredOAuthTokens;
-use super::compute_store_key;
-use super::delete_oauth_tokens_from_direct_keyring;
-use super::delete_oauth_tokens_from_file;
-use super::delete_oauth_tokens_from_secrets_keyring;
 use super::load_oauth_tokens_from_file;
 use super::load_oauth_tokens_from_keyring;
 use super::save_oauth_tokens_to_file;
@@ -72,27 +68,6 @@ impl ResolvedOAuthCredentialStore {
                 server_name,
                 tokens,
             ),
-        }
-    }
-
-    /// Deletes credentials only from this already-resolved authority.
-    pub(crate) fn delete<K: KeyringStore + Clone + 'static>(
-        self,
-        keyring_store: &K,
-        server_name: &str,
-        url: &str,
-    ) -> Result<bool> {
-        match self {
-            Self::File => {
-                let key = compute_store_key(server_name, url)?;
-                delete_oauth_tokens_from_file(&key)
-            }
-            Self::Keyring(AuthKeyringBackendKind::Direct) => {
-                delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
-            }
-            Self::Keyring(AuthKeyringBackendKind::Secrets) => {
-                delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
-            }
         }
     }
 }

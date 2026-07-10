@@ -5,39 +5,175 @@ use std::time::Instant;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_exec_server::ExecServerError;
+use oauth2::AccessToken;
 use reqwest::StatusCode;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::time;
 use tracing::warn;
 
-use crate::elicitation_client_service::ElicitationClientService;
-use crate::http_client_adapter::StreamableHttpClientAdapterError;
-use crate::oauth::OAuthPersistor;
-
+use super::OAuthRuntime;
 use super::PendingTransport;
 use super::RmcpClient;
+use crate::elicitation_client_service::ElicitationClientService;
+use crate::http_client_adapter::StreamableHttpClientAdapterError;
 
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 pub(super) const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
+#[derive(Default)]
+struct InitializeAttemptContext {
+    oauth: Option<OAuthRuntime>,
+}
+
 impl RmcpClient {
-    pub(super) async fn connect_pending_transport_with_initialize_retries(
+    pub(super) async fn connect_pending_transport_with_oauth_recovery(
         &self,
         initial_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
-        Option<OAuthPersistor>,
+        Option<OAuthRuntime>,
+    )> {
+        let mut initialize_deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut attempt_context = InitializeAttemptContext::default();
+        match self
+            .connect_pending_transport_with_initialize_retries(
+                initial_transport,
+                client_service.clone(),
+                timeout,
+                &mut initialize_deadline,
+                &mut attempt_context,
+            )
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                let Some(rejected_access_token) =
+                    Self::rejected_access_token_from_initialize_error(&error)
+                else {
+                    return Err(error);
+                };
+                let Some(oauth) = attempt_context.oauth else {
+                    return Err(error);
+                };
+                // Initialization gets one provider refresh and one reconstructed transport.
+                // Reusing this wrapper for the retry would turn persistent 401s into a refresh
+                // loop. A later delayed 401 may rebuild once more only when it can adopt an
+                // already-committed newer token without contacting the provider. The startup
+                // deadline gates whether recovery starts and bounds transport setup plus retry
+                // handshakes, but the refresh transaction has its own bounds and is deliberately
+                // excluded from the startup budget.
+                remaining_initialize_timeout(timeout, initialize_deadline)?;
+                let refresh_started_at = Instant::now();
+                let refresh_result = oauth
+                    .persistor
+                    .refresh_after_unauthorized(rejected_access_token)
+                    .await;
+                if let Some(deadline) = initialize_deadline.as_mut() {
+                    *deadline += refresh_started_at.elapsed();
+                }
+                refresh_result?;
+                let remaining = remaining_initialize_timeout(timeout, initialize_deadline)?;
+                let transport = match remaining {
+                    Some(remaining) => time::timeout(
+                        remaining,
+                        Self::create_pending_transport(&self.transport_recipe),
+                    )
+                    .await
+                    .map_err(|_| initialize_timeout_error(timeout, remaining))??,
+                    None => Self::create_pending_transport(&self.transport_recipe).await?,
+                };
+                let mut retry_context = InitializeAttemptContext::default();
+                let result = self
+                    .connect_pending_transport_with_initialize_retries(
+                        transport,
+                        client_service.clone(),
+                        timeout,
+                        &mut initialize_deadline,
+                        &mut retry_context,
+                    )
+                    .await;
+                if let Some(rejected_access_token) = result
+                    .as_ref()
+                    .err()
+                    .and_then(Self::rejected_access_token_from_initialize_error)
+                {
+                    let Some(retry_oauth) = retry_context.oauth else {
+                        return Err(AuthError::AuthorizationRequired.into());
+                    };
+                    // A delayed B/401 can arrive after another process already committed C.
+                    // Retry initialization once with C if it is now authoritative, but never
+                    // contact the provider again from this one-refresh startup boundary.
+                    let remaining = remaining_initialize_timeout(timeout, initialize_deadline)?;
+                    let adoption = retry_oauth
+                        .persistor
+                        .adopt_newer_credentials_after_unauthorized(&rejected_access_token);
+                    let adopted_newer_credentials = match remaining {
+                        Some(remaining) => time::timeout(remaining, adoption)
+                            .await
+                            .map_err(|_| initialize_timeout_error(timeout, remaining))??,
+                        None => adoption.await?,
+                    };
+                    if adopted_newer_credentials {
+                        let remaining = remaining_initialize_timeout(timeout, initialize_deadline)?;
+                        let transport = match remaining {
+                            Some(remaining) => time::timeout(
+                                remaining,
+                                Self::create_pending_transport(&self.transport_recipe),
+                            )
+                            .await
+                            .map_err(|_| initialize_timeout_error(timeout, remaining))??,
+                            None => Self::create_pending_transport(&self.transport_recipe).await?,
+                        };
+                        let mut adoption_context = InitializeAttemptContext::default();
+                        let adoption_result = self
+                            .connect_pending_transport_with_initialize_retries(
+                                transport,
+                                client_service,
+                                timeout,
+                                &mut initialize_deadline,
+                                &mut adoption_context,
+                            )
+                            .await;
+                        if adoption_result
+                            .as_ref()
+                            .err()
+                            .and_then(Self::rejected_access_token_from_initialize_error)
+                            .is_some()
+                        {
+                            return Err(AuthError::AuthorizationRequired.into());
+                        }
+                        return adoption_result;
+                    }
+                    // The reconstructed transport rejected the still-authoritative refreshed
+                    // token, so preserve Codex's established reauthentication signal.
+                    return Err(AuthError::AuthorizationRequired.into());
+                }
+                result
+            }
+        }
+    }
+
+    async fn connect_pending_transport_with_initialize_retries(
+        &self,
+        initial_transport: PendingTransport,
+        client_service: ElicitationClientService,
+        timeout: Option<Duration>,
+        initialize_deadline: &mut Option<Instant>,
+        attempt_context: &mut InitializeAttemptContext,
+    ) -> Result<(
+        Arc<RunningService<RoleClient, ElicitationClientService>>,
+        Option<OAuthRuntime>,
     )> {
         let should_retry = match &initial_transport {
             PendingTransport::InProcess { .. } | PendingTransport::Stdio { .. } => false,
             PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
-        let mut retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
         for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -50,7 +186,7 @@ impl RmcpClient {
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
                 None => {
-                    let remaining = remaining_initialize_timeout(timeout, retry_deadline)?;
+                    let remaining = remaining_initialize_timeout(timeout, *initialize_deadline)?;
                     match remaining {
                         Some(remaining) => time::timeout(
                             remaining,
@@ -62,20 +198,25 @@ impl RmcpClient {
                     }
                 }
             };
-            if let PendingTransport::StreamableHttpWithOAuth {
-                oauth_persistor, ..
-            } = &transport
-            {
-                // OAuth refresh has its own lock and provider request bounds. Exclude it from the
-                // MCP handshake budget, and finish persistence before attempting initialize.
+            if let PendingTransport::StreamableHttpWithOAuth { oauth, .. } = &transport {
+                // OAuth has independent bounds; pause the MCP handshake budget until refreshed
+                // credentials are durably committed.
                 let refresh_started_at = Instant::now();
-                oauth_persistor.refresh_if_needed().await?;
-                if let Some(deadline) = retry_deadline.as_mut() {
+                oauth.persistor.refresh_if_needed().await?;
+                if let Some(deadline) = initialize_deadline.as_mut() {
                     *deadline += refresh_started_at.elapsed();
                 }
             }
-            let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
-
+            // Keep the persistor paired with the transport attempt that returned 401. Rebuilt
+            // transports reuse the recipe's lifecycle-pinned credential source, and this pairing
+            // also keeps the authorization manager and snapshot aligned with the failed attempt.
+            attempt_context.oauth = match &transport {
+                PendingTransport::StreamableHttpWithOAuth { oauth, .. } => Some(oauth.clone()),
+                PendingTransport::InProcess { .. }
+                | PendingTransport::Stdio { .. }
+                | PendingTransport::StreamableHttp { .. } => None,
+            };
+            let attempt_timeout = remaining_initialize_timeout(timeout, *initialize_deadline)?;
             match Self::connect_pending_transport(
                 transport,
                 client_service.clone(),
@@ -96,7 +237,7 @@ impl RmcpClient {
                         error = %error,
                         "streamable HTTP MCP initialize failed with a retryable error; retrying"
                     );
-                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
+                    if !sleep_with_retry_deadline(delay, *initialize_deadline).await {
                         let duration = timeout.unwrap_or(delay);
                         return Err(anyhow!(
                             "timed out handshaking with MCP server after {duration:?}"
@@ -119,6 +260,33 @@ impl RmcpClient {
                     .downcast_ref::<rmcp::service::ClientInitializeError>()
                     .is_some_and(Self::is_retryable_client_initialize_error)
         })
+    }
+
+    fn rejected_access_token_from_initialize_error(error: &anyhow::Error) -> Option<AccessToken> {
+        error.chain().find_map(|source| {
+            source
+                .downcast_ref::<HandshakeError>()
+                .and_then(|error| {
+                    Self::rejected_access_token_from_client_initialize_error(&error.source)
+                })
+                .or_else(|| {
+                    source
+                        .downcast_ref::<rmcp::service::ClientInitializeError>()
+                        .and_then(Self::rejected_access_token_from_client_initialize_error)
+                })
+        })
+    }
+
+    fn rejected_access_token_from_client_initialize_error(
+        error: &rmcp::service::ClientInitializeError,
+    ) -> Option<AccessToken> {
+        match error {
+            rmcp::service::ClientInitializeError::TransportError { error, .. } => error
+                .error
+                .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+                .and_then(Self::rejected_access_token),
+            _ => None,
+        }
     }
 
     fn is_retryable_client_initialize_error(error: &rmcp::service::ClientInitializeError) -> bool {
@@ -171,6 +339,9 @@ impl RmcpClient {
             | StreamableHttpError::ServerDoesNotSupportSse
             | StreamableHttpError::Deserialize(_)
             | StreamableHttpError::Client(StreamableHttpClientAdapterError::SessionExpired404)
+            | StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::AccessTokenRejected { .. },
+            )
             | StreamableHttpError::Client(StreamableHttpClientAdapterError::Header(_)) => false,
             _ => false,
         }
