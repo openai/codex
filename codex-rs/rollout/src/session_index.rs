@@ -245,11 +245,13 @@ where
 {
     let mut scanner = ReverseJsonlScanner::new(File::open(path)?)?;
     while let Some(outcome) = scanner.scan_next::<SessionIndexEntry>()? {
-        let ScanOutcome::Parsed(entry) = outcome else {
-            continue;
-        };
-        if let Some(entry) = visit_entry(&entry)? {
-            return Ok(Some(entry));
+        match outcome {
+            ScanOutcome::Parsed(entry) => {
+                if let Some(entry) = visit_entry(&entry)? {
+                    return Ok(Some(entry));
+                }
+            }
+            ScanOutcome::Rejected(_) => continue,
         }
     }
     Ok(None)
