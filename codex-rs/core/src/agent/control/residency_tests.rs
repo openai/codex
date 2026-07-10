@@ -161,6 +161,7 @@ async fn mark_thread_completed(thread: &CodexThread) {
                 turn_id: turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("done".to_string()),
+                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,

@@ -53,6 +53,7 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
         turn_id: turn_id.to_string(),
         started_at: None,
         last_agent_message: None,
+        error: None,
         completed_at: None,
         duration_ms: None,
         time_to_first_token_ms: None,

@@ -1776,7 +1776,7 @@ impl Session {
                 .terminal_error
                 .lock()
                 .await
-                .replace(error.message.clone());
+                .replace(error.clone());
         }
         self.services
             .rollout_thread_trace
@@ -1834,7 +1834,7 @@ impl Session {
 
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {
-                let status = AgentStatus::Errored(error);
+                let status = AgentStatus::Errored(error.message);
                 self.agent_status.send_replace(status.clone());
                 status
             }

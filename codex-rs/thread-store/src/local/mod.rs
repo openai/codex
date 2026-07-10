@@ -540,6 +540,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     started_at: None,
                     last_agent_message: None,
+                    error: None,
                     completed_at: None,
                     duration_ms: None,
                     time_to_first_token_ms: None,

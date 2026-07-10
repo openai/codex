@@ -191,6 +191,7 @@ fn turn_complete_item(
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id,
         last_agent_message: None,
+        error: None,
         started_at,
         completed_at,
         duration_ms: None,

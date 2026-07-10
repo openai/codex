@@ -766,11 +766,13 @@ impl Session {
                 .turn_timing_state
                 .time_to_first_token_ms()
                 .await;
+            let error = turn_context.terminal_error.lock().await.clone();
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_context.sub_id.clone(),
                 last_agent_message,
+                error,
                 started_at,
                 completed_at,
                 duration_ms,
