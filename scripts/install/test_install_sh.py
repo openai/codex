@@ -88,9 +88,7 @@ class InstallShTest(unittest.TestCase):
         self.assertIn("/codex-npm-", requests[1])
         self.assertNotIn("codex-package_SHA256SUMS", requests[1])
 
-    def test_macos_install_only_exposes_legacy_code_mode_host_beside_codex(
-        self,
-    ) -> None:
+    def test_macos_install_only_exposes_codex(self) -> None:
         for host_dir in ("codex-resources", "bin"):
             with (
                 self.subTest(host_dir=host_dir),
@@ -118,14 +116,7 @@ class InstallShTest(unittest.TestCase):
                 self.assertEqual(
                     os.readlink(codex_path), str(current / "bin" / "codex")
                 )
-                if host_dir == "bin":
-                    self.assertEqual(
-                        os.readlink(host_path),
-                        str(current / host_dir / "codex-code-mode-host"),
-                    )
-                    self.assertTrue(os.access(host_path, os.X_OK))
-                else:
-                    self.assertFalse(host_path.exists())
+                self.assertFalse(host_path.exists())
 
 
 def run_installer(

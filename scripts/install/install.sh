@@ -7,7 +7,6 @@ NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
-CODE_MODE_HOST_BIN_PATH="$BIN_DIR/codex-code-mode-host"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 STANDALONE_ROOT="$CODEX_HOME_DIR/packages/standalone"
 RELEASES_DIR="$STANDALONE_ROOT/releases"
@@ -877,35 +876,12 @@ update_visible_command() {
   mkdir -p "$BIN_DIR"
   tmp_link="$BIN_DIR/.codex.$$"
   codex_relative_path="$(release_codex_relative_path "$release_dir")"
-  code_mode_host_relative_path="$(package_code_mode_host_relative_path "$release_dir")"
 
   replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/$codex_relative_path" "$tmp_link"
-
-  if [ "$os" = "darwin" ] &&
-    [ "$code_mode_host_relative_path" = "bin/codex-code-mode-host" ] &&
-    [ -x "$release_dir/$code_mode_host_relative_path" ]; then
-    replace_path_with_symlink \
-      "$CODE_MODE_HOST_BIN_PATH" \
-      "$CURRENT_LINK/$code_mode_host_relative_path" \
-      "$tmp_link"
-  else
-    existing_code_mode_host_target="$(readlink "$CODE_MODE_HOST_BIN_PATH" 2>/dev/null || true)"
-    case "$existing_code_mode_host_target" in
-      "$CURRENT_LINK/bin/codex-code-mode-host" | \
-        "$CURRENT_LINK/codex-resources/codex-code-mode-host")
-        rm -f "$CODE_MODE_HOST_BIN_PATH"
-        ;;
-    esac
-  fi
 }
 
 verify_visible_command() {
   "$BIN_PATH" --version >/dev/null
-  if [ "$os" = "darwin" ] && [ "$install_layout" = "package" ] &&
-    [ "$(package_code_mode_host_relative_path "$release_dir")" = \
-      "bin/codex-code-mode-host" ]; then
-    [ -x "$CODE_MODE_HOST_BIN_PATH" ]
-  fi
 }
 
 parse_args "$@"
