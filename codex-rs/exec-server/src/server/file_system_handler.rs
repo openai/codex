@@ -480,5 +480,4 @@ mod tests {
             format!("find-up batch must not exceed {FS_FIND_UP_BATCH_MAX_REQUESTS} requests")
         );
     }
-
 }
