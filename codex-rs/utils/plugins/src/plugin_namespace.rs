@@ -40,8 +40,17 @@ pub async fn plugin_namespace_for_root_uri(
             Ok(_) | Err(_) => {}
         }
     }
+    plugin_namespace_for_manifest_uri(fs, plugin_root, &manifest_path?).await
+}
+
+/// Reads the plugin namespace from an already-discovered manifest path.
+pub async fn plugin_namespace_for_manifest_uri(
+    fs: &dyn ExecutorFileSystem,
+    plugin_root: &PathUri,
+    manifest_path: &PathUri,
+) -> Option<String> {
     let contents = fs
-        .read_file_text(&manifest_path?, /*sandbox*/ None)
+        .read_file_text(manifest_path, /*sandbox*/ None)
         .await
         .ok()?;
     let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;

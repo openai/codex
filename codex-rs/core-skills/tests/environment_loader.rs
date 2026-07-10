@@ -574,7 +574,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
         PathUri::from_host_native_path(dunce::canonicalize(manifest_path).unwrap()).unwrap();
     assert_eq!(
         calls
-            .metadata_files
+            .read_files
             .iter()
             .filter(|path| **path == manifest_uri)
             .count(),

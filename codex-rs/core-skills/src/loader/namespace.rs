@@ -1,34 +1,148 @@
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FindUpErrorPolicy;
+use codex_exec_server::FindUpMatchKind;
+use codex_exec_server::FindUpOptions;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
+use codex_utils_plugins::plugin_namespace_for_manifest_uri;
 use codex_utils_plugins::plugin_namespace_for_root_uri;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::sync::OnceCell;
+use tokio::sync::Semaphore;
 
 use super::discovery::MAX_CONCURRENT_SKILL_LOADS;
 
+#[path = "namespace_batch.rs"]
+mod batch;
+use batch::resolve_namespace_lookups;
+
+const MAX_CONCURRENT_NAMESPACE_LOOKUPS: usize = 8;
+
+struct NamespaceProbeCache<'a> {
+    fs: &'a dyn ExecutorFileSystem,
+    roots: Mutex<HashMap<PathUri, Arc<OnceCell<Option<String>>>>>,
+    manifests: Mutex<HashMap<PathUri, Arc<OnceCell<Option<String>>>>>,
+    permits: Semaphore,
+}
+
+impl<'a> NamespaceProbeCache<'a> {
+    fn new(fs: &'a dyn ExecutorFileSystem) -> Self {
+        Self {
+            fs,
+            roots: Mutex::new(HashMap::new()),
+            manifests: Mutex::new(HashMap::new()),
+            permits: Semaphore::new(MAX_CONCURRENT_SKILL_LOADS),
+        }
+    }
+
+    async fn resolve_root(&self, root: &PathUri) -> Option<String> {
+        let cell = cached_cell(&self.roots, root);
+        cell.get_or_init(|| async {
+            let Ok(_permit) = self.permits.acquire().await else {
+                return None;
+            };
+            plugin_namespace_for_root_uri(self.fs, root).await
+        })
+        .await
+        .clone()
+    }
+
+    async fn resolve_manifest(&self, root: &PathUri, manifest: &PathUri) -> Option<String> {
+        let cell = cached_cell(&self.manifests, manifest);
+        cell.get_or_init(|| plugin_namespace_for_manifest_uri(self.fs, root, manifest))
+            .await
+            .clone()
+    }
+}
+
+fn cached_cell(
+    cells: &Mutex<HashMap<PathUri, Arc<OnceCell<Option<String>>>>>,
+    path: &PathUri,
+) -> Arc<OnceCell<Option<String>>> {
+    let mut cells = cells
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(
+        cells
+            .entry(path.clone())
+            .or_insert_with(|| Arc::new(OnceCell::new())),
+    )
+}
+
+struct ResolvedNamespaceLookup {
+    root: PathUri,
+    namespace: Option<String>,
+}
+
+async fn resolve_namespace_lookup(
+    cache: &NamespaceProbeCache<'_>,
+    root: PathUri,
+    probe_root_alone: bool,
+) -> ResolvedNamespaceLookup {
+    let mut next_ancestor = if probe_root_alone {
+        if let Some(namespace) = cache.resolve_root(&root).await {
+            return ResolvedNamespaceLookup {
+                root,
+                namespace: Some(namespace),
+            };
+        }
+        root.parent()
+    } else {
+        Some(root.clone())
+    };
+    let options = namespace_find_up_options();
+
+    while let Some(search_start) = next_ancestor {
+        let Ok(outcome) = cache
+            .fs
+            .find_up(&search_start, &options, /*sandbox*/ None)
+            .await
+        else {
+            break;
+        };
+        let Some(matched) = outcome.matched else {
+            break;
+        };
+        if let Some(namespace) = cache
+            .resolve_manifest(&matched.ancestor, &matched.path)
+            .await
+        {
+            return ResolvedNamespaceLookup {
+                root,
+                namespace: Some(namespace),
+            };
+        }
+        next_ancestor = matched.ancestor.parent();
+    }
+
+    ResolvedNamespaceLookup {
+        root,
+        namespace: None,
+    }
+}
+
+fn namespace_find_up_options() -> FindUpOptions {
+    FindUpOptions {
+        candidate_relative_paths: DISCOVERABLE_PLUGIN_MANIFEST_PATHS
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        match_kind: FindUpMatchKind::File,
+        non_not_found_error_policy: FindUpErrorPolicy::Ignore,
+    }
+}
+
 /// Resolves the namespace prefix applied to skill names during one skills scan.
-///
-/// A plugin namespace is the plugin name from the nearest valid plugin manifest
-/// above a skill path. For example, a skill named `search` beneath a plugin named
-/// `sample` is exposed as `sample:search`.
-///
-/// Resolving the namespace separately for every `SKILL.md` repeats the same
-/// ancestor manifest probes for sibling skills. This resolver resolves relevant
-/// roots once per scan, then selects the nearest matching root for each skill.
-///
-/// Namespace precedence is:
-///
-/// 1. an explicitly provided plugin namespace;
-/// 2. the deepest matching canonical symlink root or nested plugin root;
-/// 3. the namespace inherited from the scanned skills root.
 pub(crate) struct SkillNamespaceResolver {
     inherited_namespace: ResolvedSkillNamespace,
     nested_namespaces: Vec<(PathUri, ResolvedSkillNamespace)>,
 }
 
 impl SkillNamespaceResolver {
-    /// Builds a resolver whose explicit plugin-owned namespace overrides discovery.
     pub(crate) fn with_provided_namespace(namespace: &str) -> Self {
         Self {
             inherited_namespace: ResolvedSkillNamespace::Plugin(namespace.to_string()),
@@ -43,7 +157,6 @@ impl SkillNamespaceResolver {
         plugin_roots: HashSet<PathUri>,
         namespace_roots: HashSet<PathUri>,
     ) -> Self {
-        // Only probe plugin roots above loaded skills; unused siblings cannot affect names.
         let mut skill_ancestors = HashSet::new();
         for skill_path in skill_paths {
             let mut ancestor = skill_path.parent();
@@ -56,8 +169,7 @@ impl SkillNamespaceResolver {
             .into_iter()
             .filter(|plugin_root| skill_ancestors.contains(plugin_root))
             .collect::<HashSet<_>>();
-
-        // The scan root is already the fallback above if nothing else matches, exclude from the search.
+        let discovered_manifest_roots = plugin_roots.clone();
         let namespace_roots = namespace_roots
             .into_iter()
             .filter(|namespace_root| namespace_root != root)
@@ -68,54 +180,33 @@ impl SkillNamespaceResolver {
             .filter(|plugin_root| plugin_root != root && !namespace_root_set.contains(plugin_root))
             .collect::<Vec<_>>();
 
-        let lookup_roots = std::iter::once(root.clone())
+        let lookup_requests = std::iter::once(root.clone())
             .chain(namespace_roots.iter().cloned())
+            .map(|lookup_root| {
+                let probe_root_alone = discovered_manifest_roots.contains(&lookup_root);
+                (lookup_root, probe_root_alone)
+            })
             .collect::<Vec<_>>();
-        let mut pending_lookups = lookup_roots
-            .iter()
-            .cloned()
-            .map(|lookup_root| (lookup_root.clone(), lookup_root))
-            .collect::<Vec<_>>();
-        let mut direct_plugin_roots = plugin_roots.iter().cloned().collect::<HashSet<_>>();
-        let mut namespaces_by_root = HashMap::new();
-        let mut namespaces_by_lookup_root = HashMap::new();
-        while !pending_lookups.is_empty() {
-            let probe_roots = pending_lookups
-                .iter()
-                .map(|(_, ancestor)| ancestor.clone())
-                .chain(direct_plugin_roots.drain())
-                .filter(|ancestor| !namespaces_by_root.contains_key(ancestor))
-                .collect::<HashSet<_>>();
-            namespaces_by_root.extend(
-                futures::stream::iter(probe_roots)
-                    .map(|manifest_root| async move {
-                        let namespace = plugin_namespace_for_root_uri(fs, &manifest_root).await;
-                        (manifest_root, namespace)
-                    })
-                    .buffered(MAX_CONCURRENT_SKILL_LOADS)
-                    .collect::<HashMap<_, _>>()
-                    .await,
-            );
-
-            let mut next_lookups = Vec::new();
-            for (lookup_root, ancestor) in pending_lookups {
-                match namespaces_by_root.get(&ancestor) {
-                    Some(Some(namespace)) => {
-                        namespaces_by_lookup_root.insert(lookup_root, Some(namespace.clone()));
-                    }
-                    Some(None) => match ancestor.parent() {
-                        Some(parent) => next_lookups.push((lookup_root, parent)),
-                        None => {
-                            namespaces_by_lookup_root.insert(lookup_root, None);
-                        }
-                    },
-                    None => unreachable!("pending namespace ancestor was not probed"),
+        let probe_cache = NamespaceProbeCache::new(fs);
+        let lookup_resolutions = resolve_namespace_lookups(&probe_cache, &lookup_requests);
+        let plugin_resolutions = futures::stream::iter(plugin_roots.iter().cloned())
+            .map(|plugin_root| {
+                let probe_cache = &probe_cache;
+                async move {
+                    let namespace = probe_cache.resolve_root(&plugin_root).await;
+                    (plugin_root, namespace)
                 }
-            }
-            pending_lookups = next_lookups;
-        }
+            })
+            .buffer_unordered(MAX_CONCURRENT_SKILL_LOADS)
+            .collect::<Vec<_>>();
+        let (lookup_resolutions, plugin_resolutions) =
+            futures::join!(lookup_resolutions, plugin_resolutions);
+        let namespaces_by_lookup_root = lookup_resolutions
+            .into_iter()
+            .map(|lookup| (lookup.root, lookup.namespace))
+            .collect::<HashMap<_, _>>();
+        let namespaces_by_plugin_root = plugin_resolutions.into_iter().collect::<HashMap<_, _>>();
 
-        // Ordinary descendants fall back to the nearest valid manifest at or above the scan root.
         let inherited_namespace = namespaces_by_lookup_root
             .get(root)
             .and_then(Option::as_ref)
@@ -131,26 +222,21 @@ impl SkillNamespaceResolver {
                 .unwrap_or(ResolvedSkillNamespace::Plain);
             (namespace_root, namespace)
         });
-        // Invalid nested manifests are omitted, so the deepest remaining match wins.
         let plugin_lookups = plugin_roots.into_iter().filter_map(|plugin_root| {
-            namespaces_by_root
+            namespaces_by_plugin_root
                 .get(&plugin_root)
                 .and_then(Option::as_ref)
                 .cloned()
                 .map(|namespace| (plugin_root, ResolvedSkillNamespace::Plugin(namespace)))
         });
-        let nested_namespaces = namespace_lookups.chain(plugin_lookups).collect();
-
         Self {
             inherited_namespace,
-            nested_namespaces,
+            nested_namespaces: namespace_lookups.chain(plugin_lookups).collect(),
         }
     }
 
     pub(crate) fn for_skill(&self, root: &PathUri, path: &PathUri) -> &ResolvedSkillNamespace {
-        // Ancestor symlink targets cannot override skills still owned by the scan root.
         let path_is_under_root = path.starts_with(root);
-        // The deepest matching path prefix is the nearest applicable namespace.
         self.nested_namespaces
             .iter()
             .filter(|(namespace_root, _)| {
@@ -163,12 +249,9 @@ impl SkillNamespaceResolver {
     }
 }
 
-/// The completed namespace resolution for a skill root.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResolvedSkillNamespace {
-    /// No plugin namespace applies to matching skills.
     Plain,
-    /// Qualify matching skill names with this plugin namespace.
     Plugin(String),
 }
 
@@ -180,3 +263,7 @@ impl ResolvedSkillNamespace {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "namespace_tests.rs"]
+mod tests;
