@@ -353,7 +353,8 @@ mod tests {
         fs::write(&exe_path, "")?;
         let host_path = resources_dir.join(code_mode_host_executable_name());
         fs::write(&host_path, "")?;
-        let canonical_host_path = host_path.canonicalize()?;
+        let canonical_host_path =
+            AbsolutePathBuf::from_absolute_path(host_path.canonicalize()?)?.into_path_buf();
         let context = InstallContext::from_exe(
             /*is_macos*/ false,
             /*current_exe*/ Some(&exe_path),
