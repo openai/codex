@@ -599,7 +599,8 @@ impl UnifiedExecProcessManager {
             }
             let exit_code = process.exit_code();
             let exit = exit_code.unwrap_or(-1);
-            process.notify_lifecycle_finished(exit_code, /*failed*/ false);
+            let sandbox_denial_result = process.check_for_sandbox_denial_with_text(&text).await;
+            process.notify_lifecycle_finished(exit_code, sandbox_denial_result.is_err());
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.turn),
@@ -615,7 +616,7 @@ impl UnifiedExecProcessManager {
             .await;
 
             self.release_process_id(request.process_id).await;
-            process.check_for_sandbox_denial_with_text(&text).await?;
+            sandbox_denial_result?;
             (None, exit_code)
         };
 

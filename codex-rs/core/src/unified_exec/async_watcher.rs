@@ -123,6 +123,7 @@ pub(crate) fn spawn_exit_watcher(
         output_drained.notified().await;
 
         let duration = Instant::now().saturating_duration_since(started_at);
+        let _ = process.check_for_sandbox_denial().await;
         if let Some(message) = process.failure_message() {
             process.notify_lifecycle_finished(/*exit_code*/ None, /*failed*/ true);
             emit_failed_exec_end_for_unified_exec(
