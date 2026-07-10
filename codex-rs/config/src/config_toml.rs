@@ -148,6 +148,19 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+/// Non-secret settings for exchanging a workload assertion for ChatGPT auth.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WorkloadIdentityToml {
+    pub federation_rule_id: Option<String>,
+    pub principal_id: Option<String>,
+    pub tenant_id: Option<String>,
+    pub workspace_id: Option<String>,
+    /// Optional assertion file. If omitted, Codex reads the assertion from
+    /// `OPENAI_IDENTITY_TOKEN` or `OPENAI_IDENTITY_TOKEN_FILE`.
+    pub identity_token_file: Option<AbsolutePathBuf>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -371,6 +384,10 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Workload identity settings for non-interactive ChatGPT authentication.
+    #[serde(default)]
+    pub workload_identity: Option<WorkloadIdentityToml>,
 
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,

@@ -56,6 +56,7 @@ use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
+use codex_config::config_toml::WorkloadIdentityToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_http_client::HttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -65,6 +66,8 @@ use codex_protocol::auth::RefreshTokenFailedReason;
 use codex_protocol::protocol::SessionSource;
 use serde_json::Value;
 use thiserror::Error;
+
+use super::workload_identity::WorkloadIdentityExternalAuth;
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
@@ -1803,6 +1806,11 @@ pub trait AuthManagerConfig {
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
 
+    /// Returns non-secret workload identity settings from the active config layers.
+    fn workload_identity_config(&self) -> Option<WorkloadIdentityToml> {
+        None
+    }
+
     /// Returns route-selection settings for auth-owned clients.
     fn auth_route_config(&self) -> Option<AuthRouteConfig>;
 }
@@ -2250,6 +2258,26 @@ impl AuthManager {
         self.commit_external_auth(auth)
     }
 
+    async fn activate_resolving_external_auth(&self, external_auth: Arc<dyn ExternalAuth>) {
+        self.set_cached_auth(/*new_auth*/ None);
+        {
+            let Ok(mut configured_external_auth) = self.external_auth.write() else {
+                tracing::error!("failed to activate external auth: external auth lock is poisoned");
+                return;
+            };
+            *configured_external_auth = Some(Arc::clone(&external_auth));
+        }
+
+        match self.resolve_external_auth(&external_auth).await {
+            Ok(auth) => {
+                if let Err(error) = self.commit_external_auth(auth) {
+                    tracing::error!("failed to activate external auth: {error}");
+                }
+            }
+            Err(error) => tracing::error!("failed to activate external auth: {error}"),
+        }
+    }
+
     pub fn clear_external_auth(&self) {
         if let Ok(mut external_auth) = self.external_auth.write()
             && external_auth.take().is_some()
@@ -2316,7 +2344,7 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        Self::shared(
+        let manager = Self::shared(
             config.codex_home(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode(),
@@ -2325,7 +2353,19 @@ impl AuthManager {
             config.auth_keyring_backend_kind(),
             config.auth_route_config(),
         )
-        .await
+        .await;
+        let explicit_process_auth = (enable_codex_api_key_env
+            && read_codex_api_key_from_env().is_some())
+            || read_codex_access_token_from_env().is_some();
+        if !explicit_process_auth
+            && let Some(workload_identity) =
+                WorkloadIdentityExternalAuth::from_config(config.workload_identity_config())
+        {
+            manager
+                .activate_resolving_external_auth(Arc::new(workload_identity))
+                .await;
+        }
+        manager
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {

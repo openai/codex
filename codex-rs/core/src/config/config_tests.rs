@@ -6976,6 +6976,64 @@ async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn workload_identity_config_merges_from_profile_v2() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let base_config = codex_home.path().join(CONFIG_TOML_FILE);
+    let selected_config = codex_home.path().join("work.config.toml");
+    tokio::fs::write(
+        &base_config,
+        r#"
+[workload_identity]
+tenant_id = "tenant-one"
+workspace_id = "workspace-one"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        &selected_config,
+        r#"
+[workload_identity]
+federation_rule_id = "rule-one"
+principal_id = "user-one"
+identity_token_file = "./identity-token"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(selected_config.abs()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+
+    let workload_identity = config
+        .workload_identity
+        .expect("merged workload identity config");
+    assert_eq!(
+        workload_identity.federation_rule_id.as_deref(),
+        Some("rule-one")
+    );
+    assert_eq!(workload_identity.principal_id.as_deref(), Some("user-one"));
+    assert_eq!(workload_identity.tenant_id.as_deref(), Some("tenant-one"));
+    assert_eq!(
+        workload_identity.workspace_id.as_deref(),
+        Some("workspace-one")
+    );
+    assert_eq!(
+        workload_identity
+            .identity_token_file
+            .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf),
+        Some(codex_home.path().join("identity-token"))
+    );
+
+    Ok(())
+}
+
 #[test]
 fn profile_v2_config_path_resolves_validated_names() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;

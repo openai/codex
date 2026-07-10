@@ -4600,6 +4600,33 @@
         }
       ]
     },
+    "WorkloadIdentityToml": {
+      "additionalProperties": false,
+      "description": "Non-secret settings for exchanging a workload assertion for ChatGPT auth.",
+      "properties": {
+        "federation_rule_id": {
+          "type": "string"
+        },
+        "identity_token_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional assertion file. If omitted, Codex reads the assertion from `OPENAI_IDENTITY_TOKEN` or `OPENAI_IDENTITY_TOKEN_FILE`."
+        },
+        "principal_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -5531,6 +5558,15 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workload_identity": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkloadIdentityToml"
+        }
+      ],
+      "default": null,
+      "description": "Workload identity settings for non-interactive ChatGPT authentication."
     }
   },
   "title": "ConfigToml",
