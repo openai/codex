@@ -19,6 +19,7 @@ use crate::ExecServerError;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::ExecServerTransportParams;
 use crate::client_api::NoiseRendezvousConnectArgs;
 use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::NoiseRendezvousConnectProvider;
@@ -91,27 +92,30 @@ impl ExecServerClient {
     /// Noise connection details are fetched here so reconnects get a fresh URL
     /// and authorization without replacing the harness identity.
     pub(crate) async fn connect_for_transport(
-        transport_params: crate::client_api::ExecServerTransportParams,
+        transport_params: ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
-        match transport_params {
-            crate::client_api::ExecServerTransportParams::WebSocketUrl {
+        let (websocket_url, connect_timeout, initialize_timeout) = match transport_params {
+            ExecServerTransportParams::WebSocketUrl {
                 websocket_url,
                 connect_timeout,
                 initialize_timeout,
-            } => {
-                Self::connect_websocket(RemoteExecServerConnectArgs {
+            } => (websocket_url, connect_timeout, initialize_timeout),
+            ExecServerTransportParams::PendingWebSocketUrl(websocket_url) => {
+                let websocket_url = websocket_url
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err("environment registration ended before completion".to_string())
+                    })
+                    .map_err(|message| {
+                        ExecServerError::Disconnected(format!("environment unavailable: {message}"))
+                    })?;
+                (
                     websocket_url,
-                    client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
-                    connect_timeout,
-                    initialize_timeout,
-                    resume_session_id: None,
-                })
-                .await
+                    DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+                    DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
+                )
             }
-            crate::client_api::ExecServerTransportParams::NoiseRendezvous {
-                provider,
-                identity,
-            } => {
+            ExecServerTransportParams::NoiseRendezvous { provider, identity } => {
                 let reconnect_strategy = ExecServerReconnectStrategy::NoiseRendezvous {
                     provider: Arc::clone(&provider),
                     identity: identity.clone(),
@@ -121,21 +125,30 @@ impl ExecServerClient {
                 };
                 let (connection, options) =
                     Self::open_initial_noise_rendezvous_connection(&provider, &identity).await?;
-                Self::connect_with_recovery(connection, options, Some(reconnect_strategy)).await
+                return Self::connect_with_recovery(connection, options, Some(reconnect_strategy))
+                    .await;
             }
-            crate::client_api::ExecServerTransportParams::StdioCommand {
+            ExecServerTransportParams::StdioCommand {
                 command,
                 initialize_timeout,
             } => {
-                Self::connect_stdio_command(StdioExecServerConnectArgs {
+                return Self::connect_stdio_command(StdioExecServerConnectArgs {
                     command,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                     initialize_timeout,
                     resume_session_id: None,
                 })
-                .await
+                .await;
             }
-        }
+        };
+        Self::connect_websocket(RemoteExecServerConnectArgs {
+            websocket_url,
+            client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
+            connect_timeout,
+            initialize_timeout,
+            resume_session_id: None,
+        })
+        .await
     }
 
     async fn open_initial_noise_rendezvous_connection(

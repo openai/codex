@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
+use futures::FutureExt;
+
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
@@ -26,6 +28,7 @@ use crate::protocol::EnvironmentInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use tokio::sync::oneshot;
 use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -58,6 +61,10 @@ pub struct EnvironmentManager {
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
+
+/// The one-shot capability to complete a pending environment registration.
+#[must_use = "the pending environment cannot connect until registration is completed"]
+pub struct PendingEnvironmentRegistration(oneshot::Sender<Result<String, String>>);
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
 pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
@@ -295,22 +302,8 @@ impl EnvironmentManager {
         exec_server_url: String,
         connect_timeout: Option<std::time::Duration>,
     ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
-        let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
-        if disabled {
-            return Err(ExecServerError::Protocol(
-                "remote environment cannot use disabled exec-server url".to_string(),
-            ));
-        }
-        let Some(exec_server_url) = exec_server_url else {
-            return Err(ExecServerError::Protocol(
-                "remote environment requires an exec-server url".to_string(),
-            ));
-        };
+        validate_environment_id(&environment_id)?;
+        let exec_server_url = validate_remote_exec_server_url(exec_server_url)?;
         let environment = Arc::new(Environment::remote_with_transport(
             ExecServerTransportParams::websocket_url(
                 exec_server_url,
@@ -326,6 +319,25 @@ impl EnvironmentManager {
         Ok(())
     }
 
+    /// Adds or replaces a remote environment whose stable URL will be supplied later.
+    pub fn register_pending_environment(
+        &self,
+        environment_id: String,
+    ) -> Result<PendingEnvironmentRegistration, ExecServerError> {
+        validate_environment_id(&environment_id)?;
+        let (completion, websocket_url) = oneshot::channel();
+        let environment = Arc::new(Environment::remote_with_transport(
+            ExecServerTransportParams::PendingWebSocketUrl(websocket_url.shared()),
+            self.local_runtime_paths.clone(),
+        ));
+        environment.start_connecting();
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(environment_id, environment);
+        Ok(PendingEnvironmentRegistration(completion))
+    }
+
     /// Adds or replaces a named remote environment that connects through an
     /// authenticated, end-to-end encrypted rendezvous stream.
     ///
@@ -336,11 +348,7 @@ impl EnvironmentManager {
         environment_id: String,
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
     ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
+        validate_environment_id(&environment_id)?;
         let identity = NoiseChannelIdentity::generate().map_err(|error| {
             ExecServerError::Protocol(format!(
                 "failed to generate Noise harness identity: {error}"
@@ -357,6 +365,46 @@ impl EnvironmentManager {
             .insert(environment_id, environment);
         Ok(())
     }
+}
+
+impl PendingEnvironmentRegistration {
+    /// Completes provisioning with the stable URL or a terminal error message.
+    pub fn complete(self, result: Result<String, String>) -> Result<(), ExecServerError> {
+        let result = match result {
+            Ok(exec_server_url) => match validate_remote_exec_server_url(exec_server_url) {
+                Ok(exec_server_url) => Ok(exec_server_url),
+                Err(error) => {
+                    let _ = self.0.send(Err(error.to_string()));
+                    return Err(error);
+                }
+            },
+            Err(message) => Err(message),
+        };
+        self.0.send(result).map_err(|_| {
+            ExecServerError::Disconnected("pending environment registration is inactive".into())
+        })
+    }
+}
+
+fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> {
+    if environment_id.is_empty() {
+        return Err(ExecServerError::Protocol(
+            "environment id cannot be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_remote_exec_server_url(exec_server_url: String) -> Result<String, ExecServerError> {
+    let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
+    if disabled {
+        return Err(ExecServerError::Protocol(
+            "remote environment cannot use disabled exec-server url".to_string(),
+        ));
+    }
+    exec_server_url.ok_or_else(|| {
+        ExecServerError::Protocol("remote environment requires an exec-server url".to_string())
+    })
 }
 
 fn noise_environment_config_from_env()
@@ -412,7 +460,6 @@ fn optional_environment_value(name: &str) -> Option<String> {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
     remote_client: Option<LazyRemoteExecServerClient>,
     // Dropping the environment stops unfinished background startup work.
     startup_task: Arc<Mutex<Option<AbortOnDropHandle<()>>>>,
@@ -426,7 +473,6 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
-            exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::default()),
@@ -439,9 +485,7 @@ impl Environment {
 
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Environment")
-            .field("exec_server_url", &self.exec_server_url)
-            .finish_non_exhaustive()
+        f.debug_struct("Environment").finish_non_exhaustive()
     }
 }
 
@@ -483,7 +527,6 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::with_local_runtime_paths(
@@ -514,21 +557,12 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let exec_server_url = match &remote_transport {
-            ExecServerTransportParams::WebSocketUrl {
-                websocket_url: exec_server_url,
-                ..
-            } => Some(exec_server_url.clone()),
-            ExecServerTransportParams::NoiseRendezvous { .. } => None,
-            ExecServerTransportParams::StdioCommand { .. } => None,
-        };
         let client = LazyRemoteExecServerClient::new(remote_transport);
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
-            exec_server_url,
             remote_client: Some(client.clone()),
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend,
@@ -540,11 +574,6 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_client.is_some()
-    }
-
-    /// Returns the remote exec-server URL when this environment is remote.
-    pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {
@@ -718,7 +747,6 @@ mod tests {
         let environment = Environment::create(/*exec_server_url*/ None, test_runtime_paths())
             .expect("create environment");
 
-        assert_eq!(environment.exec_server_url(), None);
         assert!(!environment.is_remote());
         assert!(environment.info().await.is_ok());
     }
@@ -758,7 +786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_reports_remote_url() {
+    async fn environment_manager_creates_remote_environment_for_url() {
         let manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
             Some(test_runtime_paths()),
@@ -771,7 +799,6 @@ mod tests {
             Some(REMOTE_ENVIRONMENT_ID)
         );
         assert!(environment.is_remote());
-        assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
         assert!(Arc::ptr_eq(
             &environment,
             &manager
@@ -961,7 +988,7 @@ mod tests {
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::create_for_tests(
-            environment.exec_server_url().map(str::to_owned),
+            /*exec_server_url*/ None,
             Some(
                 environment
                     .local_runtime_paths()
@@ -1030,7 +1057,6 @@ mod tests {
             .get_environment("executor-a")
             .expect("first remote environment");
         assert!(first.is_remote());
-        assert_eq!(first.exec_server_url(), Some("ws://127.0.0.1:8765"));
         assert_eq!(manager.default_environment_id(), None);
 
         manager
@@ -1044,7 +1070,6 @@ mod tests {
             .get_environment("executor-a")
             .expect("second remote environment");
         assert!(second.is_remote());
-        assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876"));
         assert!(!Arc::ptr_eq(&first, &second));
     }
 

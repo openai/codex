@@ -389,12 +389,8 @@ mod tests {
 
         assert!(include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
-        assert_eq!(
-            environments["devbox"].exec_server_url(),
-            Some("ws://127.0.0.1:8765")
-        );
+        assert!(environments["devbox"].is_remote());
         assert!(environments["ssh-dev"].is_remote());
-        assert_eq!(environments["ssh-dev"].exec_server_url(), None);
         assert_eq!(
             default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
