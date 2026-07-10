@@ -4,19 +4,34 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorFileSystemFuture;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_path_uri::PathUri;
 use dunce::canonicalize as canonicalize_path;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
+use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 use toml::Value as TomlValue;
 
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
@@ -24,6 +39,138 @@ const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 struct TestConfig {
     cwd: AbsolutePathBuf,
     config_layer_stack: ConfigLayerStack,
+}
+
+struct BlockingRepoSkillRootFileSystem {
+    inner: Arc<dyn ExecutorFileSystem>,
+    metadata_calls: Arc<BlockingMetadataCalls>,
+}
+
+struct BlockingMetadataCalls {
+    paths: Mutex<Vec<PathUri>>,
+    started: Notify,
+    release: Semaphore,
+}
+
+impl Default for BlockingMetadataCalls {
+    fn default() -> Self {
+        Self {
+            paths: Mutex::new(Vec::new()),
+            started: Notify::new(),
+            release: Semaphore::new(0),
+        }
+    }
+}
+
+impl ExecutorFileSystem for BlockingRepoSkillRootFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        self.inner.canonicalize(path, sandbox)
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        self.inner.read_file(path, sandbox)
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        self.inner.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        let repo_skill_root_suffix = Path::new(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
+        let Ok(path_abs) = path.to_abs_path() else {
+            return self.inner.get_metadata(path, sandbox);
+        };
+        if !path_abs.ends_with(repo_skill_root_suffix) {
+            return self.inner.get_metadata(path, sandbox);
+        }
+
+        self.metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .push(path.clone());
+        self.metadata_calls.started.notify_one();
+        Box::pin(async move {
+            self.metadata_calls
+                .release
+                .acquire()
+                .await
+                .expect("metadata release semaphore")
+                .forget();
+            self.inner.get_metadata(path, sandbox).await
+        })
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        self.inner.read_directory(path, sandbox)
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        self.inner.walk(path, options, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner
+            .copy(source_path, destination_path, options, sandbox)
+    }
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
@@ -2047,6 +2194,112 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 plugin_id: None,
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn repo_skill_root_search_limits_concurrent_probes_and_preserves_order() {
+    const CONCURRENCY_LIMIT: usize = 256;
+
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let repo_dir = tempfile::tempdir().expect("tempdir");
+    mark_as_git_repo(repo_dir.path());
+
+    let mut directories = vec![repo_dir.path().to_path_buf()];
+    let mut cwd = repo_dir.path().to_path_buf();
+    for _ in 0..CONCURRENCY_LIMIT {
+        cwd.push("d");
+        directories.push(cwd.clone());
+    }
+    fs::create_dir_all(&cwd).expect("nested cwd");
+
+    let expected_roots = [0, CONCURRENCY_LIMIT / 2, CONCURRENCY_LIMIT]
+        .map(|index| {
+            directories[index]
+                .join(AGENTS_DIR_NAME)
+                .join(SKILLS_DIR_NAME)
+        })
+        .map(|path| {
+            fs::create_dir_all(&path).expect("repo skill root");
+            path.abs()
+        });
+    let expected_probes = directories
+        .iter()
+        .map(|directory| {
+            PathUri::from_abs_path(&directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME).abs())
+        })
+        .collect::<Vec<_>>();
+    let cfg = make_config_for_cwd(&codex_home, cwd).await;
+    let metadata_calls = Arc::new(BlockingMetadataCalls::default());
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(BlockingRepoSkillRootFileSystem {
+        inner: Arc::clone(&LOCAL_FS),
+        metadata_calls: Arc::clone(&metadata_calls),
+    });
+
+    let assertions = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let started = metadata_calls.started.notified();
+                if metadata_calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .len()
+                    >= CONCURRENCY_LIMIT
+                {
+                    break;
+                }
+                started.await;
+            }
+        })
+        .await
+        .expect("initial repo skill root window should start");
+        assert_eq!(
+            metadata_calls
+                .paths
+                .lock()
+                .expect("metadata paths lock")
+                .as_slice(),
+            &expected_probes[..CONCURRENCY_LIMIT]
+        );
+
+        metadata_calls.release.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let started = metadata_calls.started.notified();
+                if metadata_calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .len()
+                    > CONCURRENCY_LIMIT
+                {
+                    break;
+                }
+                started.await;
+            }
+        })
+        .await
+        .expect("next repo skill root probe should start");
+        assert_eq!(
+            metadata_calls
+                .paths
+                .lock()
+                .expect("metadata paths lock")
+                .as_slice(),
+            expected_probes.as_slice()
+        );
+
+        metadata_calls.release.add_permits(expected_probes.len());
+    };
+    let (roots, ()) = tokio::join!(
+        super::repo_agents_skill_roots(Some(fs), &cfg.config_layer_stack, &cfg.cwd),
+        assertions
+    );
+
+    assert_eq!(
+        roots.into_iter().map(|root| root.path).collect::<Vec<_>>(),
+        expected_roots
     );
 }
 

@@ -34,11 +34,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tempfile::TempDir;
 use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 #[derive(Clone, Copy)]
 enum InjectedFailure {
     Metadata(io::ErrorKind),
     MetadataBlocked,
+    MetadataBlockedByFilenamePrefix(&'static str),
     MetadataPending,
     Read(io::ErrorKind),
 }
@@ -49,11 +51,20 @@ struct FailingFileSystem {
     metadata_calls: Arc<MetadataCallCounts>,
 }
 
-#[derive(Default)]
 struct MetadataCallCounts {
     paths: Mutex<Vec<PathUri>>,
     started: Notify,
-    release: Notify,
+    release: Semaphore,
+}
+
+impl Default for MetadataCallCounts {
+    fn default() -> Self {
+        Self {
+            paths: Mutex::new(Vec::new()),
+            started: Notify::new(),
+            release: Semaphore::new(0),
+        }
+    }
 }
 
 impl FailingFileSystem {
@@ -113,7 +124,26 @@ impl FailingFileSystem {
                 Err(io::Error::new(kind, "injected metadata failure"))
             }
             InjectedFailure::MetadataBlocked if path_abs == self.path => {
-                self.metadata_calls.release.notified().await;
+                self.metadata_calls
+                    .release
+                    .acquire()
+                    .await
+                    .expect("metadata release semaphore")
+                    .forget();
+                LOCAL_FS.get_metadata(path, sandbox).await
+            }
+            InjectedFailure::MetadataBlockedByFilenamePrefix(prefix)
+                if path_abs
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(prefix)) =>
+            {
+                self.metadata_calls
+                    .release
+                    .acquire()
+                    .await
+                    .expect("metadata release semaphore")
+                    .forget();
                 LOCAL_FS.get_metadata(path, sandbox).await
             }
             InjectedFailure::MetadataPending if path_abs == self.path => {
@@ -121,6 +151,7 @@ impl FailingFileSystem {
             }
             InjectedFailure::Metadata(_)
             | InjectedFailure::MetadataBlocked
+            | InjectedFailure::MetadataBlockedByFilenamePrefix(_)
             | InjectedFailure::MetadataPending
             | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
         }
@@ -719,69 +750,107 @@ async fn marker_search_does_not_wait_for_a_higher_ancestor() {
 }
 
 #[tokio::test]
-async fn project_root_marker_search_starts_all_ancestor_probes() {
-    const NESTING_DEPTH: usize = 9;
+async fn project_root_marker_search_limits_concurrent_probes_and_preserves_order() {
+    const CONCURRENCY_LIMIT: usize = 256;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join(".git"), "").unwrap();
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
-    let mut nested = tmp.path().to_path_buf();
-    for depth in 0..NESTING_DEPTH {
-        nested.push(format!("nested-{depth}"));
-    }
+    let nested = tmp.path().join("nested");
     fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "nested project doc").unwrap();
 
-    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let markers = (0..=CONCURRENCY_LIMIT)
+        .map(|index| format!(".project-root-{index}"))
+        .collect::<Vec<_>>();
+    fs::write(
+        tmp.path()
+            .join(markers.last().expect("last project root marker")),
+        "",
+    )
+    .unwrap();
+    let marker_refs = markers.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let mut config = make_config_with_project_root_markers(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &marker_refs,
+    )
+    .await;
     config.cwd = nested.abs();
-    let expected_probe_count = config.cwd.ancestors().count();
     let cwd = PathUri::from_abs_path(&config.cwd);
+    let expected_initial_probes = markers
+        .iter()
+        .map(|marker| cwd.join(marker).expect("project root marker path"))
+        .collect::<Vec<_>>();
+    let max_probe_count = markers.len() * config.cwd.ancestors().count();
     let metadata_calls = Arc::new(MetadataCallCounts::default());
     let fs = FailingFileSystem {
-        path: config.cwd.join(".git"),
-        failure: InjectedFailure::MetadataBlocked,
+        path: config.cwd.join("unused"),
+        failure: InjectedFailure::MetadataBlockedByFilenamePrefix(".project-root-"),
         metadata_calls: Arc::clone(&metadata_calls),
     };
 
-    let search =
-        tokio::spawn(async move { super::agents_md_paths(&config.config, &cwd, &fs).await });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            let started = metadata_calls.started.notified();
-            if metadata_calls
-                .paths
-                .lock()
-                .expect("metadata paths lock")
-                .len()
-                >= expected_probe_count
-            {
-                break;
+    let assertions = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let started = metadata_calls.started.notified();
+                if metadata_calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .len()
+                    >= CONCURRENCY_LIMIT
+                {
+                    break;
+                }
+                started.await;
             }
-            started.await;
-        }
-    })
-    .await
-    .expect("initial marker window should start");
-    assert_eq!(
-        metadata_calls
-            .paths
-            .lock()
-            .expect("metadata paths lock")
-            .len(),
-        expected_probe_count
-    );
-
-    metadata_calls.release.notify_one();
-    let paths = tokio::time::timeout(std::time::Duration::from_secs(5), search)
+        })
         .await
-        .expect("marker search should complete")
-        .expect("marker search task")
-        .expect("AGENTS.md discovery");
+        .expect("initial marker window should start");
+        assert_eq!(
+            *metadata_calls.paths.lock().expect("metadata paths lock"),
+            expected_initial_probes[..CONCURRENCY_LIMIT]
+        );
+
+        metadata_calls.release.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let started = metadata_calls.started.notified();
+                if metadata_calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .len()
+                    > CONCURRENCY_LIMIT
+                {
+                    break;
+                }
+                started.await;
+            }
+        })
+        .await
+        .expect("next marker probe should start");
+        assert_eq!(
+            *metadata_calls.paths.lock().expect("metadata paths lock"),
+            expected_initial_probes
+        );
+
+        metadata_calls.release.add_permits(max_probe_count);
+    };
+    let (paths, ()) = tokio::join!(
+        super::agents_md_paths(&config.config, &cwd, &fs),
+        assertions
+    );
+    let paths = paths.expect("AGENTS.md discovery");
 
     assert_eq!(
         paths,
-        vec![PathUri::from_abs_path(
-            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
-        )]
+        vec![
+            PathUri::from_abs_path(&tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()),
+            PathUri::from_abs_path(&nested.join(DEFAULT_AGENTS_MD_FILENAME).abs()),
+        ]
     );
 }
 
@@ -854,7 +923,7 @@ async fn agents_md_search_starts_all_directory_probes() {
     expected_probes.sort();
     assert_eq!(actual_probes, expected_probes);
 
-    metadata_calls.release.notify_one();
+    metadata_calls.release.add_permits(1);
     let paths = tokio::time::timeout(std::time::Duration::from_secs(5), search)
         .await
         .expect("AGENTS.md search should complete")
