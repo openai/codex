@@ -63,6 +63,11 @@ impl ContextualUserFragment for TokenBudgetContext {
         }
         format!("\n{}\n", lines.join("\n"))
     }
+
+    fn render(&self) -> String {
+        let body = self.body();
+        format!("\n\n{CONTEXT_WINDOW_OPEN_TAG}{body}{CONTEXT_WINDOW_CLOSE_TAG}\n\n")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +101,13 @@ impl ContextualUserFragment for ContextWindowGuidance {
 
     fn body(&self) -> String {
         format!("\n{}\n", self.message)
+    }
+
+    fn render(&self) -> String {
+        let body = self.body();
+        format!(
+            "\n\n{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}{body}{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}\n\n"
+        )
     }
 }
 

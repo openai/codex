@@ -148,7 +148,7 @@ fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with(&context_window_prefix))
+        .filter(|text| text.trim_start().starts_with(&context_window_prefix))
         .collect()
 }
 
@@ -156,6 +156,7 @@ fn token_budget_window_ids(
     text: &str,
     thread_id: codex_protocol::ThreadId,
 ) -> (String, Option<String>, String) {
+    let text = text.trim();
     let captures = assert_regex_match(
         &format!(
             r"^{CONTEXT_WINDOW_OPEN_TAG}\nThread id: {thread_id}\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})(?:\nPrevious context window id: ([0-9a-f-]{{36}}))?\n{CONTEXT_WINDOW_CLOSE_TAG}$"
@@ -343,12 +344,27 @@ async fn token_budget_guidance_follows_context_window() -> Result<()> {
     let developer_texts = response.single_request().message_input_texts("developer");
     let context_window_index = developer_texts
         .iter()
-        .position(|text| text.starts_with(CONTEXT_WINDOW_OPEN_TAG))
+        .position(|text| text.trim_start().starts_with(CONTEXT_WINDOW_OPEN_TAG))
         .expect("context-window metadata should be present");
+    let developer_text = developer_texts.concat();
+    assert!(
+        developer_text.contains(&format!("\n\n{CONTEXT_WINDOW_OPEN_TAG}")),
+        "context-window metadata should follow a blank line"
+    );
+    assert!(
+        developer_text.contains(&format!(
+            "{CONTEXT_WINDOW_CLOSE_TAG}\n\n\n\n{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}"
+        )),
+        "context-window guidance should be padded from context-window metadata"
+    );
+    assert!(
+        developer_text.contains(&format!("{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}\n\n")),
+        "context-window guidance should end with a blank line"
+    );
     assert_eq!(
         developer_texts.get(context_window_index + 1),
         Some(&format!(
-            "{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}\n{guidance_message}\n{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}"
+            "\n\n{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}\n{guidance_message}\n{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}\n\n"
         ))
     );
 
@@ -423,7 +439,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
         &format!(
             r"^{CONTEXT_WINDOW_OPEN_TAG}\nThread id: {thread_id}\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n{CONTEXT_WINDOW_CLOSE_TAG}$"
         ),
-        &token_budgets[0],
+        token_budgets[0].trim(),
     );
     assert_eq!(
         captures.get(1).expect("first window id capture").as_str(),
