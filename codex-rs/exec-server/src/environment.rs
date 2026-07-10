@@ -19,6 +19,7 @@ use crate::environment_provider::EnvironmentProvider;
 use crate::environment_provider::EnvironmentProviderSnapshot;
 use crate::environment_provider::normalize_exec_server_url;
 use crate::environment_toml::environment_provider_from_codex_home;
+use crate::exec_server_url::ExecServerUrl;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
@@ -295,34 +296,80 @@ impl EnvironmentManager {
         exec_server_url: String,
         connect_timeout: Option<std::time::Duration>,
     ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
-        let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
-        if disabled {
-            return Err(ExecServerError::Protocol(
-                "remote environment cannot use disabled exec-server url".to_string(),
-            ));
-        }
-        let Some(exec_server_url) = exec_server_url else {
-            return Err(ExecServerError::Protocol(
-                "remote environment requires an exec-server url".to_string(),
-            ));
-        };
+        validate_environment_id(&environment_id)?;
+        let exec_server_url = validate_remote_exec_server_url(exec_server_url)?;
         let environment = Arc::new(Environment::remote_with_transport(
             ExecServerTransportParams::websocket_url(
-                exec_server_url,
+                ExecServerUrl::ready(exec_server_url),
                 connect_timeout.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT),
             ),
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
-        self.environments
+        self.replace_environment(environment_id, environment);
+        Ok(())
+    }
+
+    /// Registers a remote environment before its stable exec-server URL is available.
+    /// Requires an active Tokio runtime to start background connection work.
+    pub fn register_pending_environment(
+        &self,
+        environment_id: String,
+    ) -> Result<(), ExecServerError> {
+        validate_environment_id(&environment_id)?;
+        let environment = Arc::new(Environment::remote_with_transport(
+            ExecServerTransportParams::websocket_url(
+                ExecServerUrl::pending(),
+                DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+            ),
+            self.local_runtime_paths.clone(),
+        ));
+        let mut environments = self
+            .environments
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if environments.contains_key(&environment_id) {
+            return Err(ExecServerError::Protocol(format!(
+                "environment id `{environment_id}` is already registered"
+            )));
+        }
+        environment.start_connecting();
+        environments.insert(environment_id, environment);
+        Ok(())
+    }
+
+    /// Supplies the stable exec-server URL for a pending environment.
+    pub fn set_environment_exec_server_url(
+        &self,
+        environment_id: &str,
+        exec_server_url: String,
+    ) -> Result<(), ExecServerError> {
+        let exec_server_url = validate_remote_exec_server_url(exec_server_url)?;
+        let environments = self
+            .environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let environment = environments.get(environment_id).ok_or_else(|| {
+            ExecServerError::Protocol(format!("unknown environment id `{environment_id}`"))
+        })?;
+        environment.set_exec_server_url(exec_server_url)
+    }
+
+    /// Fails and removes a pending environment so the same id may be registered again.
+    pub fn fail_pending_environment(
+        &self,
+        environment_id: &str,
+        message: String,
+    ) -> Result<(), ExecServerError> {
+        let mut environments = self
+            .environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let environment = environments.get(environment_id).ok_or_else(|| {
+            ExecServerError::Protocol(format!("unknown environment id `{environment_id}`"))
+        })?;
+        environment.fail_pending_exec_server_url(message)?;
+        environments.remove(environment_id);
         Ok(())
     }
 
@@ -336,11 +383,7 @@ impl EnvironmentManager {
         environment_id: String,
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
     ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
+        validate_environment_id(&environment_id)?;
         let identity = NoiseChannelIdentity::generate().map_err(|error| {
             ExecServerError::Protocol(format!(
                 "failed to generate Noise harness identity: {error}"
@@ -351,12 +394,43 @@ impl EnvironmentManager {
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+        self.replace_environment(environment_id, environment);
         Ok(())
     }
+
+    fn replace_environment(&self, environment_id: String, environment: Arc<Environment>) {
+        let previous = self
+            .environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(environment_id.clone(), environment);
+        if let Some(previous) = previous {
+            let _ = previous.fail_pending_exec_server_url(format!(
+                "environment `{environment_id}` was replaced"
+            ));
+        }
+    }
+}
+
+fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> {
+    if environment_id.is_empty() {
+        return Err(ExecServerError::Protocol(
+            "environment id cannot be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_remote_exec_server_url(exec_server_url: String) -> Result<String, ExecServerError> {
+    let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
+    if disabled {
+        return Err(ExecServerError::Protocol(
+            "remote environment cannot use disabled exec-server url".to_string(),
+        ));
+    }
+    exec_server_url.ok_or_else(|| {
+        ExecServerError::Protocol("remote environment requires an exec-server url".to_string())
+    })
 }
 
 fn noise_environment_config_from_env()
@@ -412,7 +486,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
+    exec_server_url: Option<ExecServerUrl>,
     remote_client: Option<LazyRemoteExecServerClient>,
     // Dropping the environment stops unfinished background startup work.
     startup_task: Arc<Mutex<Option<AbortOnDropHandle<()>>>>,
@@ -503,7 +577,7 @@ impl Environment {
     ) -> Self {
         Self::remote_with_transport(
             ExecServerTransportParams::websocket_url(
-                exec_server_url,
+                ExecServerUrl::ready(exec_server_url),
                 DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             ),
             local_runtime_paths,
@@ -542,9 +616,29 @@ impl Environment {
         self.remote_client.is_some()
     }
 
-    /// Returns the remote exec-server URL when this environment is remote.
+    /// Returns the stable exec-server URL once available for a URL-backed remote environment.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        self.exec_server_url
+            .as_ref()
+            .and_then(ExecServerUrl::current)
+    }
+
+    fn set_exec_server_url(&self, exec_server_url: String) -> Result<(), ExecServerError> {
+        self.exec_server_url
+            .as_ref()
+            .ok_or_else(|| {
+                ExecServerError::Protocol("environment does not use an exec-server URL".to_string())
+            })?
+            .set_ready(exec_server_url)
+    }
+
+    fn fail_pending_exec_server_url(&self, message: String) -> Result<(), ExecServerError> {
+        self.exec_server_url
+            .as_ref()
+            .ok_or_else(|| {
+                ExecServerError::Protocol("environment does not use an exec-server URL".to_string())
+            })?
+            .set_failed(message)
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {

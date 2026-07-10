@@ -19,6 +19,7 @@ use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProviderSnapshot;
+use crate::exec_server_url::ExecServerUrl;
 
 const ENVIRONMENTS_TOML_FILE: &str = "environments.toml";
 const MAX_ENVIRONMENT_ID_LEN: usize = 64;
@@ -153,7 +154,7 @@ fn parse_environment_toml(
         (Some(url), None) => {
             let url = validate_websocket_url(url)?;
             ExecServerTransportParams::WebSocketUrl {
-                websocket_url: url,
+                websocket_url: ExecServerUrl::ready(url),
                 connect_timeout,
                 initialize_timeout,
             }
@@ -633,7 +634,7 @@ mod tests {
         else {
             panic!("expected websocket transport");
         };
-        assert_eq!(websocket_url, "ws://127.0.0.1:8765");
+        assert_eq!(websocket_url.current(), Some("ws://127.0.0.1:8765"));
         assert_eq!(*connect_timeout, Duration::from_secs(12));
         assert_eq!(*initialize_timeout, Duration::from_secs(34));
 

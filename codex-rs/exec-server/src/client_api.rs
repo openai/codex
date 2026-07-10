@@ -11,6 +11,7 @@ use crate::HttpRequestResponse;
 use crate::HttpResponseBodyStream;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
+use crate::exec_server_url::ExecServerUrl;
 
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -92,7 +93,7 @@ pub(crate) struct StdioExecServerCommand {
 #[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
     WebSocketUrl {
-        websocket_url: String,
+        websocket_url: ExecServerUrl,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
@@ -136,7 +137,7 @@ impl std::fmt::Debug for ExecServerTransportParams {
 }
 
 impl ExecServerTransportParams {
-    pub(crate) fn websocket_url(websocket_url: String, connect_timeout: Duration) -> Self {
+    pub(crate) fn websocket_url(websocket_url: ExecServerUrl, connect_timeout: Duration) -> Self {
         Self::WebSocketUrl {
             websocket_url,
             connect_timeout,

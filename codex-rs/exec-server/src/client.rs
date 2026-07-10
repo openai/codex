@@ -1430,6 +1430,7 @@ mod tests {
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
+    use crate::exec_server_url::ExecServerUrl;
     use crate::process::ExecProcessEvent;
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
@@ -2113,7 +2114,7 @@ mod tests {
         });
 
         let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
+            websocket_url: ExecServerUrl::ready(websocket_url),
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });
@@ -2220,7 +2221,7 @@ mod tests {
         });
 
         let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
+            websocket_url: ExecServerUrl::ready(websocket_url),
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });
@@ -2355,7 +2356,7 @@ mod tests {
                 .expect("client should close after the test");
         });
         let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
+            websocket_url: ExecServerUrl::ready(websocket_url),
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });
@@ -2464,7 +2465,7 @@ mod tests {
                 .expect("client should close after the test");
         });
         let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
+            websocket_url: ExecServerUrl::ready(websocket_url),
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });

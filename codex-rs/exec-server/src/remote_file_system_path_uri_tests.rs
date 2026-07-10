@@ -25,6 +25,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::*;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
+use crate::exec_server_url::ExecServerUrl;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
@@ -38,7 +39,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         record_read_file_params(/*expected_requests*/ 2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(
-            websocket_url,
+            ExecServerUrl::ready(websocket_url),
             DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
         ),
     ));

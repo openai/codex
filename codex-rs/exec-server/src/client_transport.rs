@@ -99,6 +99,7 @@ impl ExecServerClient {
                 connect_timeout,
                 initialize_timeout,
             } => {
+                let websocket_url = websocket_url.resolve().await?;
                 Self::connect_websocket(RemoteExecServerConnectArgs {
                     websocket_url,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
