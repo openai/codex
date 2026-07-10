@@ -2539,7 +2539,6 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
         .iter_mut()
         .find(|model| model.slug == "gpt-5.4")
         .expect("gpt-5.4 exists in bundled models.json");
-    model.supports_reasoning_summaries = true;
     model.default_reasoning_summary = ReasoningSummary::Detailed;
 
     let TestCodex {
@@ -2662,7 +2661,6 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
         .iter_mut()
         .find(|model| model.slug == "gpt-5.4")
         .expect("gpt-5.4 exists in bundled models.json");
-    model.supports_reasoning_summaries = true;
     model.default_reasoning_summary = ReasoningSummary::Detailed;
 
     let TestCodex { codex, .. } = test_codex()

@@ -720,14 +720,10 @@ async fn run_review_on_session(
             &params.spawn_config.to_models_manager_config(),
         )
         .await;
-    let guardian_reasoning_effort = if model_info.supports_reasoning_summaries {
-        params
-            .reasoning_effort
-            .clone()
-            .or_else(|| model_info.default_reasoning_level.clone())
-    } else {
-        None
-    };
+    let guardian_reasoning_effort = params
+        .reasoning_effort
+        .clone()
+        .or_else(|| model_info.default_reasoning_level.clone());
     let mut analytics_result =
         GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
             guardian_thread_id: review_session.codex.session.thread_id.to_string(),
