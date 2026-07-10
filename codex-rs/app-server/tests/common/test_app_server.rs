@@ -1843,7 +1843,7 @@ impl TestAppServerBuilder {
                 let mut auto_env_overrides = vec![
                     (
                         CODEX_EXEC_SERVER_URL_ENV_VAR.to_string(),
-                        auto_env.environment().exec_server_url().map(str::to_string),
+                        auto_env.exec_server_url().map(str::to_string),
                     ),
                     (
                         CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR.to_string(),

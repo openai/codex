@@ -68,6 +68,7 @@ pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;
 pub use environment::LOCAL_ENVIRONMENT_ID;
+pub use environment::PendingEnvironmentRegistration;
 pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use environment_provider::DefaultEnvironmentProvider;
 pub use environment_provider::EnvironmentProvider;

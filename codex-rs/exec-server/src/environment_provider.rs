@@ -178,24 +178,16 @@ mod tests {
         let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
         assert!(remote_environment.is_remote());
         assert_eq!(
-            remote_environment.exec_server_url(),
-            Some("ws://127.0.0.1:8765")
-        );
-        assert_eq!(
             default,
             EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string())
         );
     }
 
-    #[tokio::test]
-    async fn default_provider_normalizes_exec_server_url() {
-        let provider = DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765 ".to_string()));
-        let snapshot = provider.snapshot().await.expect("environments");
-        let environments: HashMap<_, _> = snapshot.environments.into_iter().collect();
-
+    #[test]
+    fn normalizes_exec_server_url() {
         assert_eq!(
-            environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
-            Some("ws://127.0.0.1:8765")
+            normalize_exec_server_url(Some(" ws://127.0.0.1:8765 ".to_string())),
+            (Some("ws://127.0.0.1:8765".to_string()), false)
         );
     }
 }
