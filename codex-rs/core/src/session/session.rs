@@ -907,10 +907,7 @@ impl Session {
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
-            agents_md_manager
-                .refresh(config.as_ref(), &resolved_environments)
-                .await;
-            let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
+            let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&plugins_manager),
                 Arc::clone(&skills_service),
@@ -919,8 +916,11 @@ impl Session {
             .instrument(info_span!(
                 "session_init.plugin_skill_warmup",
                 otel.name = "session_init.plugin_skill_warmup",
-            ))
-            .await;
+            ));
+            let ((), plugin_skill_errors) = tokio::join!(
+                agents_md_manager.refresh(config.as_ref(), &resolved_environments),
+                plugin_skill_warmup,
+            );
             for err in &plugin_skill_errors {
                 error!(
                     "failed to load skill {}: {}",

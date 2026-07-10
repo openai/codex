@@ -146,6 +146,9 @@ const MAX_DEPENDENCY_URL_LEN: usize = MAX_DESCRIPTION_LEN;
 // Traversal depth from the skills root.
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
+// Keep ancestor metadata probes within one remote round trip for typical project hierarchies while
+// leaving room for other startup discovery on the shared exec-server transport.
+const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;
 
 struct ResolvedDiscoveredSkill {
     skill: DiscoveredSkill,
@@ -387,10 +390,19 @@ async fn repo_agents_skill_roots(
     let project_root = find_project_root(fs.as_ref(), cwd, &project_root_markers).await;
     let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
-    for dir in dirs {
-        let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-        let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-        match fs.get_metadata(&agents_skills_uri, /*sandbox*/ None).await {
+    let mut results = futures::stream::iter(dirs)
+        .map(|dir| {
+            let fs = Arc::clone(&fs);
+            async move {
+                let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
+                let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
+                let result = fs.get_metadata(&agents_skills_uri, /*sandbox*/ None).await;
+                (agents_skills, result)
+            }
+        })
+        .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
+    while let Some((agents_skills, result)) = results.next().await {
+        match result {
             Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
                 path: agents_skills,
                 scope: SkillScope::Repo,
@@ -443,19 +455,29 @@ async fn find_project_root(
         return cwd.clone();
     }
 
+    let mut probes = Vec::new();
     for ancestor in cwd.ancestors() {
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
+            probes.push((ancestor.clone(), marker_path));
+        }
+    }
+    let mut results = futures::stream::iter(probes)
+        .map(|(ancestor, marker_path)| async move {
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
-            match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await {
-                Ok(_) => return ancestor,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to stat project root marker {}: {err:#}",
-                        marker_path.display()
-                    );
-                }
+            let result = fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await;
+            (ancestor, marker_path, result)
+        })
+        .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
+    while let Some((ancestor, marker_path, result)) = results.next().await {
+        match result {
+            Ok(_) => return ancestor,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(
+                    "failed to stat project root marker {}: {err:#}",
+                    marker_path.display()
+                );
             }
         }
     }
