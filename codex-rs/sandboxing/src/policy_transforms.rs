@@ -1,5 +1,6 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -12,6 +13,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use codex_utils_path_uri::PathUri;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,6 +21,24 @@ use std::path::PathBuf;
 pub fn normalize_additional_permissions(
     additional_permissions: AdditionalPermissionProfile,
 ) -> Result<AdditionalPermissionProfile, String> {
+    normalize_additional_permissions_with(additional_permissions, |path| {
+        canonicalize_preserving_symlinks(path.as_path())
+            .ok()
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+            .unwrap_or(path)
+    })
+}
+
+pub fn normalize_additional_permissions_for_uri(
+    additional_permissions: AdditionalPermissionProfile<PathUri>,
+) -> Result<AdditionalPermissionProfile<PathUri>, String> {
+    normalize_additional_permissions_with(additional_permissions, std::convert::identity)
+}
+
+fn normalize_additional_permissions_with<PathType: PartialEq>(
+    additional_permissions: AdditionalPermissionProfile<PathType>,
+    mut normalize_path: impl FnMut(PathType) -> PathType,
+) -> Result<AdditionalPermissionProfile<PathType>, String> {
     let network = additional_permissions
         .network
         .filter(|network| !network.is_empty());
@@ -36,10 +56,7 @@ pub fn normalize_additional_permissions(
                 }
                 let path = match entry.path {
                     FileSystemPath::Path { path } => FileSystemPath::Path {
-                        path: canonicalize_preserving_symlinks(path.as_path())
-                            .ok()
-                            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
-                            .unwrap_or(path),
+                        path: normalize_path(path),
                     },
                     FileSystemPath::GlobPattern { pattern } => {
                         FileSystemPath::GlobPattern { pattern }
@@ -68,10 +85,53 @@ pub fn normalize_additional_permissions(
     })
 }
 
-pub fn merge_permission_profiles(
-    base: Option<&AdditionalPermissionProfile>,
-    permissions: Option<&AdditionalPermissionProfile>,
-) -> Option<AdditionalPermissionProfile> {
+pub fn resolve_additional_permission_paths(
+    additional_permissions: AdditionalPermissionProfile<String>,
+    cwd: &PathUri,
+) -> Result<AdditionalPermissionProfile<PathUri>, String> {
+    let network = additional_permissions.network;
+    let file_system = additional_permissions
+        .file_system
+        .map(|file_system| -> Result<FileSystemPermissions<PathUri>, String> {
+            let entries = file_system
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let path = match entry.path {
+                        FileSystemPath::Path { path } => FileSystemPath::Path {
+                            path: cwd.join(&path).map_err(|err| {
+                                format!(
+                                    "failed to resolve permission path `{path}` against cwd URI `{cwd}`: {err}"
+                                )
+                            })?,
+                        },
+                        FileSystemPath::GlobPattern { pattern } => {
+                            FileSystemPath::GlobPattern { pattern }
+                        }
+                        FileSystemPath::Special { value } => FileSystemPath::Special { value },
+                    };
+                    Ok(FileSystemSandboxEntry {
+                        path,
+                        access: entry.access,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(FileSystemPermissions {
+                entries,
+                glob_scan_max_depth: file_system.glob_scan_max_depth,
+            })
+        })
+        .transpose()?;
+    Ok(AdditionalPermissionProfile {
+        network,
+        file_system,
+    })
+}
+
+pub fn merge_permission_profiles<PathType: Clone + PartialEq>(
+    base: Option<&AdditionalPermissionProfile<PathType>>,
+    permissions: Option<&AdditionalPermissionProfile<PathType>>,
+) -> Option<AdditionalPermissionProfile<PathType>> {
     let Some(permissions) = permissions else {
         return base.cloned();
     };
@@ -194,10 +254,10 @@ pub fn intersect_permission_profiles(
     }
 }
 
-fn merge_glob_scan_max_depth(
-    left_entries: &[FileSystemSandboxEntry],
+fn merge_glob_scan_max_depth<PathType>(
+    left_entries: &[FileSystemSandboxEntry<PathType>],
     left_depth: Option<usize>,
-    right_entries: &[FileSystemSandboxEntry],
+    right_entries: &[FileSystemSandboxEntry<PathType>],
     right_depth: Option<usize>,
 ) -> Option<usize> {
     let left_depth = effective_glob_scan_depth(left_entries, left_depth);
@@ -214,8 +274,8 @@ fn merge_glob_scan_max_depth(
     }
 }
 
-fn effective_glob_scan_depth(
-    entries: &[FileSystemSandboxEntry],
+fn effective_glob_scan_depth<PathType>(
+    entries: &[FileSystemSandboxEntry<PathType>],
     depth: Option<usize>,
 ) -> Option<GlobScanDepth> {
     entries
@@ -403,10 +463,10 @@ fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<Absolute
     }
 }
 
-fn merge_permission_entries(
-    base: &[FileSystemSandboxEntry],
-    permissions: &[FileSystemSandboxEntry],
-) -> Vec<FileSystemSandboxEntry> {
+fn merge_permission_entries<PathType: Clone + PartialEq>(
+    base: &[FileSystemSandboxEntry<PathType>],
+    permissions: &[FileSystemSandboxEntry<PathType>],
+) -> Vec<FileSystemSandboxEntry<PathType>> {
     let mut merged = Vec::with_capacity(base.len() + permissions.len());
     for entry in base.iter().chain(permissions.iter()) {
         if !merged.contains(entry) {
@@ -463,9 +523,9 @@ pub fn effective_file_system_sandbox_policy(
     }
 }
 
-fn merge_network_access(
+fn merge_network_access<PathType>(
     base_network_access: bool,
-    additional_permissions: &AdditionalPermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile<PathType>,
 ) -> bool {
     base_network_access
         || additional_permissions
@@ -475,9 +535,9 @@ fn merge_network_access(
             .unwrap_or(false)
 }
 
-pub fn effective_network_sandbox_policy(
+pub fn effective_network_sandbox_policy<PathType>(
     network_policy: NetworkSandboxPolicy,
-    additional_permissions: Option<&AdditionalPermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile<PathType>>,
 ) -> NetworkSandboxPolicy {
     if additional_permissions
         .is_some_and(|permissions| merge_network_access(network_policy.is_enabled(), permissions))
@@ -504,6 +564,59 @@ pub fn effective_permission_profile(
         &effective_file_system_policy,
         effective_network_policy,
     )
+}
+
+pub fn effective_permission_profile_for_uri(
+    permission_profile: &PermissionProfile,
+    additional_permissions: Option<&AdditionalPermissionProfile<PathUri>>,
+) -> PermissionProfile<PathUri> {
+    let permission_profile = PermissionProfile::<PathUri>::from(permission_profile.clone());
+    let Some(additional_permissions) = additional_permissions else {
+        return permission_profile;
+    };
+    let network = |network| effective_network_sandbox_policy(network, Some(additional_permissions));
+
+    match permission_profile {
+        PermissionProfile::Managed {
+            file_system,
+            network: base_network,
+        } => {
+            let file_system = match (file_system, additional_permissions.file_system.as_ref()) {
+                (
+                    ManagedFileSystemPermissions::Restricted {
+                        entries,
+                        glob_scan_max_depth,
+                    },
+                    Some(additional_file_system),
+                ) if !additional_file_system.is_empty() => {
+                    ManagedFileSystemPermissions::Restricted {
+                        entries: merge_permission_entries(
+                            &entries,
+                            &additional_file_system.entries,
+                        ),
+                        glob_scan_max_depth: merge_glob_scan_max_depth(
+                            &entries,
+                            glob_scan_max_depth.map(usize::from),
+                            &additional_file_system.entries,
+                            additional_file_system.glob_scan_max_depth.map(usize::from),
+                        )
+                        .and_then(NonZeroUsize::new),
+                    }
+                }
+                (file_system, _) => file_system,
+            };
+            PermissionProfile::Managed {
+                file_system,
+                network: network(base_network),
+            }
+        }
+        PermissionProfile::Disabled => PermissionProfile::Disabled,
+        PermissionProfile::External {
+            network: base_network,
+        } => PermissionProfile::External {
+            network: network(base_network),
+        },
+    }
 }
 
 pub fn should_require_platform_sandbox(
