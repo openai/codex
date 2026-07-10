@@ -275,11 +275,6 @@ pub struct FsReadFileResponse {
 pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS: usize = 64;
 /// Maximum caller-selected raw prefix size for one `fs/readTextPrefixesBatch` item.
 pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES: usize = 16 * 1024;
-/// Maximum raw prefix bytes returned by one full batch. Per-item base64 encoding expands this to
-/// at most 1,398,272 bytes before per-item JSON framing.
-pub const FS_READ_TEXT_PREFIXES_BATCH_MAX_RAW_RESPONSE_BYTES: usize =
-    FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS * FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsReadTextPrefixesBatchParams {

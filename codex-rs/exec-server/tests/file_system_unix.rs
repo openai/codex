@@ -25,6 +25,7 @@ use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::TextFilePrefix;
 use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
@@ -560,6 +561,52 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(
         Err(error) => error,
     };
     assert_sandbox_denied(&error);
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn text_prefix_batch_preserves_order_and_restrictive_sandbox(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let forbidden_dir = tmp.path().join("forbidden");
+    let allowed_path = allowed_dir.join("allowed.txt");
+    let forbidden_path = forbidden_dir.join("forbidden.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::create_dir_all(&forbidden_dir)?;
+    std::fs::write(&allowed_path, "allowed")?;
+    std::fs::write(&forbidden_path, "forbidden")?;
+    let paths = vec![
+        PathUri::from_host_native_path(&allowed_path)?,
+        PathUri::from_host_native_path(&forbidden_path)?,
+    ];
+    let sandbox = read_only_sandbox(allowed_dir);
+
+    let mut results = file_system
+        .read_text_prefixes_batch(&paths, 16, Some(&sandbox))
+        .await
+        .with_context(|| format!("mode={implementation}"))?
+        .into_iter();
+
+    assert_eq!(
+        results.next().expect("allowed result")?,
+        TextFilePrefix {
+            text: "allowed".to_string(),
+            complete: true,
+        }
+    );
+    let forbidden_error = results
+        .next()
+        .expect("forbidden result")
+        .expect_err("forbidden path must not return a prefix");
+    assert_sandbox_denied(&forbidden_error);
+    assert!(results.next().is_none());
 
     Ok(())
 }

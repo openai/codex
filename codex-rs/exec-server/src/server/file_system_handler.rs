@@ -151,6 +151,8 @@ impl FileSystemHandler {
         }
         let mut results = Vec::with_capacity(params.paths.len());
         for path in params.paths {
+            // Decode the complete file before selecting its prefix so invalid UTF-8 in an omitted
+            // tail has the same result as the existing complete-text read operation.
             let result = self
                 .file_system
                 .read_file(&path, params.sandbox.as_ref())

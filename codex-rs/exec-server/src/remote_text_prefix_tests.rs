@@ -16,6 +16,15 @@ fn rejects_malformed_cardinality_base64_and_utf8() {
     }
 }
 
+#[test]
+fn rejects_prefix_larger_than_the_requested_decoded_limit() {
+    let error = decode_response(data_response("YWJjZGU="), 1, 4)
+        .expect_err("oversized decoded prefix should be rejected");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("oversized prefix"));
+}
+
 fn data_response(data_base64: &str) -> FsReadTextPrefixesBatchResponse {
     FsReadTextPrefixesBatchResponse {
         results: vec![FsReadTextPrefixesBatchResult::Data {

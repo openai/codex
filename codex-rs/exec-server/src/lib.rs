@@ -115,7 +115,6 @@ pub use protocol::FS_FIND_UP_BATCH_MAX_REQUESTS;
 pub use protocol::FS_GET_METADATA_BATCH_MAX_PATHS;
 pub use protocol::FS_READ_TEXT_PREFIXES_BATCH_MAX_PATHS;
 pub use protocol::FS_READ_TEXT_PREFIXES_BATCH_MAX_PREFIX_BYTES;
-pub use protocol::FS_READ_TEXT_PREFIXES_BATCH_MAX_RAW_RESPONSE_BYTES;
 pub use protocol::FsCanonicalizeParams;
 pub use protocol::FsCanonicalizeResponse;
 pub use protocol::FsCloseParams;
