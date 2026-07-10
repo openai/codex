@@ -27,7 +27,9 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -530,25 +532,26 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
-        .with_config(|config| {
-            config.project_doc_max_bytes = 0;
-            config.use_experimental_unified_exec_tool = true;
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.approvals_reviewer = ApprovalsReviewer::User;
-            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-            assert!(
-                config
-                    .features
-                    .enable(Feature::RequestPermissionsTool)
-                    .is_ok()
-            );
-        });
+    let mut builder = test_codex().with_config(|config| {
+        config.project_doc_max_bytes = 0;
+        config.use_experimental_unified_exec_tool = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        assert!(
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .is_ok()
+        );
+    });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
         .context("thread startup should not wait for the remote environment")??;
+    let environment_manager = test.thread_manager.environment_manager();
+    let registration =
+        environment_manager.register_pending_environment(REMOTE_ENVIRONMENT_ID.to_string())?;
 
     test.codex
         .submit(Op::UserInput {
@@ -559,11 +562,21 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
-            thread_settings: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                    }],
+                )),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
+    registration.complete(Ok(format!("ws://{}", listener.local_addr()?)))?;
     serve_environment_info(listener).await;
     let event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -740,7 +753,6 @@ fn agents_md_occurrences(request: &ResponsesRequest, contents: &str) -> usize {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
     let wait_call_id = "wait-for-failure";
     let response_mock = mount_sse_sequence(
@@ -766,16 +778,17 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
-        .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
-            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-        });
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+    });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
         .context("thread startup should not wait for the remote environment")??;
+    let environment_manager = test.thread_manager.environment_manager();
+    let registration =
+        environment_manager.register_pending_environment(REMOTE_ENVIRONMENT_ID.to_string())?;
 
     test.codex
         .submit(Op::UserInput {
@@ -786,15 +799,21 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
-            thread_settings: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                    }],
+                )),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
-    let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
-        .await
-        .context("exec-server connection should arrive")??;
-    drop(stream);
+    registration.complete(Err("CCA provisioning failed".to_string()))?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
