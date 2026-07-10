@@ -437,6 +437,7 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
             call_id: "call-1".to_string(),
             tool_name: list_tool.tool_name(),
             model: "gpt-test".to_string(),
+            codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1_024),
             conversation_history: ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
