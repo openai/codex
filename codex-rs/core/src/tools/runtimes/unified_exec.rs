@@ -9,6 +9,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::plugin_script_lifecycle::PluginScriptExecution;
+use crate::plugin_script_lifecycle::PluginScriptTerminalOutcome;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -114,7 +115,7 @@ pub struct UnifiedExecRuntime<'a> {
 trait PluginScriptLifecycle: Send + Sync {
     fn mark_started(&self);
     fn mark_cancelled(&self);
-    fn finish(&self, exit_code: Option<i32>, failed: bool);
+    fn finish(&self, outcome: PluginScriptTerminalOutcome);
 }
 
 impl PluginScriptLifecycle for PluginScriptExecution {
@@ -126,8 +127,8 @@ impl PluginScriptLifecycle for PluginScriptExecution {
         self.mark_interrupted();
     }
 
-    fn finish(&self, exit_code: Option<i32>, failed: bool) {
-        self.finish(exit_code, failed);
+    fn finish(&self, outcome: PluginScriptTerminalOutcome) {
+        self.finish(outcome);
     }
 }
 
@@ -165,14 +166,21 @@ impl SpawnLifecycle for PluginScriptSpawnLifecycle {
 
     fn finish(&self, exit_code: Option<i32>, failed: bool) {
         self.inner.finish(exit_code, failed);
-        self.plugin_script.finish(exit_code, failed);
+        let outcome = if failed {
+            PluginScriptTerminalOutcome::Failed { exit_code }
+        } else if let Some(exit_code) = exit_code {
+            PluginScriptTerminalOutcome::Exited { exit_code }
+        } else {
+            PluginScriptTerminalOutcome::Failed { exit_code: None }
+        };
+        self.plugin_script.finish(outcome);
     }
 }
 
 impl Drop for PluginScriptSpawnLifecycle {
     fn drop(&mut self) {
         self.plugin_script
-            .finish(/*exit_code*/ None, /*failed*/ true);
+            .finish(PluginScriptTerminalOutcome::Failed { exit_code: None });
     }
 }
 
@@ -850,7 +858,7 @@ mod tests {
             self.events.lock().unwrap().push("plugin_cancelled");
         }
 
-        fn finish(&self, _exit_code: Option<i32>, _failed: bool) {
+        fn finish(&self, _outcome: PluginScriptTerminalOutcome) {
             if !self
                 .terminal_emitted
                 .swap(true, std::sync::atomic::Ordering::AcqRel)
