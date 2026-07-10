@@ -74,6 +74,7 @@ async fn approval_action_preserves_patch_path_uris() {
         approval_action,
         ApprovalAction::ApplyPatch {
             id: "call-1".to_string(),
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: expected_cwd,
             files: vec![path],
             patch: expected_patch,

@@ -223,6 +223,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     ) -> std::io::Result<ApprovalAction> {
         Ok(ApprovalAction::ExecCommand {
             id: ctx.call_id.to_string(),
+            environment_id: req.turn_environment.environment_id.clone(),
             command: req.command.clone(),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,

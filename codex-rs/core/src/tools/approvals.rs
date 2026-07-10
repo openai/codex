@@ -22,12 +22,14 @@ use codex_otel::ToolDecisionSource;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ApprovalAction {
     Shell {
         id: String,
+        environment_id: String,
         command: Vec<String>,
         cwd: PathUri,
         sandbox_permissions: SandboxPermissions,
@@ -36,6 +38,7 @@ pub(crate) enum ApprovalAction {
     },
     ExecCommand {
         id: String,
+        environment_id: String,
         command: Vec<String>,
         cwd: PathUri,
         sandbox_permissions: SandboxPermissions,
@@ -45,6 +48,7 @@ pub(crate) enum ApprovalAction {
     },
     ApplyPatch {
         id: String,
+        environment_id: String,
         cwd: PathUri,
         files: Vec<PathUri>,
         patch: String,
@@ -56,6 +60,7 @@ impl ApprovalAction {
         Ok(match self {
             Self::Shell {
                 id,
+                environment_id,
                 command,
                 cwd,
                 sandbox_permissions,
@@ -64,13 +69,14 @@ impl ApprovalAction {
             } => crate::guardian::GuardianApprovalRequest::Shell {
                 id,
                 command,
-                cwd: cwd.to_abs_path()?,
+                cwd: guardian_cwd(&environment_id, cwd)?,
                 sandbox_permissions,
                 additional_permissions,
                 justification,
             },
             Self::ExecCommand {
                 id,
+                environment_id,
                 command,
                 cwd,
                 sandbox_permissions,
@@ -80,7 +86,7 @@ impl ApprovalAction {
             } => crate::guardian::GuardianApprovalRequest::ExecCommand {
                 id,
                 command,
-                cwd: cwd.to_abs_path()?,
+                cwd: guardian_cwd(&environment_id, cwd)?,
                 sandbox_permissions,
                 additional_permissions,
                 justification,
@@ -88,12 +94,13 @@ impl ApprovalAction {
             },
             Self::ApplyPatch {
                 id,
+                environment_id,
                 cwd,
                 files,
                 patch,
             } => crate::guardian::GuardianApprovalRequest::ApplyPatch {
                 id,
-                cwd: cwd.to_abs_path()?,
+                cwd: guardian_cwd(&environment_id, cwd)?,
                 files: files
                     .into_iter()
                     .map(|path| path.to_abs_path())
@@ -101,6 +108,28 @@ impl ApprovalAction {
                 patch,
             },
         })
+    }
+}
+
+fn guardian_cwd(environment_id: &str, cwd: PathUri) -> std::io::Result<AbsolutePathBuf> {
+    match cwd.to_abs_path() {
+        Ok(cwd) => Ok(cwd),
+        Err(err) if environment_id != codex_exec_server::LOCAL_ENVIRONMENT_ID => Err(err),
+        Err(_) => {
+            let cwd_display = cwd.to_string();
+            let path = cwd.to_url().to_file_path().map_err(|()| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("local cwd URI `{cwd_display}` is not a host-native path"),
+                )
+            })?;
+            AbsolutePathBuf::from_absolute_path_checked(path).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("local cwd URI `{cwd_display}` is not absolute: {err}"),
+                )
+            })
+        }
     }
 }
 
@@ -295,3 +324,7 @@ fn record_resolution(
         source,
     );
 }
+
+#[cfg(all(test, unix))]
+#[path = "approvals_tests.rs"]
+mod tests;
