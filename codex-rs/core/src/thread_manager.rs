@@ -1786,6 +1786,7 @@ fn truncate_before_nth_user_message(
 struct SnapshotTurnState {
     ends_mid_turn: bool,
     active_turn_id: Option<String>,
+    active_turn_started_at: Option<i64>,
     active_turn_start_index: Option<usize>,
 }
 
@@ -1805,6 +1806,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
             return SnapshotTurnState {
                 ends_mid_turn: false,
                 active_turn_id: None,
+                active_turn_started_at: None,
                 active_turn_start_index: None,
             };
         }
@@ -1812,6 +1814,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         return SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id,
+            active_turn_started_at: active_turn_snapshot.and_then(|turn| turn.started_at),
             active_turn_start_index: builder.active_turn_start_index(),
         };
     }
@@ -1823,6 +1826,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         return SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         };
     };
@@ -1838,6 +1842,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
             )
         }),
         active_turn_id: None,
+        active_turn_started_at: None,
         active_turn_start_index: None,
     }
 }
@@ -1865,6 +1870,7 @@ fn fork_history_from_snapshot(
                 append_interrupted_boundary(
                     history,
                     snapshot_state.active_turn_id,
+                    snapshot_state.active_turn_started_at,
                     interrupted_marker,
                 )
             } else {
@@ -1880,11 +1886,13 @@ fn fork_history_from_snapshot(
 fn append_interrupted_boundary(
     history: InitialHistory,
     turn_id: Option<String>,
+    started_at: Option<i64>,
     interrupted_marker: InterruptedTurnHistoryMarker,
 ) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
+        started_at,
         completed_at: None,
         duration_ms: None,
     }));

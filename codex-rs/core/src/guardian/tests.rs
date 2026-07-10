@@ -2229,6 +2229,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
             id: "stale-turn".to_string(),
             msg: EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "stale-turn".to_string(),
+                started_at: None,
                 last_agent_message: Some(
                     "{\"risk_level\":\"high\",\"user_authorization\":\"low\",\"outcome\":\"deny\",\"rationale\":\"stale guardian rationale\"}"
                         .to_string(),
