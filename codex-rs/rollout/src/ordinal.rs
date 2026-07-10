@@ -53,7 +53,9 @@ pub(crate) async fn ordinal_state_for_rollout(path: &Path) -> io::Result<Rollout
 }
 
 fn ordinal_state_for_rollout_blocking(path: &Path) -> io::Result<RolloutOrdinalState> {
-    let history_mode = read_history_mode(path)?;
+    let Some(history_mode) = read_history_mode(path)? else {
+        return Ok(RolloutOrdinalState::Legacy);
+    };
     if matches!(history_mode, ThreadHistoryMode::Legacy) {
         return Ok(RolloutOrdinalState::Legacy);
     }
@@ -82,7 +84,7 @@ fn ordinal_state_for_rollout_blocking(path: &Path) -> io::Result<RolloutOrdinalS
     })
 }
 
-fn read_history_mode(path: &Path) -> io::Result<ThreadHistoryMode> {
+fn read_history_mode(path: &Path) -> io::Result<Option<ThreadHistoryMode>> {
     let reader = BufReader::new(File::open(path)?);
     for line in reader.lines() {
         let line = line?;
@@ -101,10 +103,7 @@ fn read_history_mode(path: &Path) -> io::Result<ThreadHistoryMode> {
                 path.display()
             )));
         };
-        return Ok(session_meta.meta.history_mode);
+        return Ok(Some(session_meta.meta.history_mode));
     }
-    Err(io::Error::other(format!(
-        "rollout at {} contains no records",
-        path.display()
-    )))
+    Ok(None)
 }

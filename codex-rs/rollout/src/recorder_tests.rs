@@ -609,6 +609,30 @@ async fn recorder_omits_ordinals_from_legacy_rollouts() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn resumed_empty_rollout_omits_ordinals() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let rollout_path = home.path().join("rollout.jsonl");
+    File::create(&rollout_path)?;
+
+    let recorder =
+        RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    recorder
+        .record_canonical_items(&[agent_message_item("legacy")])
+        .await?;
+    recorder.flush().await?;
+
+    let text = fs::read_to_string(rollout_path)?;
+    let values = text
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(values.iter().all(|value| value.get("ordinal").is_none()));
+
+    recorder.shutdown().await
+}
+
+#[tokio::test]
 async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
