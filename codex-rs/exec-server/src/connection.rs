@@ -679,26 +679,31 @@ mod tests {
         let message = test_jsonrpc_message();
         let encoded = serde_json::to_string(&message)?;
         let max_message_len = encoded.len();
-        let (reader, mut peer) = tokio::io::duplex(max_message_len.saturating_add(1));
-        let mut connection = JsonRpcConnection::from_stdio_with_max_message_len(
-            reader,
-            tokio::io::sink(),
-            "test stdio peer".to_string(),
-            max_message_len,
-        );
 
-        peer.write_all(encoded.as_bytes()).await?;
-        peer.write_all(b"\r\n").await?;
-        let event = timeout(Duration::from_secs(1), connection.incoming_rx.recv())
-            .await?
-            .expect("stdio connection should report the message");
-        match event {
-            JsonRpcConnectionEvent::Message(actual) => assert_eq!(actual, message),
-            event => anyhow::bail!("expected JSON-RPC message, got {event:?}"),
+        for line_ending in [b"\n".as_slice(), b"\r\n".as_slice()] {
+            let (reader, mut peer) =
+                tokio::io::duplex(max_message_len.saturating_add(line_ending.len()));
+            let mut connection = JsonRpcConnection::from_stdio_with_max_message_len(
+                reader,
+                tokio::io::sink(),
+                "test stdio peer".to_string(),
+                max_message_len,
+            );
+
+            peer.write_all(encoded.as_bytes()).await?;
+            peer.write_all(line_ending).await?;
+            let event = timeout(Duration::from_secs(1), connection.incoming_rx.recv())
+                .await?
+                .expect("stdio connection should report the message");
+            match event {
+                JsonRpcConnectionEvent::Message(actual) => assert_eq!(actual, message),
+                event => anyhow::bail!("expected JSON-RPC message, got {event:?}"),
+            }
+
+            drop(peer);
+            drop(connection);
         }
 
-        drop(peer);
-        drop(connection);
         Ok(())
     }
 
