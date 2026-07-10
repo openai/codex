@@ -923,7 +923,7 @@ fn fs_read_file_response_round_trips_base64_data() {
 #[test]
 fn fs_read_file_params_round_trip() {
     let params = FsReadFileParams {
-        path: absolute_path("tmp/example.txt"),
+        path: absolute_path("tmp/example.txt").into(),
     };
 
     let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -942,7 +942,7 @@ fn fs_read_file_params_round_trip() {
 #[test]
 fn fs_create_directory_params_round_trip_with_default_recursive() {
     let params = FsCreateDirectoryParams {
-        path: absolute_path("tmp/example"),
+        path: absolute_path("tmp/example").into(),
         recursive: None,
     };
 
@@ -963,7 +963,7 @@ fn fs_create_directory_params_round_trip_with_default_recursive() {
 #[test]
 fn fs_write_file_params_round_trip_with_base64_data() {
     let params = FsWriteFileParams {
-        path: absolute_path("tmp/example.bin"),
+        path: absolute_path("tmp/example.bin").into(),
         data_base64: "AAE=".to_string(),
     };
 
@@ -984,8 +984,8 @@ fn fs_write_file_params_round_trip_with_base64_data() {
 #[test]
 fn fs_copy_params_round_trip_with_recursive_directory_copy() {
     let params = FsCopyParams {
-        source_path: absolute_path("tmp/source"),
-        destination_path: absolute_path("tmp/destination"),
+        source_path: absolute_path("tmp/source").into(),
+        destination_path: absolute_path("tmp/destination").into(),
         recursive: true,
     };
 
@@ -1042,8 +1042,8 @@ fn fs_changed_notification_round_trips() {
     let notification = FsChangedNotification {
         watch_id: "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1".to_string(),
         changed_paths: vec![
-            absolute_path("tmp/repo/.git/HEAD"),
-            absolute_path("tmp/repo/.git/FETCH_HEAD"),
+            absolute_path("tmp/repo/.git/HEAD").into(),
+            absolute_path("tmp/repo/.git/FETCH_HEAD").into(),
         ],
     };
 

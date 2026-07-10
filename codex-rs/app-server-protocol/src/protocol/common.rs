@@ -1837,7 +1837,7 @@ mod tests {
             request_id: request_id(),
             params: v2::FsWatchParams {
                 watch_id: "watch-1".to_string(),
-                path: absolute_path("/tmp/repo"),
+                path: absolute_path("/tmp/repo").into(),
             },
         };
         assert_eq!(
@@ -2087,7 +2087,7 @@ mod tests {
         let fs_read = ClientRequest::FsReadFile {
             request_id: request_id(),
             params: v2::FsReadFileParams {
-                path: absolute_path("/tmp/file.txt"),
+                path: absolute_path("/tmp/file.txt").into(),
             },
         };
         assert_eq!(fs_read.serialization_scope(), None);
@@ -3073,7 +3073,7 @@ mod tests {
         let request = ClientRequest::FsGetMetadata {
             request_id: RequestId::Integer(10),
             params: v2::FsGetMetadataParams {
-                path: absolute_path("tmp/example"),
+                path: absolute_path("tmp/example").into(),
             },
         };
         assert_eq!(
@@ -3095,7 +3095,7 @@ mod tests {
             request_id: RequestId::Integer(10),
             params: v2::FsWatchParams {
                 watch_id: "watch-git".to_string(),
-                path: absolute_path("tmp/repo/.git"),
+                path: absolute_path("tmp/repo/.git").into(),
             },
         };
         assert_eq!(
