@@ -348,7 +348,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
                     "workdir": workdir,
                     "timeout_ms": expiration_ms,
                     "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
-                    "additional_permissions": PermissionProfile {
+                    "additional_permissions": PermissionProfile::<codex_utils_absolute_path::AbsolutePathBuf> {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
                         }),

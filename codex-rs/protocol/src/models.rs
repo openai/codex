@@ -2479,12 +2479,15 @@ mod tests {
 
     #[test]
     fn additional_permission_profile_is_empty_when_all_fields_are_none() {
-        assert_eq!(AdditionalPermissionProfile::default().is_empty(), true);
+        assert_eq!(
+            AdditionalPermissionProfile::<AbsolutePathBuf>::default().is_empty(),
+            true
+        );
     }
 
     #[test]
     fn additional_permission_profile_is_not_empty_when_field_is_present_but_nested_empty() {
-        let permission_profile = AdditionalPermissionProfile {
+        let permission_profile = AdditionalPermissionProfile::<AbsolutePathBuf> {
             network: Some(NetworkPermissions { enabled: None }),
             file_system: None,
         };

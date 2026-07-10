@@ -197,7 +197,7 @@ async fn extension_tool_uses_granted_turn_permissions_without_local_persistence(
     let image_dir = tempfile::tempdir()?;
     let image_path = image_dir.path().canonicalize()?.join("granted.png");
     std::fs::write(&image_path, TINY_PNG_BYTES)?;
-    let requested_permissions = RequestPermissionProfile {
+    let requested_permissions = RequestPermissionProfile::<AbsolutePathBuf> {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![image_dir.path().canonicalize()?.try_into()?]),
             Some(Vec::new()),
