@@ -77,6 +77,19 @@ pub(crate) fn prepare_exec_request(
         native_sandbox_policy_cwd.as_path(),
     );
     let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
+    // Bubblewrap re-enters this executable with the `codex-linux-sandbox`
+    // argv0 to apply seccomp, so the outer filesystem sandbox must expose it.
+    #[cfg(target_os = "linux")]
+    let file_system_policy = file_system_policy.with_additional_readable_roots(
+        native_sandbox_policy_cwd.as_path(),
+        std::slice::from_ref(&runtime_paths.codex_self_exe),
+    );
+    #[cfg(target_os = "linux")]
+    let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+        permissions.enforcement(),
+        &file_system_policy,
+        network_policy,
+    );
     let sandbox_manager = SandboxManager::new();
     let sandbox = sandbox_manager.select_initial(
         &file_system_policy,
@@ -126,7 +139,7 @@ pub(crate) fn prepare_exec_request(
                 environment_id: None,
                 network: None,
                 sandbox_policy_cwd,
-                codex_linux_sandbox_exe: runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                codex_linux_sandbox_exe: Some(runtime_paths.codex_self_exe.as_path()),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,
                 windows_sandbox_level: sandbox_context.windows_sandbox_level,
                 windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
