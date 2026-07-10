@@ -1031,7 +1031,8 @@ mod tests {
         let fallback_path = super::fallback_file_path()?;
         let original_file = fs::read(&fallback_path)?;
 
-        let loaded = super::load_oauth_tokens(
+        let loaded = super::resolve_oauth_tokens_from_store_policy(
+            &DefaultKeyringStore,
             &tokens.server_name,
             &tokens.url,
             OAuthCredentialsStoreMode::Disabled,
@@ -1051,7 +1052,7 @@ mod tests {
             AuthKeyringBackendKind::Direct,
         )?;
 
-        assert_eq!(loaded, None);
+        assert!(loaded.is_none());
         assert_eq!(
             save_error.to_string(),
             "MCP OAuth credential persistence is disabled for this runtime"

@@ -111,6 +111,7 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<ResolvedOAuthTokens>> {
     match store_mode {
+        OAuthCredentialsStoreMode::Disabled => Ok(None),
         OAuthCredentialsStoreMode::Auto => {
             // Auto remains keyring-first at lifecycle startup. The returned source is then pinned
             // by the client transport recipe and OAuth persistor so retries, recovery, and

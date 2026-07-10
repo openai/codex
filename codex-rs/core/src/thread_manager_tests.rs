@@ -1876,8 +1876,18 @@ async fn cloud_agent_uses_memory_only_models_cache_with_local_runtime_paths() {
         /*external_time_provider*/ None,
     );
 
-    let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
-    let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+    let http_client_factory = codex_http_client::HttpClientFactory::new(
+        codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+    );
+    let _ = manager
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            http_client_factory.clone(),
+        )
+        .await;
+    let _ = manager
+        .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
+        .await;
 
     assert_eq!(models_mock.requests().len(), 1);
     assert!(!config.codex_home.join("models_cache.json").exists());

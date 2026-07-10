@@ -222,10 +222,16 @@ async fn manager_without_disk_cache_fetches_and_retains_models_in_memory() {
     );
 
     let catalog = manager
-        .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
         .await;
     let cached_catalog = manager
-        .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
         .await;
 
     assert_eq!(catalog.models, remote_models);
