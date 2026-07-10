@@ -12,6 +12,7 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::plugin_script_lifecycle::PluginScriptExecution;
+use crate::plugin_script_lifecycle::PluginScriptTerminalOutcome;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_exec_request_with_after_spawn;
@@ -105,14 +106,22 @@ fn finish_plugin_script(
             execution.mark_interrupted();
         }
         match &result {
-            Ok(out) => execution.finish(Some(out.exit_code), out.timed_out),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => {
-                execution.finish(Some(output.exit_code), /*failed*/ true)
-            }
+            Ok(out) if out.timed_out => execution.finish(PluginScriptTerminalOutcome::Failed {
+                exit_code: Some(out.exit_code),
+            }),
+            Ok(out) => execution.finish(PluginScriptTerminalOutcome::Exited {
+                exit_code: out.exit_code,
+            }),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => execution
+                .finish(PluginScriptTerminalOutcome::Failed {
+                    exit_code: Some(output.exit_code),
+                }),
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
-                execution.finish(Some(output.exit_code), /*failed*/ true)
+                execution.finish(PluginScriptTerminalOutcome::Failed {
+                    exit_code: Some(output.exit_code),
+                })
             }
-            Err(_) => execution.finish(/*exit_code*/ None, /*failed*/ true),
+            Err(_) => execution.finish(PluginScriptTerminalOutcome::Failed { exit_code: None }),
         }
     }
     result
