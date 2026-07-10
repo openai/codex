@@ -332,8 +332,7 @@ mod agent {
             exclude_slash_tmp: true,
         };
         agent_config
-            .permissions
-            .set_legacy_sandbox_policy(consolidation_sandbox_policy, agent_config.cwd.as_path())
+            .set_legacy_sandbox_policy(consolidation_sandbox_policy)
             .ok()?;
 
         agent_config.model = Some(
@@ -533,6 +532,10 @@ mod agent {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "phase2_workspace_roots_tests.rs"]
+mod workspace_roots_tests;
 
 pub(super) fn get_watermark(
     claimed_watermark: i64,
