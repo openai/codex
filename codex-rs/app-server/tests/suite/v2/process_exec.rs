@@ -7,6 +7,8 @@ use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::RequestId;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -97,6 +99,73 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             stdout: "process-out".to_string(),
             stdout_cap_reached: false,
             stderr: "process-err".to_string(),
+            stderr_cap_reached: false,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_spawn_removes_process_only_environment_variables() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(OPENAI_IDENTITY_TOKEN_ENV_VAR, Some("host-assertion"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            concat!(
+                "$token = if ($null -eq $env:OPENAI_IDENTITY_TOKEN) { 'unset' } ",
+                "else { $env:OPENAI_IDENTITY_TOKEN }; ",
+                "$file = if ($null -eq $env:OPENAI_IDENTITY_TOKEN_FILE) { 'unset' } ",
+                "else { $env:OPENAI_IDENTITY_TOKEN_FILE }; ",
+                "[Console]::Out.Write(\"$token|$file\")",
+            )
+            .to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            concat!(
+                "printf '%s|%s' ",
+                "\"${OPENAI_IDENTITY_TOKEN-unset}\" ",
+                "\"${OPENAI_IDENTITY_TOKEN_FILE-unset}\"",
+            )
+            .to_string(),
+        ]
+    };
+    let process_handle = "filtered-environment".to_string();
+    let request_id = mcp
+        .send_process_spawn_request(ProcessSpawnParams {
+            env: Some(HashMap::from([(
+                OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                Some("request-token-file".to_string()),
+            )])),
+            ..process_spawn_params(process_handle.clone(), codex_home.path(), command)?
+        })
+        .await?;
+    mcp.read_stream_until_response_message(RequestId::Integer(request_id))
+        .await?;
+
+    assert_eq!(
+        read_process_exited(&mut mcp).await?,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 0,
+            stdout: "unset|unset".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
             stderr_cap_reached: false,
         }
     );

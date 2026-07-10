@@ -19,6 +19,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -151,7 +153,10 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[("COMMAND_EXEC_BASELINE", Some("server"))])
+        .with_env_overrides(&[
+            ("COMMAND_EXEC_BASELINE", Some("server")),
+            (OPENAI_IDENTITY_TOKEN_ENV_VAR, Some("host-assertion")),
+        ])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -161,7 +166,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
-                "printf '%s|%s|%s|%s' \"$COMMAND_EXEC_BASELINE\" \"$COMMAND_EXEC_EXTRA\" \"${RUST_LOG-unset}\" \"$CODEX_HOME\"".to_string(),
+                "printf '%s|%s|%s|%s|%s|%s' \"$COMMAND_EXEC_BASELINE\" \"$COMMAND_EXEC_EXTRA\" \"${RUST_LOG-unset}\" \"$CODEX_HOME\" \"${OPENAI_IDENTITY_TOKEN-unset}\" \"${OPENAI_IDENTITY_TOKEN_FILE-unset}\"".to_string(),
             ],
             process_id: None,
             tty: false,
@@ -179,6 +184,10 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
                 ),
                 ("COMMAND_EXEC_EXTRA".to_string(), Some("added".to_string())),
                 ("RUST_LOG".to_string(), None),
+                (
+                    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                    Some("request-token-file".to_string()),
+                ),
             ])),
             size: None,
             sandbox_policy: None,
@@ -194,7 +203,10 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
         response,
         CommandExecResponse {
             exit_code: 0,
-            stdout: format!("request|added|unset|{}", codex_home.path().display()),
+            stdout: format!(
+                "request|added|unset|{}|unset|unset",
+                codex_home.path().display()
+            ),
             stderr: String::new(),
         }
     );

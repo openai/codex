@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_protocol::shell_environment::is_process_only_env_var;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -174,6 +175,16 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_process_only_env_var) {
+            command.env_remove(name);
+        }
+    }
+    for name in handler.env.keys() {
+        if is_process_only_env_var(name) {
+            command.env_remove(name);
+        }
+    }
     command
 }
 
@@ -194,3 +205,7 @@ fn default_shell_command() -> Command {
         command
     }
 }
+
+#[cfg(test)]
+#[path = "command_runner_tests.rs"]
+mod tests;

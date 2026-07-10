@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_exec_server::HttpClient;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_protocol::shell_environment::is_process_only_env_var;
 use futures::FutureExt;
 use reqwest::Client;
 use reqwest::header::AUTHORIZATION;
@@ -134,7 +135,12 @@ fn auth_status_before_discovery(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<AuthStatusCheck> {
-    if bearer_token_env_var.is_some() {
+    if let Some(env_var) = bearer_token_env_var {
+        if is_process_only_env_var(env_var) {
+            anyhow::bail!(
+                "MCP server '{server_name}' cannot use process-only environment variable {env_var} as a bearer token"
+            );
+        }
         return Ok(AuthStatusCheck::Complete(McpAuthState::BearerToken));
     }
 
@@ -364,6 +370,27 @@ mod tests {
         .expect("status should compute");
 
         assert_eq!(status, McpAuthState::BearerToken);
+    }
+
+    #[tokio::test]
+    async fn determine_auth_status_rejects_process_only_bearer_token_environment_variables() {
+        let error = determine_streamable_http_auth_status(
+            "server",
+            "not-a-url",
+            Some(codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::default(),
+        )
+        .await
+        .expect_err("process-only variable should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("process-only environment variable")
+        );
     }
 
     #[tokio::test]

@@ -574,13 +574,16 @@ impl LocalProcess {
 }
 
 fn child_env(params: &ExecParams) -> HashMap<String, String> {
-    let Some(env_policy) = &params.env_policy else {
-        return params.env.clone();
+    let mut env = match &params.env_policy {
+        Some(env_policy) => {
+            let policy = shell_environment_policy(env_policy);
+            let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
+            env.extend(params.env.clone());
+            env
+        }
+        None => params.env.clone(),
     };
-
-    let policy = shell_environment_policy(env_policy);
-    let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
-    env.extend(params.env.clone());
+    env.retain(|name, _| !shell_environment::is_process_only_env_var(name));
     env
 }
 
@@ -1086,8 +1089,14 @@ mod tests {
     }
 
     #[test]
-    fn child_env_defaults_to_exact_env() {
-        let params = test_exec_params(HashMap::from([("ONLY_THIS".to_string(), "1".to_string())]));
+    fn child_env_without_policy_filters_process_only_variables() {
+        let params = test_exec_params(HashMap::from([
+            ("ONLY_THIS".to_string(), "1".to_string()),
+            (
+                shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR.to_string(),
+                "assertion".to_string(),
+            ),
+        ]));
 
         assert_eq!(
             child_env(&params),
@@ -1100,12 +1109,22 @@ mod tests {
         let mut params = test_exec_params(HashMap::from([
             ("OVERLAY".to_string(), "overlay".to_string()),
             ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+            (
+                shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                "/run/identity-token".to_string(),
+            ),
         ]));
         params.env_policy = Some(ExecEnvPolicy {
             inherit: ShellEnvironmentPolicyInherit::None,
             ignore_default_excludes: true,
             exclude: Vec::new(),
-            r#set: HashMap::from([("POLICY_SET".to_string(), "policy".to_string())]),
+            r#set: HashMap::from([
+                ("POLICY_SET".to_string(), "policy".to_string()),
+                (
+                    shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR.to_string(),
+                    "policy-assertion".to_string(),
+                ),
+            ]),
             include_only: Vec::new(),
         });
 

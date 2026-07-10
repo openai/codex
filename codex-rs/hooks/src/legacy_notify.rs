@@ -71,6 +71,9 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ffi::OsStr;
+
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -93,6 +96,21 @@ mod tests {
             "input-messages": ["Rename `foo` to `bar` and update the callsites."],
             "last-assistant-message": "Rename complete and verified `cargo build` succeeds.",
         })
+    }
+
+    #[test]
+    fn legacy_notify_command_removes_process_only_environment_variables() {
+        let command = command_from_argv(&["true".to_string()]).expect("valid command");
+        let configured_env = command
+            .as_std()
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<HashMap<_, _>>();
+
+        for name in codex_protocol::shell_environment::PROCESS_ONLY_ENV_VARS {
+            assert_eq!(configured_env.get(OsStr::new(name)), Some(&None));
+        }
+        assert!(configured_env.values().all(Option::is_none));
     }
 
     #[test]

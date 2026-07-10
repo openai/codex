@@ -132,17 +132,26 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
         .env("BASH_ENV", "/dev/null")
         .env("VALID_NAME", "ok")
         .env("PWD", "/tmp/stale")
+        .env("pwd", "keep-lowercase")
         .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
         .env("BAD-NAME", "broken")
+        .env("OPENAI_IDENTITY_TOKEN", "assertion")
+        .env("openai_identity_token_file", "/run/identity-token")
         .output()?;
 
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VALID_NAME"));
+    assert!(stdout.contains("pwd=\"keep-lowercase\""));
     assert!(!stdout.contains("PWD=/tmp/stale"));
     assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
     assert!(!stdout.contains("BAD-NAME"));
+    assert!(
+        !stdout
+            .to_ascii_lowercase()
+            .contains("openai_identity_token")
+    );
 
     Ok(())
 }

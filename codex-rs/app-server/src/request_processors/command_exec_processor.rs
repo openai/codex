@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::shell_environment::is_process_only_env_var;
 
 #[derive(Clone)]
 pub(crate) struct CommandExecRequestProcessor {
@@ -163,6 +164,7 @@ impl CommandExecRequestProcessor {
                 }
             }
         }
+        env.retain(|name, _| !is_process_only_env_var(name));
         let timeout_ms = match timeout_ms {
             Some(timeout_ms) => match u64::try_from(timeout_ms) {
                 Ok(timeout_ms) => Some(timeout_ms),

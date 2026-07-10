@@ -52,6 +52,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::shell_environment::is_process_only_env_var;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
@@ -781,6 +782,11 @@ fn resolve_bearer_token(
     let Some(env_var) = bearer_token_env_var else {
         return Ok(None);
     };
+    if is_process_only_env_var(env_var) {
+        return Err(anyhow!(
+            "MCP server '{server_name}' cannot use process-only environment variable {env_var} as a bearer token"
+        ));
+    }
 
     match env::var(env_var) {
         Ok(value) => {
@@ -1043,6 +1049,21 @@ mod tests {
         let error = StartupOutcomeError::from(error);
 
         assert!(error.is_authentication_required());
+    }
+
+    #[test]
+    fn resolve_bearer_token_rejects_process_only_environment_variables() {
+        let error = resolve_bearer_token(
+            "server",
+            Some(codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR),
+        )
+        .expect_err("process-only variable should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("process-only environment variable")
+        );
     }
 
     #[test]

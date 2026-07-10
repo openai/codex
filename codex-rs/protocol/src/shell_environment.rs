@@ -4,6 +4,21 @@ use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+pub const OPENAI_IDENTITY_TOKEN_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN";
+pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
+
+/// Environment variables consumed by Codex itself that must not be forwarded
+/// to model-controlled commands or extension processes.
+pub const PROCESS_ONLY_ENV_VARS: &[&str] = &[
+    OPENAI_IDENTITY_TOKEN_ENV_VAR,
+    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+];
+
+pub fn is_process_only_env_var(name: &str) -> bool {
+    PROCESS_ONLY_ENV_VARS
+        .iter()
+        .any(|process_only| process_only.eq_ignore_ascii_case(name))
+}
 
 /// Construct a shell environment from the supplied process environment and
 /// shell-environment policy.
@@ -105,6 +120,10 @@ where
     if let Some(thread_id) = thread_id {
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
     }
+
+    // Process-only credentials cannot be restored through user-provided shell
+    // environment overrides.
+    env_map.retain(|name, _| !is_process_only_env_var(name));
 
     env_map
 }
@@ -209,6 +228,25 @@ mod windows_tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn process_only_variables_are_removed_case_insensitively() {
+        let vars = make_vars(&[("openai_identity_token", "assertion")]);
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            r#set: HashMap::from([(
+                OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                "C:\\run\\identity-token".to_string(),
+            )]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            populate_env(vars, &policy, /*thread_id*/ None),
+            HashMap::new()
+        );
+    }
 }
 
 #[cfg(all(test, not(target_os = "windows")))]
@@ -246,5 +284,33 @@ mod non_windows_tests {
         ]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn process_only_variables_cannot_be_inherited_or_set() {
+        let vars = make_vars(&[
+            (OPENAI_IDENTITY_TOKEN_ENV_VAR, "assertion"),
+            (OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, "/run/identity-token"),
+        ]);
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            r#set: HashMap::from([
+                (
+                    OPENAI_IDENTITY_TOKEN_ENV_VAR.to_string(),
+                    "configured-assertion".to_string(),
+                ),
+                (
+                    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                    "/configured/identity-token".to_string(),
+                ),
+            ]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            populate_env(vars, &policy, /*thread_id*/ None),
+            HashMap::new()
+        );
     }
 }

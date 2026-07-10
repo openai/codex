@@ -1,5 +1,7 @@
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
+use codex_protocol::shell_environment::PROCESS_ONLY_ENV_VARS;
+use codex_protocol::shell_environment::is_process_only_env_var;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -229,5 +231,13 @@ pub fn command_from_argv(argv: &[String]) -> Option<Command> {
     }
     let mut command = Command::new(program);
     command.args(args);
+    for name in PROCESS_ONLY_ENV_VARS {
+        command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_process_only_env_var) {
+            command.env_remove(name);
+        }
+    }
     Some(command)
 }

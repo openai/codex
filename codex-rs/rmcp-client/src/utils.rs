@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
+use codex_protocol::shell_environment::is_process_only_env_var;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
@@ -14,13 +15,17 @@ pub(crate) fn create_env_for_mcp_server(
     env_vars: &[McpServerEnvVar],
 ) -> Result<HashMap<OsString, OsString>> {
     let additional_env_vars = local_stdio_env_var_names(env_vars)?;
-    let env = DEFAULT_ENV_VARS
+    let mut env: HashMap<OsString, OsString> = DEFAULT_ENV_VARS
         .iter()
         .copied()
         .chain(additional_env_vars)
         .filter_map(|var| env::var_os(var).map(|value| (OsString::from(var), value)))
         .chain(extra_env.unwrap_or_default())
         .collect();
+    env.retain(|name, _| {
+        name.to_str()
+            .is_none_or(|name| !is_process_only_env_var(name))
+    });
     Ok(env)
 }
 
@@ -31,18 +36,24 @@ pub(crate) fn create_env_overlay_for_remote_mcp_server(
     // Remote stdio should inherit PATH/HOME/etc. from the executor side, not
     // from the orchestrator process. Only forward variables explicitly named
     // by the MCP config plus literal env overrides from that config.
-    env_vars
+    let mut env: HashMap<OsString, OsString> = env_vars
         .iter()
         .filter(|var| !var.is_remote_source())
         .filter_map(|var| env::var_os(var.name()).map(|value| (OsString::from(var.name()), value)))
         .chain(extra_env.unwrap_or_default())
-        .collect()
+        .collect();
+    env.retain(|name, _| {
+        name.to_str()
+            .is_none_or(|name| !is_process_only_env_var(name))
+    });
+    env
 }
 
 pub(crate) fn remote_mcp_env_var_names(env_vars: &[McpServerEnvVar]) -> Vec<String> {
     env_vars
         .iter()
         .filter(|var| var.is_remote_source())
+        .filter(|var| !is_process_only_env_var(var.name()))
         .map(|var| var.name().to_string())
         .collect()
 }
@@ -54,7 +65,10 @@ fn local_stdio_env_var_names(env_vars: &[McpServerEnvVar]) -> Result<impl Iterat
             remote_var.name()
         ));
     }
-    Ok(env_vars.iter().map(McpServerEnvVar::name))
+    Ok(env_vars
+        .iter()
+        .map(McpServerEnvVar::name)
+        .filter(|name| !is_process_only_env_var(name)))
 }
 
 pub(crate) fn build_default_headers(
@@ -85,6 +99,9 @@ pub(crate) fn build_default_headers(
 
     if let Some(env_headers) = env_http_headers {
         for (name, env_var) in env_headers {
+            if is_process_only_env_var(&env_var) {
+                continue;
+            }
             if let Ok(value) = env::var(&env_var) {
                 if value.trim().is_empty() {
                     continue;
@@ -148,6 +165,8 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_ENV_VAR;
+    use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
     use pretty_assertions::assert_eq;
 
     use serial_test::serial;
@@ -207,6 +226,75 @@ mod tests {
         let env = create_env_for_mcp_server(/*extra_env*/ None, &[custom_var.into()])
             .expect("local MCP env should build");
         assert_eq!(env.get(OsStr::new(custom_var)), Some(&expected));
+    }
+
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn create_env_excludes_process_only_variables_from_all_sources() {
+        let _token_guard = EnvVarGuard::set(OPENAI_IDENTITY_TOKEN_ENV_VAR, "assertion");
+        let _file_guard =
+            EnvVarGuard::set(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, "/run/identity-token");
+        let env = create_env_for_mcp_server(
+            Some(HashMap::from([
+                (
+                    OsString::from(OPENAI_IDENTITY_TOKEN_ENV_VAR),
+                    OsString::from("configured-assertion"),
+                ),
+                (
+                    OsString::from(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR),
+                    OsString::from("/configured/identity-token"),
+                ),
+            ])),
+            &[
+                OPENAI_IDENTITY_TOKEN_ENV_VAR.into(),
+                OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.into(),
+            ],
+        )
+        .expect("local MCP env should build");
+        let expected =
+            create_env_for_mcp_server(/*extra_env*/ None, &[]).expect("baseline MCP env");
+
+        assert_eq!(env, expected);
+    }
+
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn create_remote_env_excludes_process_only_variables() {
+        let _token_guard = EnvVarGuard::set(OPENAI_IDENTITY_TOKEN_ENV_VAR, "assertion");
+        let env = create_env_overlay_for_remote_mcp_server(
+            Some(HashMap::from([(
+                OsString::from(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR),
+                OsString::from("/configured/identity-token"),
+            )])),
+            &[OPENAI_IDENTITY_TOKEN_ENV_VAR.into()],
+        );
+
+        assert_eq!(env, HashMap::new());
+    }
+
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn default_headers_exclude_process_only_environment_variables() {
+        let _token_guard = EnvVarGuard::set(OPENAI_IDENTITY_TOKEN_ENV_VAR, "assertion");
+        let _file_guard =
+            EnvVarGuard::set(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, "/run/identity-token");
+
+        let headers = build_default_headers(
+            /*http_headers*/ None,
+            Some(HashMap::from([
+                (
+                    "x-openai-assertion".to_string(),
+                    OPENAI_IDENTITY_TOKEN_ENV_VAR.to_string(),
+                ),
+                (
+                    "x-openai-assertion-file".to_string(),
+                    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR.to_string(),
+                ),
+            ])),
+        )
+        .expect("default headers should build");
+
+        assert_eq!(headers, HeaderMap::new());
     }
 
     #[test]

@@ -17,6 +17,8 @@ use anyhow::anyhow;
 use anyhow::bail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::shell_environment::PROCESS_ONLY_ENV_VARS;
+use codex_protocol::shell_environment::is_process_only_env_var;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::fs;
 use tokio::process::Command;
@@ -230,7 +232,7 @@ async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String
         ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
         ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,
         ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
+        ShellType::PowerShell => run_shell_script(shell, &powershell_snapshot_script(), cwd).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }
@@ -289,6 +291,11 @@ async fn run_script_with_timeout(
     handler.args(&args[1..]);
     handler.stdin(Stdio::null());
     handler.current_dir(cwd);
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_process_only_env_var) {
+            handler.env_remove(name);
+        }
+    }
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
@@ -312,7 +319,25 @@ async fn run_script_with_timeout(
 }
 
 fn excluded_exports_regex() -> String {
-    EXCLUDED_EXPORT_VARS.join("|")
+    EXCLUDED_EXPORT_VARS
+        .iter()
+        .map(|name| (*name).to_string())
+        .chain(PROCESS_ONLY_ENV_VARS.iter().map(|name| {
+            let mut pattern = String::with_capacity(name.len() * 4);
+            for character in name.chars() {
+                if character.is_ascii_alphabetic() {
+                    pattern.push('[');
+                    pattern.push(character.to_ascii_uppercase());
+                    pattern.push(character.to_ascii_lowercase());
+                    pattern.push(']');
+                } else {
+                    pattern.push(character);
+                }
+            }
+            pattern
+        }))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 fn zsh_snapshot_script() -> String {
@@ -469,7 +494,13 @@ fi
     script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
-fn powershell_snapshot_script() -> &'static str {
+fn powershell_snapshot_script() -> String {
+    let excluded = EXCLUDED_EXPORT_VARS
+        .iter()
+        .chain(PROCESS_ONLY_ENV_VARS)
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     r##"$ErrorActionPreference = 'Stop'
 Write-Output '# Snapshot file'
 Write-Output '# Unset all aliases to avoid conflicts with functions'
@@ -485,13 +516,15 @@ $aliases | ForEach-Object {
     "Set-Alias -Name {0} -Value {1}" -f $_.Name, $_.Definition
 }
 Write-Output ''
-$envVars = Get-ChildItem Env:
+$excludedEnvVars = @(EXCLUDED_EXPORTS)
+$envVars = Get-ChildItem Env: | Where-Object { $_.Name -notin $excludedEnvVars }
 Write-Output ("# exports " + $envVars.Count)
 $envVars | ForEach-Object {
     $escaped = $_.Value -replace "'", "''"
     "`$env:{0}='{1}'" -f $_.Name, $escaped
 }
 "##
+    .replace("EXCLUDED_EXPORTS", &excluded)
 }
 
 /// Removes shell snapshots that either lack a matching session rollout file or
