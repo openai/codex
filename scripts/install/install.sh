@@ -881,7 +881,9 @@ update_visible_command() {
 
   replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/$codex_relative_path" "$tmp_link"
 
-  if [ "$os" = "darwin" ] && [ -x "$release_dir/$code_mode_host_relative_path" ]; then
+  if [ "$os" = "darwin" ] &&
+    [ "$code_mode_host_relative_path" = "bin/codex-code-mode-host" ] &&
+    [ -x "$release_dir/$code_mode_host_relative_path" ]; then
     replace_path_with_symlink \
       "$CODE_MODE_HOST_BIN_PATH" \
       "$CURRENT_LINK/$code_mode_host_relative_path" \
@@ -899,7 +901,9 @@ update_visible_command() {
 
 verify_visible_command() {
   "$BIN_PATH" --version >/dev/null
-  if [ "$os" = "darwin" ] && [ "$install_layout" = "package" ]; then
+  if [ "$os" = "darwin" ] && [ "$install_layout" = "package" ] &&
+    [ "$(package_code_mode_host_relative_path "$release_dir")" = \
+      "bin/codex-code-mode-host" ]; then
     [ -x "$CODE_MODE_HOST_BIN_PATH" ]
   fi
 }

@@ -1,4 +1,3 @@
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -25,8 +24,6 @@ use self::connection::Connection;
 use self::connection::ConnectionError;
 use self::connection::RemoteSession;
 use self::connection::SessionCleanup;
-use crate::NoopCodeModeSessionDelegate;
-
 mod connection;
 
 type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
@@ -50,6 +47,12 @@ impl ProcessOwnedCodeModeSessionProvider {
         }
     }
 
+    fn in_process() -> Self {
+        Self {
+            state: StdMutex::new(ProviderState::InProcess),
+        }
+    }
+
     fn process_host(&self) -> Option<Arc<OwnedProcessHost>> {
         match &*self
             .state
@@ -64,7 +67,10 @@ impl ProcessOwnedCodeModeSessionProvider {
 
 impl Default for ProcessOwnedCodeModeSessionProvider {
     fn default() -> Self {
-        Self::with_host_program(default_host_program())
+        match InstallContext::current().code_mode_host_program() {
+            Some(host_program) => Self::with_host_program(host_program),
+            None => Self::in_process(),
+        }
     }
 }
 
@@ -190,13 +196,6 @@ pub struct ProcessOwnedCodeModeSession {
 }
 
 impl ProcessOwnedCodeModeSession {
-    pub fn new() -> Self {
-        Self::with_process_host(
-            Arc::new(NoopCodeModeSessionDelegate),
-            Arc::new(OwnedProcessHost::new(default_host_program())),
-        )
-    }
-
     fn with_process_host(
         delegate: Arc<dyn CodeModeSessionDelegate>,
         process_host: Arc<OwnedProcessHost>,
@@ -465,12 +464,6 @@ impl Drop for ProcessOwnedCodeModeSession {
     }
 }
 
-impl Default for ProcessOwnedCodeModeSession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CodeModeSession for ProcessOwnedCodeModeSession {
     fn execute<'a>(
         &'a self,
@@ -490,26 +483,6 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
         Box::pin(ProcessOwnedCodeModeSession::shutdown(self))
     }
-}
-
-fn default_host_program() -> PathBuf {
-    InstallContext::current()
-        .code_mode_host_program()
-        .unwrap_or_else(|| resolve_host_program(std::env::current_exe()))
-}
-
-fn resolve_host_program(current_exe: io::Result<PathBuf>) -> PathBuf {
-    let executable_name = if cfg!(windows) {
-        "codex-code-mode-host.exe"
-    } else {
-        "codex-code-mode-host"
-    };
-    if let Ok(current_exe) = current_exe
-        && let Some(parent) = current_exe.parent()
-    {
-        return parent.join(executable_name);
-    }
-    PathBuf::from(executable_name)
 }
 
 #[cfg(test)]
