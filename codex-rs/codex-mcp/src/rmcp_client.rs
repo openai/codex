@@ -76,9 +76,10 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::warn;
 
-/// MCP server capability indicating that Codex should include [`SandboxState`]
-/// in tool-call request `_meta` under this key.
+/// Legacy MCP server capability for the mixed native-path/URI sandbox state payload.
 pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
+/// MCP server capability for the URI-native [`SandboxState`] payload.
+pub const MCP_SANDBOX_STATE_META_V2_CAPABILITY: &str = "codex/sandbox-state-meta-v2";
 pub const OPENAI_FORM_CAPABILITY: &str = "openai/form";
 
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
@@ -108,6 +109,7 @@ pub(crate) struct ManagedClient {
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
+    pub(crate) server_supports_sandbox_state_meta_v2_capability: bool,
     pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -847,6 +849,12 @@ async fn start_server_task(
         .as_ref()
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
+    let server_supports_sandbox_state_meta_v2_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_V2_CAPABILITY))
+        .is_some();
     let list_start = Instant::now();
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
@@ -886,6 +894,7 @@ async fn start_server_task(
         tool_filter,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
+        server_supports_sandbox_state_meta_v2_capability,
         codex_apps_tools_cache_context,
     };
 

@@ -5,6 +5,7 @@
 //! tiny shared metrics helper. Transport startup and orchestration live in
 //! [`crate::rmcp_client`] and [`crate::connection_manager`].
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,19 +14,174 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as _;
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
-    pub permission_profile: PermissionProfile,
-    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub permission_profile: PermissionProfile<PathUri>,
+    pub codex_linux_sandbox_exe: Option<PathUri>,
     pub sandbox_cwd: PathUri,
     #[serde(default)]
     pub use_legacy_landlock: bool,
+}
+
+/// Historical mixed native-path/URI payload for `codex/sandbox-state-meta`.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacySandboxState {
+    pub permission_profile: PermissionProfile<LegacyAppPathString>,
+    pub codex_linux_sandbox_exe: Option<LegacyAppPathString>,
+    pub sandbox_cwd: PathUri,
+    pub use_legacy_landlock: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySandboxStateWire {
+    permission_profile: PermissionProfile<LegacyAppPathString>,
+    codex_linux_sandbox_exe: Option<LegacyAppPathString>,
+    sandbox_cwd: PathUri,
+    #[serde(default)]
+    use_legacy_landlock: bool,
+}
+
+impl LegacySandboxState {
+    pub fn from_native_paths(
+        permission_profile: PermissionProfile,
+        codex_linux_sandbox_exe: Option<&Path>,
+        sandbox_cwd: PathUri,
+        use_legacy_landlock: bool,
+    ) -> anyhow::Result<Self> {
+        let permission_profile = try_map_permission_profile_paths(permission_profile, |path| {
+            let path = path.as_path().to_str().ok_or_else(|| {
+                anyhow::anyhow!("legacy sandbox permission path is not valid UTF-8")
+            })?;
+            Ok::<_, anyhow::Error>(LegacyAppPathString::from_path(Path::new(path)))
+        })?;
+        let codex_linux_sandbox_exe = codex_linux_sandbox_exe
+            .map(|path| {
+                let path = path.to_str().ok_or_else(|| {
+                    anyhow::anyhow!("legacy sandbox helper path is not valid UTF-8")
+                })?;
+                Ok::<_, anyhow::Error>(LegacyAppPathString::from_path(Path::new(path)))
+            })
+            .transpose()?;
+        Ok(Self {
+            permission_profile,
+            codex_linux_sandbox_exe,
+            sandbox_cwd,
+            use_legacy_landlock,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = LegacySandboxStateWire::deserialize(deserializer)?;
+        let permission_profile =
+            try_map_permission_profile_paths(wire.permission_profile, sandbox_wire_path_to_uri)
+                .map_err(D::Error::custom)?;
+        let codex_linux_sandbox_exe = wire
+            .codex_linux_sandbox_exe
+            .map(|path| sandbox_wire_helper_path_to_uri(path, &wire.sandbox_cwd))
+            .transpose()
+            .map_err(D::Error::custom)?;
+        Ok(Self {
+            permission_profile,
+            codex_linux_sandbox_exe,
+            sandbox_cwd: wire.sandbox_cwd,
+            use_legacy_landlock: wire.use_legacy_landlock,
+        })
+    }
+}
+
+fn try_map_permission_profile_paths<InputPath, OutputPath, E>(
+    profile: PermissionProfile<InputPath>,
+    mut map: impl FnMut(InputPath) -> Result<OutputPath, E>,
+) -> Result<PermissionProfile<OutputPath>, E> {
+    Ok(match profile {
+        PermissionProfile::Managed {
+            file_system,
+            network,
+        } => {
+            let file_system = match file_system {
+                ManagedFileSystemPermissions::Restricted {
+                    entries,
+                    glob_scan_max_depth,
+                } => ManagedFileSystemPermissions::Restricted {
+                    entries: entries
+                        .into_iter()
+                        .map(|entry| {
+                            let path = match entry.path {
+                                FileSystemPath::Path { path } => {
+                                    FileSystemPath::Path { path: map(path)? }
+                                }
+                                FileSystemPath::GlobPattern { pattern } => {
+                                    FileSystemPath::GlobPattern { pattern }
+                                }
+                                FileSystemPath::Special { value } => {
+                                    FileSystemPath::Special { value }
+                                }
+                            };
+                            Ok(FileSystemSandboxEntry {
+                                path,
+                                access: entry.access,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, E>>()?,
+                    glob_scan_max_depth,
+                },
+                ManagedFileSystemPermissions::Unrestricted => {
+                    ManagedFileSystemPermissions::Unrestricted
+                }
+            };
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            }
+        }
+        PermissionProfile::Disabled => PermissionProfile::Disabled,
+        PermissionProfile::External { network } => PermissionProfile::External { network },
+    })
+}
+
+fn sandbox_wire_path_to_uri(path: LegacyAppPathString) -> Result<PathUri, String> {
+    if let Ok(uri) = PathUri::parse(path.as_str()) {
+        return Ok(uri);
+    }
+    path.to_inferred_path_uri().ok_or_else(|| {
+        format!("sandbox path `{path}` is neither a path URI nor an absolute native path")
+    })
+}
+
+fn sandbox_wire_helper_path_to_uri(
+    path: LegacyAppPathString,
+    sandbox_cwd: &PathUri,
+) -> Result<PathUri, String> {
+    if let Ok(uri) = PathUri::parse(path.as_str()) {
+        return Ok(uri);
+    }
+    if let Some(uri) = path.to_inferred_path_uri() {
+        return Ok(uri);
+    }
+    sandbox_cwd.join(path.as_str()).map_err(|err| {
+        format!(
+            "sandbox helper path `{path}` cannot be resolved against sandbox cwd URI `{sandbox_cwd}`: {err}"
+        )
+    })
 }
 
 /// Runtime context used when resolving per-server MCP environments.

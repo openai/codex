@@ -781,6 +781,16 @@ impl McpConnectionManager {
             .server_supports_sandbox_state_meta_capability)
     }
 
+    pub async fn server_supports_sandbox_state_meta_v2_capability(
+        &self,
+        server: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .client_by_name(server)
+            .await?
+            .server_supports_sandbox_state_meta_v2_capability)
+    }
+
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,

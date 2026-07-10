@@ -28,6 +28,7 @@ use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
+use codex_mcp::MCP_SANDBOX_STATE_META_V2_CAPABILITY;
 use codex_mcp::SandboxState;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_utils_path_uri::LegacyAppPathString;
@@ -941,12 +942,36 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
         .expect("sandbox state metadata should be present");
+    assert!(!meta.contains_key(MCP_SANDBOX_STATE_META_V2_CAPABILITY));
+    let expected_permission_profile = serde_json::to_value(PermissionProfile::read_only())?;
+    assert_eq!(
+        sandbox_meta.get("permissionProfile"),
+        Some(&expected_permission_profile)
+    );
+    let expected_helper = if is_remote_test_environment() {
+        Value::Null
+    } else {
+        serde_json::to_value(&fixture.config.codex_linux_sandbox_exe)?
+    };
+    assert_eq!(
+        sandbox_meta.get("codexLinuxSandboxExe"),
+        Some(&expected_helper)
+    );
     let sandbox_state: SandboxState = serde_json::from_value(sandbox_meta.clone())?;
     assert_eq!(
         sandbox_state,
         SandboxState {
-            permission_profile: PermissionProfile::read_only(),
-            codex_linux_sandbox_exe: fixture.config.codex_linux_sandbox_exe.clone(),
+            permission_profile: PermissionProfile::read_only().into(),
+            codex_linux_sandbox_exe: if is_remote_test_environment() {
+                None
+            } else {
+                fixture
+                    .config
+                    .codex_linux_sandbox_exe
+                    .as_deref()
+                    .map(PathUri::from_host_native_path)
+                    .transpose()?
+            },
             sandbox_cwd: PathUri::from_abs_path(&fixture.config.cwd),
             use_legacy_landlock: false,
         }

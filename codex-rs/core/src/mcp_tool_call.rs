@@ -35,6 +35,7 @@ use codex_connectors::AppToolPolicyInput;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::LegacySandboxState;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
@@ -716,42 +717,85 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let turn_context = step_context.turn.as_ref();
-    let supports_sandbox_state_meta = manager
-        .server_supports_sandbox_state_meta_capability(server)
+    let supports_sandbox_state_meta_v2 = manager
+        .server_supports_sandbox_state_meta_v2_capability(server)
         .await
         .unwrap_or(false);
-    if !supports_sandbox_state_meta {
+    let sandbox_state_meta_key = if supports_sandbox_state_meta_v2 {
+        codex_mcp::MCP_SANDBOX_STATE_META_V2_CAPABILITY
+    } else if manager
+        .server_supports_sandbox_state_meta_capability(server)
+        .await
+        .unwrap_or(false)
+    {
+        codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY
+    } else {
         return Ok(meta);
-    }
+    };
 
     let server_environment_id = manager
         .server_environment_id(server)
         .unwrap_or(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID);
+    let server_is_local = server_environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+        || step_context
+            .environments
+            .turn_environments
+            .iter()
+            .find(|environment| environment.environment_id == server_environment_id)
+            .is_some_and(|environment| !environment.environment.is_remote());
+    if !server_is_local && !supports_sandbox_state_meta_v2 {
+        return Ok(meta);
+    }
     let Some(sandbox_cwd) = sandbox_cwd_for_mcp_server(step_context, server_environment_id) else {
         return Ok(meta);
     };
-    let permission_profile = turn_context.permission_profile();
-    let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile,
-        codex_linux_sandbox_exe: step_context.mcp.config().codex_linux_sandbox_exe.clone(),
-        sandbox_cwd,
-        use_legacy_landlock: step_context.mcp.config().use_legacy_landlock,
-    })?;
+    let permission_profile = if server_is_local {
+        turn_context.permission_profile()
+    } else {
+        turn_context.config.permissions.permission_profile().clone()
+    };
+    let sandbox_state = if supports_sandbox_state_meta_v2 {
+        let codex_linux_sandbox_exe = if server_is_local {
+            match step_context.mcp.config().codex_linux_sandbox_exe.as_deref() {
+                Some(path) if path.is_absolute() => Some(PathUri::from_host_native_path(path)?),
+                Some(path) => {
+                    let path = path.to_str().ok_or_else(|| {
+                        anyhow::anyhow!("relative sandbox helper path is not valid UTF-8")
+                    })?;
+                    Some(sandbox_cwd.join(path)?)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        serde_json::to_value(SandboxState {
+            permission_profile: permission_profile.into(),
+            codex_linux_sandbox_exe,
+            sandbox_cwd,
+            use_legacy_landlock: step_context.mcp.config().use_legacy_landlock,
+        })?
+    } else {
+        serde_json::to_value(LegacySandboxState::from_native_paths(
+            permission_profile,
+            if server_is_local {
+                step_context.mcp.config().codex_linux_sandbox_exe.as_deref()
+            } else {
+                None
+            },
+            sandbox_cwd,
+            step_context.mcp.config().use_legacy_landlock,
+        )?)?
+    };
 
     match meta.as_mut() {
         Some(serde_json::Value::Object(map)) => {
-            map.insert(
-                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-                sandbox_state,
-            );
+            map.insert(sandbox_state_meta_key.to_string(), sandbox_state);
         }
         Some(_) => {}
         None => {
             let mut map = serde_json::Map::new();
-            map.insert(
-                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-                sandbox_state,
-            );
+            map.insert(sandbox_state_meta_key.to_string(), sandbox_state);
             meta = Some(serde_json::Value::Object(map));
         }
     }
