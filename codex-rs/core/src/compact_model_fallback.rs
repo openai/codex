@@ -2,15 +2,26 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionReason;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::CodexErr;
-use http::StatusCode;
 use tracing::warn;
 
+/// Returns whether failed previous-model compaction should be attempted once with the current
+/// model.
+///
+/// These errors can reflect model availability, compatibility, capacity, or model-scoped usage
+/// failures. Some variants also cover broader server failures; accepting an occasional redundant
+/// attempt keeps fallback resilient as backend error classifications evolve. Callers bound the
+/// fallback to a single current-model attempt.
 pub(crate) fn should_retry_with_current_model(error: &CodexErr) -> bool {
-    match error {
-        CodexErr::InvalidRequest(_) => true,
-        CodexErr::UnexpectedStatus(response) => response.status == StatusCode::NOT_FOUND,
-        _ => false,
-    }
+    matches!(
+        error,
+        CodexErr::InvalidRequest(_)
+            | CodexErr::UnexpectedStatus(_)
+            | CodexErr::ContextWindowExceeded
+            | CodexErr::UsageLimitReached(_)
+            | CodexErr::ServerOverloaded
+            | CodexErr::InternalServerError
+            | CodexErr::RetryLimit(_)
+    )
 }
 
 pub(crate) fn record_model_fallback(
