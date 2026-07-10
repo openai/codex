@@ -87,7 +87,6 @@ mod override_updates;
 mod pending_input;
 mod permissions_messages;
 mod personality;
-mod personality_migration;
 mod plugins;
 mod prompt_caching;
 mod prompt_debug_tests;
