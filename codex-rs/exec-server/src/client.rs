@@ -1488,8 +1488,11 @@ mod tests {
         let traceparent = trace.traceparent.as_deref().expect("request traceparent");
         let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
         let parts = traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(expected_parts.len(), 4);
+        assert_eq!(parts[0], expected_parts[0]);
         assert_eq!(parts[1], expected_parts[1]);
-        assert_ne!(parts[2], expected_parts[2]);
+        assert_eq!(parts[3], expected_parts[3]);
         assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 
