@@ -9758,9 +9758,13 @@
                 "type": "string"
               },
               "subpath": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/LegacyAppPathString"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
@@ -9812,9 +9816,13 @@
                 "type": "string"
               },
               "subpath": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/LegacyAppPathString"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
