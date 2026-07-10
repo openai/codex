@@ -107,6 +107,7 @@ async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
     let codex_home = TempDir::new()?;
+    let initial_workspace = TempDir::new()?;
     let workspace = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -115,7 +116,19 @@ async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(initial_workspace.path().to_string_lossy().into_owned()),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let thread = to_response::<ThreadStartResponse>(response)?.thread;
 
     send_thread_settings_update(
         &mut mcp,
@@ -148,6 +161,13 @@ async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()
             workspace.path().to_string_lossy()
         )),
         "default environment should use the updated cwd: {environment_context}"
+    );
+    assert!(
+        environment_context.contains(&format!(
+            "<workspace_roots><root>{}</root></workspace_roots>",
+            workspace.path().to_string_lossy()
+        )),
+        "default workspace root should use the updated cwd: {environment_context}"
     );
 
     Ok(())

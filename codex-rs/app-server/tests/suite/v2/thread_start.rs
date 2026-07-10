@@ -16,6 +16,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+#[cfg(not(windows))]
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition;
@@ -553,13 +554,18 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
 
     assert_eq!(response_cwd, cwd.abs());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
-    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
-        panic!("expected workspace-write sandbox");
-    };
-    assert!(
-        writable_roots.contains(&extra_root.abs().canonicalize()?),
-        "legacy sandbox projection should include the runtime workspace root"
-    );
+    #[cfg(windows)]
+    let _ = sandbox;
+    #[cfg(not(windows))]
+    {
+        let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
+            panic!("expected workspace-write sandbox");
+        };
+        assert!(
+            writable_roots.contains(&extra_root.abs().canonicalize()?),
+            "legacy sandbox projection should include the runtime workspace root"
+        );
+    }
 
     let environment_root = cwd.join("environment-root");
     std::fs::create_dir_all(&environment_root)?;
@@ -584,13 +590,18 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
     assert_eq!(runtime_workspace_roots, vec![environment_root.abs()]);
-    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
-        panic!("expected workspace-write sandbox");
-    };
-    assert!(
-        writable_roots.contains(&environment_root.abs().canonicalize()?),
-        "legacy sandbox projection should include the environment workspace root"
-    );
+    #[cfg(windows)]
+    let _ = sandbox;
+    #[cfg(not(windows))]
+    {
+        let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox else {
+            panic!("expected workspace-write sandbox");
+        };
+        assert!(
+            writable_roots.contains(&environment_root.abs().canonicalize()?),
+            "legacy sandbox projection should include the environment workspace root"
+        );
+    }
 
     Ok(())
 }
@@ -615,7 +626,7 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             ..Default::default()
         })

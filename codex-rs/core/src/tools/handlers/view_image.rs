@@ -381,7 +381,10 @@ mod tests {
         replace_primary_environment_cwd(&mut turn, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
-        turn.permission_profile = PermissionProfile::Disabled;
+        Arc::make_mut(&mut turn.config)
+            .permissions
+            .set_permission_profile(PermissionProfile::Disabled)
+            .expect("set permission profile");
         let turn = Arc::new(turn);
 
         let result = ViewImageHandler::default()

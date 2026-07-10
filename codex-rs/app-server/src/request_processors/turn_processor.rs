@@ -587,9 +587,28 @@ impl TurnRequestProcessor {
             return None;
         }
         let snapshot = thread.config_snapshot().await;
+        let current_cwd = snapshot.cwd().clone();
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
         let environment_selections = environment_selections.unwrap_or_else(|| {
-            let workspace_roots = workspace_roots.unwrap_or(snapshot.workspace_roots);
+            let workspace_roots = workspace_roots.unwrap_or_else(|| {
+                let workspace_roots = snapshot.workspace_roots;
+                if legacy_fallback_cwd != current_cwd && workspace_roots.contains(&current_cwd) {
+                    let mut retargeted_workspace_roots = Vec::with_capacity(workspace_roots.len());
+                    for root in workspace_roots {
+                        let root = if root == current_cwd {
+                            legacy_fallback_cwd.clone()
+                        } else {
+                            root
+                        };
+                        if !retargeted_workspace_roots.contains(&root) {
+                            retargeted_workspace_roots.push(root);
+                        }
+                    }
+                    retargeted_workspace_roots
+                } else {
+                    workspace_roots
+                }
+            });
             self.thread_manager
                 .default_environment_selections(&legacy_fallback_cwd, &workspace_roots)
         });
