@@ -23,11 +23,19 @@ use codex_exec_server::CreateDirectoryOptions;
 #[cfg(target_os = "linux")]
 use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -210,6 +218,51 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_read_file_materializes_environment_workspace_roots() -> Result<()> {
+    let context = create_file_system_context(FileSystemImplementation::Remote).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    let workspace_file = workspace.join("included.txt");
+    let excluded_file = tmp.path().join("excluded.txt");
+    std::fs::create_dir(&workspace)?;
+    std::fs::write(&workspace_file, b"included")?;
+    std::fs::write(&excluded_file, b"excluded")?;
+
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        PathUri::from_host_native_path(tmp.path())?,
+    );
+    sandbox.workspace_roots = vec![PathUri::from_host_native_path(&workspace)?];
+
+    assert_eq!(
+        file_system
+            .read_file(
+                &PathUri::from_host_native_path(&workspace_file)?,
+                Some(&sandbox),
+            )
+            .await?,
+        b"included"
+    );
+    let error = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&excluded_file)?,
+            Some(&sandbox),
+        )
+        .await
+        .expect_err("read outside environment workspace roots should fail");
+    assert_sandbox_denied(&error);
+
+    Ok(())
+}
+
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -299,6 +352,7 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: false,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -321,6 +375,7 @@ async fn file_system_walk_handles_directory_symlinks(
                 max_directories: 4,
                 max_entries: 8,
                 follow_directory_symlinks: true,
+                prune_hidden_directories: false,
             },
             /*sandbox*/ None,
         )
@@ -341,6 +396,68 @@ async fn file_system_walk_handles_directory_symlinks(
                 WalkEntry {
                     path: PathUri::from_host_native_path(target_link.join("root-link"))?,
                     kind: WalkEntryKind::Directory,
+                },
+            ],
+            errors: Vec::new(),
+            truncated: false,
+        }
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_prunes_hidden_directories_without_claiming_visible_aliases(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let root = tmp.path().join("root");
+    let hidden = root.join(".hidden");
+    let hidden_nested = hidden.join("nested");
+    let visible = root.join("visible");
+    std::fs::create_dir_all(&hidden_nested)?;
+    std::fs::write(hidden_nested.join("note.txt"), "visible through alias")?;
+    symlink(&hidden, &visible)?;
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(&root)?,
+            WalkOptions {
+                max_depth: 3,
+                max_directories: 3,
+                max_entries: 6,
+                follow_directory_symlinks: true,
+                prune_hidden_directories: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+
+    assert_eq!(
+        outcome,
+        WalkOutcome {
+            entries: vec![
+                WalkEntry {
+                    path: PathUri::from_host_native_path(hidden)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(&visible)?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(visible.join("nested"))?,
+                    kind: WalkEntryKind::Directory,
+                },
+                WalkEntry {
+                    path: PathUri::from_host_native_path(visible.join("nested/note.txt"))?,
+                    kind: WalkEntryKind::File,
                 },
             ],
             errors: Vec::new(),

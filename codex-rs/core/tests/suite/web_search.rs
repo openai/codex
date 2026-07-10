@@ -241,7 +241,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     )
     .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.2").with_home(home);
     let test = builder
         .build(&server)
         .await
@@ -276,7 +276,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn indexed_web_search_mode_sets_index_gate() {
+async fn indexed_web_search_mode_sets_indexed_access() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -290,7 +290,7 @@ async fn indexed_web_search_mode_sets_index_gate() {
     std::fs::write(home.path().join("config.toml"), r#"web_search = "indexed""#)
         .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.2").with_home(home);
     let test = builder
         .build(&server)
         .await
@@ -308,7 +308,7 @@ async fn indexed_web_search_mode_sets_index_gate() {
     assert_eq!(
         (
             tool.get("external_web_access").and_then(Value::as_bool),
-            tool.get("index_gated_web_access").and_then(Value::as_bool),
+            tool.get("indexed_web_access").and_then(Value::as_bool),
         ),
         (Some(true), Some(true))
     );

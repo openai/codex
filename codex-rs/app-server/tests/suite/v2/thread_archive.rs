@@ -38,7 +38,10 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -221,7 +224,11 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
         )
         .await?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let archive_id = mcp
@@ -342,7 +349,11 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
         .join(child_rollout_path.file_name().expect("rollout file name"));
     std::fs::create_dir_all(&archived_child_path)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let archive_id = mcp
@@ -446,7 +457,11 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
         )
         .await?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let archive_id = mcp
@@ -499,7 +514,10 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut primary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
@@ -539,7 +557,10 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     .await??;
     primary.clear_message_buffer();
 
-    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut secondary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
 
     let archive_id = primary

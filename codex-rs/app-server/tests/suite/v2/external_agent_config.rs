@@ -58,14 +58,15 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     let sqlite_home = TempDir::new()?;
     let home_dir = codex_home.path().display().to_string();
     let sqlite_home_dir = sqlite_home.path().display().to_string();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("HOME", Some(home_dir.as_str())),
             ("CODEX_SQLITE_HOME", Some(sqlite_home_dir.as_str())),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -189,17 +190,18 @@ async fn external_agent_config_import_reports_failed_sync_import_in_completion()
     let home_dir = codex_home.path().display().to_string();
     let analytics_capture_file = codex_home.path().join("analytics-events.jsonl");
     let analytics_capture_file = analytics_capture_file.display().to_string();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
             ("HOME", Some(home_dir.as_str())),
             (
                 "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE",
                 Some(analytics_capture_file.as_str()),
             ),
-        ],
-    )
-    .await?;
+        ])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -335,9 +337,12 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
         external_agent_home(codex_home.path()).join("projects/repo/missing.jsonl");
     let project_root = codex_home.path().join("repo");
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -413,9 +418,18 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
 }
 
 #[tokio::test]
-async fn external_agent_config_import_sends_completion_notification_for_local_plugins() -> Result<()>
-{
+async fn external_agent_config_import_reinstalls_plugins_from_known_marketplaces() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let analytics_server = start_analytics_events_server().await?;
+    write_analytics_config(codex_home.path(), &analytics_server.uri())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
     let marketplace_root = codex_home.path().join("marketplace");
     let plugin_root = marketplace_root.join("plugins").join("sample");
     std::fs::create_dir_all(marketplace_root.join(".agents/plugins"))?;
@@ -440,15 +454,18 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         r#"{"name":"sample","version":"0.1.0"}"#,
     )?;
     let source_home = external_agent_home(codex_home.path());
-    std::fs::create_dir_all(&source_home)?;
+    std::fs::create_dir_all(source_home.join("plugins"))?;
     let settings = serde_json::json!({
         "enabledPlugins": {
-            "sample@debug": true
+            "missing@debug": true,
+            "sample@debug": true,
         },
         "extraKnownMarketplaces": {
             "debug": {
-                "source": "local",
-                "path": marketplace_root,
+                "source": {
+                    "source": "file",
+                    "path": marketplace_root.join(".agents/plugins/marketplace.json"),
+                }
             }
         }
     });
@@ -456,32 +473,63 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         source_home.join("settings.json"),
         serde_json::to_string_pretty(&settings)?,
     )?;
+    std::fs::write(
+        source_home.join("plugins/known_marketplaces.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "debug": {
+                "source": {
+                    "source": "file",
+                    "path": marketplace_root.join(".agents/plugins/marketplace.json"),
+                },
+                "installLocation": marketplace_root,
+                "lastUpdated": "2026-07-09T00:16:23.611Z",
+            }
+        }))?,
+    )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_raw_request(
-            "externalAgentConfig/import",
-            Some(serde_json::json!({
-                "migrationItems": [{
-                    "itemType": "PLUGINS",
-                    "description": "Import plugins",
-                    "cwd": null,
-                    "details": {
-                        "plugins": [{
-                            "marketplaceName": "debug",
-                            "pluginNames": ["sample"]
-                        }]
-                    }
-                }]
-            })),
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({ "includeHome": true })),
         )
         .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
+    assert_eq!(detected.items.len(), 1);
+    assert_eq!(
+        detected.items[0].item_type,
+        ExternalAgentConfigMigrationItemType::Plugins
+    );
+    assert_eq!(
+        detected.items[0]
+            .details
+            .as_ref()
+            .map(|details| details.plugins.clone()),
+        Some(vec![codex_app_server_protocol::PluginsMigration {
+            marketplace_name: "debug".to_string(),
+            plugin_names: vec!["missing".to_string(), "sample".to_string()],
+        }])
+    );
 
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({ "migrationItems": detected.items })),
+        )
+        .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
@@ -499,6 +547,55 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_type_results.len(), 1);
+    let plugin_result = &completed.item_type_results[0];
+    assert_eq!(
+        plugin_result.item_type,
+        ExternalAgentConfigMigrationItemType::Plugins
+    );
+    assert_eq!(plugin_result.successes.len(), 1);
+    assert_eq!(
+        plugin_result.successes[0].source.as_deref(),
+        Some("sample@debug")
+    );
+    assert_eq!(plugin_result.failures.len(), 1);
+    assert_eq!(
+        plugin_result.failures[0].source.as_deref(),
+        Some("missing@debug")
+    );
+    assert_eq!(
+        plugin_result.failures[0].error_type.as_deref(),
+        Some("plugin_not_found")
+    );
+    assert_eq!(plugin_result.failures[0].failure_stage, "plugin_import");
+    assert_eq!(
+        plugin_result.failures[0].message,
+        "plugin `missing` was not found in marketplace `debug`"
+    );
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_plugin_install_failed",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["plugin_id"], "missing@debug");
+    assert_eq!(event_params["plugin_name"], "missing");
+    assert_eq!(event_params["marketplace_name"], "debug");
+    assert_eq!(event_params["source"], "external_agent_migration");
+    assert_eq!(event_params["error_type"], "plugin_not_found");
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_onboarding_external_agent_import_failure",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["type"], "PLUGINS");
+    assert_eq!(event_params["failure_stage"], "plugin_import");
+    assert_eq!(event_params["error_type"], "plugin_not_found");
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
@@ -551,9 +648,12 @@ async fn external_agent_config_import_sends_completion_notification_after_pendin
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -604,6 +704,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
+    let control_request = "<ide_selection>src/auth.rs:1-5</ide_selection>";
+    let first_request = "Fix auth flow";
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
     std::fs::write(
@@ -613,7 +715,14 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "type": "user",
                 "cwd": &project_root,
                 "timestamp": &recent_timestamp,
-                "message": { "content": "first request" },
+                "message": { "content": control_request },
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "user",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": first_request },
             })
             .to_string(),
             serde_json::json!({
@@ -623,19 +732,17 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "message": { "content": "first answer" },
             })
             .to_string(),
-            serde_json::json!({
-                "type": "custom-title",
-                "customTitle": "source session title",
-            })
-            .to_string(),
         ]
         .join("\n"),
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -653,6 +760,14 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     .await??;
     let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
     assert_eq!(detected.items.len(), 1);
+    assert_eq!(
+        detected.items[0]
+            .details
+            .as_ref()
+            .and_then(|details| details.sessions.first())
+            .and_then(|session| session.title.as_deref()),
+        Some("Fix auth flow")
+    );
 
     let request_id = mcp
         .send_raw_request(
@@ -729,8 +844,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .expect("expected imported thread")
         .clone();
     assert_eq!(imported_thread_id, thread.id.to_string());
-    assert_eq!(thread.preview, "first request");
-    assert_eq!(thread.name.as_deref(), Some("source session title"));
+    assert_eq!(thread.preview, control_request);
+    assert_eq!(thread.name.as_deref(), Some("Fix auth flow"));
 
     let request_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -744,13 +859,39 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
-    assert_eq!(response.thread.turns.len(), 1);
-    let items = &response.thread.turns[0].items;
-    assert_eq!(items.len(), 3);
+    assert_eq!(response.thread.turns.len(), 2);
+    let control_items = &response.thread.turns[0].items;
+    assert_eq!(control_items.len(), 1);
+    match &control_items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: control_request.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+    let imported_items = &response.thread.turns[1].items;
+    assert_eq!(imported_items.len(), 3);
+    match &imported_items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: first_request.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
     assert_eq!(
-        items.last(),
+        imported_items.last(),
         Some(&ThreadItem::AgentMessage {
-            id: "item-3".into(),
+            id: "item-4".into(),
             text: "<EXTERNAL SESSION IMPORTED>".into(),
             phase: None,
             memory_citation: None,
@@ -804,8 +945,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
-    assert_eq!(response.thread.turns.len(), 2);
-    match &response.thread.turns[1].items[1] {
+    assert_eq!(response.thread.turns.len(), 3);
+    match &response.thread.turns[2].items[1] {
         ThreadItem::AgentMessage { text, .. } => assert_eq!(text, "follow-up answer"),
         other => panic!("expected agent message item, got {other:?}"),
     }
@@ -845,9 +986,12 @@ required = true
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -931,9 +1075,12 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1022,9 +1169,12 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1115,9 +1265,12 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     std::fs::write(&session_path, &session_contents)?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1291,9 +1444,12 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
     )?;
 
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

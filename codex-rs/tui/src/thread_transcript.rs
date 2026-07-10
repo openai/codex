@@ -9,6 +9,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::history_cell::split_reasoning_summary_parts;
 use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
@@ -89,19 +90,17 @@ pub(crate) fn thread_to_transcript_cells(
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                let text = if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
-                    && !content.is_empty()
-                {
-                    content.join("\n\n")
-                } else {
-                    summary.join("\n\n")
-                };
+                let (header, text) =
+                    if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
+                        && !content.is_empty()
+                    {
+                        ("Reasoning".to_string(), content.join("\n\n"))
+                    } else {
+                        split_reasoning_summary_parts(summary)
+                    };
                 if !text.trim().is_empty() {
                     cells.push(Arc::new(ReasoningSummaryCell::new(
-                        "Reasoning".to_string(),
-                        text,
-                        cwd,
-                        /*transcript_only*/ false,
+                        header, text, cwd, /*transcript_only*/ false,
                     )));
                 }
             }
@@ -199,21 +198,24 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         } => {
             vec![sub_agent_activity_summary(*kind, agent_path).dim().into()]
         }
-        ThreadItem::WebSearch { query, .. } => {
-            vec![vec!["web search: ".dim(), query.clone().into()].into()]
+        ThreadItem::WebSearch(item) => {
+            vec![vec!["web search: ".dim(), item.query.clone().into()].into()]
         }
         ThreadItem::ImageView { path, .. } => {
             let path = path.render_for_ui();
             vec![format!("image: {path}").dim().into()]
         }
-        ThreadItem::ImageGeneration {
-            status, saved_path, ..
-        } => {
-            let saved = saved_path
+        ThreadItem::ImageGeneration(item) => {
+            let saved = item
+                .saved_path
                 .as_ref()
                 .map(|path| format!(" · {}", path.as_path().display()))
                 .unwrap_or_default();
-            vec![format!("image generation: {status}{saved}").dim().into()]
+            vec![
+                format!("image generation: {}{saved}", item.status)
+                    .dim()
+                    .into(),
+            ]
         }
         ThreadItem::EnteredReviewMode { review, .. } => {
             vec![vec!["review started: ".dim(), review.clone().into()].into()]

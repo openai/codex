@@ -10,13 +10,52 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_host_windows;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn builder_interposes_fixed_delay_for_auto_env() -> Result<()> {
+    skip_if_host_windows!(Ok(()));
+    skip_if_remote!(Ok(()), "the fixed-delay fixture is local-only");
+
+    let codex_home = TempDir::new()?;
+    let requested_delay = Duration::from_secs(1);
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_exec_server_delay(requested_delay)
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    assert_eq!(
+        mcp.auto_env_params()?.environment_id,
+        codex_exec_server::REMOTE_ENVIRONMENT_ID
+    );
+
+    let thread_start = Instant::now();
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        Duration::from_secs(60),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let elapsed = thread_start.elapsed();
+    assert!(
+        elapsed >= requested_delay,
+        "thread/start completed in {elapsed:?}, below the requested {requested_delay:?} delay"
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_start_with_auto_env_exposes_fixture_cwd_to_model() -> Result<()> {
@@ -41,7 +80,10 @@ async fn thread_start_with_auto_env_exposes_fixture_cwd_to_model() -> Result<()>
         "compact",
     )?;
 
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let expected_environment = mcp.auto_env_params()?;
 
@@ -110,14 +152,17 @@ async fn auto_env_rejects_explicit_environment_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(codex_home.path().join("environments.toml"), "")?;
 
-    let result = TestAppServer::new_with_auto_env(codex_home.path()).await;
+    let result = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await;
     let Err(err) = result else {
         anyhow::bail!("auto-env construction unexpectedly succeeded");
     };
     assert_eq!(
         err.to_string(),
         format!(
-            "new_with_auto_env cannot be used when {} exists",
+            "automatic environment cannot be used when {} exists",
             codex_home.path().join("environments.toml").display()
         )
     );

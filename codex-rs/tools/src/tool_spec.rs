@@ -25,20 +25,18 @@ pub enum ToolSpec {
         description: String,
         parameters: JsonSchema,
     },
-    #[serde(rename = "image_generation")]
-    ImageGeneration { output_format: String },
     // TODO: Understand why we get an error on web_search although the API docs
     // say it's supported.
     // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
-    // The `external_web_access` field determines whether the web search is over
-    // cached or live content.
+    // `external_web_access` distinguishes cached from live-capable search, while
+    // `indexed_web_access` restricts live fetches to indexed URLs.
     // https://platform.openai.com/docs/guides/tools-web-search#live-internet-access
     #[serde(rename = "web_search")]
     WebSearch {
         #[serde(skip_serializing_if = "Option::is_none")]
         external_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        index_gated_web_access: Option<bool>,
+        indexed_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filters: Option<ResponsesApiWebSearchFilters>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,7 +56,6 @@ impl ToolSpec {
             ToolSpec::Function(tool) => tool.name.as_str(),
             ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
-            ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
         }

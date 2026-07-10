@@ -127,7 +127,7 @@ pub(crate) fn network_proxy_config_from_profile_network(
     // Profile `network.enabled` controls sandbox network access. Profiles may
     // provide proxy settings for the feature gate to consume when that network
     // access is enabled, but they do not start the managed proxy on their own.
-    config.network.enabled = false;
+    config.enabled = false;
     config
 }
 

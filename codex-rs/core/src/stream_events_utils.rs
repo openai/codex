@@ -1,17 +1,12 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
-use crate::context::ContextualUserFragment;
-use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
@@ -106,85 +101,6 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
         return Some(combined);
     }
     None
-}
-
-async fn save_image_generation_result(
-    codex_home: &AbsolutePathBuf,
-    session_id: &str,
-    call_id: &str,
-    result: &str,
-) -> Result<AbsolutePathBuf> {
-    let bytes = BASE64_STANDARD
-        .decode(result.trim().as_bytes())
-        .map_err(|err| {
-            CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
-        })?;
-    let path = image_generation_artifact_path(codex_home, session_id, call_id);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&path, bytes).await?;
-    Ok(path)
-}
-
-pub(crate) async fn persist_image_generation_item(
-    sess: &Session,
-    turn_context: &TurnContext,
-    image_item: &mut ImageGenerationItem,
-) -> Option<AbsolutePathBuf> {
-    image_item.saved_path = None;
-    let session_id = sess.thread_id.to_string();
-    match save_image_generation_result(
-        &turn_context.config.codex_home,
-        &session_id,
-        &image_item.id,
-        &image_item.result,
-    )
-    .await
-    {
-        Ok(path) => {
-            image_item.saved_path = Some(path.clone());
-            Some(path)
-        }
-        Err(err) => {
-            let output_path = image_generation_artifact_path(
-                &turn_context.config.codex_home,
-                &session_id,
-                &image_item.id,
-            );
-            let output_dir = output_path
-                .parent()
-                .unwrap_or_else(|| turn_context.config.codex_home.clone());
-            tracing::warn!(
-                call_id = %image_item.id,
-                output_dir = %output_dir.display(),
-                "failed to save generated image: {err}"
-            );
-            None
-        }
-    }
-}
-
-async fn record_image_generation_instructions(
-    sess: &Session,
-    turn_context: &TurnContext,
-    image_item: &ImageGenerationItem,
-) {
-    if image_item.saved_path.is_none() {
-        return;
-    }
-    let session_id = sess.thread_id.to_string();
-    let image_output_path =
-        image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
-    let image_output_dir = image_output_path
-        .parent()
-        .unwrap_or_else(|| turn_context.config.codex_home.clone());
-    let message: ResponseItem = ContextualUserFragment::into(ImageGenerationInstructions::new(
-        image_output_dir.display(),
-        image_output_path.display(),
-    ));
-    sess.record_conversation_items(turn_context, &[message])
-        .await;
 }
 
 /// Persist a completed model response item and record any cited memory usage.
@@ -356,14 +272,12 @@ pub(crate) struct FinalizedTurnItemFacts {
 
 pub(crate) async fn finalize_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<FinalizedTurnItem> {
     let turn_item =
-        handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
-            .await?;
+        handle_non_tool_response_item(sess, contributor_policy, item, plan_mode).await?;
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
         match &turn_item {
             TurnItem::AgentMessage(agent_message) => {
@@ -388,7 +302,6 @@ pub(crate) async fn finalize_non_tool_response_item(
                     defers_mailbox_delivery_to_next_turn,
                 )
             }
-            TurnItem::ImageGeneration(_) => (None, None, true),
             _ => (None, None, false),
         };
     Some(FinalizedTurnItem {
@@ -446,7 +359,6 @@ pub(crate) async fn handle_output_item_done(
         Ok(None) => {
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
@@ -457,15 +369,8 @@ pub(crate) async fn handle_output_item_done(
                 .map(|finalized| finalized.facts.clone());
             if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
-                    let mut started_item = finalized_turn_item.turn_item.clone();
-                    if let TurnItem::ImageGeneration(item) = &mut started_item {
-                        item.status = "in_progress".to_string();
-                        item.revised_prompt = None;
-                        item.result.clear();
-                        item.saved_path = None;
-                    }
                     ctx.sess
-                        .emit_turn_item_started(&ctx.turn_context, &started_item)
+                        .emit_turn_item_started(&ctx.turn_context, &finalized_turn_item.turn_item)
                         .await;
                 }
 
@@ -516,30 +421,37 @@ pub(crate) async fn handle_output_item_done(
 
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
-    debug!(?item, "Output item");
+    let item_type = match item {
+        ResponseItem::AdditionalTools { .. } => "additional_tools",
+        ResponseItem::Message { .. } => "message",
+        ResponseItem::AgentMessage { .. } => "agent_message",
+        ResponseItem::Reasoning { .. } => "reasoning",
+        ResponseItem::LocalShellCall { .. } => "local_shell_call",
+        ResponseItem::FunctionCall { .. } => "function_call",
+        ResponseItem::ToolSearchCall { .. } => "tool_search_call",
+        ResponseItem::FunctionCallOutput { .. } => "function_call_output",
+        ResponseItem::CustomToolCall { .. } => "custom_tool_call",
+        ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
+        ResponseItem::ToolSearchOutput { .. } => "tool_search_output",
+        ResponseItem::WebSearchCall { .. } => "web_search_call",
+        ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
+        ResponseItem::Compaction { .. } => "compaction",
+        ResponseItem::CompactionTrigger { .. } => "compaction_trigger",
+        ResponseItem::ContextCompaction { .. } => "context_compaction",
+        ResponseItem::Other => "other",
+    };
+    debug!(item_type, item_id = item.id(), "Output item");
 
     match item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. } => {
+        | ResponseItem::WebSearchCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            finalize_turn_item(
-                sess,
-                turn_context,
-                contributor_policy,
-                &mut turn_item,
-                plan_mode,
-            )
-            .await;
-            if let TurnItem::ImageGeneration(image_item) = &turn_item {
-                record_image_generation_instructions(sess, turn_context, image_item).await;
-            }
+            finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)
         }
         ResponseItem::FunctionCallOutput { .. }
@@ -554,7 +466,6 @@ pub(crate) async fn handle_non_tool_response_item(
 
 pub(crate) async fn finalize_turn_item(
     sess: &Session,
-    turn_context: &TurnContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     turn_item: &mut TurnItem,
     plan_mode: bool,
@@ -577,11 +488,6 @@ pub(crate) async fn finalize_turn_item(
         if agent_message.memory_citation.is_none() {
             agent_message.memory_citation = memory_citation;
         }
-    }
-    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
-        && !image_item.result.is_empty()
-    {
-        persist_image_generation_item(sess, turn_context, image_item).await;
     }
 }
 
@@ -615,7 +521,6 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
             // to the safer "defer mailbox mail" behavior.
             last_assistant_message_from_item(item, plan_mode).is_some()
         }
-        ResponseItem::ImageGenerationCall { .. } => true,
         _ => false,
     }
 }

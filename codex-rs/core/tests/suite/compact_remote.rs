@@ -3451,7 +3451,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     skip_if_no_network!(Ok(()));
 
     let previous_model = "gpt-5.4";
-    let next_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())

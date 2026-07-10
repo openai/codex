@@ -42,7 +42,7 @@ impl ExecServerClient {
         &self,
         mut params: HttpRequestParams,
     ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
-        let rpc_client = self.inner.rpc_client().await?;
+        let rpc_client = self.rpc_client().await?;
         params.stream_response = true;
         let request_id = self.inner.next_http_body_stream_request_id();
         params.request_id = request_id.clone();

@@ -15,3 +15,12 @@ filegroup(
     ),
     visibility = ["//visibility:public"],
 )
+
+test_suite(
+    name = "e2e-benchmarks",
+    tags = ["manual"],
+    tests = [
+        "//codex-rs/cli:codex-help-bench",
+    ],
+    visibility = ["//visibility:public"],
+)

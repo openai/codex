@@ -121,6 +121,7 @@ fn install_method_name(context: &InstallContext) -> &'static str {
         InstallMethod::Standalone { .. } => "standalone",
         InstallMethod::Npm => "npm",
         InstallMethod::Bun => "bun",
+        InstallMethod::Pnpm => "pnpm",
         InstallMethod::Brew => "brew",
         InstallMethod::Other => "local build",
     }

@@ -56,6 +56,7 @@ fn make_mcp_tool(
             format!("Test tool: {tool_name}"),
             Arc::new(JsonObject::default()),
         ),
+        openai_file_input_optional_fields: Default::default(),
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),

@@ -1,6 +1,8 @@
 mod common;
 
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -11,11 +13,27 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
+#[cfg(target_os = "linux")]
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
+#[cfg(target_os = "linux")]
+use codex_protocol::models::PermissionProfile;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::FileSystemAccessMode;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::FileSystemPath;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::FileSystemSandboxEntry;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::FileSystemSpecialPath;
+#[cfg(target_os = "linux")]
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -93,6 +111,132 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 
     assert_eq!(exit_code, Some(0));
     assert!(closed);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> Result<()> {
+    if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
+        eprintln!("skipping bwrap test: {warning}");
+        return Ok(());
+    }
+
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let workspace = TempDir::new()?;
+    let file = workspace.path().join("allowed.txt");
+    std::fs::write(&file, b"allowed")?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-restricted-helper"),
+            argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
+            cwd,
+            env_policy: None,
+            env: HashMap::from([("PATH".to_string(), std::env::var("PATH")?)]),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: Some(sandbox),
+            enforce_managed_network: false,
+            managed_network: None,
+        })
+        .await?;
+    let output = collect_process_output_from_events(session.process).await?;
+
+    assert_eq!(
+        output,
+        ("allowed".to_string(), String::new(), Some(0), true)
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -> Result<()> {
+    if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
+        eprintln!("skipping bwrap test: {warning}");
+        return Ok(());
+    }
+
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let workspace = TempDir::new()?;
+    let file = workspace.path().join("allowed.txt");
+    std::fs::write(&file, b"allowed")?;
+    let hostile_helper = workspace.path().join("codex-linux-sandbox");
+    std::fs::write(&hostile_helper, b"#!/bin/sh\nprintf hostile")?;
+    let mut permissions = std::fs::metadata(&hostile_helper)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hostile_helper, permissions)?;
+    let path = std::env::var_os("PATH").context("PATH is not set")?;
+    let hostile_path = std::env::join_paths(
+        std::iter::once(workspace.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-hostile-helper-path"),
+            argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
+            cwd,
+            env_policy: None,
+            env: HashMap::from([(
+                "PATH".to_string(),
+                hostile_path.to_string_lossy().into_owned(),
+            )]),
+            tty: true,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: Some(sandbox),
+            enforce_managed_network: false,
+            managed_network: None,
+        })
+        .await?;
+    let output = collect_process_output_from_events(session.process).await?;
+
+    assert_eq!(
+        output,
+        ("allowed".to_string(), String::new(), Some(0), true)
+    );
     Ok(())
 }
 

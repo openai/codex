@@ -2,6 +2,7 @@ use super::cache::ModelsCacheManager;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -41,6 +42,7 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     fn list_models<'a>(
         &'a self,
         client_version: &'a str,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>>;
 }
 
@@ -83,10 +85,13 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     fn list_models(
         &self,
         refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, Vec<ModelPreset>> {
         Box::pin(
             async move {
-                let catalog = self.raw_model_catalog(refresh_strategy).await;
+                let catalog = self
+                    .raw_model_catalog(refresh_strategy, http_client_factory)
+                    .await;
                 self.build_available_models(catalog.models)
             }
             .instrument(tracing::info_span!(
@@ -100,6 +105,7 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ModelsResponse>;
 
     /// Return the current in-memory remote model catalog without refreshing or loading cache state.
@@ -152,13 +158,17 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         model: &'a Option<String>,
         allow_provider_model_fallback: bool,
         refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'a, String> {
         Box::pin(
             async move {
                 if let Some(model) = model.as_ref() {
                     return model.to_string();
                 }
-                default_model_from_available(self.list_models(refresh_strategy).await)
+                default_model_from_available(
+                    self.list_models(refresh_strategy, http_client_factory)
+                        .await,
+                )
             }
             .instrument(tracing::info_span!(
                 "get_default_model",
@@ -188,7 +198,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
-    fn refresh_if_new_etag(&self, etag: String) -> ModelsManagerFuture<'_, ()>;
+    fn refresh_if_new_etag(
+        &self,
+        etag: String,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()>;
 }
 
 pub type ModelsManagerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -247,10 +261,12 @@ impl ModelsManager for OpenAiModelsManager {
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ModelsResponse> {
         Box::pin(OpenAiModelsManager::raw_model_catalog(
             self,
             refresh_strategy,
+            http_client_factory,
         ))
     }
 
@@ -270,14 +286,29 @@ impl ModelsManager for OpenAiModelsManager {
         builtin_collaboration_mode_presets()
     }
 
-    fn refresh_if_new_etag(&self, etag: String) -> ModelsManagerFuture<'_, ()> {
-        Box::pin(OpenAiModelsManager::refresh_if_new_etag(self, etag))
+    fn refresh_if_new_etag(
+        &self,
+        etag: String,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        Box::pin(OpenAiModelsManager::refresh_if_new_etag(
+            self,
+            etag,
+            http_client_factory,
+        ))
     }
 }
 
 impl OpenAiModelsManager {
-    async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
-        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
+    async fn raw_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsResponse {
+        if let Err(err) = self
+            .refresh_available_models(refresh_strategy, &http_client_factory)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
         ModelsResponse {
@@ -285,7 +316,7 @@ impl OpenAiModelsManager {
         }
     }
 
-    async fn refresh_if_new_etag(&self, etag: String) {
+    async fn refresh_if_new_etag(&self, etag: String, http_client_factory: HttpClientFactory) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -293,13 +324,20 @@ impl OpenAiModelsManager {
             }
             return;
         }
-        if let Err(err) = self.refresh_available_models(RefreshStrategy::Online).await {
+        if let Err(err) = self
+            .refresh_available_models(RefreshStrategy::Online, &http_client_factory)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
     }
 
     /// Refresh available models according to the specified strategy.
-    async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+    async fn refresh_available_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: &HttpClientFactory,
+    ) -> CoreResult<()> {
         if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
@@ -323,18 +361,24 @@ impl OpenAiModelsManager {
                     return Ok(());
                 }
                 info!("models cache: cache miss, fetching remote models");
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(http_client_factory).await
             }
             RefreshStrategy::Online => {
                 // Always fetch from network
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(http_client_factory).await
             }
         }
     }
 
-    async fn fetch_and_update_models(&self) -> CoreResult<()> {
+    async fn fetch_and_update_models(
+        &self,
+        http_client_factory: &HttpClientFactory,
+    ) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
-        let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
+        let (models, etag) = self
+            .endpoint_client
+            .list_models(&client_version, http_client_factory.clone())
+            .await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
@@ -416,10 +460,13 @@ impl ModelsManager for StaticModelsManager {
         model: &'a Option<String>,
         allow_provider_model_fallback: bool,
         refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'a, String> {
         Box::pin(
             async move {
-                let available_models = self.list_models(refresh_strategy).await;
+                let available_models = self
+                    .list_models(refresh_strategy, http_client_factory)
+                    .await;
                 let requested_model = model.as_deref();
 
                 if allow_provider_model_fallback {
@@ -447,6 +494,7 @@ impl ModelsManager for StaticModelsManager {
     fn raw_model_catalog(
         &self,
         _refresh_strategy: RefreshStrategy,
+        _http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ModelsResponse> {
         Box::pin(async move {
             ModelsResponse {
@@ -471,7 +519,11 @@ impl ModelsManager for StaticModelsManager {
         builtin_collaboration_mode_presets()
     }
 
-    fn refresh_if_new_etag(&self, _etag: String) -> ModelsManagerFuture<'_, ()> {
+    fn refresh_if_new_etag(
+        &self,
+        _etag: String,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
         Box::pin(async {})
     }
 }

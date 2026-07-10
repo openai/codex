@@ -10,6 +10,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -111,6 +112,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) history_mode: ThreadHistoryMode,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
     pub(crate) environments: TurnEnvironmentSnapshot,
@@ -149,6 +151,11 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn item_ids_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::ItemIds)
+            || matches!(self.history_mode, ThreadHistoryMode::Paginated)
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
@@ -244,7 +251,10 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let available_models = models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
+            .list_models(
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
             .await;
 
         Self {
@@ -262,6 +272,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            history_mode: self.history_mode,
             parent_thread_id: self.parent_thread_id,
             originator: self.originator.clone(),
             environments: self.environments.clone(),
@@ -361,6 +372,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
+            approvals_reviewer: Some(self.config.approvals_reviewer),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
             network: self.turn_context_network_item(),
@@ -540,6 +552,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            history_mode: session_configuration.history_mode,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
             environments,

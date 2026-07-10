@@ -2,7 +2,6 @@ use super::manager::CodexAuth;
 use super::manager::ExternalAuth;
 use super::manager::ExternalAuthFuture;
 use super::manager::ExternalAuthRefreshContext;
-use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -30,7 +29,7 @@ impl BearerTokenRefresher {
         clippy::await_holding_invalid_type,
         reason = "external bearer cache misses intentionally hold cached_token across the provider command to avoid duplicate refreshes"
     )]
-    async fn resolve(&self) -> io::Result<Option<CodexAuth>> {
+    async fn resolve(&self) -> io::Result<CodexAuth> {
         let access_token = {
             let mut cached = self.state.cached_token.lock().await;
             if let Some(cached_token) = cached.as_ref() {
@@ -39,9 +38,7 @@ impl BearerTokenRefresher {
                     None => true,
                 };
                 if should_use_cached_token {
-                    return Ok(Some(CodexAuth::from_api_key(
-                        cached_token.access_token.as_str(),
-                    )));
+                    return Ok(CodexAuth::from_api_key(cached_token.access_token.as_str()));
                 }
             }
 
@@ -52,7 +49,7 @@ impl BearerTokenRefresher {
             });
             access_token
         };
-        Ok(Some(CodexAuth::from_api_key(access_token.as_str())))
+        Ok(CodexAuth::from_api_key(access_token.as_str()))
     }
 
     async fn refresh(&self, _context: ExternalAuthRefreshContext) -> io::Result<CodexAuth> {
@@ -67,11 +64,7 @@ impl BearerTokenRefresher {
 }
 
 impl ExternalAuth for BearerTokenRefresher {
-    fn auth_mode(&self) -> AuthMode {
-        AuthMode::ApiKey
-    }
-
-    fn resolve(&self) -> ExternalAuthFuture<'_, Option<CodexAuth>> {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
         Box::pin(BearerTokenRefresher::resolve(self))
     }
 

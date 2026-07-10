@@ -1021,6 +1021,32 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
     );
 }
 
+// Directory symlinks on Windows can require Developer Mode or administrator privileges.
+#[tokio::test]
+#[cfg(unix)]
+async fn loads_skills_through_visible_alias_to_hidden_directory() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let hidden_root = root.path().join(".hidden");
+    let skill_path = write_skill_at(&hidden_root, "search", "search-skill", "search description");
+    symlink_dir(&hidden_root, &root.path().join("visible"));
+
+    let outcome = load_user_skills_root(root.path()).await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![expected_user_skill(
+            &skill_path,
+            "search-skill",
+            "search description",
+        )]
+    );
+}
+
 #[tokio::test]
 #[cfg(unix)]
 async fn ignores_symlinked_skill_file_for_user_scope() {
@@ -1480,48 +1506,6 @@ async fn invalid_nested_plugin_manifest_falls_back_to_outer_namespace() {
         vec![expected_user_skill(
             &skill_path,
             "outer:search-skill",
-            "search description",
-        )]
-    );
-}
-
-// Directory symlinks on Windows can require Developer Mode or administrator privileges.
-#[cfg(unix)]
-#[tokio::test]
-async fn namespaces_skills_in_symlinked_plugin_skills_dir() {
-    // skills/
-    // └── linked-plugin -> shared-plugin/skills/
-    // shared-plugin/
-    // ├── .codex-plugin/plugin.json
-    // └── skills/search/SKILL.md
-    let root = tempfile::tempdir().expect("tempdir");
-    let shared_plugin_root = tempfile::tempdir().expect("tempdir");
-    write_plugin_manifest(shared_plugin_root.path(), r#"{"name":"linked"}"#);
-    let skill_path = write_skill_at(
-        &shared_plugin_root.path().join("skills"),
-        "search",
-        "search-skill",
-        "search description",
-    );
-    let skills_root = root.path().join("skills");
-    fs::create_dir_all(&skills_root).unwrap();
-    symlink_dir(
-        &shared_plugin_root.path().join("skills"),
-        &skills_root.join("linked-plugin"),
-    );
-
-    let outcome = load_user_skills_root(&skills_root).await;
-
-    assert!(
-        outcome.errors.is_empty(),
-        "unexpected errors: {:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.skills,
-        vec![expected_user_skill(
-            &skill_path,
-            "linked:search-skill",
             "search description",
         )]
     );

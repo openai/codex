@@ -48,7 +48,7 @@ runs:
         {
           echo "files<<EOF"
           for binary in ${BINARIES}; do
-            echo "${GITHUB_WORKSPACE}/codex-rs/target/${TARGET}/release/${binary}.exe"
+            echo "${CARGO_TARGET_DIR}/${TARGET}/release/${binary}.exe"
           done
           echo "EOF"
         } >> "$GITHUB_OUTPUT"

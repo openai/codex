@@ -657,12 +657,12 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
     );
     let network_socket = "/tmp/codex-proxy-use";
     let explicit_socket = "/tmp/codex-browser-use";
-    let mut network_config = NetworkProxyConfig::default();
-    network_config.network.enabled = true;
-    network_config.network.mode = NetworkMode::Full;
-    network_config
-        .network
-        .set_allow_unix_sockets(vec![network_socket.to_string()]);
+    let mut network_config = NetworkProxyConfig {
+        enabled: true,
+        mode: NetworkMode::Full,
+        ..Default::default()
+    };
+    network_config.set_allow_unix_sockets(vec![network_socket.to_string()]);
     let state = build_config_state(network_config, NetworkProxyConstraints::default())?;
     let network_proxy = NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(

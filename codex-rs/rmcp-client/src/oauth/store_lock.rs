@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Result;
 use codex_utils_home_dir::find_codex_home;
 
 const OAUTH_LOCK_DIR: &str = "mcp-oauth-locks";
@@ -52,7 +51,7 @@ pub(super) struct OAuthStoreLock {
 }
 
 impl OAuthStoreLock {
-    pub(super) fn acquire(store: OAuthStore) -> Result<Self> {
+    pub(super) fn acquire(store: OAuthStore) -> Result<Self, OAuthStoreLockFailure> {
         // This lock intentionally follows the existing local File/Secrets credential-store
         // authority. Those stores are CODEX_HOME-backed today: if CODEX_HOME is unset they use
         // the default home (`~/.codex`), and if an embedder has no local home/filesystem authority
@@ -67,7 +66,7 @@ impl OAuthStoreLock {
         codex_home: &Path,
         store: OAuthStore,
         acquire_timeout: Duration,
-    ) -> Result<Self> {
+    ) -> Result<Self, OAuthStoreLockFailure> {
         let path = oauth_store_lock_path(codex_home, store);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|source| OAuthStoreLockFailure::CreateDir {
@@ -99,8 +98,7 @@ impl OAuthStoreLock {
                         store,
                         path,
                         acquire_timeout,
-                    }
-                    .into());
+                    });
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
                     if !reported_contention {
@@ -119,16 +117,13 @@ impl OAuthStoreLock {
                         store,
                         path,
                         source: io::Error::from(error),
-                    }
-                    .into());
+                    });
                 }
             }
         }
     }
 }
 
-/// Marks aggregate-store coordination failures in an [`anyhow::Error`] chain.
-///
 /// Auto may fall back when the configured keyring backend is unavailable, but it must surface a
 /// lock failure. Falling back while another process owns the aggregate-store lock could leave the
 /// newer credential in File while a stale Secrets entry remains preferred.

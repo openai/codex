@@ -42,6 +42,7 @@ mod cli_stream;
 mod client;
 mod client_websockets;
 mod code_mode;
+mod code_mode_elicitation;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
@@ -54,6 +55,7 @@ mod exec;
 mod exec_policy;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
+mod external_auth;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
@@ -65,6 +67,8 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+mod mcp_auth_elicitation;
+mod mcp_auth_refresh;
 #[cfg(unix)]
 mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;

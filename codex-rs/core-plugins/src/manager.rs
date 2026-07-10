@@ -57,6 +57,7 @@ use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::PluginInstallSource;
 use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
@@ -370,6 +371,7 @@ pub struct PluginsManager {
     restriction_product: Option<Product>,
     auth_mode: RwLock<Option<AuthMode>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+    plugin_install_source: PluginInstallSource,
 }
 
 #[derive(Clone)]
@@ -449,7 +451,13 @@ impl PluginsManager {
             restriction_product,
             auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
+            plugin_install_source: PluginInstallSource::Manual,
         }
+    }
+
+    pub fn with_plugin_install_source(mut self, source: PluginInstallSource) -> Self {
+        self.plugin_install_source = source;
+        self
     }
 
     pub fn set_auth_mode(&self, auth_mode: Option<AuthMode>) -> bool {
@@ -1283,6 +1291,7 @@ impl PluginsManager {
                 self.track_plugin_install_failed(
                     &plugin_id,
                     plugin_install_error_type(&err),
+                    plugin_install_sub_error_type(&err),
                     err.to_string(),
                 );
                 Err(err)
@@ -1345,6 +1354,7 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &resolved.plugin_id,
                 plugin_install_error_type(&err),
+                plugin_install_sub_error_type(&err),
                 err.to_string(),
             );
             return Err(err);
@@ -1356,6 +1366,7 @@ impl PluginsManager {
                 self.track_plugin_install_failed(
                     &plugin_id,
                     plugin_install_error_type(&err),
+                    plugin_install_sub_error_type(&err),
                     err.to_string(),
                 );
                 Err(err)
@@ -1383,6 +1394,7 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &plugin_id,
                 marketplace_error_type(err),
+                /*sub_error_type*/ None,
                 err.to_string(),
             );
         } else {
@@ -1398,11 +1410,13 @@ impl PluginsManager {
         &self,
         plugin_id: &PluginId,
         error_type: &'static str,
+        sub_error_type: Option<String>,
         error_message: String,
     ) {
         tracing::warn!(
             plugin_id = %plugin_id.as_key(),
             error_type = %error_type,
+            sub_error_type = sub_error_type.as_deref(),
             error = %error_message,
             "plugin install failed"
         );
@@ -1413,6 +1427,7 @@ impl PluginsManager {
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_install_failed(
                 self.telemetry_metadata_for_plugin_id(plugin_id),
+                self.plugin_install_source,
                 error_type.to_string(),
             );
         }
@@ -2671,6 +2686,16 @@ fn plugin_install_error_type(err: &PluginInstallError) -> &'static str {
         PluginInstallError::Store(err) => plugin_store_error_type(err),
         PluginInstallError::Config(_) => "config",
         PluginInstallError::Join(_) => "join",
+    }
+}
+
+fn plugin_install_sub_error_type(err: &PluginInstallError) -> Option<String> {
+    match err {
+        PluginInstallError::Store(err) => err.sub_error_type(),
+        PluginInstallError::Marketplace(_)
+        | PluginInstallError::Remote(_)
+        | PluginInstallError::Config(_)
+        | PluginInstallError::Join(_) => None,
     }
 }
 

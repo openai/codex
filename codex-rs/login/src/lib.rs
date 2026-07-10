@@ -6,6 +6,7 @@ mod device_code_auth;
 mod outbound_proxy;
 mod pkce;
 mod server;
+mod success_page;
 
 pub use codex_config::types::AuthCredentialsStoreMode;
 pub use codex_http_client::BuildCustomCaTransportError as BuildLoginHttpClientError;
@@ -17,10 +18,14 @@ pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
+pub use success_page::CODEX_OPEN_APP_URL;
+pub use success_page::LoginSuccessPage;
+pub use success_page::LoginSuccessPageBrand;
 
 pub use auth::AgentIdentityAuthPolicy;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
+pub use auth::AuthHeaders;
 pub use auth::AuthKeyringBackendKind;
 pub use auth::AuthManager;
 pub use auth::AuthManagerConfig;

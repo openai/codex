@@ -402,8 +402,8 @@ impl TurnToolCounts {
             ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
                 self.subagent_tool_call += 1;
             }
-            ThreadItem::WebSearch { .. } => self.web_search += 1,
-            ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
+            ThreadItem::WebSearch(_) => self.web_search += 1,
+            ThreadItem::ImageGeneration(_) => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
             | ThreadItem::HookPrompt { .. }
             | ThreadItem::AgentMessage { .. }
@@ -837,12 +837,17 @@ impl AnalyticsReducer {
         input: PluginInstallFailedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let PluginInstallFailedInput { plugin, error_type } = input;
+        let PluginInstallFailedInput {
+            plugin,
+            source,
+            error_type,
+        } = input;
         out.push(TrackEventRequest::PluginInstallFailed(
             CodexPluginInstallFailedEventRequest {
                 event_type: "codex_plugin_install_failed",
                 event_params: CodexPluginInstallFailedMetadata {
                     plugin: codex_plugin_metadata(plugin),
+                    source,
                     error_type,
                 },
             },
@@ -1732,9 +1737,9 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::FileChange { id, .. }
         | ThreadItem::McpToolCall { id, .. }
         | ThreadItem::DynamicToolCall { id, .. }
-        | ThreadItem::CollabAgentToolCall { id, .. }
-        | ThreadItem::WebSearch { id, .. }
-        | ThreadItem::ImageGeneration { id, .. } => Some(id),
+        | ThreadItem::CollabAgentToolCall { id, .. } => Some(id),
+        ThreadItem::WebSearch(item) => Some(&item.id),
+        ThreadItem::ImageGeneration(item) => Some(&item.id),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
         | ThreadItem::AgentMessage { .. }
@@ -2027,11 +2032,11 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::WebSearch { id, query, action } => {
+        ThreadItem::WebSearch(item) => {
             let base = tool_item_base(
                 thread_id,
                 turn_id,
-                id.clone(),
+                item.id.clone(),
                 "web_search".to_string(),
                 ToolItemOutcome {
                     terminal_status: ToolItemTerminalStatus::Completed,
@@ -2051,24 +2056,18 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 event_type: "codex_web_search_event",
                 event_params: CodexWebSearchEventParams {
                     base,
-                    web_search_action: action.as_ref().map(web_search_action_kind),
-                    query_present: !query.trim().is_empty(),
-                    query_count: web_search_query_count(query, action.as_ref()),
+                    web_search_action: item.action.as_ref().map(web_search_action_kind),
+                    query_present: !item.query.trim().is_empty(),
+                    query_count: web_search_query_count(&item.query, item.action.as_ref()),
                 },
             }))
         }
-        ThreadItem::ImageGeneration {
-            id,
-            status,
-            revised_prompt,
-            saved_path,
-            ..
-        } => {
-            let (terminal_status, failure_kind) = image_generation_outcome(status.as_str());
+        ThreadItem::ImageGeneration(item) => {
+            let (terminal_status, failure_kind) = image_generation_outcome(item.status.as_str());
             let base = tool_item_base(
                 thread_id,
                 turn_id,
-                id.clone(),
+                item.id.clone(),
                 "image_generation".to_string(),
                 ToolItemOutcome {
                     terminal_status,
@@ -2089,8 +2088,8 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                     event_type: "codex_image_generation_event",
                     event_params: CodexImageGenerationEventParams {
                         base,
-                        revised_prompt_present: revised_prompt.is_some(),
-                        saved_path_present: saved_path.is_some(),
+                        revised_prompt_present: item.revised_prompt.is_some(),
+                        saved_path_present: item.saved_path.is_some(),
                     },
                 },
             ))

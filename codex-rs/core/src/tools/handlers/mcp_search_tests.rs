@@ -63,6 +63,7 @@ fn tool_info() -> ToolInfo {
             }))),
         )
         .with_title("Create event"),
+        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: Some("Calendar".to_string()),
         plugin_display_names: vec![" Calendar plugin ".to_string(), " ".to_string()],

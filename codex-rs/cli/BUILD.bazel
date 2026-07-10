@@ -1,5 +1,6 @@
 load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate")
 load("//bazel/platforms:release_binaries.bzl", "multiplatform_binaries")
+load("//bazel/rules:e2e_benchmark.bzl", "codex_e2e_benchmark")
 
 codex_rust_crate(
     name = "cli",
@@ -12,4 +13,9 @@ codex_rust_crate(
 
 multiplatform_binaries(
     name = "codex",
+)
+
+codex_e2e_benchmark(
+    name = "codex-help",
+    binaries = [":codex"],
 )

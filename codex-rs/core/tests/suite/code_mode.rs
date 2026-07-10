@@ -43,6 +43,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -190,10 +191,19 @@ async fn run_code_mode_turn_with_model_and_config(
     model: &'static str,
     configure: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<(TestCodex, ResponseMock)> {
-    let mut builder = test_codex().with_model(model).with_config(move |config| {
+    let builder = test_codex().with_model(model).with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
         configure(config);
     });
+    run_code_mode_turn_with_builder(server, prompt, code, builder).await
+}
+
+async fn run_code_mode_turn_with_builder(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    mut builder: TestCodexBuilder,
+) -> Result<(TestCodex, ResponseMock)> {
     let test = builder.build(server).await?;
 
     responses::mount_sse_once(
@@ -220,26 +230,29 @@ async fn run_code_mode_turn_with_model_and_config(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_process_host_returns_a_tool_error() -> Result<()> {
+async fn missing_process_host_falls_back_to_in_process_code_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, follow_up_mock) =
-        run_code_mode_turn_with_config(&server, "Run code mode", "text('unreachable')", |config| {
+    let builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program("codex-code-mode-host-does-not-exist".into())
+        .with_config(|config| {
             config
                 .features
-                .enable(Feature::CodeModeHost)
-                .expect("code mode host should be enabled");
-        })
-        .await?;
+                .enable(Feature::CodeMode)
+                .expect("code mode should be enabled");
+        });
+    let (_test, follow_up_mock) =
+        run_code_mode_turn_with_builder(&server, "Run code mode", "text('fallback')", builder)
+            .await?;
 
-    let output = follow_up_mock
-        .single_request()
-        .custom_tool_call_output("call-1");
-    assert!(
-        output["output"]
-            .as_str()
-            .is_some_and(|output| output.contains("failed to spawn code-mode host"))
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&follow_up_mock.single_request(), "call-1"),
+            /*index*/ 1,
+        ),
+        "fallback"
     );
 
     Ok(())
@@ -706,8 +719,7 @@ if (!tool) {
             "exec".to_string(),
             "wait".to_string(),
             "request_user_input".to_string(),
-            "web_search".to_string(),
-            "image_generation".to_string()
+            "web_search".to_string()
         ]
     );
 
@@ -730,6 +742,7 @@ if (!tool) {
         })
         .expect("exec description should be present");
     assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+    assert!(exec_description.contains("Shared MCP Types:"));
     assert!(!exec_description.contains("calendar_timezone_option_99"));
 
     let request = follow_up_mock.single_request();
@@ -2866,7 +2879,7 @@ async fn code_mode_resizes_explicit_original_image() -> Result<()> {
         &server,
         "use exec to return a large original-detail image",
         &code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
         |_| {},
     )
     .await?;
@@ -2936,7 +2949,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
+        .with_model("gpt-5.4")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
         });
@@ -3030,7 +3043,7 @@ image(imageItem);
         &server,
         "use exec to call the rmcp image scenario tool and emit its image output",
         code,
-        "gpt-5.3-codex",
+        "gpt-5.4",
     )
     .await?;
 

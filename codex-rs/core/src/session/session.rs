@@ -634,7 +634,12 @@ impl Session {
                                 },
                             },
                         };
-                        LiveThread::resume(Arc::clone(&thread_store), params).await?
+                        LiveThread::resume(
+                            Arc::clone(&thread_store),
+                            session_configuration.history_mode,
+                            params,
+                        )
+                        .await?
                     }
                 };
                 Ok(Some(live_thread))
@@ -667,6 +672,7 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let thread_extension_data_for_mcp = &thread_extension_data;
+        let mcp_originator = session_configuration.originator.clone();
         let mcp_runtime_cwd = session_configuration
             .environment_selections()
             .first()
@@ -683,6 +689,7 @@ impl Session {
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
                     thread_extension_data_for_mcp,
+                    &mcp_originator,
                     /*available_environment_ids*/ &[],
                 )
                 .await;
@@ -1110,7 +1117,11 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
-                    /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+                    /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds)
+                        || matches!(
+                            session_configuration.history_mode,
+                            ThreadHistoryMode::Paginated
+                        ),
                     /*concurrent_reasoning_summaries_enabled*/ config
                         .features
                         .enabled(Feature::ConcurrentReasoningSummaries),
@@ -1194,6 +1205,9 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
+            let codex_apps_auth_manager =
+                codex_mcp::host_owned_codex_apps_enabled(&mcp_projection.config, auth)
+                    .then(|| Arc::clone(&sess.services.auth_manager));
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
@@ -1218,6 +1232,7 @@ impl Session {
                     .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
                 auth,
+                codex_apps_auth_manager,
                 Some(sess.mcp_elicitation_reviewer()),
                 Some(sess.mcp_elicitation_lifecycle()),
                 codex_mcp::ElicitationRequestRouter::default(),

@@ -53,6 +53,8 @@ pub struct Originator {
 static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
 static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
     LazyLock::new(|| RwLock::new(None));
+static ROUTE_AWARE_CLIENT_BUILD_PERMIT: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(1);
 
 #[derive(Debug)]
 pub enum SetOriginatorError {
@@ -265,6 +267,26 @@ pub fn build_default_reqwest_client_for_route(
     )
 }
 
+/// Builds the default Codex reqwest client for a concrete outbound route without blocking the
+/// async runtime worker that initiated the request.
+pub async fn build_default_reqwest_client_for_route_async(
+    http_client_factory: HttpClientFactory,
+    request_url: String,
+    route_class: ClientRouteClass,
+) -> std::io::Result<reqwest::Client> {
+    let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
+        .acquire()
+        .await
+        .map_err(std::io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        build_default_reqwest_client_for_route(&http_client_factory, &request_url, route_class)
+            .map_err(std::io::Error::from)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
 fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
     if is_sandboxed() {
@@ -273,16 +295,13 @@ fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     with_chatgpt_cloudflare_cookie_store(builder)
 }
 
-/// Builds a raw reqwest client for an auth endpoint without Codex default headers.
-pub(crate) fn build_raw_auth_reqwest_client(
+/// Builds an HTTP client for an auth endpoint without Codex default headers.
+pub(crate) fn create_raw_auth_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
-) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    auth_http_client_factory(auth_route_config).build_reqwest_client(
-        reqwest::Client::builder(),
-        endpoint,
-        ClientRouteClass::Auth,
-    )
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+    auth_http_client_factory(auth_route_config)
+        .build_client_without_request_logging(endpoint, ClientRouteClass::Auth)
 }
 
 /// Builds the default Codex reqwest client for an auth endpoint.
