@@ -7,6 +7,7 @@ pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 pub(crate) static LOGS_MIGRATOR: Migrator = sqlx::migrate!("./logs_migrations");
 pub(crate) static GOALS_MIGRATOR: Migrator = sqlx::migrate!("./goals_migrations");
 pub(crate) static MEMORIES_MIGRATOR: Migrator = sqlx::migrate!("./memory_migrations");
+pub(crate) static THREAD_HISTORY_MIGRATOR: Migrator = sqlx::migrate!("./thread_history_migrations");
 
 /// Allow an older Codex binary to open a database that has already been
 /// migrated by a newer binary running in parallel.
@@ -39,6 +40,12 @@ pub(crate) fn runtime_goals_migrator() -> Migrator {
 
 pub(crate) fn runtime_memories_migrator() -> Migrator {
     runtime_migrator(&MEMORIES_MIGRATOR)
+}
+
+// The paginated history projector will call this when it takes ownership of opening the database.
+#[allow(dead_code)]
+pub(crate) fn runtime_thread_history_migrator() -> Migrator {
+    runtime_migrator(&THREAD_HISTORY_MIGRATOR)
 }
 
 pub(crate) async fn repair_legacy_recency_migration_version(
