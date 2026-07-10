@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_file_system::find_nearest_native_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -55,6 +56,36 @@ pub async fn get_git_repo_root_with_fs(
         _ => cwd.parent()?,
     };
     find_nearest_native_ancestor_with_markers(
+        fs,
+        &base,
+        vec![".git".to_string()],
+        FindUpErrorPolicy::Ignore,
+        /*sandbox*/ None,
+    )
+    .await
+    .ok()?
+}
+
+/// Return the repository root for a URI `cwd` using the provided filesystem.
+///
+/// Native paths retain the lossless traversal behavior of
+/// [`get_git_repo_root_with_fs`]. Foreign-platform paths stay in URI space so
+/// their filesystem can be inspected without host reinterpretation.
+pub async fn get_git_repo_root_uri_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &PathUri,
+) -> Option<PathUri> {
+    if let Ok(native_cwd) = cwd.to_abs_path() {
+        return get_git_repo_root_with_fs(fs, &native_cwd)
+            .await
+            .map(|root| PathUri::from_abs_path(&root));
+    }
+
+    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+    find_nearest_ancestor_with_markers(
         fs,
         &base,
         vec![".git".to_string()],

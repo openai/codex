@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -79,7 +78,7 @@ use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
-use codex_git_utils::get_git_repo_root_with_fs;
+use codex_git_utils::get_git_repo_root_uri_with_fs;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -107,6 +106,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_utils_path_uri::PathUri;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -460,19 +460,16 @@ pub(crate) async fn run_turn(
 }
 
 #[instrument(level = "trace", skip_all)]
-async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
+async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathUri)> {
     let mut display_roots = Vec::new();
     for turn_environment in &turn_context.environments.turn_environments {
-        // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
-        // environment roots can participate without host-native conversion.
-        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
-            continue;
-        };
-        let root =
-            get_git_repo_root_with_fs(turn_environment.environment.get_filesystem().as_ref(), &cwd)
-                .await
-                .unwrap_or(cwd)
-                .into_path_buf();
+        let cwd = turn_environment.cwd();
+        let root = get_git_repo_root_uri_with_fs(
+            turn_environment.environment.get_filesystem().as_ref(),
+            cwd,
+        )
+        .await
+        .unwrap_or_else(|| cwd.clone());
         display_roots.push((turn_environment.environment_id.clone(), root));
     }
     display_roots

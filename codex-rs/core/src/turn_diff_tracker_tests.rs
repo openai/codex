@@ -47,7 +47,10 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
 }
 
 fn tracker_with_root(root: &Path) -> TurnDiffTracker {
-    TurnDiffTracker::with_environment_display_roots([("".to_string(), root.to_path_buf())])
+    TurnDiffTracker::with_environment_display_roots([(
+        "".to_string(),
+        PathUri::from_host_native_path(root).expect("absolute root"),
+    )])
 }
 
 #[tokio::test]
@@ -110,9 +113,10 @@ async fn tracks_same_absolute_path_across_multiple_environments() {
     )
     .await;
 
+    let root = PathUri::from_host_native_path(dir.path()).expect("absolute root");
     let mut tracker = TurnDiffTracker::with_environment_display_roots([
-        ("local".to_string(), dir.path().to_path_buf()),
-        ("remote".to_string(), dir.path().to_path_buf()),
+        ("local".to_string(), root.clone()),
+        ("remote".to_string(), root),
     ]);
     tracker.track_delta("remote", &add);
     tracker.track_delta("local", &add);
@@ -463,7 +467,8 @@ fn large_rewrite_returns_promptly_and_preserves_exact_content() {
             .success()
     );
     let tracker = tracker_with_root(dir.path());
-    let tracked_path = TrackedPath::new("", &path);
+    let path_uri = PathUri::from_host_native_path(&path).expect("absolute path");
+    let tracked_path = TrackedPath::new("", &path_uri);
 
     let started = Instant::now();
     let diff = tracker
