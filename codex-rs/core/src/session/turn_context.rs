@@ -475,12 +475,10 @@ impl Session {
         let mut config = Self::build_per_turn_config(
             session_configuration,
             session_configuration.cwd().clone(),
-            workspace_roots.clone(),
+            workspace_roots,
         );
         config.model = Some(session_configuration.collaboration_mode.model().to_string());
         config.permissions.approval_policy = session_configuration.approval_policy.clone();
-        config.workspace_roots = workspace_roots.clone();
-        config.permissions.set_workspace_roots(workspace_roots);
         config
     }
 
@@ -699,7 +697,7 @@ impl Session {
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
         let turn_environments = self.services.turn_environments.snapshot().await;
-        let primary_turn_environment = turn_environments.primary().cloned();
+        let primary_turn_environment = turn_environments.primary();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
         // a foreign primary environment does not fall back to the session's host cwd.
         let cwd = primary_turn_environment
@@ -707,17 +705,14 @@ impl Session {
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let workspace_roots = primary_turn_environment
-            .as_ref()
-            .map(TurnEnvironment::workspace_roots)
-            .map(|workspace_roots| {
-                workspace_roots
+            .and_then(|turn_environment| {
+                turn_environment
+                    .workspace_roots()
                     .iter()
                     .map(PathUri::to_abs_path)
                     .collect::<std::io::Result<Vec<_>>>()
+                    .ok()
             })
-            .transpose()
-            .ok()
-            .flatten()
             .unwrap_or_default();
         let per_turn_config =
             Self::build_per_turn_config(&session_configuration, cwd.clone(), workspace_roots);

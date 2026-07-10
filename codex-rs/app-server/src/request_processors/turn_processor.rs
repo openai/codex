@@ -107,7 +107,6 @@ fn map_additional_context(
 struct ThreadSettingsBuildParams {
     method: &'static str,
     environments: Option<TurnEnvironmentSelections>,
-    runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     approval_policy: Option<codex_app_server_protocol::AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
@@ -501,7 +500,7 @@ impl TurnRequestProcessor {
             .build_environment_override(
                 thread.as_ref(),
                 cwd,
-                runtime_workspace_roots.clone(),
+                runtime_workspace_roots,
                 environment_selections,
             )
             .await;
@@ -511,7 +510,6 @@ impl TurnRequestProcessor {
                 ThreadSettingsBuildParams {
                     method: "turn/start",
                     environments,
-                    runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,
@@ -602,7 +600,7 @@ impl TurnRequestProcessor {
 
         let snapshot = thread.config_snapshot().await;
         let current_cwd = snapshot.cwd().clone();
-        let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
+        let legacy_fallback_cwd = cwd.unwrap_or_else(|| current_cwd.clone());
         let workspace_roots = match workspace_roots {
             Some(workspace_roots) => workspace_roots,
             None => {
@@ -640,7 +638,6 @@ impl TurnRequestProcessor {
         let ThreadSettingsBuildParams {
             method,
             environments,
-            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -661,7 +658,6 @@ impl TurnRequestProcessor {
 
         let collaboration_mode =
             collaboration_mode.map(|mode| self.normalize_collaboration_mode(mode));
-        let runtime_workspace_roots_request = runtime_workspace_roots;
         let has_environment_override = environments.is_some();
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
@@ -673,7 +669,6 @@ impl TurnRequestProcessor {
         };
 
         let has_any_overrides = has_environment_override
-            || runtime_workspace_roots_request.is_some()
             || approval_policy.is_some()
             || approvals_reviewer.is_some()
             || sandbox_policy.is_some()
@@ -798,7 +793,6 @@ impl TurnRequestProcessor {
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
                     environments,
-                    runtime_workspace_roots: None,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,

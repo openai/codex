@@ -969,6 +969,8 @@ impl ThreadRequestProcessor {
             ));
         }
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
+        let environments =
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1092,7 +1094,7 @@ impl ThreadRequestProcessor {
         history_mode: Option<ThreadHistoryMode>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
-        environments: Option<Vec<codex_app_server_protocol::TurnEnvironmentParams>>,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
         experimental_raw_events: bool,
@@ -1105,11 +1107,6 @@ impl ThreadRequestProcessor {
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
-        let environment_selections = resolve_turn_environment_selections(
-            listener_task_context.thread_manager.as_ref(),
-            environments,
-        )?;
-
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
         // could be downgraded to ReadOnly (perhaps there is no sandbox
