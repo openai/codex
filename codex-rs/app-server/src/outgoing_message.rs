@@ -18,6 +18,7 @@ use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_utils_path_uri::PathUri;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -146,14 +147,14 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn track_effective_permissions_approval_response(
         &self,
         request_id: RequestId,
-        response: RequestPermissionsResponse,
+        response: RequestPermissionsResponse<PathUri>,
     ) {
         self.outgoing
             .analytics_events_client
             .track_effective_permissions_approval_response(
                 now_unix_timestamp_ms(),
                 request_id,
-                response,
+                response.map_paths(|path| path.inferred_native_path_string()),
             );
     }
 

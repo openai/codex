@@ -483,7 +483,7 @@ pub(crate) enum AnalyticsFact {
     EffectivePermissionsApprovalResponse {
         completed_at_ms: u64,
         request_id: RequestId,
-        response: Box<RequestPermissionsResponse>,
+        response: Box<RequestPermissionsResponse<String>>,
     },
     ServerRequestAborted {
         completed_at_ms: u64,

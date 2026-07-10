@@ -512,7 +512,7 @@ impl AnalyticsEventsClient {
         &self,
         completed_at_ms: u64,
         request_id: RequestId,
-        response: RequestPermissionsResponse,
+        response: RequestPermissionsResponse<String>,
     ) {
         self.record_fact(AnalyticsFact::EffectivePermissionsApprovalResponse {
             completed_at_ms,

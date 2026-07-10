@@ -1118,7 +1118,7 @@ impl AnalyticsReducer {
         &mut self,
         completed_at_ms: u64,
         request_id: RequestId,
-        response: CoreRequestPermissionsResponse,
+        response: CoreRequestPermissionsResponse<String>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let Some(pending_review) = self.pending_reviews.remove(&request_id) else {
@@ -2229,7 +2229,7 @@ fn file_change_review_result(
 }
 
 fn effective_permissions_review_result(
-    response: &CoreRequestPermissionsResponse,
+    response: &CoreRequestPermissionsResponse<String>,
 ) -> (ReviewStatus, ReviewResolution) {
     if response.permissions.is_empty() {
         return (ReviewStatus::Denied, ReviewResolution::None);

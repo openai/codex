@@ -540,10 +540,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id: item_id.clone(),
                 started_at_ms: event.started_at_ms,
                 reason: event.reason.clone(),
-                grant_root: event
-                    .grant_root
-                    .as_deref()
-                    .map(LegacyAppPathString::from_path),
+                grant_root: event.grant_root.clone(),
             };
             let (pending_request_id, rx) = outgoing
                 .send_request(ServerRequestPayload::FileChangeRequestApproval(params))

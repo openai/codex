@@ -1,5 +1,7 @@
 use super::*;
 use codex_core::config::permission_profile_catalog;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -14,6 +16,21 @@ pub(crate) struct CatalogRequestProcessor {
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
+
+fn localize_catalog_cwd(cwd: &LegacyAppPathString) -> Result<AbsolutePathBuf, String> {
+    match cwd.to_host_abs_path() {
+        Ok(cwd) => return Ok(cwd),
+        Err(host_err) if cwd.infer_absolute_path_convention() == Some(PathConvention::native()) => {
+            return Err(host_err.to_string());
+        }
+        Err(_) => {}
+    }
+    if let Some(convention) = cwd.infer_absolute_path_convention() {
+        let path_uri = cwd.to_path_uri(convention).map_err(|err| err.to_string())?;
+        return Err(format!("invalid cwd: foreign path URI {path_uri}"));
+    }
+    AbsolutePathBuf::relative_to_current_dir(cwd.as_str()).map_err(|err| err.to_string())
+}
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
@@ -421,9 +438,10 @@ impl CatalogRequestProcessor {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
         let config_layer_stack = match cwd {
             Some(cwd) => {
-                let cwd = PathBuf::from(cwd);
+                let cwd = localize_catalog_cwd(&cwd)
+                    .map_err(|err| invalid_request(format!("invalid cwd: {err}")))?;
                 let (_, config_layer_stack) = self
-                    .resolve_cwd_config(&cwd)
+                    .resolve_cwd_config(cwd.as_path())
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
                 config_layer_stack

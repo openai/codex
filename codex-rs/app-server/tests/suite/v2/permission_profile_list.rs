@@ -13,6 +13,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -128,7 +129,7 @@ description = "Project-scoped profile."
         .send_permission_profile_list_request(PermissionProfileListParams {
             cursor: None,
             limit: Some(3),
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(LegacyAppPathString::from_path(workspace.path())),
         })
         .await?;
     let first = read_response::<PermissionProfileListResponse>(&mut mcp, first_request_id).await?;
@@ -160,7 +161,7 @@ description = "Project-scoped profile."
         .send_permission_profile_list_request(PermissionProfileListParams {
             cursor: first.next_cursor,
             limit: Some(3),
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(LegacyAppPathString::from_path(workspace.path())),
         })
         .await?;
     let second =
@@ -209,7 +210,7 @@ description = "Project-scoped profile."
         .send_permission_profile_list_request(PermissionProfileListParams {
             cursor: None,
             limit: None,
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(LegacyAppPathString::from_path(workspace.path())),
         })
         .await?;
     let actual = read_response::<PermissionProfileListResponse>(&mut mcp, request_id).await?;
