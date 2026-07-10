@@ -1,3 +1,4 @@
+use super::cache::ModelsCacheHit;
 use super::cache::ModelsCacheManager;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
@@ -6,6 +7,7 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -18,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio::sync::TryLockError;
 use tracing::Instrument as _;
 use tracing::error;
@@ -215,6 +218,7 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 pub struct OpenAiModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
     etag: RwLock<Option<String>>,
+    refresh_permit: Semaphore,
     cache_manager: ModelsCacheManager,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
@@ -263,6 +267,7 @@ impl OpenAiModelsManager {
         Self {
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
+            refresh_permit: Semaphore::new(1),
             cache_manager,
             endpoint_client,
             auth_manager,
@@ -375,7 +380,7 @@ impl OpenAiModelsManager {
             RefreshStrategy::Offline => {
                 // Only try to load from cache, never fetch
                 self.try_load_cache().await;
-                Ok(())
+                return Ok(());
             }
             RefreshStrategy::OnlineIfUncached => {
                 // Try cache first, fall back to online if unavailable
@@ -383,14 +388,24 @@ impl OpenAiModelsManager {
                     info!("models cache: using cached models for OnlineIfUncached");
                     return Ok(());
                 }
-                info!("models cache: cache miss, fetching remote models");
-                self.fetch_and_update_models(http_client_factory).await
             }
-            RefreshStrategy::Online => {
-                // Always fetch from network
-                self.fetch_and_update_models(http_client_factory).await
-            }
+            RefreshStrategy::Online => {}
         }
+
+        // Serialize network refreshes so models, ETag, and freshness come from one response.
+        let _refresh_permit = self
+            .refresh_permit
+            .acquire()
+            .await
+            .map_err(|_| CodexErr::InternalServerError)?;
+        if matches!(refresh_strategy, RefreshStrategy::OnlineIfUncached)
+            && self.try_load_cache().await
+        {
+            info!("models cache: another refresh populated the cache");
+            return Ok(());
+        }
+        info!("models cache: fetching remote models");
+        self.fetch_and_update_models(http_client_factory).await
     }
 
     async fn fetch_and_update_models(
@@ -464,6 +479,10 @@ impl OpenAiModelsManager {
                 info!("models cache: no usable cache entry");
                 return false;
             }
+        };
+        let ModelsCacheHit::Persisted(cache) = cache else {
+            info!("models cache: using current in-memory models");
+            return true;
         };
         let models = cache.models.clone();
         *self.etag.write().await = cache.etag.clone();

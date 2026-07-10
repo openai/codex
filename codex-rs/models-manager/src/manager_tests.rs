@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tempfile::tempdir;
+use tokio::sync::Notify;
 
 #[path = "model_info_overrides_tests.rs"]
 mod model_info_overrides_tests;
@@ -82,6 +83,13 @@ struct TestModelsEndpoint {
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
+    first_fetch_gate: Option<Arc<FirstFetchGate>>,
+}
+
+#[derive(Debug)]
+struct FirstFetchGate {
+    started: Notify,
+    release: Notify,
 }
 
 impl TestModelsEndpoint {
@@ -92,6 +100,7 @@ impl TestModelsEndpoint {
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
+            first_fetch_gate: None,
         })
     }
 
@@ -102,7 +111,26 @@ impl TestModelsEndpoint {
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
+            first_fetch_gate: None,
         })
+    }
+
+    fn with_blocked_first_fetch(
+        responses: Vec<Vec<ModelInfo>>,
+    ) -> (Arc<Self>, Arc<FirstFetchGate>) {
+        let gate = Arc::new(FirstFetchGate {
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let endpoint = Arc::new(Self {
+            has_command_auth: false,
+            uses_codex_backend: true,
+            responses: Mutex::new(responses.into()),
+            fetch_count: AtomicUsize::new(0),
+            observed_proxy_policy: Mutex::new(None),
+            first_fetch_gate: Some(Arc::clone(&gate)),
+        });
+        (endpoint, gate)
     }
 
     fn fetch_count(&self) -> usize {
@@ -117,7 +145,13 @@ impl TestModelsEndpoint {
     }
 
     async fn list_models(&self) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
-        self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        let fetch_index = self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        if fetch_index == 0
+            && let Some(gate) = self.first_fetch_gate.as_ref()
+        {
+            gate.started.notify_one();
+            gate.release.notified().await;
+        }
         let models = self
             .responses
             .lock()
@@ -237,6 +271,96 @@ async fn manager_without_disk_cache_fetches_and_retains_models_in_memory() {
     assert_eq!(catalog.models, remote_models);
     assert_eq!(cached_catalog, catalog);
     assert_eq!(manager.get_remote_models().await, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1);
+}
+
+#[tokio::test]
+async fn manager_without_disk_cache_refetches_when_stale() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone(), remote_models]);
+    let mut manager = OpenAiModelsManager::new_without_disk_cache(
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+    manager.cache_manager.set_ttl(Duration::ZERO);
+
+    for _ in 0..2 {
+        let _ = manager
+            .raw_model_catalog(
+                RefreshStrategy::OnlineIfUncached,
+                DEFAULT_HTTP_CLIENT_FACTORY,
+            )
+            .await;
+    }
+
+    assert_eq!(endpoint.fetch_count(), 2);
+}
+
+#[tokio::test]
+async fn manager_without_disk_cache_online_always_refetches() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone(), remote_models]);
+    let manager = OpenAiModelsManager::new_without_disk_cache(
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+
+    for _ in 0..2 {
+        let _ = manager
+            .raw_model_catalog(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
+    }
+
+    assert_eq!(endpoint.fetch_count(), 2);
+}
+
+#[tokio::test]
+async fn concurrent_memory_cache_misses_share_one_fetch() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let (endpoint, gate) =
+        TestModelsEndpoint::with_blocked_first_fetch(vec![remote_models.clone(), remote_models]);
+    let manager = Arc::new(OpenAiModelsManager::new_without_disk_cache(
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    ));
+
+    let first_refresh = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .raw_model_catalog(
+                    RefreshStrategy::OnlineIfUncached,
+                    DEFAULT_HTTP_CLIENT_FACTORY,
+                )
+                .await
+        }
+    });
+    gate.started.notified().await;
+    let second_refresh = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .raw_model_catalog(
+                    RefreshStrategy::OnlineIfUncached,
+                    DEFAULT_HTTP_CLIENT_FACTORY,
+                )
+                .await
+        }
+    });
+    tokio::task::yield_now().await;
+    gate.release.notify_one();
+
+    let (first_catalog, second_catalog) = tokio::join!(first_refresh, second_refresh);
+    assert_eq!(
+        first_catalog.expect("first refresh should complete"),
+        second_catalog.expect("second refresh should complete")
+    );
     assert_eq!(endpoint.fetch_count(), 1);
 }
 
@@ -676,6 +800,7 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
         observed_proxy_policy: Mutex::new(None),
+        first_fetch_gate: None,
     });
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
