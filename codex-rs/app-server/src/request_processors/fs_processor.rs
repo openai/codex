@@ -29,7 +29,6 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
-use codex_utils_path_uri::PathUri;
 use std::io;
 use std::sync::Arc;
 
@@ -65,7 +64,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path);
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let bytes = self
             .file_system()?
             .read_file(&path, /*sandbox*/ None)
@@ -80,12 +82,15 @@ impl FsRequestProcessor {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        let path = PathUri::from_abs_path(&params.path);
         self.file_system()?
             .write_file(&path, bytes, /*sandbox*/ None)
             .await
@@ -97,7 +102,10 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path);
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         self.file_system()?
             .create_directory(
                 &path,
@@ -115,7 +123,10 @@ impl FsRequestProcessor {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path);
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let metadata = self
             .file_system()?
             .get_metadata(&path, /*sandbox*/ None)
@@ -134,7 +145,10 @@ impl FsRequestProcessor {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path);
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let entries = self
             .file_system()?
             .read_directory(&path, /*sandbox*/ None)
@@ -156,7 +170,10 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path);
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         self.file_system()?
             .remove(
                 &path,
@@ -175,8 +192,14 @@ impl FsRequestProcessor {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        let source_path = PathUri::from_abs_path(&params.source_path);
-        let destination_path = PathUri::from_abs_path(&params.destination_path);
+        let source_path = params
+            .source_path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
+        let destination_path = params
+            .destination_path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         self.file_system()?
             .copy(
                 &source_path,
@@ -196,8 +219,14 @@ impl FsRequestProcessor {
         connection_id: ConnectionId,
         params: FsWatchParams,
     ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+        let path = params
+            .path
+            .to_host_path_uri()
+            .map_err(|err| invalid_request(err.to_string()))?;
         self.file_system()?;
-        self.fs_watch_manager.watch(connection_id, params).await
+        self.fs_watch_manager
+            .watch(connection_id, params.watch_id, path)
+            .await
     }
 
     pub(crate) async fn unwatch(

@@ -16,6 +16,8 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
@@ -60,13 +62,22 @@ async fn expect_error_message(
     Ok(())
 }
 
-fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
+fn absolute_path(path: PathBuf) -> LegacyAppPathString {
     assert!(
         path.is_absolute(),
         "path must be absolute: {}",
         path.display()
     );
-    AbsolutePathBuf::try_from(path).expect("path should be absolute")
+    AbsolutePathBuf::try_from(path)
+        .expect("path should be absolute")
+        .into()
+}
+
+fn relative_path_error(path: &str) -> String {
+    format!(
+        "path `{path}` is not absolute using {} path syntax",
+        PathConvention::native()
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -408,12 +419,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     let read_id = mcp
         .send_raw_request("fs/readFile", Some(json!({ "path": "relative.txt" })))
         .await?;
-    expect_error_message(
-        &mut mcp,
-        read_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
-    )
-    .await?;
+    expect_error_message(&mut mcp, read_id, &relative_path_error("relative.txt")).await?;
 
     let write_id = mcp
         .send_raw_request(
@@ -424,12 +430,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
             })),
         )
         .await?;
-    expect_error_message(
-        &mut mcp,
-        write_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
-    )
-    .await?;
+    expect_error_message(&mut mcp, write_id, &relative_path_error("relative.txt")).await?;
 
     let create_directory_id = mcp
         .send_raw_request(
@@ -443,7 +444,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         create_directory_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
+        &relative_path_error("relative-dir"),
     )
     .await?;
 
@@ -453,7 +454,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         get_metadata_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
+        &relative_path_error("relative.txt"),
     )
     .await?;
 
@@ -463,7 +464,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         read_directory_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
+        &relative_path_error("relative-dir"),
     )
     .await?;
 
@@ -477,12 +478,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
             })),
         )
         .await?;
-    expect_error_message(
-        &mut mcp,
-        remove_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
-    )
-    .await?;
+    expect_error_message(&mut mcp, remove_id, &relative_path_error("relative.txt")).await?;
 
     let copy_source_id = mcp
         .send_raw_request(
@@ -497,7 +493,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         copy_source_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
+        &relative_path_error("relative.txt"),
     )
     .await?;
 
@@ -514,7 +510,7 @@ async fn fs_methods_reject_relative_paths() -> Result<()> {
     expect_error_message(
         &mut mcp,
         copy_destination_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
+        &relative_path_error("relative-copy.txt"),
     )
     .await?;
 
@@ -839,12 +835,7 @@ async fn fs_watch_rejects_relative_paths() -> Result<()> {
             Some(json!({ "watchId": "watch-relative", "path": "relative-path" })),
         )
         .await?;
-    expect_error_message(
-        &mut mcp,
-        watch_id,
-        "Invalid request: AbsolutePathBuf deserialized without a base path",
-    )
-    .await?;
+    expect_error_message(&mut mcp, watch_id, &relative_path_error("relative-path")).await?;
 
     Ok(())
 }

@@ -18,6 +18,9 @@ use codex_app_server_protocol::FuzzyFileSearchSessionStopResponse;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
+use std::path::PathBuf;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -25,6 +28,36 @@ pub(crate) struct SearchRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+}
+
+fn localize_fuzzy_search_roots(
+    roots: Vec<LegacyAppPathString>,
+) -> Result<Vec<PathBuf>, JSONRPCErrorError> {
+    roots
+        .into_iter()
+        .map(|root| {
+            match root.to_host_abs_path() {
+                Ok(root) => return Ok(root.into_path_buf()),
+                Err(host_err)
+                    if root.infer_absolute_path_convention() == Some(PathConvention::native()) =>
+                {
+                    return Err(invalid_request(format!(
+                        "invalid fuzzy search root: {host_err}"
+                    )));
+                }
+                Err(_) => {}
+            }
+            if let Some(convention) = root.infer_absolute_path_convention() {
+                let root_uri = root
+                    .to_path_uri(convention)
+                    .map_err(|err| invalid_request(format!("invalid fuzzy search root: {err}")))?;
+                return Err(invalid_request(format!(
+                    "invalid fuzzy search root: foreign path URI {root_uri}"
+                )));
+            }
+            Ok(PathBuf::from(root.as_str()))
+        })
+        .collect()
 }
 
 impl SearchRequestProcessor {
@@ -45,6 +78,7 @@ impl SearchRequestProcessor {
             roots,
             cancellation_token,
         } = params;
+        let roots = localize_fuzzy_search_roots(roots)?;
 
         let cancel_flag = match cancellation_token.clone() {
             Some(token) => {
@@ -87,6 +121,7 @@ impl SearchRequestProcessor {
             return Err(invalid_request("sessionId must not be empty"));
         }
 
+        let roots = localize_fuzzy_search_roots(roots)?;
         let session =
             start_fuzzy_file_search_session(session_id.clone(), roots, self.outgoing.clone())
                 .map_err(|err| {

@@ -9,6 +9,7 @@ use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchResult;
 use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
+use codex_app_server_protocol::LegacyAppPathString;
 use codex_app_server_protocol::ServerNotification;
 use codex_file_search as file_search;
 use tracing::warn;
@@ -20,7 +21,7 @@ const MAX_THREADS: usize = 12;
 
 pub(crate) async fn run_fuzzy_file_search(
     query: String,
-    roots: Vec<String>,
+    roots: Vec<PathBuf>,
     cancellation_flag: Arc<AtomicBool>,
 ) -> Vec<FuzzyFileSearchResult> {
     if roots.is_empty() {
@@ -36,12 +37,10 @@ pub(crate) async fn run_fuzzy_file_search(
     let threads = cores.min(MAX_THREADS);
     #[expect(clippy::expect_used)]
     let threads = NonZero::new(threads.max(1)).expect("threads should be non-zero");
-    let search_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
-
     let mut files = match tokio::task::spawn_blocking(move || {
         file_search::run(
             query.as_str(),
-            search_dirs,
+            roots,
             file_search::FileSearchOptions {
                 limit,
                 threads,
@@ -59,7 +58,7 @@ pub(crate) async fn run_fuzzy_file_search(
             .map(|m| {
                 let file_name = m.path.file_name().unwrap_or_default();
                 FuzzyFileSearchResult {
-                    root: m.root.to_string_lossy().to_string(),
+                    root: LegacyAppPathString::from_path(&m.root),
                     path: m.path.to_string_lossy().to_string(),
                     match_type: match m.match_type {
                         file_search::MatchType::File => FuzzyFileSearchMatchType::File,
@@ -117,7 +116,7 @@ impl Drop for FuzzyFileSearchSession {
 
 pub(crate) fn start_fuzzy_file_search_session(
     session_id: String,
-    roots: Vec<String>,
+    roots: Vec<PathBuf>,
     outgoing: Arc<OutgoingMessageSender>,
 ) -> anyhow::Result<FuzzyFileSearchSession> {
     #[expect(clippy::expect_used)]
@@ -128,7 +127,6 @@ pub(crate) fn start_fuzzy_file_search_session(
     let threads = cores.min(MAX_THREADS);
     #[expect(clippy::expect_used)]
     let threads = NonZero::new(threads.max(1)).expect("threads should be non-zero");
-    let search_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
     let canceled = Arc::new(AtomicBool::new(false));
 
     let shared = Arc::new(SessionShared {
@@ -143,7 +141,7 @@ pub(crate) fn start_fuzzy_file_search_session(
         shared: shared.clone(),
     });
     let session = file_search::create_session(
-        search_dirs,
+        roots,
         file_search::FileSearchOptions {
             limit,
             threads,
@@ -234,7 +232,7 @@ fn collect_files(snapshot: &file_search::FileSearchSnapshot) -> Vec<FuzzyFileSea
         .map(|m| {
             let file_name = m.path.file_name().unwrap_or_default();
             FuzzyFileSearchResult {
-                root: m.root.to_string_lossy().to_string(),
+                root: LegacyAppPathString::from_path(&m.root),
                 path: m.path.to_string_lossy().to_string(),
                 match_type: match m.match_type {
                     file_search::MatchType::File => FuzzyFileSearchMatchType::File,

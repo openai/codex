@@ -373,7 +373,7 @@ async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     let payload =
         wait_for_session_updated(&mut mcp, session_id, "alp", FileExpectation::NonEmpty).await?;
     assert_eq!(payload.files.len(), 1);
-    assert_eq!(payload.files[0].root, root_path);
+    assert_eq!(payload.files[0].root.as_str(), root_path);
     assert_eq!(payload.files[0].path, "alpha.txt");
     let completed = wait_for_session_completed(&mut mcp, session_id).await?;
     assert_eq!(completed.session_id, session_id);
@@ -401,7 +401,7 @@ async fn test_fuzzy_file_search_session_update_is_case_insensitive() -> Result<(
     let payload =
         wait_for_session_updated(&mut mcp, session_id, "ALP", FileExpectation::NonEmpty).await?;
     assert_eq!(payload.files.len(), 1);
-    assert_eq!(payload.files[0].root, root_path);
+    assert_eq!(payload.files[0].root.as_str(), root_path);
     assert_eq!(payload.files[0].path, "alpha.txt");
 
     Ok(())
@@ -475,7 +475,7 @@ async fn test_fuzzy_file_search_session_update_works_without_waiting_for_start_r
     let payload =
         wait_for_session_updated(&mut mcp, session_id, "alp", FileExpectation::NonEmpty).await?;
     assert_eq!(payload.files.len(), 1);
-    assert_eq!(payload.files[0].root, root_path);
+    assert_eq!(payload.files[0].root.as_str(), root_path);
     assert_eq!(payload.files[0].path, "alpha.txt");
 
     Ok(())
@@ -499,7 +499,10 @@ async fn test_fuzzy_file_search_session_multiple_query_updates_work() -> Result<
     let alp_payload =
         wait_for_session_updated(&mut mcp, session_id, "alp", FileExpectation::NonEmpty).await?;
     assert_eq!(
-        alp_payload.files.iter().all(|file| file.root == root_path),
+        alp_payload
+            .files
+            .iter()
+            .all(|file| file.root.as_str() == root_path),
         true
     );
     wait_for_session_completed(&mut mcp, session_id).await?;
@@ -584,7 +587,7 @@ async fn test_fuzzy_file_search_two_sessions_are_independent() -> Result<()> {
     let session_a_update =
         wait_for_session_updated(&mut mcp, session_a, "alp", FileExpectation::NonEmpty).await?;
     assert_eq!(session_a_update.files.len(), 1);
-    assert_eq!(session_a_update.files[0].root, root_a_path);
+    assert_eq!(session_a_update.files[0].root.as_str(), root_a_path);
     assert_eq!(session_a_update.files[0].path, "alpha.txt");
 
     mcp.update_fuzzy_file_search_session(session_b, "bet")
@@ -592,7 +595,7 @@ async fn test_fuzzy_file_search_two_sessions_are_independent() -> Result<()> {
     let session_b_update =
         wait_for_session_updated(&mut mcp, session_b, "bet", FileExpectation::NonEmpty).await?;
     assert_eq!(session_b_update.files.len(), 1);
-    assert_eq!(session_b_update.files[0].root, root_b_path);
+    assert_eq!(session_b_update.files[0].root.as_str(), root_b_path);
     assert_eq!(session_b_update.files[0].path, "beta.txt");
 
     Ok(())

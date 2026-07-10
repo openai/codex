@@ -4,7 +4,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::FsChangedNotification;
 use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsUnwatchResponse;
-use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
@@ -13,6 +12,7 @@ use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
@@ -76,20 +76,23 @@ impl FsWatchManager {
     pub(crate) async fn watch(
         &self,
         connection_id: ConnectionId,
-        params: FsWatchParams,
+        watch_id: String,
+        path: PathUri,
     ) -> Result<FsWatchResponse, JSONRPCErrorError> {
-        let watch_id = params.watch_id;
+        let watch_root = path
+            .to_abs_path()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let watch_key = WatchKey {
             connection_id,
             watch_id: watch_id.clone(),
         };
         let outgoing = self.outgoing.clone();
         let (subscriber, rx) = self.file_watcher.add_subscriber();
-        let watch_root = params.path.clone();
         let registration = subscriber.register_paths(vec![WatchPath {
-            path: params.path.to_path_buf(),
+            path: watch_root.to_path_buf(),
             recursive: false,
         }]);
+        let response_path = watch_root.clone();
         let (terminate_tx, terminate_rx) = oneshot::channel();
 
         match self.state.lock().await.entries.entry(watch_key) {
@@ -127,6 +130,7 @@ impl FsWatchManager {
                     .collect::<Vec<_>>();
                 changed_paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
                 if !changed_paths.is_empty() {
+                    let changed_paths = changed_paths.into_iter().map(Into::into).collect();
                     outgoing
                         .send_server_notification_to_connection_and_wait(
                             connection_id,
@@ -140,7 +144,9 @@ impl FsWatchManager {
             }
         });
 
-        Ok(FsWatchResponse { path: params.path })
+        Ok(FsWatchResponse {
+            path: response_path.into(),
+        })
     }
 
     pub(crate) async fn unwatch(
@@ -214,15 +220,13 @@ mod tests {
         let response = manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: watch_id.clone(),
-                    path: path.clone(),
-                },
+                watch_id.clone(),
+                PathUri::from_abs_path(&path),
             )
             .await
             .expect("watch should succeed");
 
-        assert_eq!(response.path, path);
+        assert_eq!(response.path, path.into());
 
         let state = manager.state.lock().await;
         assert_eq!(
@@ -244,10 +248,8 @@ mod tests {
         manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: "watch-head".to_string(),
-                    path: absolute_path(head_path),
-                },
+                "watch-head".to_string(),
+                PathUri::from_abs_path(&absolute_path(head_path)),
             )
             .await
             .expect("watch should succeed");
@@ -291,10 +293,8 @@ mod tests {
         manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: "watch-head".to_string(),
-                    path: absolute_path(head_path),
-                },
+                "watch-head".to_string(),
+                PathUri::from_abs_path(&absolute_path(head_path)),
             )
             .await
             .expect("first watch should succeed");
@@ -302,10 +302,8 @@ mod tests {
         let error = manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: "watch-head".to_string(),
-                    path: absolute_path(fetch_head_path),
-                },
+                "watch-head".to_string(),
+                PathUri::from_abs_path(&absolute_path(fetch_head_path)),
             )
             .await
             .expect_err("duplicate watch should fail");
@@ -328,30 +326,24 @@ mod tests {
         let response = manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: "watch-head".to_string(),
-                    path: absolute_path(head_path.clone()),
-                },
+                "watch-head".to_string(),
+                PathUri::from_abs_path(&absolute_path(head_path.clone())),
             )
             .await
             .expect("first watch should succeed");
         manager
             .watch(
                 ConnectionId(1),
-                FsWatchParams {
-                    watch_id: "watch-fetch-head".to_string(),
-                    path: absolute_path(fetch_head_path),
-                },
+                "watch-fetch-head".to_string(),
+                PathUri::from_abs_path(&absolute_path(fetch_head_path)),
             )
             .await
             .expect("second watch should succeed");
         manager
             .watch(
                 ConnectionId(2),
-                FsWatchParams {
-                    watch_id: "watch-packed-refs".to_string(),
-                    path: absolute_path(packed_refs_path),
-                },
+                "watch-packed-refs".to_string(),
+                PathUri::from_abs_path(&absolute_path(packed_refs_path)),
             )
             .await
             .expect("third watch should succeed");
@@ -372,6 +364,6 @@ mod tests {
                 watch_id: "watch-packed-refs".to_string(),
             }])
         );
-        assert_eq!(response.path, absolute_path(head_path));
+        assert_eq!(response.path, absolute_path(head_path).into());
     }
 }

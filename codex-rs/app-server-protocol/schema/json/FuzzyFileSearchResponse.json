@@ -32,7 +32,7 @@
           "type": "string"
         },
         "root": {
-          "type": "string"
+          "$ref": "#/definitions/LegacyAppPathString"
         },
         "score": {
           "format": "uint32",
@@ -48,6 +48,9 @@
         "score"
       ],
       "type": "object"
+    },
+    "LegacyAppPathString": {
+      "type": "string"
     }
   },
   "properties": {

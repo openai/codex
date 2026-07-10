@@ -1,4 +1,4 @@
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,7 +10,7 @@ use ts_rs::TS;
 #[ts(export_to = "v2/")]
 pub struct FsReadFileParams {
     /// Absolute path to read.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -28,7 +28,7 @@ pub struct FsReadFileResponse {
 #[ts(export_to = "v2/")]
 pub struct FsWriteFileParams {
     /// Absolute path to write.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
     /// File contents encoded as base64.
     pub data_base64: String,
 }
@@ -45,7 +45,7 @@ pub struct FsWriteFileResponse {}
 #[ts(export_to = "v2/")]
 pub struct FsCreateDirectoryParams {
     /// Absolute directory path to create.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
     /// Whether parent directories should also be created. Defaults to `true`.
     #[ts(optional = nullable)]
     pub recursive: Option<bool>,
@@ -63,7 +63,7 @@ pub struct FsCreateDirectoryResponse {}
 #[ts(export_to = "v2/")]
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -91,7 +91,7 @@ pub struct FsGetMetadataResponse {
 #[ts(export_to = "v2/")]
 pub struct FsReadDirectoryParams {
     /// Absolute directory path to read.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
 }
 
 /// A directory entry returned by `fs/readDirectory`.
@@ -122,7 +122,7 @@ pub struct FsReadDirectoryResponse {
 #[ts(export_to = "v2/")]
 pub struct FsRemoveParams {
     /// Absolute path to remove.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
     /// Whether directory removal should recurse. Defaults to `true`.
     #[ts(optional = nullable)]
     pub recursive: Option<bool>,
@@ -143,9 +143,9 @@ pub struct FsRemoveResponse {}
 #[ts(export_to = "v2/")]
 pub struct FsCopyParams {
     /// Absolute source path.
-    pub source_path: AbsolutePathBuf,
+    pub source_path: LegacyAppPathString,
     /// Absolute destination path.
-    pub destination_path: AbsolutePathBuf,
+    pub destination_path: LegacyAppPathString,
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
@@ -165,7 +165,7 @@ pub struct FsWatchParams {
     /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
     pub watch_id: String,
     /// Absolute file or directory path to watch.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
 }
 
 /// Successful response for `fs/watch`.
@@ -174,7 +174,7 @@ pub struct FsWatchParams {
 #[ts(export_to = "v2/")]
 pub struct FsWatchResponse {
     /// Canonicalized path associated with the watch.
-    pub path: AbsolutePathBuf,
+    pub path: LegacyAppPathString,
 }
 
 /// Stop filesystem watch notifications for a prior `fs/watch`.
@@ -200,5 +200,5 @@ pub struct FsChangedNotification {
     /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
     /// File or directory paths associated with this event.
-    pub changed_paths: Vec<AbsolutePathBuf>,
+    pub changed_paths: Vec<LegacyAppPathString>,
 }
