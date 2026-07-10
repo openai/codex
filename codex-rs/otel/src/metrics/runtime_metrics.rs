@@ -38,7 +38,7 @@ impl RuntimeMetricTotals {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RuntimeMetricsSummary {
     pub tool_calls: RuntimeMetricTotals,
     pub api_calls: RuntimeMetricTotals,
@@ -49,8 +49,8 @@ pub struct RuntimeMetricsSummary {
     pub responses_api_inference_time_ms: u64,
     pub responses_api_engine_iapi_ttft_ms: u64,
     pub responses_api_engine_service_ttft_ms: u64,
-    pub responses_api_engine_iapi_tbt_ms: u64,
-    pub responses_api_engine_service_tbt_ms: u64,
+    pub responses_api_engine_iapi_tbt_ms: f64,
+    pub responses_api_engine_service_tbt_ms: f64,
     pub turn_ttft_ms: u64,
     pub turn_ttfm_ms: u64,
 }
@@ -66,8 +66,8 @@ impl RuntimeMetricsSummary {
             && self.responses_api_inference_time_ms == 0
             && self.responses_api_engine_iapi_ttft_ms == 0
             && self.responses_api_engine_service_ttft_ms == 0
-            && self.responses_api_engine_iapi_tbt_ms == 0
-            && self.responses_api_engine_service_tbt_ms == 0
+            && self.responses_api_engine_iapi_tbt_ms == 0.0
+            && self.responses_api_engine_service_tbt_ms == 0.0
             && self.turn_ttft_ms == 0
             && self.turn_ttfm_ms == 0
     }
@@ -90,10 +90,10 @@ impl RuntimeMetricsSummary {
         if other.responses_api_engine_service_ttft_ms > 0 {
             self.responses_api_engine_service_ttft_ms = other.responses_api_engine_service_ttft_ms;
         }
-        if other.responses_api_engine_iapi_tbt_ms > 0 {
+        if other.responses_api_engine_iapi_tbt_ms > 0.0 {
             self.responses_api_engine_iapi_tbt_ms = other.responses_api_engine_iapi_tbt_ms;
         }
-        if other.responses_api_engine_service_tbt_ms > 0 {
+        if other.responses_api_engine_service_tbt_ms > 0.0 {
             self.responses_api_engine_service_tbt_ms = other.responses_api_engine_service_tbt_ms;
         }
         if other.turn_ttft_ms > 0 {
@@ -146,9 +146,9 @@ impl RuntimeMetricsSummary {
         let responses_api_engine_service_ttft_ms =
             sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC);
         let responses_api_engine_iapi_tbt_ms =
-            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC);
+            sum_histogram_f64(snapshot, RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC);
         let responses_api_engine_service_tbt_ms =
-            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC);
+            sum_histogram_f64(snapshot, RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC);
         let turn_ttft_ms = sum_histogram_ms(snapshot, TURN_TTFT_DURATION_METRIC);
         let turn_ttfm_ms = sum_histogram_ms(snapshot, TURN_TTFM_DURATION_METRIC);
         Self {
@@ -189,21 +189,25 @@ fn sum_counter_metric(metric: &Metric) -> u64 {
 }
 
 fn sum_histogram_ms(snapshot: &ResourceMetrics, name: &str) -> u64 {
+    f64_to_u64(sum_histogram_f64(snapshot, name))
+}
+
+fn sum_histogram_f64(snapshot: &ResourceMetrics, name: &str) -> f64 {
     snapshot
         .scope_metrics()
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
         .filter(|metric| metric.name() == name)
-        .map(sum_histogram_metric_ms)
+        .map(sum_histogram_metric)
         .sum()
 }
 
-fn sum_histogram_metric_ms(metric: &Metric) -> u64 {
+fn sum_histogram_metric(metric: &Metric) -> f64 {
     match metric.data() {
         AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
             .data_points()
-            .map(|point| f64_to_u64(point.sum()))
+            .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::sum)
             .sum(),
-        _ => 0,
+        _ => 0.0,
     }
 }
 

@@ -34,6 +34,21 @@ fn record_duration_records_histogram() -> Result<()> {
 }
 
 #[test]
+fn record_duration_keeps_whole_millisecond_behavior() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+
+    metrics.record_duration("codex.request_latency", Duration::from_micros(15_999), &[])?;
+    metrics.shutdown()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let (_, _, sum, count) = histogram_data(&resource_metrics, "codex.request_latency");
+    assert_eq!(sum, 15.0);
+    assert_eq!(count, 1);
+
+    Ok(())
+}
+
+#[test]
 fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
 

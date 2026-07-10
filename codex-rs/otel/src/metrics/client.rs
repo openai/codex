@@ -401,6 +401,23 @@ impl MetricsClient {
         )
     }
 
+    /// Record a duration supplied as fractional milliseconds using a histogram.
+    pub(crate) fn record_duration_ms_f64(
+        &self,
+        name: &str,
+        duration_ms: f64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.duration_histogram(
+            name,
+            duration_ms,
+            MILLISECOND_DURATION_UNIT,
+            MILLISECOND_DURATION_DESCRIPTION,
+            MILLISECOND_DURATION_BOUNDARIES,
+            tags,
+        )
+    }
+
     /// Record a duration in seconds using a histogram with an instrument description.
     pub fn record_duration_seconds_with_description(
         &self,

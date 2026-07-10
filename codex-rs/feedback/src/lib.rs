@@ -18,6 +18,7 @@ use codex_protocol::protocol::SessionSource;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
@@ -205,7 +206,11 @@ impl CodexFeedback {
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
             // full trace when the user uploads a report.
-            .with_filter(Targets::new().with_default(Level::TRACE))
+            .with_filter(
+                Targets::new()
+                    .with_default(Level::TRACE)
+                    .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF),
+            )
     }
 
     /// Returns a [`tracing_subscriber`] layer that collects structured metadata for feedback.
@@ -720,6 +725,21 @@ mod tests {
         let snap = fb.snapshot(/*session_id*/ None);
         // Capacity 8: after writing 10 bytes, we should keep the last 8.
         pretty_assertions::assert_eq!(std::str::from_utf8(snap.as_bytes()).unwrap(), "cdefghij");
+    }
+
+    #[test]
+    fn logger_layer_excludes_responses_websocket_timing_payloads() {
+        let fb = CodexFeedback::new();
+        let _guard = tracing_subscriber::registry()
+            .with(fb.logger_layer())
+            .set_default();
+
+        tracing::trace!(target: "codex_api::responses_websocket_timing", payload = "secret");
+        tracing::trace!(target: "codex_feedback_test", "retained");
+
+        let logs = String::from_utf8(fb.snapshot(/*session_id*/ None).bytes).unwrap();
+        assert!(!logs.contains("secret"));
+        assert!(logs.contains("retained"));
     }
 
     #[test]
