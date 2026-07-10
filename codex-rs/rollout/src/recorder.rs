@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Error as IoError;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -811,18 +815,8 @@ impl RolloutRecorder {
                 (None, Some(log_file_info), path, Some(session_meta))
             }
             RolloutRecorderParams::Resume { path } => {
-                let path = compression::materialize_rollout_for_append(path.as_path()).await?;
-                (
-                    Some(
-                        tokio::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .await?,
-                    ),
-                    None,
-                    path,
-                    None,
-                )
+                let (path, file) = open_rollout_for_append(path.as_path()).await?;
+                (Some(file), None, path, None)
             }
         };
 
@@ -1536,10 +1530,13 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         )));
     };
     fs::create_dir_all(parent)?;
-    std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
         .append(true)
         .create(true)
-        .open(path)
+        .open(path)?;
+    ensure_rollout_is_newline_terminated(&mut file)?;
+    Ok(file)
 }
 
 /// Mutable state owned by the background rollout writer.
@@ -1788,13 +1785,40 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let rollout_path = compression::materialize_rollout_for_append(rollout_path).await?;
-    let file = tokio::fs::OpenOptions::new()
-        .append(true)
-        .open(rollout_path)
-        .await?;
+    let (_rollout_path, file) = open_rollout_for_append(rollout_path).await?;
     let mut writer = JsonlWriter { file };
     writer.write_rollout_item(item).await
+}
+
+async fn open_rollout_for_append(path: &Path) -> std::io::Result<(PathBuf, tokio::fs::File)> {
+    let path = compression::materialize_rollout_for_append(path).await?;
+    let path_for_open = path.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        let mut file = File::options()
+            .read(true)
+            .append(true)
+            .open(path_for_open)?;
+        ensure_rollout_is_newline_terminated(&mut file)?;
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .map_err(IoError::other)??;
+    Ok((path, tokio::fs::File::from_std(file)))
+}
+
+fn ensure_rollout_is_newline_terminated(file: &mut File) -> std::io::Result<()> {
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::End(-1))?;
+    let mut final_byte = [0];
+    file.read_exact(&mut final_byte)?;
+    if final_byte[0] != b'\n' {
+        file.write_all(b"\n")?;
+        file.flush()?;
+    }
+    Ok(())
 }
 
 struct JsonlWriter {
