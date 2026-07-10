@@ -83,6 +83,10 @@ impl LegacyAppPathString {
 
     /// Parses this API string as an absolute path native to the current host.
     ///
+    /// Use this for legacy app or wire path text that must be validated as
+    /// native to the current host. Constructing [`AbsolutePathBuf`] directly
+    /// can misclassify foreign-platform spelling as a local path.
+    ///
     /// Host-specific path namespaces are normalized. Relative and
     /// foreign-platform paths are rejected.
     pub fn to_host_abs_path(&self) -> Result<AbsolutePathBuf, LegacyAppPathStringError> {
