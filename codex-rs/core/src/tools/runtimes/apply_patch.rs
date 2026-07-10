@@ -73,23 +73,14 @@ impl ApplyPatchRuntime {
         &self.committed_delta
     }
 
-    fn build_guardian_review_request(
-        req: &ApplyPatchRequest,
-        call_id: &str,
-    ) -> std::io::Result<ApprovalAction> {
-        // TODO(anp): Remove this conversion once the guardian API supports PathUri.
-        let cwd = req.action.cwd.to_abs_path()?;
-        let files = req
-            .file_paths
-            .iter()
-            .map(PathUri::to_abs_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        Ok(ApprovalAction::ApplyPatch {
+    fn build_approval_action(req: &ApplyPatchRequest, call_id: &str) -> ApprovalAction {
+        ApprovalAction::ApplyPatch {
             id: call_id.to_string(),
-            cwd,
-            files,
+            environment_id: req.turn_environment.environment_id.clone(),
+            cwd: req.action.cwd.clone(),
+            files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
-        })
+        }
     }
 
     fn file_system_sandbox_context_for_attempt(
@@ -188,7 +179,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         ctx: &ApprovalCtx<'_>,
     ) -> std::io::Result<ApprovalAction> {
-        ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id)
+        Ok(ApplyPatchRuntime::build_approval_action(req, ctx.call_id))
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {

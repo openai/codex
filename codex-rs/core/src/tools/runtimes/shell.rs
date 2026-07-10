@@ -46,6 +46,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -183,8 +184,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
     ) -> std::io::Result<ApprovalAction> {
         Ok(ApprovalAction::Shell {
             id: ctx.call_id.to_string(),
+            environment_id: req.turn_environment.environment_id.clone(),
             command: req.command.clone(),
-            cwd: req.cwd.clone(),
+            cwd: PathUri::from_abs_path(&req.cwd),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
             justification: req.justification.clone(),
