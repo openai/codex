@@ -963,6 +963,12 @@ impl ThreadRequestProcessor {
             thread_source,
             environments,
         } = params;
+        if matches!(
+            history_mode,
+            Some(codex_app_server_protocol::ThreadHistoryMode::Paginated)
+        ) {
+            return Err(method_not_found("paginated_threads is not supported yet"));
+        }
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",

@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
@@ -116,13 +115,22 @@ pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
-    // LocalThreadStore rejects paginated threads before opening a writer.
-    let persisted_items =
-        persisted_rollout_items(params.items.as_slice(), ThreadHistoryMode::Legacy);
+    // A live append should always have a recorder: create/resume installs one, while
+    // shutdown/discard/delete removes it. Keep the lookup defensive so late appends fail after
+    // teardown.
+    let (recorder, history_mode) = store
+        .live_recorders
+        .lock()
+        .await
+        .get(&params.thread_id)
+        .map(|entry| (entry.recorder.clone(), entry.history_mode))
+        .ok_or(ThreadStoreError::ThreadNotFound {
+            thread_id: params.thread_id,
+        })?;
+    let persisted_items = persisted_rollout_items(params.items.as_slice(), history_mode);
     if persisted_items.is_empty() {
         return Ok(());
     }
-    let recorder = store.live_recorder(params.thread_id).await?;
     recorder
         .record_canonical_items(persisted_items.as_slice())
         .await

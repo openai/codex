@@ -2,7 +2,6 @@ use super::LocalThreadStore;
 use crate::CreateThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
-use crate::error::reject_paginated_history_mode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
@@ -12,7 +11,6 @@ pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
 ) -> ThreadStoreResult<RolloutRecorder> {
-    reject_paginated_history_mode(params.history_mode)?;
     let cwd = params
         .metadata
         .cwd
