@@ -5,6 +5,7 @@ use std::collections::HashSet;
 pub use codex_utils_plugins::mention_syntax;
 pub use codex_utils_plugins::plugin_namespace_for_skill_path;
 
+mod host_capabilities;
 mod load_outcome;
 pub mod manifest;
 mod plugin_id;
@@ -12,6 +13,7 @@ mod provider;
 
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+pub use host_capabilities::HostCapabilities;
 pub use load_outcome::EffectiveSkillRoots;
 pub use load_outcome::LoadedPlugin;
 pub use load_outcome::PluginLoadOutcome;

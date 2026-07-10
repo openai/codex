@@ -164,6 +164,7 @@ fn item(name: &str, display_name: &str) -> RecommendedPluginItem {
         release: RecommendedPluginRelease {
             display_name: display_name.to_string(),
             app_ids: Vec::new(),
+            requires: Some(RecommendedPluginRequirements::default()),
         },
     }
 }
@@ -219,6 +220,20 @@ fn recommended_plugins_require_remote_install_identity() {
 }
 
 #[test]
+fn recommended_plugins_without_requirements_use_legacy_discovery() {
+    let mut plugin = item("github", "GitHub");
+    plugin.release.requires = None;
+
+    assert_eq!(
+        recommended_plugins_mode(RecommendedPluginsResponse {
+            enabled: Some(true),
+            plugins: vec![plugin],
+        }),
+        RecommendedPluginsMode::Legacy
+    );
+}
+
+#[test]
 fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
     let mut plugins = (0..=52)
         .rev()
@@ -234,6 +249,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
         release: RecommendedPluginRelease {
             display_name: "Disabled".to_string(),
             app_ids: Vec::new(),
+            requires: Some(RecommendedPluginRequirements::default()),
         },
     });
     plugins.push(RecommendedPluginItem {
@@ -244,6 +260,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
         release: RecommendedPluginRelease {
             display_name: "Not Available".to_string(),
             app_ids: Vec::new(),
+            requires: Some(RecommendedPluginRequirements::default()),
         },
     });
 
@@ -263,6 +280,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
             remote_plugin_id: "plugin_plugin-00".to_string(),
             display_name: "Plugin 00".to_string(),
             app_connector_ids: Vec::new(),
+            requirements: PluginManifestRequirements::default(),
         })
     );
     assert_eq!(
@@ -272,6 +290,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
             remote_plugin_id: "plugin_plugin-49".to_string(),
             display_name: "Plugin 49".to_string(),
             app_connector_ids: Vec::new(),
+            requirements: PluginManifestRequirements::default(),
         })
     );
 }
@@ -296,6 +315,7 @@ fn recommended_plugins_bound_model_visible_fields() {
                 remote_plugin_id: "plugin_bounded".to_string(),
                 display_name: "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN),
                 app_connector_ids: Vec::new(),
+                requirements: PluginManifestRequirements::default(),
             }],
         }
     );
@@ -318,6 +338,7 @@ fn recommended_plugins_preserve_install_identity_and_normalize_app_ids() {
                     "connector_two".to_string(),
                     "connector_one".to_string(),
                 ],
+                requires: Some(RecommendedPluginRequirements::default()),
             },
         }],
     });
@@ -330,6 +351,7 @@ fn recommended_plugins_preserve_install_identity_and_normalize_app_ids() {
                 remote_plugin_id: "plugin_connector_sample".to_string(),
                 display_name: "Sample".to_string(),
                 app_connector_ids: vec!["connector_one".to_string(), "connector_two".to_string(),],
+                requirements: PluginManifestRequirements::default(),
             }],
         }
     );
@@ -347,6 +369,7 @@ fn recommended_plugins_ignore_invalid_remote_plugin_ids() {
             release: RecommendedPluginRelease {
                 display_name: "Sample".to_string(),
                 app_ids: Vec::new(),
+                requires: Some(RecommendedPluginRequirements::default()),
             },
         }],
     });

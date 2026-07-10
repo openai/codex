@@ -72,6 +72,7 @@ use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
+use codex_plugin::HostCapabilities;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
@@ -110,7 +111,7 @@ pub struct PluginsConfigInput {
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
-    pub host_capabilities: HashSet<String>,
+    pub host_capabilities: HostCapabilities,
 }
 
 impl PluginsConfigInput {
@@ -125,7 +126,7 @@ impl PluginsConfigInput {
             plugins_enabled,
             remote_plugin_enabled,
             chatgpt_base_url,
-            host_capabilities: HashSet::new(),
+            host_capabilities: HostCapabilities::default(),
         }
     }
 }
@@ -591,7 +592,7 @@ impl PluginsManager {
     fn resolve_loaded_plugins_for_runtime(
         &self,
         mut plugins: Vec<LoadedPlugin>,
-        host_capabilities: &HashSet<String>,
+        host_capabilities: &HostCapabilities,
     ) -> PluginLoadOutcome {
         let auth_mode = self.auth_mode();
         for plugin in &mut plugins {
@@ -1257,6 +1258,9 @@ impl PluginsManager {
                 !installed_plugin_ids.contains(plugin.config_id.as_str())
                     && !installed_remote_plugin_ids.contains(plugin.remote_plugin_id.as_str())
                     && !disabled_plugin_ids.contains(plugin.config_id.as_str())
+                    && plugin
+                        .requirements
+                        .is_satisfied_by(&input.plugins_config.host_capabilities)
             })
             .map(|plugin| {
                 DiscoverableTool::from(DiscoverablePluginInfo {
@@ -1692,7 +1696,7 @@ impl PluginsManager {
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         skill_config_rules: &SkillConfigRules,
-        host_capabilities: &HashSet<String>,
+        host_capabilities: &HostCapabilities,
     ) -> Result<Option<PluginCapabilitySummary>, MarketplaceError> {
         let fragment = self
             .tool_suggest_metadata_cache

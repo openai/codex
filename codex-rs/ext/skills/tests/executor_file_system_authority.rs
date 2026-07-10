@@ -265,7 +265,6 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             include_bundled_skills: true,
             include_orchestrator_skills: false,
             mcp_resources: None,
-            host_capabilities: Default::default(),
         })
         .await
         .expect("list executor skills");
@@ -295,79 +294,6 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
                 ),
             ),
         ]
-    );
-
-    std::fs::remove_dir_all(test_root).expect("remove skill directory");
-}
-
-#[tokio::test]
-async fn executor_plugin_skills_preserve_all_host_capability_requirements() {
-    let test_root = create_local_skill_root("host-requirements").expect("create local skill root");
-    std::fs::create_dir_all(test_root.join(".codex-plugin")).expect("create manifest directory");
-    std::fs::write(
-        test_root.join(".codex-plugin/plugin.json"),
-        r#"{
-  "name": "gated-skill-plugin",
-  "requires": {
-    "hostCapabilities": ["codex.inline_visualization", "codex.code_mode"]
-  }
-}"#,
-    )
-    .expect("write plugin manifest");
-    std::fs::create_dir_all(test_root.join("broken")).expect("create broken skill directory");
-    std::fs::write(test_root.join("broken/SKILL.md"), "missing frontmatter")
-        .expect("write broken skill");
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(EnvironmentManager::default_for_tests()),
-        /*restriction_product*/ None,
-    );
-    let catalog = provider
-        .list(SkillListQuery {
-            turn_id: "turn-1".to_string(),
-            executor_roots: vec![SelectedCapabilityRoot {
-                id: "selected-root".to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "local".to_string(),
-                    path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
-                },
-            }],
-            host_snapshot: None,
-            include_host_skills: false,
-            include_bundled_skills: true,
-            include_orchestrator_skills: false,
-            mcp_resources: None,
-            host_capabilities: Default::default(),
-        })
-        .await
-        .expect("list executor skills");
-    let [entry] = catalog.entries.as_slice() else {
-        panic!("expected one executor skill");
-    };
-
-    assert!(catalog.warnings.is_empty());
-    let [gated_warnings] = catalog.host_capability_gated_warnings.as_slice() else {
-        panic!("expected one host-gated warning group");
-    };
-    assert_eq!(
-        gated_warnings.required_host_capabilities,
-        vec![
-            "codex.inline_visualization".to_string(),
-            "codex.code_mode".to_string(),
-        ]
-    );
-    assert_eq!(gated_warnings.warnings.len(), 1);
-    assert!(!entry.host_requirements_satisfied_by(&Default::default()));
-    assert!(
-        !entry.host_requirements_satisfied_by(&["codex.inline_visualization".to_string()].into())
-    );
-    assert!(
-        entry.host_requirements_satisfied_by(
-            &[
-                "codex.code_mode".to_string(),
-                "codex.inline_visualization".to_string(),
-            ]
-            .into()
-        )
     );
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");

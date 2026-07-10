@@ -34,6 +34,7 @@ use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppDeclaration;
+use codex_plugin::HostCapabilities;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
@@ -178,7 +179,7 @@ pub async fn load_plugin_hooks_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     remote_global_catalog_active: bool,
-    host_capabilities: &HashSet<String>,
+    host_capabilities: &HostCapabilities,
 ) -> PluginHookLoadOutcome {
     let mut plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
@@ -768,8 +769,8 @@ async fn load_plugin(
         manifest_description: None,
         root,
         enabled: plugin.enabled,
-        required_host_capabilities: Vec::new(),
-        missing_host_capabilities: Vec::new(),
+        required_host_capabilities: HostCapabilities::default(),
+        missing_host_capabilities: HostCapabilities::default(),
         skill_roots: Vec::new(),
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,

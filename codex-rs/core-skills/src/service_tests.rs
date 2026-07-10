@@ -229,68 +229,6 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
-async fn cwd_cache_separates_effective_plugin_skill_roots() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let cwd = tempfile::tempdir().expect("tempdir");
-    let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
-        codex_home.path().abs(),
-        /*bundled_skills_enabled*/ true,
-    );
-    let skill_path = write_plugin_skill(
-        &codex_home,
-        "test",
-        "visualize",
-        "visualize",
-        "visualize",
-        "render inline visualizations",
-    );
-    let plugin_root = plugin_skill_root_for_skill_path(&skill_path, "visualize@test", "visualize");
-
-    let supported_input = SkillsLoadInput::new(
-        cwd.path().abs(),
-        vec![plugin_root],
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
-    let supported = skills_service
-        .snapshot_for_cwd(
-            &supported_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
-        .await;
-    assert!(
-        supported
-            .outcome()
-            .skills
-            .iter()
-            .any(|skill| skill.name == "visualize:visualize")
-    );
-
-    let unsupported_input = SkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
-    let unsupported = skills_service
-        .snapshot_for_cwd(
-            &unsupported_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
-        .await;
-    assert!(
-        unsupported
-            .outcome()
-            .skills
-            .iter()
-            .all(|skill| skill.name != "visualize:visualize")
-    );
-}
-
-#[tokio::test]
 async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");

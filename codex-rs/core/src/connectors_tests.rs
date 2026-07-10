@@ -224,12 +224,6 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         .expect("config should load");
     let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
     let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
-    let mut other_host_config = config.clone();
-    other_host_config
-        .host_capabilities
-        .insert("codex.inline_visualization".to_string());
-    let other_host_cache_key =
-        accessible_connectors_cache_key(&other_host_config, /*auth*/ None);
     let tools = vec![
         codex_app_tool(
             "calendar_list_events",
@@ -247,10 +241,6 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
     let cached = with_accessible_connectors_cache_cleared(|| {
         refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
-        assert_eq!(
-            read_cached_accessible_connectors(&other_host_cache_key),
-            None
-        );
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
     });
 

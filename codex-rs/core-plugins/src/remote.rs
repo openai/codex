@@ -13,9 +13,11 @@ use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
+use codex_plugin::HostCapabilities;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::app_connector_ids_from_declarations;
+use codex_plugin::manifest::PluginManifestRequirements;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
@@ -263,6 +265,7 @@ pub struct RecommendedPlugin {
     pub remote_plugin_id: String,
     pub display_name: String,
     pub app_connector_ids: Vec<String>,
+    pub requirements: PluginManifestRequirements,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -648,6 +651,15 @@ struct RecommendedPluginRelease {
     display_name: String,
     #[serde(default)]
     app_ids: Vec<String>,
+    #[serde(default)]
+    requires: Option<RecommendedPluginRequirements>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecommendedPluginRequirements {
+    #[serde(default)]
+    host_capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -894,7 +906,11 @@ fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> Recommended
         let RecommendedPluginRelease {
             display_name,
             app_ids,
+            requires,
         } = plugin.release;
+        let Some(requires) = requires else {
+            return RecommendedPluginsMode::Legacy;
+        };
         let display_name = non_empty_string(Some(&display_name))
             .unwrap_or_else(|| plugin.name.clone())
             .chars()
@@ -913,6 +929,9 @@ fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> Recommended
                 remote_plugin_id: plugin.id,
                 display_name,
                 app_connector_ids,
+                requirements: PluginManifestRequirements {
+                    host_capabilities: HostCapabilities::from_names(requires.host_capabilities),
+                },
             });
     }
 

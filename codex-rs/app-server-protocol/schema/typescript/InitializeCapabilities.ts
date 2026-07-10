@@ -19,10 +19,6 @@ requestAttestation: boolean,
  */
 mcpServerOpenaiFormElicitation?: boolean,
 /**
- * Host features available to runtime plugins on this connection.
- */
-hostCapabilities?: Array<string> | null,
-/**
  * Exact notification method names that should be suppressed for this
  * connection (for example `thread/started`).
  */

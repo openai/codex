@@ -95,7 +95,6 @@ fn catalog_from_outcome(outcome: &SkillLoadOutcome) -> SkillCatalog {
                 )
             })
             .collect(),
-        ..Default::default()
     };
 
     for (skill, enabled) in outcome.skills_with_enabled() {

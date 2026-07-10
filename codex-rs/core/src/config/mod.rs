@@ -120,7 +120,6 @@ use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -611,9 +610,6 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
-/// Opaque host features available to runtime plugins for one thread.
-pub type HostCapabilities = BTreeSet<String>;
-
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -623,12 +619,6 @@ pub struct Config {
 
     /// Warnings collected during config load that should be shown on startup.
     pub startup_warnings: Vec<String>,
-
-    /// Host features available to runtime plugins for this thread.
-    ///
-    /// This is supplied by the embedding client rather than config.toml and is
-    /// intentionally not persisted with the thread.
-    pub host_capabilities: HostCapabilities,
 
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -1508,14 +1498,12 @@ impl Config {
 
     /// Build the plugin-manager input from the effective config.
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
-        let mut input = PluginsConfigInput::new(
+        PluginsConfigInput::new(
             self.config_layer_stack.clone(),
             self.features.enabled(Feature::Plugins),
             self.features.enabled(Feature::RemotePlugin),
             self.chatgpt_base_url.clone(),
-        );
-        input.host_capabilities = self.host_capabilities.iter().cloned().collect();
-        input
+        )
     }
 
     /// Applies managed MCP requirements to servers supplied by one plugin.
@@ -1689,7 +1677,6 @@ impl Config {
             ConfigOverrides {
                 cwd: Some(self.cwd.to_path_buf()),
                 default_zsh_path,
-                host_capabilities: self.host_capabilities.clone(),
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
@@ -2439,8 +2426,6 @@ pub struct ConfigOverrides {
     /// Explicit absolute runtime workspace roots for this session. When set,
     /// this is the full runtime root list rather than an additive override.
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
-    /// Opaque host features supplied by the embedding client for this thread.
-    pub host_capabilities: HostCapabilities,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -3031,7 +3016,6 @@ impl Config {
             bypass_hook_trust,
             additional_writable_roots,
             workspace_roots: workspace_roots_override,
-            host_capabilities,
         } = overrides;
         let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
 
@@ -3815,7 +3799,6 @@ impl Config {
             workspace_roots: workspace_roots.clone(),
             workspace_roots_explicit,
             startup_warnings,
-            host_capabilities,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile_state,

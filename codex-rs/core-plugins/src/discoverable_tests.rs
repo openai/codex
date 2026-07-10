@@ -331,7 +331,7 @@ async fn reprojects_cached_configured_and_fallback_plugins_for_host_capabilities
     write_required_manifests(HOST_CAPABILITY_SESSION_OWNED_IAB);
     plugins
         .host_capabilities
-        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION.to_string());
+        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION);
     let supported = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[configured_plugin_id], &[], &[]),
@@ -424,7 +424,7 @@ source = "/tmp/{marketplace_name}"
 
     plugins
         .host_capabilities
-        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION.to_string());
+        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION);
     let supported = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(

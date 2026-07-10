@@ -326,7 +326,6 @@ use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::HostCapabilities;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -496,12 +495,6 @@ use uuid::Uuid;
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct AppServerClientInfo {
-    pub(crate) name: Option<String>,
-    pub(crate) version: Option<String>,
-}
-
 mod account_processor;
 mod apps_processor;
 mod catalog_processor;
@@ -606,21 +599,6 @@ fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec
         }
     }
     resolved_roots
-}
-
-async fn ensure_thread_host_capabilities(
-    thread_id: ThreadId,
-    thread: &CodexThread,
-    requested: &HostCapabilities,
-    operation: &str,
-) -> Result<(), JSONRPCErrorError> {
-    let active = thread.config_snapshot().await.host_capabilities;
-    if &active != requested {
-        return Err(invalid_request(format!(
-            "cannot {operation} on thread {thread_id} with different host capabilities: requested={requested:?} active={active:?}"
-        )));
-    }
-    Ok(())
 }
 
 mod config_errors;

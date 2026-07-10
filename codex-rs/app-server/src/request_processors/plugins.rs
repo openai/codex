@@ -23,7 +23,6 @@ use codex_core_plugins::remote_bundle::RemotePluginBundleInstallError;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
-use codex_plugin::AppConnectorId;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::auth::AuthMode as DomainAuthMode;
@@ -87,39 +86,6 @@ fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginI
         screenshots: interface.screenshots,
         screenshot_urls: Vec::new(),
     }
-}
-
-async fn load_plugin_auth_capabilities_for_host(
-    config: &Config,
-    plugin_root: &Path,
-    auth_mode: Option<DomainAuthMode>,
-) -> (HashMap<String, McpServerConfig>, Vec<AppConnectorId>) {
-    if !plugin_auth_side_effects_available_for_host(plugin_root, &config.host_capabilities) {
-        return Default::default();
-    }
-
-    let (mcp_servers, app_declarations) = tokio::join!(
-        load_plugin_mcp_servers(plugin_root, auth_mode),
-        load_plugin_apps(plugin_root),
-    );
-    (
-        mcp_servers,
-        codex_plugin::app_connector_ids_from_declarations(&app_declarations),
-    )
-}
-
-fn plugin_auth_side_effects_available_for_host(
-    plugin_root: &Path,
-    host_capabilities: &HostCapabilities,
-) -> bool {
-    let Some(manifest) = codex_core_plugins::manifest::load_plugin_manifest(plugin_root) else {
-        return false;
-    };
-    !manifest
-        .requires
-        .host_capabilities
-        .iter()
-        .any(|capability| !host_capabilities.contains(capability))
 }
 
 fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginSource {
@@ -486,11 +452,9 @@ impl PluginRequestProcessor {
 
     pub(crate) async fn plugin_install(
         &self,
-        request_id: &ConnectionRequestId,
         params: PluginInstallParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_install_response(request_id, params, host_capabilities)
+        self.plugin_install_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -1458,9 +1422,7 @@ impl PluginRequestProcessor {
 
     async fn plugin_install_response(
         &self,
-        request_id: &ConnectionRequestId,
         params: PluginInstallParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let PluginInstallParams {
             marketplace_path,
@@ -1471,12 +1433,7 @@ impl PluginRequestProcessor {
             (Some(marketplace_path), None) => marketplace_path,
             (None, Some(remote_marketplace_name)) => {
                 return self
-                    .remote_plugin_install_response(
-                        request_id,
-                        remote_marketplace_name,
-                        plugin_name,
-                        host_capabilities,
-                    )
+                    .remote_plugin_install_response(remote_marketplace_name, plugin_name)
                     .await;
             }
             (Some(_), Some(_)) | (None, None) => {
@@ -1486,8 +1443,7 @@ impl PluginRequestProcessor {
             }
         };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-        let mut config = self.load_latest_config(config_cwd.clone()).await?;
-        config.host_capabilities = host_capabilities.clone();
+        let config = self.load_latest_config(config_cwd.clone()).await?;
         let auth = self.auth_manager.auth().await;
 
         if !self
@@ -1521,7 +1477,7 @@ impl PluginRequestProcessor {
                 return Err(Self::plugin_install_error(err));
             }
         };
-        let mut config = match self.load_latest_config(config_cwd).await {
+        let config = match self.load_latest_config(config_cwd).await {
             Ok(config) => config,
             Err(err) => {
                 warn!(
@@ -1530,25 +1486,22 @@ impl PluginRequestProcessor {
                 config
             }
         };
-        config.host_capabilities = host_capabilities;
 
         self.on_effective_plugins_changed();
 
-        let (plugin_mcp_servers, plugin_apps) = load_plugin_auth_capabilities_for_host(
-            &config,
+        let plugin_mcp_servers = load_plugin_mcp_servers(
             result.installed_path.as_path(),
             auth.as_ref().map(CodexAuth::auth_mode),
         )
         .await;
         if !plugin_mcp_servers.is_empty() {
-            self.start_plugin_mcp_oauth_logins(
-                request_id.connection_id,
-                &config,
-                plugin_mcp_servers,
-            )
-            .await;
+            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
+                .await;
         }
 
+        let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_apps =
+            codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
@@ -1566,13 +1519,10 @@ impl PluginRequestProcessor {
 
     async fn remote_plugin_install_response(
         &self,
-        request_id: &ConnectionRequestId,
         remote_marketplace_name: String,
         remote_plugin_id: String,
-        host_capabilities: HostCapabilities,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
-        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        config.host_capabilities = host_capabilities;
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
             return Err(invalid_request(format!(
                 "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
@@ -1716,72 +1666,66 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
-        let auth_side_effects_available = plugin_auth_side_effects_available_for_host(
-            result.installed_path.as_path(),
-            &config.host_capabilities,
-        );
-        let (plugin_mcp_servers, plugin_apps) = load_plugin_auth_capabilities_for_host(
-            &config,
+        let plugin_mcp_servers = load_plugin_mcp_servers(
             result.installed_path.as_path(),
             auth.as_ref().map(CodexAuth::auth_mode),
         )
         .await;
         if !plugin_mcp_servers.is_empty() {
-            self.start_plugin_mcp_oauth_logins(
-                request_id.connection_id,
-                &config,
-                plugin_mcp_servers,
-            )
-            .await;
+            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
+                .await;
         }
 
         let is_chatgpt_auth = auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth);
-        let apps_needing_auth =
-            if let Some(app_ids_needing_auth) = install_result.app_ids_needing_auth {
-                if app_ids_needing_auth.is_empty()
-                    || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
-                    || !auth_side_effects_available
-                {
-                    Vec::new()
-                } else {
-                    let plugin_apps = app_ids_needing_auth
-                        .into_iter()
-                        .map(AppConnectorId)
-                        .collect::<Vec<_>>();
-                    let app_category_by_id = remote_detail
-                        .app_manifest
-                        .as_ref()
-                        .map(plugin_app_category_by_id_from_value)
-                        .unwrap_or_default();
-                    let all_connectors = connectors::list_cached_all_connectors(&config, &[])
-                        .await
-                        .unwrap_or_default();
-                    connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
-                        .into_iter()
-                        .map(|connector| {
-                            let category = app_category_by_id
-                                .get(&connector.id)
-                                .cloned()
-                                .or_else(|| connector.category());
-                            AppSummary {
-                                category,
-                                id: connector.id,
-                                name: connector.name,
-                                description: connector.description,
-                                install_url: connector.install_url,
-                            }
-                        })
-                        .collect()
-                }
+        let apps_needing_auth = if let Some(app_ids_needing_auth) =
+            install_result.app_ids_needing_auth
+        {
+            if app_ids_needing_auth.is_empty()
+                || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
+            {
+                Vec::new()
             } else {
-                self.plugin_apps_needing_auth_for_install(
-                    &config,
-                    is_chatgpt_auth,
-                    &result.plugin_id.as_key(),
-                    &plugin_apps,
-                )
-                .await
-            };
+                let plugin_apps = app_ids_needing_auth
+                    .into_iter()
+                    .map(codex_plugin::AppConnectorId)
+                    .collect::<Vec<_>>();
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let all_connectors = connectors::list_cached_all_connectors(&config, &[])
+                    .await
+                    .unwrap_or_default();
+                connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
+                    .into_iter()
+                    .map(|connector| {
+                        let category = app_category_by_id
+                            .get(&connector.id)
+                            .cloned()
+                            .or_else(|| connector.category());
+                        AppSummary {
+                            category,
+                            id: connector.id,
+                            name: connector.name,
+                            description: connector.description,
+                            install_url: connector.install_url,
+                        }
+                    })
+                    .collect()
+            }
+        } else {
+            let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+            let plugin_apps =
+                codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
+            self.plugin_apps_needing_auth_for_install(
+                &config,
+                is_chatgpt_auth,
+                &result.plugin_id.as_key(),
+                &plugin_apps,
+            )
+            .await
+        };
 
         Ok(PluginInstallResponse {
             auth_policy: remote_detail.summary.auth_policy,
@@ -1891,7 +1835,6 @@ impl PluginRequestProcessor {
 
     async fn start_plugin_mcp_oauth_logins(
         &self,
-        connection_id: ConnectionId,
         config: &Config,
         plugin_mcp_servers: HashMap<String, McpServerConfig>,
     ) {
@@ -1970,9 +1913,7 @@ impl PluginRequestProcessor {
                         error,
                     },
                 );
-                outgoing
-                    .send_server_notification_to_connections(&[connection_id], notification)
-                    .await;
+                outgoing.send_server_notification(notification).await;
             });
         }
     }
@@ -2456,38 +2397,4 @@ fn remote_plugin_bundle_install_error_to_jsonrpc(
     err: codex_core_plugins::remote_bundle::RemotePluginBundleInstallError,
 ) -> JSONRPCErrorError {
     internal_error(format!("install remote plugin bundle: {err}"))
-}
-
-#[cfg(test)]
-mod host_capability_tests {
-    use super::*;
-
-    #[test]
-    fn post_install_auth_side_effects_require_host_capabilities() {
-        let plugin_root = tempfile::tempdir().expect("temp plugin root");
-        let manifest_dir = plugin_root.path().join(".codex-plugin");
-        std::fs::create_dir_all(&manifest_dir).expect("create manifest directory");
-        std::fs::write(
-            manifest_dir.join("plugin.json"),
-            r#"{
-                "name": "gated-auth-plugin",
-                "requires": {
-                    "hostCapabilities": ["codex.inline_visualization"]
-                }
-            }"#,
-        )
-        .expect("write plugin manifest");
-
-        let mut host_capabilities = HostCapabilities::new();
-        assert!(!plugin_auth_side_effects_available_for_host(
-            plugin_root.path(),
-            &host_capabilities,
-        ));
-
-        host_capabilities.insert("codex.inline_visualization".to_string());
-        assert!(plugin_auth_side_effects_available_for_host(
-            plugin_root.path(),
-            &host_capabilities,
-        ));
-    }
 }

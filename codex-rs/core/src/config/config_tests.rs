@@ -4741,12 +4741,7 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{
-  "name": "sample",
-  "requires": {
-    "hostCapabilities": ["codex.inline_visualization"]
-  }
-}"#,
+        r#"{"name":"sample"}"#,
     )?;
     std::fs::write(
         plugin_root.join(".mcp.json"),
@@ -4813,7 +4808,6 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         thread_layer_stack.effective_config().try_into()?,
         ConfigOverrides {
             cwd: Some(codex_home.path().to_path_buf()),
-            host_capabilities: ["codex.inline_visualization".to_string()].into(),
             ..Default::default()
         },
         codex_home.abs(),
@@ -4827,10 +4821,6 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     let configured_servers = mcp_config.mcp_server_catalog.configured_servers();
 
-    assert_eq!(
-        config.host_capabilities,
-        ["codex.inline_visualization".to_string()].into()
-    );
     assert_eq!(
         configured_servers.get("sample"),
         Some(&http_mcp("https://sample.example/mcp"))

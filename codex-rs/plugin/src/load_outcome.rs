@@ -6,9 +6,11 @@ use codex_utils_plugins::PluginSkillRoot;
 
 use crate::AppConnectorId;
 use crate::AppDeclaration;
+use crate::HostCapabilities;
 use crate::PluginCapabilitySummary;
 use crate::PluginHookSource;
 use crate::app_connector_ids_from_declarations;
+use crate::manifest::PluginManifestRequirements;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -21,8 +23,8 @@ pub struct LoadedPlugin<M> {
     pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
-    pub required_host_capabilities: Vec<String>,
-    pub missing_host_capabilities: Vec<String>,
+    pub required_host_capabilities: HostCapabilities,
+    pub missing_host_capabilities: HostCapabilities,
     pub skill_roots: Vec<AbsolutePathBuf>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub has_enabled_skills: bool,
@@ -42,13 +44,11 @@ impl<M> LoadedPlugin<M> {
         self.manifest_name.as_deref().unwrap_or(&self.config_name)
     }
 
-    pub fn apply_host_capabilities(&mut self, host_capabilities: &HashSet<String>) {
-        self.missing_host_capabilities = self
-            .required_host_capabilities
-            .iter()
-            .filter(|capability| !host_capabilities.contains(*capability))
-            .cloned()
-            .collect::<Vec<_>>();
+    pub fn apply_host_capabilities(&mut self, host_capabilities: &HostCapabilities) {
+        self.missing_host_capabilities = PluginManifestRequirements {
+            host_capabilities: self.required_host_capabilities.clone(),
+        }
+        .missing_from(host_capabilities);
     }
 }
 
@@ -243,8 +243,8 @@ mod tests {
             manifest_description: None,
             root: test_path(config_name),
             enabled: true,
-            required_host_capabilities: Vec::new(),
-            missing_host_capabilities: Vec::new(),
+            required_host_capabilities: HostCapabilities::default(),
+            missing_host_capabilities: HostCapabilities::default(),
             skill_roots,
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,

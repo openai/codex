@@ -1,14 +1,15 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_plugin::AppDeclaration;
+use codex_plugin::HostCapabilities;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::app_connector_ids_from_declarations;
+use codex_plugin::manifest::PluginManifestRequirements;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
@@ -55,7 +56,7 @@ pub(crate) struct ToolSuggestMetadataFragment {
     config_name: String,
     display_name: String,
     description: Option<String>,
-    required_host_capabilities: Vec<String>,
+    requirements: PluginManifestRequirements,
     mcp_server_names: Vec<String>,
     app_declarations: Vec<AppDeclaration>,
     skill_inventory: Option<PluginSkillInventory>,
@@ -66,13 +67,9 @@ impl ToolSuggestMetadataFragment {
         &self,
         skill_config_rules: &SkillConfigRules,
         auth_mode: Option<AuthMode>,
-        host_capabilities: &HashSet<String>,
+        host_capabilities: &HostCapabilities,
     ) -> Option<PluginCapabilitySummary> {
-        if self
-            .required_host_capabilities
-            .iter()
-            .any(|capability| !host_capabilities.contains(capability))
-        {
+        if !self.requirements.is_satisfied_by(host_capabilities) {
             return None;
         }
 
@@ -206,15 +203,14 @@ async fn load_plugin_metadata(
     )?;
 
     let MarketplacePluginSource::Local { path: plugin_root } = &plugin.source else {
-        let required_host_capabilities = match plugin.manifest_fallback.as_ref() {
+        let requirements = match plugin.manifest_fallback.as_ref() {
             Some(fallback) => {
                 fallback
                     .parse_for_listing()
                     .ok_or_else(|| "invalid marketplace plugin manifest fallback".to_string())?
                     .requires
-                    .host_capabilities
             }
-            None => Vec::new(),
+            None => PluginManifestRequirements::default(),
         };
         return Ok(Arc::new(ToolSuggestMetadataFragment {
             config_name: plugin.id.clone(),
@@ -222,7 +218,7 @@ async fn load_plugin_metadata(
             description: prompt_safe_plugin_description(Some(
                 &remote_plugin_install_required_description(&plugin.source),
             )),
-            required_host_capabilities,
+            requirements,
             mcp_server_names: Vec::new(),
             app_declarations: Vec::new(),
             skill_inventory: None,
@@ -254,7 +250,7 @@ async fn load_plugin_metadata(
         config_name: plugin.id.clone(),
         display_name: plugin.name.clone(),
         description: prompt_safe_plugin_description(manifest.description.as_deref()),
-        required_host_capabilities: manifest.requires.host_capabilities,
+        requirements: manifest.requires,
         mcp_server_names,
         app_declarations,
         skill_inventory: Some(skill_inventory),

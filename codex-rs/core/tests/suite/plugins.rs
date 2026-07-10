@@ -29,7 +29,6 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
-use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -271,109 +270,6 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         developer_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_capabilities_gate_plugin_guidance_and_tools_all_of() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    let rmcp_test_server_bin = match stdio_server_bin() {
-        Ok(bin) => bin,
-        Err(err) => {
-            eprintln!("test_stdio_server binary not available, skipping test: {err}");
-            return Ok(());
-        }
-    };
-
-    for (host_capabilities, expected_supported) in [
-        (Vec::new(), false),
-        (vec!["capability-a"], false),
-        (vec!["capability-b"], false),
-        (vec!["capability-a", "capability-b"], true),
-        (
-            vec!["capability-a", "capability-b", "capability-extra"],
-            true,
-        ),
-    ] {
-        let server = start_mock_server().await;
-        let mock = mount_plugin_tool_search_turn(&server).await;
-        let codex_home = Arc::new(TempDir::new()?);
-        write_plugin_skill_plugin(codex_home.as_ref());
-        write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
-        std::fs::write(
-            sample_plugin_root(codex_home.as_ref()).join(".codex-plugin/plugin.json"),
-            format!(
-                r#"{{
-  "name": "{SAMPLE_PLUGIN_DISPLAY_NAME}",
-  "description": "{SAMPLE_PLUGIN_DESCRIPTION}",
-  "requires": {{
-    "hostCapabilities": ["capability-a", "capability-b"]
-  }}
-}}"#
-            ),
-        )?;
-
-        let mut builder = test_codex()
-            .with_home(codex_home)
-            .with_auth(CodexAuth::from_api_key("Test API Key"))
-            .with_config(move |config| {
-                config.host_capabilities = host_capabilities
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-            });
-        let test_codex = builder
-            .build(&server)
-            .await
-            .expect("create new conversation");
-        let codex = Arc::clone(&test_codex.codex);
-        let startup = loop {
-            let event = codex
-                .next_event()
-                .await
-                .expect("stream ended unexpectedly while waiting for MCP startup");
-            if let EventMsg::McpStartupComplete(startup) = event.msg {
-                break startup;
-            }
-        };
-        let sample_ready = startup.ready.iter().any(|server| server == "sample");
-        let sample_reported = sample_ready
-            || startup
-                .failed
-                .iter()
-                .any(|failure| failure.server == "sample")
-            || startup.cancelled.iter().any(|server| server == "sample");
-        assert_eq!(sample_reported, expected_supported);
-        assert_eq!(sample_ready, expected_supported);
-
-        codex
-            .submit(Op::UserInput {
-                items: vec![codex_protocol::user_input::UserInput::Text {
-                    text: "hello".into(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            })
-            .await?;
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-        let requests = mock.requests();
-        let developer_text = requests[0].message_input_texts("developer").join("\n\n");
-        assert_eq!(
-            developer_text.contains("sample:sample-search: inspect sample data"),
-            expected_supported
-        );
-        assert_eq!(
-            developer_text.contains(SAMPLE_PLUGIN_DESCRIPTION),
-            expected_supported
-        );
-        let (_, echo_tool) = searched_plugin_tools(&requests[1]);
-        assert_eq!(echo_tool.is_some(), expected_supported);
-    }
 
     Ok(())
 }

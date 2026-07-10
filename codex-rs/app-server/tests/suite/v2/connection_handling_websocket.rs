@@ -8,7 +8,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -18,14 +17,10 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
-use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
-use core_test_support::responses;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
@@ -55,9 +50,6 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
-use wiremock::Mock;
-use wiremock::matchers::method;
-use wiremock::matchers::path_regex;
 
 // macOS and Windows CI can spend tens of seconds starting the app-server test
 // binary under Bazel before it accepts JSON-RPC or reports its websocket bind
@@ -69,12 +61,6 @@ pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type HmacSha256 = Hmac<Sha256>;
-
-fn body_contains(req: &wiremock::Request, text: &str) -> bool {
-    String::from_utf8(req.body.clone())
-        .ok()
-        .is_some_and(|body| body.contains(text))
-}
 
 #[tokio::test]
 async fn websocket_transport_routes_per_connection_handshake_and_responses() -> Result<()> {
@@ -113,310 +99,6 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     assert_eq!(ws2_config.id, RequestId::Integer(77));
     assert!(ws1_config.result.get("config").is_some());
     assert!(ws2_config.result.get("config").is_some());
-
-    process
-        .kill()
-        .await
-        .context("failed to stop websocket app-server process")?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn host_capabilities_are_normalized_and_sticky_for_loaded_threads() -> Result<()> {
-    const CHILD_PROMPT: &str = "child: verify capability-scoped auto-attach";
-    const PARENT_PROMPT: &str = "spawn a child to test connection auto-attach";
-    const SPAWN_CALL_ID: &str = "spawn-call-host-capabilities";
-
-    let server = responses::start_mock_server().await;
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "task_name": "capability_check",
-    }))?;
-    let _parent_turn = responses::mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
-        responses::sse(vec![
-            responses::ev_response_created("resp-parent-1"),
-            responses::ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                "collaboration",
-                "spawn_agent",
-                &spawn_args,
-            ),
-            responses::ev_completed("resp-parent-1"),
-        ]),
-    )
-    .await;
-    let child_response = responses::sse(vec![
-        responses::ev_response_created("resp-child-1"),
-        responses::ev_assistant_message("msg-child-1", "child done"),
-        responses::ev_completed("resp-child-1"),
-    ]);
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses$"))
-        .and(|req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        })
-        .respond_with(responses::sse_response(child_response).set_delay(Duration::from_millis(250)))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-    let _parent_follow_up = responses::mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
-        responses::sse(vec![
-            responses::ev_response_created("resp-parent-2"),
-            responses::ev_assistant_message("msg-parent-2", "parent done"),
-            responses::ev_completed("resp-parent-2"),
-        ]),
-    )
-    .await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        config_path,
-        format!("{config}\n[features]\nmulti_agent_v2 = true\n"),
-    )?;
-
-    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
-
-    let mut owner = connect_websocket(bind_addr).await?;
-    send_initialize_request_with_host_capabilities(
-        &mut owner,
-        /*id*/ 1,
-        "ws_thread_owner",
-        Some(vec![" capability-a ", "", "capability-a", "capability-b"]),
-    )
-    .await?;
-    read_response_for_id(&mut owner, /*id*/ 1)
-        .await
-        .context("owner initialize response")?;
-
-    // A connection with a different capability set must not be auto-attached
-    // when the owner creates the thread.
-    let mut mismatched_client = connect_websocket(bind_addr).await?;
-    send_initialize_request_with_host_capabilities(
-        &mut mismatched_client,
-        /*id*/ 6,
-        "ws_mismatched_client",
-        Some(vec!["capability-c"]),
-    )
-    .await?;
-    read_response_for_id(&mut mismatched_client, /*id*/ 6)
-        .await
-        .context("mismatched-client initialize response")?;
-
-    // Equivalent capabilities with different ordering and without duplicates
-    // must be eligible for auto-attach after normalization.
-    let mut equivalent_client = connect_websocket(bind_addr).await?;
-    send_initialize_request_with_host_capabilities(
-        &mut equivalent_client,
-        /*id*/ 4,
-        "ws_equivalent_client",
-        Some(vec!["capability-b", "capability-a"]),
-    )
-    .await?;
-    read_response_for_id(&mut equivalent_client, /*id*/ 4)
-        .await
-        .context("equivalent-client initialize response")?;
-
-    let thread_id = start_thread(&mut owner, /*id*/ 2).await?;
-    read_notification_for_method(&mut mismatched_client, "thread/started")
-        .await
-        .context("mismatched-client global thread/started notification")?;
-    read_notification_for_method(&mut equivalent_client, "thread/started")
-        .await
-        .context("equivalent-client global thread/started notification")?;
-    send_request(
-        &mut owner,
-        "turn/start",
-        /*id*/ 3,
-        Some(serde_json::to_value(TurnStartParams {
-            thread_id: thread_id.clone(),
-            input: vec![V2UserInput::Text {
-                text: PARENT_PROMPT.to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })?),
-    )
-    .await?;
-    read_response_for_id(&mut owner, /*id*/ 3)
-        .await
-        .context("owner turn/start response")?;
-    read_notification_for_method(&mut owner, "turn/completed")
-        .await
-        .context("owner turn/completed notification")?;
-    read_notification_for_method(&mut equivalent_client, "turn/completed")
-        .await
-        .context("equivalent auto-attached client child turn/completed notification")?;
-
-    match timeout(Duration::from_millis(250), async {
-        loop {
-            if let JSONRPCMessage::Notification(notification) =
-                read_jsonrpc_message(&mut mismatched_client).await?
-                && notification.method == "turn/completed"
-            {
-                return Ok::<_, anyhow::Error>(notification);
-            }
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => bail!("mismatched client received thread-scoped turn/completed"),
-        Ok(Err(err)) => return Err(err),
-        Err(_) => {}
-    }
-
-    send_request(
-        &mut equivalent_client,
-        "thread/resume",
-        /*id*/ 5,
-        Some(serde_json::to_value(ThreadResumeParams {
-            thread_id: thread_id.clone(),
-            ..Default::default()
-        })?),
-    )
-    .await?;
-    read_response_for_id(&mut equivalent_client, /*id*/ 5)
-        .await
-        .context("equivalent-client resume response")?;
-
-    send_request(
-        &mut mismatched_client,
-        "thread/resume",
-        /*id*/ 7,
-        Some(serde_json::to_value(ThreadResumeParams {
-            thread_id: thread_id.clone(),
-            ..Default::default()
-        })?),
-    )
-    .await?;
-    let resume_error = read_error_for_id(&mut mismatched_client, /*id*/ 7)
-        .await
-        .context("mismatched-client resume error")?;
-    assert!(
-        resume_error
-            .error
-            .message
-            .contains("cannot resume running thread")
-    );
-
-    send_request(
-        &mut mismatched_client,
-        "turn/start",
-        /*id*/ 8,
-        Some(serde_json::to_value(TurnStartParams {
-            thread_id: thread_id.clone(),
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })?),
-    )
-    .await?;
-    let turn_error = read_error_for_id(&mut mismatched_client, /*id*/ 8)
-        .await
-        .context("mismatched-client turn/start error")?;
-    assert!(turn_error.error.message.contains("cannot start a turn"));
-
-    send_request(
-        &mut mismatched_client,
-        "turn/steer",
-        /*id*/ 9,
-        Some(json!({
-            "threadId": thread_id,
-            "expectedTurnId": "turn-under-test",
-            "input": [],
-        })),
-    )
-    .await?;
-    let steer_error = read_error_for_id(&mut mismatched_client, /*id*/ 9)
-        .await
-        .context("mismatched-client turn/steer error")?;
-    assert!(steer_error.error.message.contains("cannot steer a turn"));
-
-    send_request(
-        &mut mismatched_client,
-        "thread/inject_items",
-        /*id*/ 10,
-        Some(json!({
-            "threadId": thread_id,
-            "items": [],
-        })),
-    )
-    .await?;
-    let inject_error = read_error_for_id(&mut mismatched_client, /*id*/ 10)
-        .await
-        .context("mismatched-client thread/injectItems error")?;
-    assert!(
-        inject_error.error.message.contains("cannot inject items"),
-        "unexpected inject error: {}",
-        inject_error.error.message
-    );
-
-    send_request(
-        &mut mismatched_client,
-        "app/list",
-        /*id*/ 11,
-        Some(json!({
-            "threadId": thread_id,
-        })),
-    )
-    .await?;
-    let apps_error = read_error_for_id(&mut mismatched_client, /*id*/ 11)
-        .await
-        .context("mismatched-client app/list error")?;
-    assert!(apps_error.error.message.contains("cannot list apps"));
-
-    send_request(
-        &mut mismatched_client,
-        "thread/rollback",
-        /*id*/ 12,
-        Some(json!({
-            "threadId": thread_id,
-            "numTurns": 1,
-        })),
-    )
-    .await?;
-    let rollback_error = read_error_for_id(&mut mismatched_client, /*id*/ 12)
-        .await
-        .context("mismatched-client thread/rollback error")?;
-    assert!(rollback_error.error.message.contains("cannot roll back"));
-
-    send_request(
-        &mut mismatched_client,
-        "turn/interrupt",
-        /*id*/ 13,
-        Some(json!({
-            "threadId": thread_id,
-            "turnId": "turn-under-test",
-        })),
-    )
-    .await?;
-    let interrupt_error = read_error_for_id(&mut mismatched_client, /*id*/ 13)
-        .await
-        .context("mismatched-client turn/interrupt error")?;
-    assert!(
-        interrupt_error
-            .error
-            .message
-            .contains("cannot interrupt a turn")
-    );
-
-    send_request(
-        &mut mismatched_client,
-        "thread/settings/update",
-        /*id*/ 14,
-        Some(json!({
-            "threadId": thread_id,
-        })),
-    )
-    .await?;
-    read_response_for_id(&mut mismatched_client, /*id*/ 14)
-        .await
-        .context("mismatched-client thread/settings/update response")?;
 
     process
         .kill()
@@ -1013,32 +695,13 @@ pub(super) async fn send_initialize_request(
     id: i64,
     client_name: &str,
 ) -> Result<()> {
-    send_initialize_request_with_host_capabilities(
-        stream,
-        id,
-        client_name,
-        /*host_capabilities*/ None,
-    )
-    .await
-}
-
-async fn send_initialize_request_with_host_capabilities(
-    stream: &mut WsClient,
-    id: i64,
-    client_name: &str,
-    host_capabilities: Option<Vec<&str>>,
-) -> Result<()> {
     let params = InitializeParams {
         client_info: ClientInfo {
             name: client_name.to_string(),
             title: Some("WebSocket Test Client".to_string()),
             version: "0.1.0".to_string(),
         },
-        capabilities: host_capabilities.map(|host_capabilities| InitializeCapabilities {
-            experimental_api: true,
-            host_capabilities: Some(host_capabilities.into_iter().map(str::to_string).collect()),
-            ..Default::default()
-        }),
+        capabilities: None,
     };
     send_request(
         stream,

@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,7 +31,6 @@ pub struct SkillListQuery {
     pub include_bundled_skills: bool,
     pub include_orchestrator_skills: bool,
     pub mcp_resources: Option<Arc<McpResourceClient>>,
-    pub host_capabilities: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]

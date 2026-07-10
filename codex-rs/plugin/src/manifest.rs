@@ -1,5 +1,7 @@
 use codex_config::HooksFile;
 
+use crate::HostCapabilities;
+
 /// Parsed plugin metadata parameterized by its resource locator representation.
 ///
 /// Host loading uses absolute paths, while resolved packages replace them with
@@ -19,7 +21,23 @@ pub struct PluginManifest<Resource> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginManifestRequirements {
     /// Every listed capability must be advertised by the host.
-    pub host_capabilities: Vec<String>,
+    pub host_capabilities: HostCapabilities,
+}
+
+impl PluginManifestRequirements {
+    pub fn is_satisfied_by(&self, host_capabilities: &HostCapabilities) -> bool {
+        self.host_capabilities
+            .iter()
+            .all(|capability| host_capabilities.contains(capability))
+    }
+
+    pub fn missing_from(&self, host_capabilities: &HostCapabilities) -> HostCapabilities {
+        HostCapabilities::from_names(
+            self.host_capabilities
+                .iter()
+                .filter(|capability| !host_capabilities.contains(capability)),
+        )
+    }
 }
 
 /// Component resources declared by a plugin manifest.

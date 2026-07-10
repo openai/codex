@@ -1,6 +1,5 @@
 use codex_core_skills::model::SkillDependencies;
 use codex_utils_path_uri::PathUri;
-use std::collections::BTreeSet;
 
 /// Source authority that owns a skill package and must be used to read it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -118,7 +117,6 @@ pub struct SkillCatalogEntry {
     pub dependencies: Option<SkillDependencies>,
     pub enabled: bool,
     pub prompt_visible: bool,
-    pub(crate) required_host_capabilities: Vec<String>,
 }
 
 impl SkillCatalogEntry {
@@ -140,7 +138,6 @@ impl SkillCatalogEntry {
             dependencies: None,
             enabled: true,
             prompt_visible: true,
-            required_host_capabilities: Vec::new(),
         }
     }
 
@@ -169,21 +166,6 @@ impl SkillCatalogEntry {
         self
     }
 
-    pub fn with_required_host_capabilities(
-        mut self,
-        required_host_capabilities: Vec<String>,
-    ) -> Self {
-        self.required_host_capabilities = required_host_capabilities;
-        self
-    }
-
-    /// Returns whether every host capability required by this package is available.
-    pub fn host_requirements_satisfied_by(&self, host_capabilities: &BTreeSet<String>) -> bool {
-        self.required_host_capabilities
-            .iter()
-            .all(|capability| host_capabilities.contains(capability))
-    }
-
     pub(crate) fn rendered_path(&self) -> &str {
         self.display_path
             .as_deref()
@@ -196,9 +178,6 @@ impl SkillCatalogEntry {
 pub struct SkillCatalog {
     pub entries: Vec<SkillCatalogEntry>,
     pub warnings: Vec<String>,
-    /// Warnings whose visibility depends on the host capabilities available at projection time.
-    #[doc(hidden)]
-    pub host_capability_gated_warnings: Vec<HostCapabilityGatedWarnings>,
 }
 
 impl SkillCatalog {
@@ -207,8 +186,6 @@ impl SkillCatalog {
             self.push_entry(entry);
         }
         self.warnings.extend(other.warnings);
-        self.host_capability_gated_warnings
-            .extend(other.host_capability_gated_warnings);
     }
 
     pub fn push_entry(&mut self, entry: SkillCatalogEntry) {
@@ -222,33 +199,6 @@ impl SkillCatalog {
 
         self.entries.push(entry);
     }
-
-    pub(crate) fn extend_warnings_with_host_requirements(
-        &mut self,
-        warnings: Vec<String>,
-        required_host_capabilities: &[String],
-    ) {
-        if warnings.is_empty() {
-            return;
-        }
-        if required_host_capabilities.is_empty() {
-            self.warnings.extend(warnings);
-        } else {
-            self.host_capability_gated_warnings
-                .push(HostCapabilityGatedWarnings {
-                    required_host_capabilities: required_host_capabilities.to_vec(),
-                    warnings,
-                });
-        }
-    }
-}
-
-/// Warning group carried in raw catalogs until host capabilities are projected.
-#[doc(hidden)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostCapabilityGatedWarnings {
-    pub required_host_capabilities: Vec<String>,
-    pub warnings: Vec<String>,
 }
 
 /// Contents returned after resolving a skill resource through its owner.

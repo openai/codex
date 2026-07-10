@@ -24,7 +24,6 @@ mod provider;
 struct SelectedPluginMetadata {
     plugin_id: String,
     plugin_display_name: String,
-    required_host_capabilities: Vec<String>,
     servers: Vec<(String, codex_config::McpServerConfig)>,
     connector_ids: Vec<String>,
 }
@@ -113,12 +112,6 @@ impl SelectedExecutorPluginMcpContributor {
                 Some(SelectedPluginMetadata {
                     plugin_id: plugin.plugin().selected_root_id().to_string(),
                     plugin_display_name: plugin.plugin().manifest().display_name().to_string(),
-                    required_host_capabilities: plugin
-                        .plugin()
-                        .manifest()
-                        .requires
-                        .host_capabilities
-                        .clone(),
                     servers,
                     connector_ids,
                 })
@@ -178,13 +171,6 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                 let Some(plugin) = self.metadata_for_root(&state, selected_root).await else {
                     continue;
                 };
-                if !plugin
-                    .required_host_capabilities
-                    .iter()
-                    .all(|capability| context.config().host_capabilities.contains(capability))
-                {
-                    continue;
-                }
                 let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
                 context
                     .config()

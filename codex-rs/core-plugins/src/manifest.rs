@@ -1,4 +1,5 @@
 use codex_config::HooksFile;
+use codex_plugin::HostCapabilities;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
@@ -188,17 +189,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         let version = version.trim();
         (!version.is_empty()).then(|| version.to_string())
     });
-    let mut host_capabilities = Vec::new();
-    for capability in requires.host_capabilities {
-        let capability = capability.trim();
-        if !capability.is_empty()
-            && !host_capabilities
-                .iter()
-                .any(|existing| existing == capability)
-        {
-            host_capabilities.push(capability.to_string());
-        }
-    }
+    let host_capabilities = HostCapabilities::from_names(requires.host_capabilities);
     let interface = interface.and_then(|interface| {
         let RawPluginManifestInterface {
             display_name,
@@ -535,6 +526,7 @@ mod tests {
     use super::load_plugin_manifest;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+    use codex_plugin::HostCapabilities;
     use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
     use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
@@ -757,10 +749,10 @@ mod tests {
         assert_eq!(
             manifest.requires,
             PluginManifestRequirements {
-                host_capabilities: vec![
-                    "codex.inline_visualization".to_string(),
-                    "codex.code_mode".to_string(),
-                ],
+                host_capabilities: HostCapabilities::from_names([
+                    "codex.inline_visualization",
+                    "codex.code_mode",
+                ]),
             }
         );
     }
@@ -788,7 +780,7 @@ mod tests {
         assert_eq!(manifest.version, Some("2.0.0".to_string()));
         assert_eq!(
             manifest.requires.host_capabilities,
-            vec!["codex.inline_visualization".to_string()]
+            HostCapabilities::from_names(["codex.inline_visualization"])
         );
         assert_eq!(
             manifest
@@ -897,7 +889,7 @@ mod tests {
         assert_eq!(
             executor_plugin.manifest().requires,
             PluginManifestRequirements {
-                host_capabilities: vec!["codex.inline_visualization".to_string()],
+                host_capabilities: HostCapabilities::from_names(["codex.inline_visualization"]),
             }
         );
         assert_eq!(executor_plugin, expected_plugin);

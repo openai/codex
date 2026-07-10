@@ -783,7 +783,6 @@ mod thread_processor_behavior_tests {
             parent_thread_id: None,
             thread_source: None,
             originator: "test_originator".to_string(),
-            host_capabilities: Default::default(),
         };
 
         assert_eq!(

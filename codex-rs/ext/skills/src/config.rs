@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 /// Host-supplied configuration used by the skills extension.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillsExtensionConfig {
@@ -9,6 +7,4 @@ pub struct SkillsExtensionConfig {
     pub bundled_skills_enabled: bool,
     /// Whether orchestrator-owned skills are eligible for discovery.
     pub orchestrator_skills_enabled: bool,
-    /// Opaque host features available to runtime plugins for this thread.
-    pub host_capabilities: BTreeSet<String>,
 }

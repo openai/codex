@@ -1,6 +1,7 @@
 use super::PluginResourceLocator;
 use super::ResolvedPlugin;
 use super::ResolvedPluginError;
+use crate::HostCapabilities;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestInterface;
@@ -44,7 +45,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
         description: None,
         keywords: Vec::new(),
         requires: PluginManifestRequirements {
-            host_capabilities: vec!["codex.inline_visualization".to_string()],
+            host_capabilities: HostCapabilities::from_names(["codex.inline_visualization"]),
         },
         paths: PluginManifestPaths {
             skills: vec![path_uri(&skills)],
@@ -81,7 +82,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
             description: None,
             keywords: Vec::new(),
             requires: PluginManifestRequirements {
-                host_capabilities: vec!["codex.inline_visualization".to_string()],
+                host_capabilities: HostCapabilities::from_names(["codex.inline_visualization"]),
             },
             paths: PluginManifestPaths {
                 skills: vec![resource("executor-1", &skills)],

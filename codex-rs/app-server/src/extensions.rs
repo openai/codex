@@ -91,7 +91,6 @@ where
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
             orchestrator_skills_enabled: config.orchestrator_skills_enabled,
-            host_capabilities: config.host_capabilities.clone(),
         },
     );
     Arc::new(builder.build())

@@ -176,7 +176,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     let mut config = Config {
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
-        host_capabilities: Default::default(),
         bypass_hook_trust: false,
         model,
         service_tier: None,

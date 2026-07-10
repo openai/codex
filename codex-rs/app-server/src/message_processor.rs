@@ -19,7 +19,6 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::request_processors::AccountRequestProcessor;
-use crate::request_processors::AppServerClientInfo;
 use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
@@ -66,7 +65,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config::HostCapabilities;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
@@ -143,7 +141,6 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
     pub(crate) supports_openai_form_elicitation: bool,
-    pub(crate) host_capabilities: HostCapabilities,
 }
 
 impl Default for ConnectionSessionState {
@@ -199,13 +196,6 @@ impl ConnectionSessionState {
         self.initialized
             .get()
             .is_some_and(|session| session.supports_openai_form_elicitation)
-    }
-
-    pub(crate) fn host_capabilities(&self) -> HostCapabilities {
-        self.initialized
-            .get()
-            .map(|session| session.host_capabilities.clone())
-            .unwrap_or_default()
     }
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
@@ -678,10 +668,10 @@ impl MessageProcessor {
     pub(crate) async fn try_attach_thread_listener(
         &self,
         thread_id: ThreadId,
-        connections: Vec<(ConnectionId, HostCapabilities)>,
+        connection_ids: Vec<ConnectionId>,
     ) {
         self.thread_processor
-            .try_attach_thread_listener(thread_id, connections)
+            .try_attach_thread_listener(thread_id, connection_ids)
             .await;
     }
 
@@ -818,12 +808,9 @@ impl MessageProcessor {
         );
 
         let serialization_scope = codex_request.serialization_scope();
-        let app_server_client_info = AppServerClientInfo {
-            name: session.app_server_client_name().map(str::to_string),
-            version: session.client_version().map(str::to_string),
-        };
+        let app_server_client_name = session.app_server_client_name().map(str::to_string);
+        let client_version = session.client_version().map(str::to_string);
         let supports_openai_form_elicitation = session.supports_openai_form_elicitation();
-        let host_capabilities = session.host_capabilities();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -837,9 +824,9 @@ impl MessageProcessor {
                         connection_request_id,
                         codex_request,
                         request_context,
-                        app_server_client_info,
+                        app_server_client_name,
+                        client_version,
                         supports_openai_form_elicitation,
-                        host_capabilities,
                     )
                     .await;
                 if let Err(error) = result {
@@ -867,9 +854,9 @@ impl MessageProcessor {
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         request_context: RequestContext,
-        app_server_client_info: AppServerClientInfo,
+        app_server_client_name: Option<String>,
+        client_version: Option<String>,
         supports_openai_form_elicitation: bool,
-        host_capabilities: HostCapabilities,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -921,7 +908,7 @@ impl MessageProcessor {
                 .remote_control_processor
                 .enable(
                     params.is_some_and(|params| params.ephemeral),
-                    app_server_client_info.name.as_deref(),
+                    app_server_client_name.as_deref(),
                 )
                 .await
                 .map(|response| Some(response.into())),
@@ -929,7 +916,7 @@ impl MessageProcessor {
                 .remote_control_processor
                 .disable(
                     params.is_some_and(|params| params.ephemeral),
-                    app_server_client_info.name.as_deref(),
+                    app_server_client_name.as_deref(),
                 )
                 .await
                 .map(|response| Some(response.into())),
@@ -939,7 +926,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlPairingStart { params, .. } => self
                 .remote_control_processor
-                .pairing_start(params, app_server_client_info.name.as_deref())
+                .pairing_start(params, app_server_client_name.as_deref())
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlPairingStatus { params, .. } => self
@@ -1023,9 +1010,9 @@ impl MessageProcessor {
                     .thread_start(
                         request_id.clone(),
                         params,
-                        app_server_client_info.clone(),
+                        app_server_client_name.clone(),
+                        client_version.clone(),
                         supports_openai_form_elicitation,
-                        host_capabilities.clone(),
                         request_context,
                     )
                     .await
@@ -1040,10 +1027,10 @@ impl MessageProcessor {
                     .thread_resume(
                         request_id.clone(),
                         params,
-                        app_server_client_info.clone(),
+                        app_server_client_name.clone(),
+                        client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
-                        host_capabilities.clone(),
                     )
                     .await
             }
@@ -1052,10 +1039,10 @@ impl MessageProcessor {
                     .thread_fork(
                         request_id.clone(),
                         params,
-                        app_server_client_info.clone(),
+                        app_server_client_name.clone(),
+                        client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
-                        host_capabilities.clone(),
                     )
                     .await
             }
@@ -1116,7 +1103,7 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadCompactStart { params, .. } => {
                 self.thread_processor
-                    .thread_compact_start(&request_id, params, host_capabilities.clone())
+                    .thread_compact_start(&request_id, params)
                     .await
             }
             ClientRequest::ThreadBackgroundTerminalsClean { params, .. } => {
@@ -1136,12 +1123,7 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadRollback { params, .. } => {
                 self.thread_processor
-                    .thread_rollback(
-                        &request_id,
-                        params,
-                        app_server_client_info.name.as_deref(),
-                        host_capabilities.clone(),
-                    )
+                    .thread_rollback(&request_id, params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::ThreadList { params, .. } => {
@@ -1176,17 +1158,13 @@ impl MessageProcessor {
                 self.thread_processor.conversation_summary(params).await
             }
             ClientRequest::SkillsList { params, .. } => {
-                self.catalog_processor
-                    .skills_list(params, host_capabilities.clone())
-                    .await
+                self.catalog_processor.skills_list(params).await
             }
             ClientRequest::SkillsExtraRootsSet { params, .. } => {
                 self.catalog_processor.skills_extra_roots_set(params).await
             }
             ClientRequest::HooksList { params, .. } => {
-                self.catalog_processor
-                    .hooks_list(params, host_capabilities.clone())
-                    .await
+                self.catalog_processor.hooks_list(params).await
             }
             ClientRequest::MarketplaceAdd { params, .. } => {
                 self.marketplace_processor.marketplace_add(params).await
@@ -1227,17 +1205,13 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_share_delete(params).await
             }
             ClientRequest::AppsList { params, .. } => {
-                self.apps_processor
-                    .apps_list(&request_id, params, host_capabilities.clone())
-                    .await
+                self.apps_processor.apps_list(&request_id, params).await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
                 self.catalog_processor.skills_config_write(params).await
             }
             ClientRequest::PluginInstall { params, .. } => {
-                self.plugin_processor
-                    .plugin_install(&request_id, params, host_capabilities.clone())
-                    .await
+                self.plugin_processor.plugin_install(params).await
             }
             ClientRequest::PluginUninstall { params, .. } => {
                 self.plugin_processor.plugin_uninstall(params).await
@@ -1266,84 +1240,74 @@ impl MessageProcessor {
                     .turn_start(
                         request_id.clone(),
                         params,
-                        app_server_client_info,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
                         /*supports_openai_form_elicitation*/
                         supports_openai_form_elicitation,
-                        host_capabilities,
                     )
                     .await
             }
             ClientRequest::ThreadInjectItems { params, .. } => {
-                self.turn_processor
-                    .thread_inject_items(params, host_capabilities.clone())
-                    .await
+                self.turn_processor.thread_inject_items(params).await
             }
             ClientRequest::TurnSteer { params, .. } => {
-                self.turn_processor
-                    .turn_steer(&request_id, params, host_capabilities.clone())
-                    .await
+                self.turn_processor.turn_steer(&request_id, params).await
             }
             ClientRequest::TurnInterrupt { params, .. } => {
                 self.turn_processor
-                    .turn_interrupt(&request_id, params, host_capabilities.clone())
+                    .turn_interrupt(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeStart { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_start(&request_id, params, host_capabilities.clone())
+                    .thread_realtime_start(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeAppendAudio { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_append_audio(&request_id, params, host_capabilities.clone())
+                    .thread_realtime_append_audio(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeAppendText { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_append_text(&request_id, params, host_capabilities.clone())
+                    .thread_realtime_append_text(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeAppendSpeech { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_append_speech(&request_id, params, host_capabilities.clone())
+                    .thread_realtime_append_speech(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeStop { params, .. } => {
                 self.turn_processor
-                    .thread_realtime_stop(&request_id, params, host_capabilities.clone())
+                    .thread_realtime_stop(&request_id, params)
                     .await
             }
             ClientRequest::ThreadRealtimeListVoices { params: _, .. } => {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor
-                    .review_start(&request_id, params, host_capabilities.clone())
-                    .await
+                self.turn_processor.review_start(&request_id, params).await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
-                self.mcp_processor
-                    .mcp_server_oauth_login(&request_id, params, host_capabilities.clone())
-                    .await
+                self.mcp_processor.mcp_server_oauth_login(params).await
             }
             ClientRequest::McpServerRefresh { params, .. } => {
-                self.mcp_processor
-                    .mcp_server_refresh(params, host_capabilities.clone())
-                    .await
+                self.mcp_processor.mcp_server_refresh(params).await
             }
             ClientRequest::McpServerStatusList { params, .. } => {
                 self.mcp_processor
-                    .mcp_server_status_list(&request_id, params, host_capabilities.clone())
+                    .mcp_server_status_list(&request_id, params)
                     .await
             }
             ClientRequest::McpResourceRead { params, .. } => {
                 self.mcp_processor
-                    .mcp_resource_read(&request_id, params, host_capabilities.clone())
+                    .mcp_resource_read(&request_id, params)
                     .await
             }
             ClientRequest::McpServerToolCall { params, .. } => {
                 self.mcp_processor
-                    .mcp_server_tool_call(&request_id, params, host_capabilities)
+                    .mcp_server_tool_call(&request_id, params)
                     .await
             }
             ClientRequest::WindowsSandboxSetupStart { params, .. } => {

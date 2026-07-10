@@ -36,9 +36,8 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params, host_capabilities)
+        self.apps_list_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -47,19 +46,11 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let installed_start = Instant::now();
         let reload = params.force_refetch;
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
-            let (thread_id, loaded_thread) = self.load_thread(thread_id).await?;
-            ensure_thread_host_capabilities(
-                thread_id,
-                loaded_thread.as_ref(),
-                &host_capabilities,
-                "list apps",
-            )
-            .await?;
+            let (_, loaded_thread) = self.load_thread(thread_id).await?;
             Some(loaded_thread)
         } else {
             None
@@ -69,7 +60,6 @@ impl AppsRequestProcessor {
             None => None,
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
-        config.host_capabilities = host_capabilities;
 
         if let Some(thread) = thread {
             let _ = config
@@ -141,7 +131,6 @@ impl AppsRequestProcessor {
         plugins_manager: Arc<PluginsManager>,
         installed_start: Instant,
     ) {
-        let connection_id = request_id.connection_id;
         let reload = params.force_refetch;
         let retry_params = params.clone();
         let retry_config = config.clone();
@@ -150,7 +139,6 @@ impl AppsRequestProcessor {
         let retry_plugins_manager = Arc::clone(&plugins_manager);
         let result = Self::apps_list_response(
             &outgoing,
-            connection_id,
             params,
             config,
             environment_manager,
@@ -173,7 +161,6 @@ impl AppsRequestProcessor {
             retry_params.force_refetch = true;
             if let Err(err) = Self::apps_list_response(
                 &outgoing,
-                connection_id,
                 retry_params,
                 retry_config,
                 retry_environment_manager,
@@ -189,7 +176,6 @@ impl AppsRequestProcessor {
 
     async fn apps_list_response(
         outgoing: &Arc<OutgoingMessageSender>,
-        connection_id: ConnectionId,
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
@@ -269,7 +255,7 @@ impl AppsRequestProcessor {
                 accessible_loaded,
                 all_loaded,
             ) {
-                send_app_list_updated_notification(outgoing, connection_id, merged.clone()).await;
+                send_app_list_updated_notification(outgoing, merged.clone()).await;
                 last_notified_apps = Some(merged);
             }
         }
@@ -329,7 +315,7 @@ impl AppsRequestProcessor {
                 all_loaded,
             ) && last_notified_apps.as_ref() != Some(&merged)
             {
-                send_app_list_updated_notification(outgoing, connection_id, merged.clone()).await;
+                send_app_list_updated_notification(outgoing, merged.clone()).await;
                 last_notified_apps = Some(merged.clone());
             }
 
@@ -458,47 +444,12 @@ fn paginate_apps(
 
 async fn send_app_list_updated_notification(
     outgoing: &Arc<OutgoingMessageSender>,
-    connection_id: ConnectionId,
     data: Vec<AppInfo>,
 ) {
     let data = data.into_iter().map(app_info_to_api).collect();
     outgoing
-        .send_server_notification_to_connections(
-            &[connection_id],
-            ServerNotification::AppListUpdated(AppListUpdatedNotification { data }),
-        )
+        .send_server_notification(ServerNotification::AppListUpdated(
+            AppListUpdatedNotification { data },
+        ))
         .await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::outgoing_message::OutgoingEnvelope;
-    use crate::outgoing_message::OutgoingMessage;
-
-    #[tokio::test]
-    async fn app_list_updated_notification_targets_requesting_connection() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let outgoing = Arc::new(OutgoingMessageSender::new(
-            tx,
-            codex_analytics::AnalyticsEventsClient::disabled(),
-        ));
-
-        send_app_list_updated_notification(&outgoing, ConnectionId(42), Vec::new()).await;
-
-        let envelope = rx.recv().await.expect("notification should be sent");
-        let OutgoingEnvelope::ToConnection {
-            connection_id,
-            message,
-            ..
-        } = envelope
-        else {
-            panic!("app list update should not be broadcast");
-        };
-        assert_eq!(connection_id, ConnectionId(42));
-        assert!(matches!(
-            message,
-            OutgoingMessage::AppServerNotification(ServerNotification::AppListUpdated(_))
-        ));
-    }
 }

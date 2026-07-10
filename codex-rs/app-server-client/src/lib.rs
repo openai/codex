@@ -349,8 +349,6 @@ pub struct InProcessClientStartArgs {
     pub experimental_api: bool,
     /// Whether MCP servers may send `openai/form` elicitation requests.
     pub mcp_server_openai_form_elicitation: bool,
-    /// Host features available to runtime plugins.
-    pub host_capabilities: Vec<String>,
     /// Notification methods this client opts out of receiving.
     pub opt_out_notification_methods: Vec<String>,
     /// Queue capacity for command/event channels (clamped to at least 1).
@@ -376,8 +374,6 @@ impl InProcessClientStartArgs {
                 Some(self.opt_out_notification_methods.clone())
             },
             mcp_server_openai_form_elicitation: self.mcp_server_openai_form_elicitation,
-            host_capabilities: (!self.host_capabilities.is_empty())
-                .then(|| self.host_capabilities.clone()),
         };
 
         InitializeParams {
@@ -1049,7 +1045,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity,
         })
@@ -1244,7 +1239,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         }
@@ -1260,20 +1254,6 @@ mod tests {
                 .capabilities
                 .expect("initialize capabilities")
                 .mcp_server_openai_form_elicitation
-        );
-    }
-
-    #[test]
-    fn remote_initialize_params_forward_host_capabilities() {
-        let mut args = test_remote_connect_args("ws://localhost/rpc".to_string());
-        args.host_capabilities = vec!["codex.inline_visualization".to_string()];
-
-        assert_eq!(
-            args.initialize_params()
-                .capabilities
-                .expect("initialize capabilities")
-                .host_capabilities,
-            Some(vec!["codex.inline_visualization".to_string()])
         );
     }
 
@@ -1548,7 +1528,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         })
@@ -1638,7 +1617,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         })
@@ -1659,7 +1637,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         })
@@ -2264,22 +2241,18 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: true,
-            host_capabilities: vec!["codex.inline_visualization".to_string()],
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }
         .into_runtime_start_args();
 
         assert_eq!(runtime_args.config, config);
-        let initialize_capabilities = runtime_args
-            .initialize
-            .capabilities
-            .as_ref()
-            .expect("initialize capabilities");
-        assert!(initialize_capabilities.mcp_server_openai_form_elicitation);
-        assert_eq!(
-            initialize_capabilities.host_capabilities,
-            Some(vec!["codex.inline_visualization".to_string()])
+        assert!(
+            runtime_args
+                .initialize
+                .capabilities
+                .expect("initialize capabilities")
+                .mcp_server_openai_form_elicitation
         );
         assert!(Arc::ptr_eq(
             &runtime_args.environment_manager,
@@ -2317,7 +2290,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,
-            host_capabilities: Vec::new(),
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }

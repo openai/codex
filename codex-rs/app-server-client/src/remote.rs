@@ -87,7 +87,6 @@ pub struct RemoteAppServerConnectArgs {
     pub client_version: String,
     pub experimental_api: bool,
     pub mcp_server_openai_form_elicitation: bool,
-    pub host_capabilities: Vec<String>,
     pub opt_out_notification_methods: Vec<String>,
     pub channel_capacity: usize,
 }
@@ -102,8 +101,6 @@ impl RemoteAppServerConnectArgs {
                 Some(self.opt_out_notification_methods.clone())
             },
             mcp_server_openai_form_elicitation: self.mcp_server_openai_form_elicitation,
-            host_capabilities: (!self.host_capabilities.is_empty())
-                .then(|| self.host_capabilities.clone()),
         };
 
         InitializeParams {

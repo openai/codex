@@ -93,20 +93,6 @@ App-server then advertises the downstream `openai/form` MCP extension for
 threads started, resumed, or forked by that connection. Clients that cannot
 handle the request envelope omit the field or set it to `false`.
 
-Clients declare host features available to runtime plugins with
-`initialize.params.capabilities.hostCapabilities`. Capability names are opaque
-compatibility signals, not authorization grants; omitted or `null`
-capabilities are treated as an empty set. The capability set is fixed for the
-lifetime of a loaded thread, so clients must use the same set when resuming or
-performing model-visible runtime operations on that thread. Capability-independent
-settings updates remain available; the next `turn/start` enforces compatibility.
-
-Plugin manifests declare all-of host requirements with
-`{"requires":{"hostCapabilities":["codex.inline_visualization"]}}`. A plugin
-whose requirements are not satisfied remains installed and manageable, but its
-skills, MCP servers, apps, hooks, and model-facing summaries are excluded from
-that runtime.
-
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -1836,7 +1822,7 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 } }
 ```
 
-When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot, and the requesting connection must have the same host capability set as the loaded thread. When omitted, the latest global config is used.
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
 
 `app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
 

@@ -45,6 +45,7 @@ use codex_core_skills::SkillsService;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_login::CodexAuth;
 use codex_plugin::AppDeclaration;
+use codex_plugin::HostCapabilities;
 use codex_plugin::PluginId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
@@ -808,10 +809,7 @@ fn write_host_capability_projection_plugin(codex_home: &Path) -> std::path::Path
 }
 
 fn set_host_capabilities(config: &mut PluginsConfigInput, capabilities: &[&str]) {
-    config.host_capabilities = capabilities
-        .iter()
-        .map(|capability| (*capability).to_string())
-        .collect();
+    config.host_capabilities = HostCapabilities::from_names(capabilities);
 }
 
 async fn load_plugins_from_config(
@@ -932,8 +930,8 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             ),
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
-            required_host_capabilities: Vec::new(),
-            missing_host_capabilities: Vec::new(),
+            required_host_capabilities: HostCapabilities::default(),
+            missing_host_capabilities: HostCapabilities::default(),
             skill_roots: vec![plugin_root.join("skills").abs()],
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
@@ -1015,17 +1013,14 @@ async fn plugin_host_capability_projection_is_all_of_and_reprojects_cached_plugi
         assert_eq!(plugin.error, None);
         assert_eq!(
             plugin.missing_host_capabilities,
-            missing_host_capabilities
-                .iter()
-                .map(|capability| (*capability).to_string())
-                .collect::<Vec<_>>()
+            HostCapabilities::from_names(missing_host_capabilities)
         );
         assert_eq!(
             plugin.required_host_capabilities,
-            vec![
+            HostCapabilities::from_names([
                 HOST_CAPABILITY_INLINE_VISUALIZATION.to_string(),
                 HOST_CAPABILITY_SESSION_OWNED_IAB.to_string(),
-            ]
+            ])
         );
         assert_eq!(plugin.skill_roots, vec![plugin_root.join("skills").abs()]);
         assert_eq!(
@@ -2355,8 +2350,8 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             manifest_description: None,
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
-            required_host_capabilities: Vec::new(),
-            missing_host_capabilities: Vec::new(),
+            required_host_capabilities: HostCapabilities::default(),
+            missing_host_capabilities: HostCapabilities::default(),
             skill_roots: Vec::new(),
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: false,
@@ -2532,8 +2527,8 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         manifest_description: None,
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
-        required_host_capabilities: Vec::new(),
-        missing_host_capabilities: Vec::new(),
+        required_host_capabilities: HostCapabilities::default(),
+        missing_host_capabilities: HostCapabilities::default(),
         skill_roots: Vec::new(),
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,
@@ -5171,13 +5166,17 @@ plugins = true
                             "name": "slack",
                             "release": {
                                 "display_name": "Slack",
-                                "app_ids": ["connector_slack"]
+                                "app_ids": ["connector_slack"],
+                                "requires": {"hostCapabilities": []}
                             }
                         },
                         {
                             "id": "plugin_github",
                             "name": "github",
-                            "release": {"display_name": "GitHub"}
+                            "release": {
+                                "display_name": "GitHub",
+                                "requires": {"hostCapabilities": []}
+                            }
                         }
                     ]
                 }))
@@ -5198,12 +5197,14 @@ plugins = true
                 remote_plugin_id: "plugin_github".to_string(),
                 display_name: "GitHub".to_string(),
                 app_connector_ids: Vec::new(),
+                requirements: Default::default(),
             },
             RecommendedPlugin {
                 config_id: "slack@openai-curated-remote".to_string(),
                 remote_plugin_id: "plugin_slack".to_string(),
                 display_name: "Slack".to_string(),
                 app_connector_ids: vec!["connector_slack".to_string()],
+                requirements: Default::default(),
             },
         ],
     };
@@ -5222,7 +5223,7 @@ plugins = true
 }
 
 #[tokio::test]
-async fn recommended_plugin_candidates_filter_installed_and_disabled_plugins() {
+async fn recommended_plugin_candidates_filter_installed_disabled_and_unsupported_plugins() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
@@ -5239,17 +5240,36 @@ plugins = true
                 {
                     "id": "plugin_linear",
                     "name": "linear",
-                    "release": {"display_name": "Linear"}
+                    "release": {
+                        "display_name": "Linear",
+                        "requires": {"hostCapabilities": []}
+                    }
                 },
                 {
                     "id": "plugin_github",
                     "name": "github",
-                    "release": {"display_name": "GitHub"}
+                    "release": {
+                        "display_name": "GitHub",
+                        "requires": {"hostCapabilities": []}
+                    }
                 },
                 {
                     "id": "plugin_slack",
                     "name": "slack",
-                    "release": {"display_name": "Slack"}
+                    "release": {
+                        "display_name": "Slack",
+                        "requires": {"hostCapabilities": []}
+                    }
+                },
+                {
+                    "id": "plugin_visualize",
+                    "name": "visualize",
+                    "release": {
+                        "display_name": "Visualize",
+                        "requires": {
+                            "hostCapabilities": [HOST_CAPABILITY_INLINE_VISUALIZATION]
+                        }
+                    }
                 }
             ]
         })))
@@ -5290,6 +5310,43 @@ plugins = true
             mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),
         })])
+    );
+
+    config
+        .host_capabilities
+        .insert(HOST_CAPABILITY_INLINE_VISUALIZATION);
+    let candidates = manager
+        .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+            plugins_config: &config,
+            loaded_plugins: &loaded_plugins,
+            auth: Some(&auth),
+            disabled_tools: &disabled_tools,
+            app_server_client_name: None,
+        })
+        .await;
+
+    assert_eq!(
+        candidates,
+        Some(vec![
+            DiscoverableTool::from(DiscoverablePluginInfo {
+                id: "slack@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugin_slack".to_string()),
+                name: "Slack".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            }),
+            DiscoverableTool::from(DiscoverablePluginInfo {
+                id: "visualize@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugin_visualize".to_string()),
+                name: "Visualize".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            }),
+        ])
     );
 }
 

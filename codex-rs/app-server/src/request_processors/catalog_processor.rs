@@ -120,9 +120,8 @@ impl CatalogRequestProcessor {
     pub(crate) async fn skills_list(
         &self,
         params: SkillsListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.skills_list_response(params, host_capabilities)
+        self.skills_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -130,9 +129,8 @@ impl CatalogRequestProcessor {
     pub(crate) async fn hooks_list(
         &self,
         params: HooksListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.hooks_list_response(params, host_capabilities)
+        self.hooks_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -490,7 +488,6 @@ impl CatalogRequestProcessor {
     async fn skills_list_response(
         &self,
         params: SkillsListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
         let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
@@ -499,8 +496,7 @@ impl CatalogRequestProcessor {
             cwds
         };
 
-        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        config.host_capabilities = host_capabilities;
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -599,7 +595,6 @@ impl CatalogRequestProcessor {
     async fn hooks_list_response(
         &self,
         params: HooksListParams,
-        host_capabilities: HostCapabilities,
     ) -> Result<HooksListResponse, JSONRPCErrorError> {
         let HooksListParams { cwds } = params;
         let cwds = if cwds.is_empty() {
@@ -616,10 +611,7 @@ impl CatalogRequestProcessor {
                 .config_manager
                 .load_for_cwd(
                     /*request_overrides*/ None,
-                    ConfigOverrides {
-                        host_capabilities: host_capabilities.clone(),
-                        ..Default::default()
-                    },
+                    ConfigOverrides::default(),
                     Some(cwd.clone()),
                 )
                 .await

@@ -1125,19 +1125,16 @@ pub async fn run_main_with_transport_options(
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let mut initialized_connections = Vec::new();
+                                let mut initialized_connection_ids = Vec::new();
                                 for (connection_id, connection_state) in &connections {
                                     if connection_state.session.initialized() {
-                                        initialized_connections.push((
-                                            *connection_id,
-                                            connection_state.session.host_capabilities(),
-                                        ));
+                                        initialized_connection_ids.push(*connection_id);
                                     }
                                 }
                                 processor
                                     .try_attach_thread_listener(
                                         thread_id,
-                                        initialized_connections,
+                                        initialized_connection_ids,
                                     )
                                     .await;
                             }
