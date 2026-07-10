@@ -289,6 +289,17 @@ fn invalid_request_response(message: impl Into<String>) -> wiremock::ResponseTem
     }))
 }
 
+fn model_not_found_response(model: &str) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(/*status*/ 404).set_body_json(json!({
+        "error": {
+            "message": format!("Model not found {model}"),
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": null,
+        }
+    }))
+}
+
 fn write_global_file(
     home: &TempDir,
     filename: &str,
@@ -2293,7 +2304,7 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_rename() {
+async fn pre_sampling_compact_falls_back_when_previous_model_is_not_found() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -2320,9 +2331,7 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
                 ev_assistant_message("m1", "before switch"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ])),
-            invalid_request_response(format!(
-                "The '{retired_model}' model is not supported when using Codex with a ChatGPT account."
-            )),
+            model_not_found_response(retired_model),
             sse_response(sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -2384,7 +2393,9 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
     })
     .await;
 
-    let model_provider = openai_model_provider(&server);
+    let mut model_provider = openai_model_provider(&server);
+    model_provider.request_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(0);
     let mut resumed_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(retired_model)

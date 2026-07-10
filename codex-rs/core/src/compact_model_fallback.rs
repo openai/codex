@@ -2,7 +2,16 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionReason;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::CodexErr;
+use http::StatusCode;
 use tracing::warn;
+
+pub(crate) fn should_retry_with_current_model(error: &CodexErr) -> bool {
+    match error {
+        CodexErr::InvalidRequest(_) => true,
+        CodexErr::UnexpectedStatus(response) => response.status == StatusCode::NOT_FOUND,
+        _ => false,
+    }
+}
 
 pub(crate) fn record_model_fallback(
     session_telemetry: &SessionTelemetry,
