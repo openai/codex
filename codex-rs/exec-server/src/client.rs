@@ -23,6 +23,7 @@ use tokio_util::task::AbortOnDropHandle;
 use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::debug;
+use tracing::instrument::WithSubscriber;
 
 use crate::ProcessId;
 use crate::client::http_client::response_body_stream::MAX_QUEUED_HTTP_BODY_BYTES;
@@ -781,7 +782,11 @@ impl ExecServerClient {
                     }
                 }
             };
-            tokio::spawn(process_start_task.in_current_span());
+            tokio::spawn(
+                process_start_task
+                    .in_current_span()
+                    .with_current_subscriber(),
+            );
             return result_rx.await.map_err(|_| {
                 ExecServerError::Protocol("process start task stopped unexpectedly".to_string())
             })?;
@@ -1479,7 +1484,7 @@ mod tests {
             .expect("json-rpc line should write");
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn process_start_propagates_caller_trace_context_across_background_task() {
         let (client_stdin, server_reader) = duplex(1 << 20);
         let (mut server_writer, client_stdout) = duplex(1 << 20);

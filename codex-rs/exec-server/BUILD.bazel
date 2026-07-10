@@ -14,9 +14,10 @@ codex_rust_crate(
     integration_compile_data_extra = [
         "src/proto/codex.exec_server.relay.v1.rs",
     ],
-    # Keep the crate's integration tests single-threaded under Bazel because
-    # they install process-global test-binary dispatch state, and the remote
-    # exec-server cases already rely on serialization around the full CLI path.
+    # Keep the crate's tests single-threaded under Bazel because they install
+    # process-global test-binary dispatch state, and the remote exec-server
+    # cases already rely on serialization around the full CLI path.
     integration_test_args = ["--test-threads=1"],
     test_tags = ["no-sandbox"],
+    unit_test_args = ["--test-threads=1"],
 )

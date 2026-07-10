@@ -194,6 +194,7 @@ def codex_rust_crate(
         deps_extra = [],
         integration_compile_data_extra = [],
         integration_test_args = [],
+        unit_test_args = [],
         integration_test_timeout = None,
         test_data_extra = [],
         test_shard_counts = {},
@@ -230,6 +231,7 @@ def codex_rust_crate(
             Typically only needed when features add additional deps.
         integration_compile_data_extra: Extra compile_data for integration tests.
         integration_test_args: Optional args for integration test binaries.
+        unit_test_args: Optional args for the unit test binary.
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
@@ -347,6 +349,8 @@ def codex_rust_crate(
         )
 
         unit_test_kwargs = {}
+        if unit_test_args:
+            unit_test_kwargs["args"] = unit_test_args
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
         if unit_test_shard_count:
