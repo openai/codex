@@ -11,6 +11,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -73,6 +74,7 @@ struct LifecycleFixture {
 
 #[tokio::test]
 async fn plugin_script_emits_started_and_completed_lifecycle_analytics() -> Result<()> {
+    skip_if_remote!(Ok(()), "plugin lifecycle fixtures are local-only");
     let fixture = run_lifecycle_fixture(
         "printf 'sensitive-script-output\\n'\n",
         &["secret-argument"],
@@ -114,10 +116,7 @@ async fn plugin_script_emits_started_and_completed_lifecycle_analytics() -> Resu
 
 #[tokio::test]
 async fn zsh_fork_plugin_script_emits_terminal_lifecycle_analytics() -> Result<()> {
-    skip_if_remote!(
-        Ok(()),
-        "zsh-fork fixtures use host-local zsh and workspace paths"
-    );
+    skip_if_remote!(Ok(()), "plugin lifecycle fixtures are local-only");
     skip_if_no_network!(Ok(()));
     let Some(zsh_path) = super::turn_start_zsh_fork::find_test_zsh_path()? else {
         return Ok(());
@@ -156,8 +155,9 @@ async fn zsh_fork_plugin_script_emits_terminal_lifecycle_analytics() -> Result<(
 }
 
 #[tokio::test]
-async fn sandbox_denial_emits_failed_lifecycle_analytics() -> Result<()> {
-    let denial = run_lifecycle_fixture(
+async fn sandbox_denial_retry_emits_new_lifecycle_execution() -> Result<()> {
+    skip_if_remote!(Ok(()), "plugin lifecycle fixtures are local-only");
+    let retry = run_lifecycle_fixture(
         "printf denied > denied.txt\n",
         &[],
         /*interrupt*/ false,
@@ -165,16 +165,26 @@ async fn sandbox_denial_emits_failed_lifecycle_analytics() -> Result<()> {
             sandbox_policy: SandboxPolicy::ReadOnly {
                 network_access: false,
             },
+            approval_policy: AskForApproval::UnlessTrusted,
+            expected_events: 4,
             ..LifecycleRun::classic()
         },
     )
     .await?;
-    assert_eq!(statuses(&denial.events), vec!["started", "failed"]);
+    assert_eq!(
+        statuses(&retry.events),
+        vec!["started", "failed", "started", "completed"]
+    );
+    assert_ne!(
+        retry.events[0]["event_params"]["execution_id"],
+        retry.events[2]["event_params"]["execution_id"]
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn pre_spawn_plugin_script_failure_emits_no_lifecycle_analytics() -> Result<()> {
+    skip_if_remote!(Ok(()), "plugin lifecycle fixtures are local-only");
     let fixture = run_lifecycle_fixture(
         "exit 0\n",
         &[],
@@ -329,6 +339,18 @@ enabled = true
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_response)?;
+    if matches!(run.approval_policy, AskForApproval::UnlessTrusted) {
+        let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_request_message(),
+        )
+        .await??
+        else {
+            panic!("expected command approval request");
+        };
+        mcp.send_response(request_id, serde_json::json!({ "decision": "accept" }))
+            .await?;
+    }
     if interrupt {
         wait_for_analytics_events(
             &server,
