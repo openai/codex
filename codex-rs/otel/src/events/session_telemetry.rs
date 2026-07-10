@@ -1254,8 +1254,7 @@ impl SessionTelemetry {
 
 fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {
     let ms = f64_ms_value(value)?;
-    let clamped = ms.min(u64::MAX as f64);
-    Some(Duration::from_millis(clamped.round() as u64))
+    Some(Duration::from_millis(ms.round() as u64))
 }
 
 fn f64_ms_value(value: Option<&serde_json::Value>) -> Option<f64> {
@@ -1267,5 +1266,5 @@ fn f64_ms_value(value: Option<&serde_json::Value>) -> Option<f64> {
     if !ms.is_finite() || ms < 0.0 {
         return None;
     }
-    Some(ms)
+    Some(ms.min(u64::MAX as f64))
 }
