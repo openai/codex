@@ -598,6 +598,9 @@ def codex_rust_crate(
 
             wine_test_kwargs = {}
             wine_test_kwargs.update(integration_test_kwargs)
+            wine_test_tags = test_tags + ["no-argument-comment-lint"]
+            if test_shard_count:
+                wine_test_tags.append("manual")
 
             # The Wine runner is a binary rather than a rust_test, but it still
             # needs a Cargo-like cwd, stable libtest bucketing, and absolute
@@ -614,7 +617,7 @@ def codex_rust_crate(
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
                 # This wrapper has no Rust sources and transitions a data
                 # dependency to a Windows toolchain the lint does not register.
-                tags = test_tags + ["manual", "no-argument-comment-lint"],
+                tags = wine_test_tags,
                 **wine_test_kwargs
             )
 
