@@ -96,6 +96,24 @@ fn unknown_installation_policy_source_maps_to_none() {
     assert_eq!(summary.install_policy_source, None);
 }
 
+#[test]
+fn scheduled_task_metadata_distinguishes_unavailable_from_empty() {
+    let release = serde_json::json!({
+        "display_name": "Example",
+        "description": "Example plugin",
+        "interface": {},
+    });
+    let without_metadata: RemotePluginReleaseResponse =
+        serde_json::from_value(release.clone()).expect("release should deserialize");
+    assert_eq!(without_metadata.scheduled_tasks, None);
+
+    let mut with_empty_metadata = release;
+    with_empty_metadata["scheduled_tasks"] = serde_json::json!([]);
+    let with_empty_metadata: RemotePluginReleaseResponse =
+        serde_json::from_value(with_empty_metadata).expect("release should deserialize");
+    assert_eq!(with_empty_metadata.scheduled_tasks, Some(Vec::new()));
+}
+
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
     RemotePluginDirectoryItem {
         id: id.to_string(),
@@ -138,6 +156,7 @@ fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
             },
             skills: Vec::new(),
             mcp_servers: Vec::new(),
+            scheduled_tasks: None,
         },
     }
 }

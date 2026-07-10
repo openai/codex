@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::ScheduledTaskSummary;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
@@ -209,6 +210,7 @@ pub struct RemotePluginDetail {
     pub app_ids: Vec<String>,
     pub app_templates: Vec<RemoteAppTemplate>,
     pub mcp_servers: Vec<String>,
+    pub scheduled_tasks: Option<Vec<ScheduledTaskSummary>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -504,6 +506,7 @@ struct RemotePluginReleaseResponse {
     skills: Vec<RemotePluginSkillResponse>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mcp_servers: Vec<RemotePluginMcpServerResponse>,
+    scheduled_tasks: Option<Vec<ScheduledTaskSummary>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1290,6 +1293,7 @@ async fn build_remote_plugin_detail(
             })
             .collect(),
         mcp_servers,
+        scheduled_tasks: plugin.release.scheduled_tasks,
     })
 }
 

@@ -876,6 +876,7 @@ async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
                 apps: Vec::new(),
                 app_templates: Vec::new(),
                 mcp_servers: Vec::new(),
+                scheduled_tasks: None,
             },
         }),
     );

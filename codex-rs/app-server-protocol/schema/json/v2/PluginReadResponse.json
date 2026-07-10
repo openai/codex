@@ -192,6 +192,15 @@
           },
           "type": "array"
         },
+        "scheduledTasks": {
+          "items": {
+            "$ref": "#/definitions/ScheduledTaskSummary"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "shareUrl": {
           "type": [
             "string",
@@ -717,6 +726,143 @@
         "source"
       ],
       "type": "object"
+    },
+    "ScheduledTaskSchedule": {
+      "oneOf": [
+        {
+          "properties": {
+            "days": {
+              "items": {
+                "$ref": "#/definitions/ScheduledTaskWeekday"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "intervalHours": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "hourly"
+              ],
+              "title": "HourlyScheduledTaskScheduleType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intervalHours",
+            "type"
+          ],
+          "title": "HourlyScheduledTaskSchedule",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "time": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "daily"
+              ],
+              "title": "DailyScheduledTaskScheduleType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "time",
+            "type"
+          ],
+          "title": "DailyScheduledTaskSchedule",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "time": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "weekdays"
+              ],
+              "title": "WeekdaysScheduledTaskScheduleType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "time",
+            "type"
+          ],
+          "title": "WeekdaysScheduledTaskSchedule",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "days": {
+              "items": {
+                "$ref": "#/definitions/ScheduledTaskWeekday"
+              },
+              "type": "array"
+            },
+            "time": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "weekly"
+              ],
+              "title": "WeeklyScheduledTaskScheduleType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "days",
+            "time",
+            "type"
+          ],
+          "title": "WeeklyScheduledTaskSchedule",
+          "type": "object"
+        }
+      ]
+    },
+    "ScheduledTaskSummary": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "schedule": {
+          "$ref": "#/definitions/ScheduledTaskSchedule"
+        }
+      },
+      "required": [
+        "key",
+        "name",
+        "prompt",
+        "schedule"
+      ],
+      "type": "object"
+    },
+    "ScheduledTaskWeekday": {
+      "enum": [
+        "MO",
+        "TU",
+        "WE",
+        "TH",
+        "FR",
+        "SA",
+        "SU"
+      ],
+      "type": "string"
     },
     "SkillInterface": {
       "properties": {
