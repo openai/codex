@@ -24,6 +24,7 @@ pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
+pub use manager::localize_additional_permissions_for_current_host;
 pub use manager::with_managed_mitm_ca_readable_root;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
@@ -45,7 +46,8 @@ impl From<SandboxTransformError> for CodexErr {
     fn from(err: SandboxTransformError) -> Self {
         match err {
             error @ SandboxTransformError::InvalidCommandCwd { .. }
-            | error @ SandboxTransformError::InvalidSandboxPolicyCwd { .. } => {
+            | error @ SandboxTransformError::InvalidSandboxPolicyCwd { .. }
+            | error @ SandboxTransformError::InvalidAdditionalPermissions { .. } => {
                 CodexErr::InvalidRequest(error.to_string())
             }
             SandboxTransformError::MissingLinuxSandboxExecutable => {

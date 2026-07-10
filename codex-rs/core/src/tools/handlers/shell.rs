@@ -87,13 +87,14 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         .clone();
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
-    let requested_additional_permissions = additional_permissions.clone();
+    let requested_additional_permissions = additional_permissions.clone().map(Into::into);
+    let permission_cwd = PathUri::from_abs_path(&exec_params.cwd);
     let effective_additional_permissions = apply_granted_turn_permissions(
         session.as_ref(),
         &turn_environment.environment_id,
-        exec_params.cwd.as_path(),
+        &permission_cwd,
         exec_params.sandbox_permissions,
-        additional_permissions,
+        additional_permissions.map(Into::into),
     )
     .await;
     let additional_permissions_allowed = exec_permission_approvals_enabled
@@ -112,7 +113,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
                 effective_additional_permissions.sandbox_permissions,
                 effective_additional_permissions.additional_permissions,
                 effective_additional_permissions.permissions_preapproved,
-                &exec_params.cwd,
+                &permission_cwd,
             )
         },
         |permissions| Ok(Some(permissions)),
@@ -138,10 +139,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     // Intercept apply_patch if present.
-    let apply_patch_cwd = PathUri::from_abs_path(&exec_params.cwd);
     if let Some(output) = intercept_apply_patch(
         &exec_params.command,
-        &apply_patch_cwd,
+        &permission_cwd,
         fs.as_ref(),
         turn_environment.clone(),
         session.clone(),

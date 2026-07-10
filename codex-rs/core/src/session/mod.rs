@@ -2615,10 +2615,9 @@ impl Session {
             }
             PermissionGrantScope::Session => {
                 let mut state = self.state.lock().await;
-                state.record_granted_permissions(
-                    environment_id,
-                    response.permissions.clone().into(),
-                );
+                let permissions: AdditionalPermissionProfile<PathUri> =
+                    response.permissions.clone().into();
+                state.record_granted_permissions(environment_id, permissions);
             }
         }
     }

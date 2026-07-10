@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -46,12 +45,10 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
-use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions_for_uri;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
@@ -219,25 +216,37 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<PathUri> {
 }
 
 fn write_permissions_for_paths(
-    file_paths: &[AbsolutePathBuf],
+    file_paths: &[PathUri],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> Option<AdditionalPermissionProfile> {
-    let write_paths = file_paths
-        .iter()
-        .map(|path| {
-            path.parent()
-                .unwrap_or_else(|| path.clone())
-                .into_path_buf()
-        })
-        .filter(|path| {
-            !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd.as_path())
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(AbsolutePathBuf::from_absolute_path)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
+    cwd: &PathUri,
+) -> Option<AdditionalPermissionProfile<PathUri>> {
+    let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {
+        cwd.to_abs_path().ok()
+    } else {
+        None
+    };
+    let mut write_paths = Vec::new();
+    for file_path in file_paths {
+        let already_writable = native_cwd.as_ref().is_some_and(|native_cwd| {
+            file_path.infer_path_convention() == Some(PathConvention::native())
+                && file_path
+                    .to_abs_path()
+                    .ok()
+                    .is_some_and(|native_file_path| {
+                        file_system_sandbox_policy.can_write_path_with_cwd(
+                            native_file_path.as_path(),
+                            native_cwd.as_path(),
+                        )
+                    })
+        });
+        if already_writable {
+            continue;
+        }
+        let write_path = file_path.parent().unwrap_or_else(|| file_path.clone());
+        if !write_paths.contains(&write_path) {
+            write_paths.push(write_path);
+        }
+    }
 
     let permissions = (!write_paths.is_empty()).then_some(AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
@@ -247,7 +256,7 @@ fn write_permissions_for_paths(
         ..Default::default()
     })?;
 
-    normalize_additional_permissions(permissions).ok()
+    normalize_additional_permissions_for_uri(permissions).ok()
 }
 
 /// Extracts the raw patch text used as the command-shaped hook input for apply_patch.
@@ -264,65 +273,26 @@ async fn effective_patch_permissions(
     environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &PathUri,
-) -> std::io::Result<(
-    Vec<PathUri>,
-    crate::tools::handlers::EffectiveAdditionalPermissions,
-    codex_protocol::permissions::FileSystemSandboxPolicy,
-)> {
-    let file_paths = file_paths_for_action(action);
-    let native_cwd = cwd.to_abs_path()?;
-    let granted_permissions = merge_permission_profiles(
-        session
-            .granted_session_permissions(environment_id)
-            .await
-            .as_ref(),
-        session
-            .granted_turn_permissions(environment_id)
-            .await
-            .as_ref(),
-    );
-    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
-    let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-        &base_file_system_sandbox_policy,
-        granted_permissions.as_ref(),
-    );
-    let native_file_paths = file_paths
-        .iter()
-        .map(PathUri::to_abs_path)
-        .collect::<Result<Vec<_>, _>>()?;
-    let effective_additional_permissions = apply_granted_turn_permissions(
-        session,
-        environment_id,
-        native_cwd.as_path(),
-        crate::sandboxing::SandboxPermissions::UseDefault,
-        write_permissions_for_paths(&native_file_paths, &file_system_sandbox_policy, &native_cwd),
-    )
-    .await;
-
-    Ok((
-        file_paths,
-        effective_additional_permissions,
-        file_system_sandbox_policy,
-    ))
-}
-
-fn patch_permissions_without_path_matching(
-    action: &ApplyPatchAction,
 ) -> (
     Vec<PathUri>,
     crate::tools::handlers::EffectiveAdditionalPermissions,
     codex_protocol::permissions::FileSystemSandboxPolicy,
 ) {
-    // TODO(anp): Make permission matching operate on PathUri. Until then, foreign paths skip
-    // permission matching; a managed turn still fails closed at the platform sandbox boundary.
+    let file_paths = file_paths_for_action(action);
+    let file_system_sandbox_policy = turn.file_system_sandbox_policy();
+    let effective_additional_permissions = apply_granted_turn_permissions(
+        session,
+        environment_id,
+        cwd,
+        crate::sandboxing::SandboxPermissions::UseDefault,
+        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, cwd),
+    )
+    .await;
+
     (
-        file_paths_for_action(action),
-        crate::tools::handlers::EffectiveAdditionalPermissions {
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            permissions_preapproved: false,
-        },
-        codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted(),
+        file_paths,
+        effective_additional_permissions,
+        file_system_sandbox_policy,
     )
 }
 
@@ -383,10 +353,8 @@ impl ApplyPatchHandler {
             ));
         };
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn.file_system_sandbox_context(
-            /*additional_permissions*/ None,
-            turn_environment.cwd(),
-        );
+        let sandbox = turn
+            .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
         match codex_apply_patch::verify_apply_patch_args(
             args,
             turn_environment.cwd(),
@@ -404,8 +372,7 @@ impl ApplyPatchHandler {
                         &changes,
                         turn_environment.cwd(),
                     )
-                    .await
-                    .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
+                    .await;
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                     .await
                 {
@@ -554,7 +521,8 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
@@ -567,8 +535,7 @@ pub(crate) async fn intercept_apply_patch(
                     &changes,
                     cwd,
                 )
-                .await
-                .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
+                .await;
             match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                 .await
             {

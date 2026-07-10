@@ -25,6 +25,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -590,66 +591,97 @@ async fn handle_patch_approval(
     } = event;
     let approval_id = call_id.clone();
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
-        let files = changes
-            .keys()
-            .map(|path| {
-                #[allow(deprecated)]
-                parent_ctx.cwd.join(path)
-            })
-            .collect::<Vec<_>>();
-        let review_cancel = cancel_token.child_token();
-        let patch = changes
-            .iter()
-            .map(|(path, change)| match change {
-                codex_protocol::protocol::FileChange::Add { content } => {
-                    format!("*** Add File: {}\n{}", path.display(), content)
-                }
-                codex_protocol::protocol::FileChange::Delete { content } => {
-                    format!("*** Delete File: {}\n{}", path.display(), content)
-                }
-                codex_protocol::protocol::FileChange::Update {
-                    unified_diff,
-                    move_path,
-                } => {
-                    if let Some(move_path) = move_path {
-                        format!(
-                            "*** Update File: {}\n*** Move to: {}\n{}",
-                            path.display(),
-                            move_path.display(),
-                            unified_diff
+        match parent_ctx.environments.primary() {
+            Some(environment) => {
+                let cwd = environment.cwd().clone();
+                let files = changes
+                    .iter()
+                    .flat_map(|(path, change)| {
+                        std::iter::once(path).chain(match change {
+                            codex_protocol::protocol::FileChange::Update {
+                                move_path: Some(move_path),
+                                ..
+                            } => Some(move_path),
+                            codex_protocol::protocol::FileChange::Add { .. }
+                            | codex_protocol::protocol::FileChange::Delete { .. }
+                            | codex_protocol::protocol::FileChange::Update {
+                                move_path: None,
+                                ..
+                            } => None,
+                        })
+                    })
+                    .map(|path| cwd.join(path.to_string_lossy().as_ref()))
+                    .collect::<Result<Vec<_>, _>>();
+                match files {
+                    Ok(files) => {
+                        let review_cancel = cancel_token.child_token();
+                        let patch = changes
+                            .iter()
+                            .map(|(path, change)| match change {
+                                codex_protocol::protocol::FileChange::Add { content } => {
+                                    format!("*** Add File: {}\n{}", path.display(), content)
+                                }
+                                codex_protocol::protocol::FileChange::Delete { content } => {
+                                    format!("*** Delete File: {}\n{}", path.display(), content)
+                                }
+                                codex_protocol::protocol::FileChange::Update {
+                                    unified_diff,
+                                    move_path,
+                                } => {
+                                    if let Some(move_path) = move_path {
+                                        format!(
+                                            "*** Update File: {}\n*** Move to: {}\n{}",
+                                            path.display(),
+                                            move_path.display(),
+                                            unified_diff
+                                        )
+                                    } else {
+                                        format!(
+                                            "*** Update File: {}\n{}",
+                                            path.display(),
+                                            unified_diff
+                                        )
+                                    }
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let review_rx = spawn_approval_request_review(
+                            Arc::clone(parent_session),
+                            Arc::clone(parent_ctx),
+                            new_guardian_review_id(),
+                            GuardianApprovalRequest::ApplyPatch {
+                                id: approval_id.clone(),
+                                cwd,
+                                files,
+                                patch,
+                            },
+                            reason.clone(),
+                            GuardianApprovalRequestSource::DelegatedSubagent,
+                            review_cancel.clone(),
+                        );
+                        Some(
+                            await_approval_with_cancel(
+                                async move { review_rx.await.unwrap_or_default() },
+                                parent_session,
+                                &approval_id,
+                                cancel_token,
+                                Some(&review_cancel),
+                            )
+                            .await,
                         )
-                    } else {
-                        format!("*** Update File: {}\n{}", path.display(), unified_diff)
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, %cwd, "failed to resolve delegated patch path");
+                        Some(ReviewDecision::Abort)
                     }
                 }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let review_rx = spawn_approval_request_review(
-            Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
-            new_guardian_review_id(),
-            GuardianApprovalRequest::ApplyPatch {
-                id: approval_id.clone(),
-                #[allow(deprecated)]
-                cwd: parent_ctx.cwd.clone(),
-                files,
-                patch,
-            },
-            reason.clone(),
-            GuardianApprovalRequestSource::DelegatedSubagent,
-            review_cancel.clone(),
-        );
-        Some(
-            await_approval_with_cancel(
-                async move { review_rx.await.unwrap_or_default() },
-                parent_session,
-                &approval_id,
-                cancel_token,
-                Some(&review_cancel),
-            )
-            .await,
-        )
+            }
+            None => {
+                tracing::warn!("delegated patch approval has no primary environment");
+                Some(ReviewDecision::Abort)
+            }
+        }
     } else {
         None
     };
@@ -806,10 +838,18 @@ async fn handle_request_permissions(
         reason: event.reason,
         permissions: event.permissions,
     };
-    let cwd = event.cwd.unwrap_or_else(|| {
-        #[allow(deprecated)]
-        parent_ctx.cwd.clone()
-    });
+    let cwd = event
+        .cwd
+        .or_else(|| {
+            parent_ctx
+                .environments
+                .primary()
+                .map(|environment| environment.cwd().clone())
+        })
+        .unwrap_or_else(|| {
+            #[allow(deprecated)]
+            PathUri::from_abs_path(&parent_ctx.cwd)
+        });
     let response_fut = parent_session.request_permissions_for_cwd(
         parent_ctx,
         call_id.clone(),
@@ -859,9 +899,9 @@ async fn await_request_permissions_with_cancel<F>(
     parent_session: &Session,
     call_id: &str,
     cancel_token: &CancellationToken,
-) -> RequestPermissionsResponse
+) -> RequestPermissionsResponse<PathUri>
 where
-    F: core::future::Future<Output = Option<RequestPermissionsResponse>>,
+    F: core::future::Future<Output = Option<RequestPermissionsResponse<PathUri>>>,
 {
     tokio::select! {
         biased;

@@ -37,15 +37,15 @@ mod view_image;
 pub(crate) mod view_image_spec;
 mod wait_for_environment;
 
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles_for_uri;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions_for_uri;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
-use std::path::Path;
 
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
@@ -181,10 +181,10 @@ pub(crate) fn normalize_and_validate_additional_permissions(
     additional_permissions_allowed: bool,
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     permissions_preapproved: bool,
-    _cwd: &Path,
-) -> Result<Option<AdditionalPermissionProfile>, String> {
+    _cwd: &PathUri,
+) -> Result<Option<AdditionalPermissionProfile<PathUri>>, String> {
     let uses_additional_permissions = matches!(
         sandbox_permissions,
         SandboxPermissions::WithAdditionalPermissions
@@ -212,7 +212,7 @@ pub(crate) fn normalize_and_validate_additional_permissions(
                     .to_string(),
             );
         };
-        let normalized = normalize_additional_permissions(additional_permissions)?;
+        let normalized = normalize_additional_permissions_for_uri(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
                 "`additional_permissions` must include at least one requested permission in `network` or `file_system`"
@@ -234,15 +234,15 @@ pub(crate) fn normalize_and_validate_additional_permissions(
 
 pub(super) struct EffectiveAdditionalPermissions {
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     pub permissions_preapproved: bool,
 }
 
 pub(super) fn implicit_granted_permissions(
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<&AdditionalPermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile<PathUri>>,
     effective_additional_permissions: &EffectiveAdditionalPermissions,
-) -> Option<AdditionalPermissionProfile> {
+) -> Option<AdditionalPermissionProfile<PathUri>> {
     if !sandbox_permissions.uses_additional_permissions()
         && !matches!(sandbox_permissions, SandboxPermissions::RequireEscalated)
         && additional_permissions.is_none()
@@ -258,9 +258,9 @@ pub(super) fn implicit_granted_permissions(
 pub(super) async fn apply_granted_turn_permissions(
     session: &Session,
     environment_id: &str,
-    cwd: &Path,
+    cwd: &PathUri,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
 ) -> EffectiveAdditionalPermissions {
     if matches!(sandbox_permissions, SandboxPermissions::RequireEscalated) {
         return EffectiveAdditionalPermissions {
@@ -302,16 +302,16 @@ pub(super) async fn apply_granted_turn_permissions(
 }
 
 fn permissions_are_preapproved(
-    effective_permissions: &AdditionalPermissionProfile,
-    granted_permissions: AdditionalPermissionProfile,
-    cwd: &Path,
+    effective_permissions: &AdditionalPermissionProfile<PathUri>,
+    granted_permissions: AdditionalPermissionProfile<PathUri>,
+    cwd: &PathUri,
 ) -> bool {
-    let materialized_effective_permissions = intersect_permission_profiles(
+    let materialized_effective_permissions = intersect_permission_profiles_for_uri(
         effective_permissions.clone(),
         effective_permissions.clone(),
         cwd,
     );
-    intersect_permission_profiles(effective_permissions.clone(), granted_permissions, cwd)
+    intersect_permission_profiles_for_uri(effective_permissions.clone(), granted_permissions, cwd)
         == materialized_effective_permissions
 }
 
@@ -331,13 +331,13 @@ mod tests {
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::GranularApprovalConfig;
-    use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+    use codex_sandboxing::policy_transforms::intersect_permission_profiles_for_uri;
     use codex_sandboxing::policy_transforms::merge_permission_profiles;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
-    fn network_permissions() -> AdditionalPermissionProfile {
+    fn network_permissions() -> AdditionalPermissionProfile<PathUri> {
         AdditionalPermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
@@ -346,12 +346,12 @@ mod tests {
         }
     }
 
-    fn file_system_permissions(path: &std::path::Path) -> AdditionalPermissionProfile {
+    fn file_system_permissions(path: &std::path::Path) -> AdditionalPermissionProfile<PathUri> {
         AdditionalPermissionProfile {
             file_system: Some(FileSystemPermissions::from_read_write_roots(
                 /*read*/ None,
                 Some(vec![
-                    AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
+                    PathUri::from_host_native_path(path).expect("absolute path URI"),
                 ]),
             )),
             ..Default::default()
@@ -362,6 +362,7 @@ mod tests {
     fn preapproved_permissions_work_when_request_permissions_tool_is_enabled_without_exec_permission_approvals_feature()
      {
         let cwd = tempdir().expect("tempdir");
+        let cwd_uri = PathUri::from_host_native_path(cwd.path()).expect("cwd URI");
 
         let normalized = normalize_and_validate_additional_permissions(
             /*additional_permissions_allowed*/ false,
@@ -375,7 +376,7 @@ mod tests {
             SandboxPermissions::WithAdditionalPermissions,
             Some(network_permissions()),
             /*permissions_preapproved*/ true,
-            cwd.path(),
+            &cwd_uri,
         )
         .expect("preapproved permissions should be allowed");
 
@@ -385,6 +386,7 @@ mod tests {
     #[test]
     fn fresh_additional_permissions_still_require_exec_permission_approvals_feature() {
         let cwd = tempdir().expect("tempdir");
+        let cwd_uri = PathUri::from_host_native_path(cwd.path()).expect("cwd URI");
 
         let err = normalize_and_validate_additional_permissions(
             /*additional_permissions_allowed*/ false,
@@ -392,7 +394,7 @@ mod tests {
             SandboxPermissions::WithAdditionalPermissions,
             Some(network_permissions()),
             /*permissions_preapproved*/ false,
-            cwd.path(),
+            &cwd_uri,
         )
         .expect_err("fresh inline permission requests should remain disabled");
 
@@ -439,6 +441,7 @@ mod tests {
     #[test]
     fn relative_deny_glob_grants_remain_preapproved_after_materialization() {
         let cwd = tempdir().expect("tempdir");
+        let cwd_uri = PathUri::from_host_native_path(cwd.path()).expect("cwd URI");
         let requested_permissions = AdditionalPermissionProfile {
             file_system: Some(FileSystemPermissions {
                 entries: vec![
@@ -459,10 +462,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let stored_grant = intersect_permission_profiles(
+        let stored_grant = intersect_permission_profiles_for_uri(
             requested_permissions.clone(),
             requested_permissions.clone(),
-            cwd.path(),
+            &cwd_uri,
         );
         let effective_permissions =
             merge_permission_profiles(Some(&requested_permissions), Some(&stored_grant))
@@ -471,7 +474,7 @@ mod tests {
         assert!(permissions_are_preapproved(
             &effective_permissions,
             stored_grant,
-            cwd.path(),
+            &cwd_uri,
         ));
     }
 }

@@ -40,7 +40,7 @@ pub(crate) fn build_sandbox_command(
     command: &[String],
     cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()

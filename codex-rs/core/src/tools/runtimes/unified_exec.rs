@@ -55,7 +55,6 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::io;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
@@ -74,7 +73,7 @@ pub struct UnifiedExecRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -90,7 +89,7 @@ pub struct UnifiedExecApprovalKey {
     pub cwd: PathUri,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
 }
 
 /// Runtime adapter that keeps policy and sandbox orchestration on the
@@ -118,7 +117,7 @@ fn build_unified_exec_sandbox_command(
     cwd: &PathUri,
     env: &HashMap<String, String>,
     managed_network: Option<ManagedNetworkSandboxContext>,
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()
@@ -183,15 +182,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            let native_cwd = match req.cwd.to_abs_path() {
-                Ok(c) => c,
-                Err(e) => {
-                    // TODO(anp) make sandboxing work for foreign OSes, in the meantime this should
-                    // be impossible for single-OS app-servers
-                    error!(cwd = %req.cwd, ?e, "got non-native path in start_approval_async");
-                    return ReviewDecision::Abort;
-                }
-            };
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
                 session
@@ -201,7 +191,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         /*approval_id*/ None,
                         environment_id,
                         command,
-                        native_cwd,
+                        req.cwd.clone(),
                         reason,
                         ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
@@ -224,7 +214,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Ok(ApprovalAction::ExecCommand {
             id: ctx.call_id.to_string(),
             command: req.command.clone(),
-            cwd: req.cwd.to_abs_path()?,
+            cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
             justification: req.justification.clone(),
@@ -278,7 +268,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
-                cwd: req.cwd.to_abs_path().ok()?,
+                cwd: req.cwd.clone(),
                 sandbox_permissions: req.sandbox_permissions,
                 additional_permissions: req.additional_permissions.clone(),
                 justification: req.justification.clone(),

@@ -3,6 +3,7 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -41,7 +42,7 @@ pub(crate) struct SessionState {
     pub(crate) current_time_reminder: CurrentTimeReminderState,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
-    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
+    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile<PathUri>>,
     next_turn_is_first: bool,
 }
 
@@ -288,7 +289,7 @@ impl SessionState {
     pub(crate) fn record_granted_permissions(
         &mut self,
         environment_id: &str,
-        permissions: AdditionalPermissionProfile,
+        permissions: AdditionalPermissionProfile<PathUri>,
     ) {
         let granted_permissions = merge_permission_profiles(
             self.granted_permissions_by_environment_id
@@ -304,7 +305,7 @@ impl SessionState {
     pub(crate) fn granted_permissions(
         &self,
         environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
+    ) -> Option<AdditionalPermissionProfile<PathUri>> {
         self.granted_permissions_by_environment_id
             .get(environment_id)
             .cloned()

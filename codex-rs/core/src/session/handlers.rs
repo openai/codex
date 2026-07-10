@@ -48,6 +48,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_utils_path_uri::PathUri;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -423,7 +424,7 @@ pub async fn request_user_input_response(
 pub async fn request_permissions_response(
     sess: &Arc<Session>,
     id: String,
-    response: RequestPermissionsResponse,
+    response: RequestPermissionsResponse<PathUri>,
 ) {
     sess.notify_request_permissions_response(&id, response)
         .await;

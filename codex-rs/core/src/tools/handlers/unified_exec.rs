@@ -40,7 +40,7 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<String>>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]

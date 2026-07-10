@@ -28,6 +28,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
 use codex_sandboxing::SandboxType;
+use codex_utils_path_uri::PathUri;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -652,19 +653,23 @@ impl NetworkApprovalService {
             .await
         } else {
             let available_decisions = None;
-            let cwd = if let Some(owner_call) = owner_call.as_ref() {
-                owner_call.trigger.cwd.clone()
+            let cwd_uri = if let Some(owner_call) = owner_call.as_ref() {
+                Some(owner_call.trigger.cwd.clone())
             } else {
                 turn_context
                     .environments
                     .turn_environments
                     .iter()
                     .find(|environment| environment.environment_id == environment_id)
-                    .and_then(|environment| environment.cwd().to_abs_path().ok())
-                    .unwrap_or_else(|| {
-                        #[allow(deprecated)]
-                        turn_context.cwd.clone()
-                    })
+                    .map(|environment| environment.cwd().clone())
+            };
+            let cwd = match cwd_uri {
+                Some(cwd) => cwd,
+                None =>
+                {
+                    #[allow(deprecated)]
+                    PathUri::from_abs_path(&turn_context.cwd)
+                }
             };
             session
                 .request_command_approval(

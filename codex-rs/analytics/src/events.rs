@@ -233,17 +233,17 @@ pub enum GuardianApprovalRequestSource {
 pub enum GuardianReviewedAction {
     Shell {
         sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<AdditionalPermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile<String>>,
     },
     UnifiedExec {
         sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<AdditionalPermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile<String>>,
         tty: bool,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
-        additional_permissions: Option<AdditionalPermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile<String>>,
     },
     ApplyPatch {},
     NetworkAccess {

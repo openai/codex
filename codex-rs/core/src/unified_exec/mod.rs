@@ -103,7 +103,7 @@ pub(crate) struct ExecCommandRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,

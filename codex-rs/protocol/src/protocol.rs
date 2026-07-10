@@ -618,7 +618,7 @@ pub enum Op {
         /// Call id for the in-flight request.
         id: String,
         /// User-granted permissions.
-        response: RequestPermissionsResponse,
+        response: RequestPermissionsResponse<PathUri>,
     },
 
     /// Resolve a dynamic tool call request.

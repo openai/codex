@@ -46,6 +46,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -63,7 +64,7 @@ pub struct ShellRequest {
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -96,7 +97,7 @@ pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
 }
 
 impl ShellRuntime {
@@ -142,7 +143,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
-        let cwd = req.cwd.clone();
+        let cwd = PathUri::from_abs_path(&req.cwd);
         let environment_id = Some(req.turn_environment.environment_id.clone());
         let reason = ctx
             .retry_reason
@@ -184,7 +185,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Ok(ApprovalAction::Shell {
             id: ctx.call_id.to_string(),
             command: req.command.clone(),
-            cwd: req.cwd.clone(),
+            cwd: PathUri::from_abs_path(&req.cwd),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
             justification: req.justification.clone(),
@@ -227,7 +228,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
-                cwd: req.cwd.clone(),
+                cwd: PathUri::from_abs_path(&req.cwd),
                 sandbox_permissions: req.sandbox_permissions,
                 additional_permissions: req.additional_permissions.clone(),
                 justification: req.justification.clone(),

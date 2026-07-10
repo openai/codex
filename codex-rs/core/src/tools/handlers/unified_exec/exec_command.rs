@@ -12,7 +12,6 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
@@ -29,9 +28,7 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
-use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxType;
-use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::resolve_additional_permission_paths;
 use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -151,52 +148,23 @@ impl ExecCommandHandler {
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
 
-        // A foreign cwd cannot seed the AbsolutePathBufGuard used to resolve relative paths in the
-        // permissions config below. Consult the configured platform-sandbox requirement before
-        // deciding whether parsing may continue without that base path.
-        let sandbox = SandboxManager::new().select_initial(
-            &turn.file_system_sandbox_policy(),
-            turn.network_sandbox_policy(),
-            SandboxablePreference::Auto,
-            turn.windows_sandbox_level,
-            turn.network.is_some(),
-        );
-        // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
-        // representable as `/C:/repo` on POSIX. Require the inferred convention to match too.
-        let cwd_uses_native_convention =
-            cwd.infer_path_convention() == Some(PathConvention::native());
-        // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
-        let native_cwd = match cwd.to_abs_path() {
-            Ok(cwd) if cwd_uses_native_convention => Some(cwd),
-            _ if sandbox == SandboxType::None => None,
-            Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
-            Ok(_) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "path URI `{cwd}` does not use the host's native {} path convention",
-                    PathConvention::native()
-                )));
-            }
-        };
-        let mut args: ExecCommandArgs = match native_cwd.as_ref() {
-            Some(native_cwd) => {
-                // The base path only resolves paths nested in the permissions config types.
-                parse_arguments_with_base_path(&arguments, native_cwd)?
-            }
-            None => {
-                // Parsing without a base only skips relative-path resolution inside the
-                // permissions config. That is safe only for a truly unsandboxed attempt;
-                // sandboxed attempts fall through and return the conversion error below.
-                parse_arguments(&arguments)?
-            }
-        };
+        let mut args: ExecCommandArgs = parse_arguments(&arguments)?;
+        let additional_permissions = args
+            .additional_permissions
+            .take()
+            .map(|permissions| resolve_additional_permission_paths(permissions, &cwd))
+            .transpose()
+            .map_err(FunctionCallError::RespondToModel)?;
         let hook_command = args.cmd.clone();
-        // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
-        if let Some(native_cwd) = native_cwd.as_ref() {
+        // TODO(anp): Wire PathUri through implicit skills instead of skipping foreign paths.
+        if cwd.infer_path_convention() == Some(PathConvention::native())
+            && let Ok(native_cwd) = cwd.to_abs_path()
+        {
             maybe_emit_implicit_skill_invocation(
                 session.as_ref(),
                 context.turn.as_ref(),
                 &hook_command,
-                native_cwd,
+                &native_cwd,
             )
             .await;
         }
@@ -245,7 +213,6 @@ impl ExecCommandHandler {
             yield_time_ms,
             max_output_tokens,
             sandbox_permissions,
-            additional_permissions,
             justification,
             prefix_rule,
             ..
@@ -254,12 +221,10 @@ impl ExecCommandHandler {
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
         let requested_additional_permissions = additional_permissions.clone();
-        // TODO(anp): Make permission matching operate on PathUri for remote environments.
-        let permission_cwd = native_cwd.as_ref().unwrap_or(&turn.config.cwd);
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
             &turn_environment.environment_id,
-            permission_cwd.as_path(),
+            &cwd,
             sandbox_permissions,
             additional_permissions,
         )
@@ -299,7 +264,7 @@ impl ExecCommandHandler {
                     effective_additional_permissions.sandbox_permissions,
                     effective_additional_permissions.additional_permissions,
                     effective_additional_permissions.permissions_preapproved,
-                    permission_cwd,
+                    &cwd,
                 )
             },
             |permissions| Ok(Some(permissions)),

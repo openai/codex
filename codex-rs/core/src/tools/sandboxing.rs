@@ -25,7 +25,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::effective_permission_profile;
+use codex_sandboxing::policy_transforms::effective_permission_profile_for_uri;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -480,7 +480,7 @@ impl<'a> SandboxAttempt<'a> {
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
         let network = self.network_proxy(network);
         let managed_network = command.managed_network.clone();
-        let exec_server_permissions = effective_permission_profile(
+        let exec_server_permissions = effective_permission_profile_for_uri(
             self.exec_server_permissions,
             command.additional_permissions.as_ref(),
         );
@@ -509,7 +509,7 @@ impl<'a> SandboxAttempt<'a> {
         exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
-                permissions: exec_server_permissions.into(),
+                permissions: exec_server_permissions,
                 cwd: Some(exec_request.windows_sandbox_policy_cwd.clone()),
                 workspace_roots: Vec::new(),
                 windows_sandbox_level: self.windows_sandbox_level,

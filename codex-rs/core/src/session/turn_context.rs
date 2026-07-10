@@ -12,8 +12,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
-use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_permission_profile_for_uri;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -298,33 +297,31 @@ impl TurnContext {
 
     pub(crate) fn file_system_sandbox_context(
         &self,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-        cwd: &PathUri,
+        additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
+        environment: &TurnEnvironment,
     ) -> FileSystemSandboxContext {
-        let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
-            self.permission_profile.to_runtime_permissions();
-        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-            &base_file_system_sandbox_policy,
+        let environment_is_remote = environment.environment.is_remote();
+        let permission_profile = if environment_is_remote {
+            self.config.permissions.permission_profile()
+        } else {
+            &self.permission_profile
+        };
+        let permissions = effective_permission_profile_for_uri(
+            permission_profile,
             additional_permissions.as_ref(),
-        );
-        let network_sandbox_policy = effective_network_sandbox_policy(
-            base_network_sandbox_policy,
-            additional_permissions.as_ref(),
-        );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            self.permission_profile.enforcement(),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
         );
         FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(cwd.clone()),
-            workspace_roots: self
-                .config
-                .effective_workspace_roots()
-                .iter()
-                .map(PathUri::from_abs_path)
-                .collect(),
+            permissions,
+            cwd: Some(environment.cwd().clone()),
+            workspace_roots: if environment_is_remote {
+                Vec::new()
+            } else {
+                self.config
+                    .effective_workspace_roots()
+                    .iter()
+                    .map(PathUri::from_abs_path)
+                    .collect()
+            },
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config

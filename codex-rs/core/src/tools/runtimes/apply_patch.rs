@@ -30,7 +30,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::effective_permission_profile;
+use codex_sandboxing::policy_transforms::effective_permission_profile_for_uri;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ pub struct ApplyPatchRequest {
     pub file_paths: Vec<PathUri>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     pub permissions_preapproved: bool,
 }
 
@@ -77,17 +77,10 @@ impl ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         call_id: &str,
     ) -> std::io::Result<ApprovalAction> {
-        // TODO(anp): Remove this conversion once the guardian API supports PathUri.
-        let cwd = req.action.cwd.to_abs_path()?;
-        let files = req
-            .file_paths
-            .iter()
-            .map(PathUri::to_abs_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
         Ok(ApprovalAction::ApplyPatch {
             id: call_id.to_string(),
-            cwd,
-            files,
+            cwd: req.action.cwd.clone(),
+            files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         })
     }
@@ -100,16 +93,28 @@ impl ApplyPatchRuntime {
             return None;
         }
 
-        let permissions =
-            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
+        let environment_is_remote = req.turn_environment.environment.is_remote();
+        let permission_profile = if environment_is_remote {
+            attempt.exec_server_permissions
+        } else {
+            attempt.permissions
+        };
+        let permissions = effective_permission_profile_for_uri(
+            permission_profile,
+            req.additional_permissions.as_ref(),
+        );
         Some(FileSystemSandboxContext {
-            permissions: permissions.into(),
+            permissions,
             cwd: Some(attempt.sandbox_cwd.clone()),
-            workspace_roots: attempt
-                .workspace_roots
-                .iter()
-                .map(PathUri::from_abs_path)
-                .collect(),
+            workspace_roots: if environment_is_remote {
+                Vec::new()
+            } else {
+                attempt
+                    .workspace_roots
+                    .iter()
+                    .map(PathUri::from_abs_path)
+                    .collect()
+            },
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,

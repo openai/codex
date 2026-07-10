@@ -22,6 +22,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -101,7 +102,26 @@ pub struct SandboxCommand {
     pub cwd: PathUri,
     pub env: HashMap<String, String>,
     pub managed_network: Option<ManagedNetworkSandboxContext>,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
+}
+
+pub fn localize_additional_permissions_for_current_host(
+    additional_permissions: AdditionalPermissionProfile<PathUri>,
+) -> io::Result<AdditionalPermissionProfile> {
+    if let Some(file_system) = additional_permissions.file_system.as_ref()
+        && let Some((path, _)) = file_system
+            .explicit_path_entries()
+            .find(|(path, _)| path.infer_path_convention() != Some(PathConvention::native()))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "permission path URI `{path}` is not native to the current host's {} path convention",
+                PathConvention::native()
+            ),
+        ));
+    }
+    additional_permissions.try_into()
 }
 
 /// A host-native launch request produced after [`SandboxManager::transform`] validates URI inputs.
@@ -211,6 +231,9 @@ pub enum SandboxTransformError {
         cwd: PathUri,
         source: io::Error,
     },
+    InvalidAdditionalPermissions {
+        source: io::Error,
+    },
     MissingLinuxSandboxExecutable,
     EnvironmentNetworkProxy(String),
     #[cfg(target_os = "linux")]
@@ -234,6 +257,10 @@ impl std::fmt::Display for SandboxTransformError {
                 f,
                 "sandbox policy cwd URI `{cwd}` is not valid on this host: {source}"
             ),
+            Self::InvalidAdditionalPermissions { source } => write!(
+                f,
+                "additional permission URIs are not valid on this host: {source}"
+            ),
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
@@ -256,7 +283,8 @@ impl std::error::Error for SandboxTransformError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidCommandCwd { source, .. }
-            | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
+            | Self::InvalidSandboxPolicyCwd { source, .. }
+            | Self::InvalidAdditionalPermissions { source } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
             Self::EnvironmentNetworkProxy(_) => None,
             #[cfg(target_os = "linux")]
@@ -337,7 +365,18 @@ impl SandboxManager {
         } = request;
         #[cfg(target_os = "macos")]
         let managed_network = command.managed_network.as_ref();
-        let additional_permissions = command.additional_permissions.take();
+        let additional_permissions = match command
+            .additional_permissions
+            .take()
+            .map(localize_additional_permissions_for_current_host)
+            .transpose()
+        {
+            Ok(additional_permissions) => additional_permissions,
+            Err(_) if sandbox == SandboxType::None => None,
+            Err(source) => {
+                return Err(SandboxTransformError::InvalidAdditionalPermissions { source });
+            }
+        };
         let managed_mitm_ca_trust_bundle_path =
             network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let base_effective_permission_profile =

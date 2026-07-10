@@ -49,6 +49,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::localize_additional_permissions_for_current_host;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_shell_escalation::EscalateServer;
@@ -101,6 +102,19 @@ fn approval_sandbox_permissions(
     } else {
         sandbox_permissions
     }
+}
+
+fn localize_additional_permissions_for_zsh_fork(
+    additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
+) -> Result<Option<AdditionalPermissionProfile>, ToolError> {
+    additional_permissions
+        .map(localize_additional_permissions_for_current_host)
+        .transpose()
+        .map_err(|err| {
+            ToolError::Rejected(format!(
+                "zsh-fork cannot localize additional permission URIs: {err}"
+            ))
+        })
 }
 
 pub(super) async fn try_run_zsh_fork(
@@ -232,6 +246,8 @@ pub(super) async fn try_run_zsh_fork(
         req.sandbox_permissions,
         req.additional_permissions_preapproved,
     );
+    let prompt_permissions =
+        localize_additional_permissions_for_zsh_fork(req.additional_permissions.clone())?;
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
@@ -244,7 +260,7 @@ pub(super) async fn try_run_zsh_fork(
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
-        prompt_permissions: req.additional_permissions.clone(),
+        prompt_permissions,
         stopwatch: stopwatch.clone(),
     };
 
@@ -316,6 +332,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
     };
+    let prompt_permissions =
+        localize_additional_permissions_for_zsh_fork(req.additional_permissions.clone())?;
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
@@ -331,7 +349,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             req.sandbox_permissions,
             req.additional_permissions_preapproved,
         ),
-        prompt_permissions: req.additional_permissions.clone(),
+        prompt_permissions,
         stopwatch: Stopwatch::unlimited(),
     };
 
@@ -500,8 +518,8 @@ impl CoreShellActionProvider {
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
-                            cwd: workdir.clone(),
-                            additional_permissions,
+                            cwd: PathUri::from_abs_path(&workdir),
+                            additional_permissions: additional_permissions.clone().map(Into::into),
                         },
                         /*retry_reason*/ None,
                     )
@@ -521,11 +539,11 @@ impl CoreShellActionProvider {
                         approval_id,
                         environment_id,
                         command,
-                        workdir.clone(),
+                        PathUri::from_abs_path(&workdir),
                         /*reason*/ None,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
-                        additional_permissions,
+                        additional_permissions.map(Into::into),
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await;
@@ -1013,7 +1031,7 @@ impl CoreShellCommandExecutor {
             cwd,
             env,
             managed_network: None,
-            additional_permissions,
+            additional_permissions: additional_permissions.map(Into::into),
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
