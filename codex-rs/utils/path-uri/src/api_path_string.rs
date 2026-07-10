@@ -30,7 +30,7 @@ use ts_rs::TS;
 /// `String` and is instead encouraged to convert through [`PathUri`] or
 /// [`AbsolutePathBuf`]. Relative path text remains valid until an operation
 /// such as [`Self::to_path_uri`] requires an absolute path.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
 pub struct LegacyAppPathString(String);
@@ -79,14 +79,6 @@ impl LegacyAppPathString {
                 convention: Some(convention),
             }
         })
-    }
-
-    /// Parses this API string as an absolute path native to the current host.
-    ///
-    /// Host-specific path namespaces are normalized before the path is converted
-    /// to a URI. Relative and foreign-platform paths are rejected.
-    pub fn to_host_path_uri(&self) -> Result<PathUri, LegacyAppPathStringError> {
-        self.to_path_uri(PathConvention::native())
     }
 
     /// Parses this API string as an absolute path native to the current host.
