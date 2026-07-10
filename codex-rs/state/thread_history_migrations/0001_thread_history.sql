@@ -17,11 +17,11 @@ CREATE UNIQUE INDEX idx_thread_turns_page
 
 CREATE TABLE thread_items (
     thread_id TEXT NOT NULL,
-    turn_id TEXT,
+    turn_id TEXT NOT NULL,
     item_id TEXT NOT NULL,
     rollout_ordinal INTEGER NOT NULL,
     item_json TEXT NOT NULL,
-    PRIMARY KEY (thread_id, item_id)
+    PRIMARY KEY (thread_id, turn_id, item_id)
 );
 
 CREATE UNIQUE INDEX idx_thread_items_page

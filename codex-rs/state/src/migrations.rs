@@ -42,6 +42,8 @@ pub(crate) fn runtime_memories_migrator() -> Migrator {
     runtime_migrator(&MEMORIES_MIGRATOR)
 }
 
+// The paginated history projector will call this when it takes ownership of opening the database.
+#[allow(dead_code)]
 pub(crate) fn runtime_thread_history_migrator() -> Migrator {
     runtime_migrator(&THREAD_HISTORY_MIGRATOR)
 }

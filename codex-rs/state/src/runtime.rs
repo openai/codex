@@ -23,7 +23,6 @@ use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
 use crate::migrations::runtime_state_migrator;
-use crate::migrations::runtime_thread_history_migrator;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
@@ -169,7 +168,6 @@ pub struct StateRuntime {
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
     logs_pool: Arc<sqlx::SqlitePool>,
-    thread_history_pool: Arc<sqlx::SqlitePool>,
     thread_goals: GoalStore,
     memories: MemoryStore,
     thread_updated_at_millis: Arc<AtomicI64>,
@@ -210,12 +208,10 @@ impl StateRuntime {
         let logs_migrator = runtime_logs_migrator();
         let goals_migrator = runtime_goals_migrator();
         let memories_migrator = runtime_memories_migrator();
-        let thread_history_migrator = runtime_thread_history_migrator();
         let state_path = STATE_DB.path(codex_home.as_path());
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
-        let thread_history_path = THREAD_HISTORY_DB.path(codex_home.as_path());
         let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
@@ -258,29 +254,6 @@ impl StateRuntime {
                 return Err(err);
             }
         };
-        let thread_history_pool = match open_thread_history_sqlite(
-            &thread_history_path,
-            &thread_history_migrator,
-            telemetry_override,
-        )
-        .await
-        {
-            Ok(db) => Arc::new(db),
-            Err(err) => {
-                warn!(
-                    "failed to open thread history db at {}: {err}",
-                    thread_history_path.display()
-                );
-                close_sqlite_pools(&[
-                    pool.as_ref(),
-                    logs_pool.as_ref(),
-                    goals_pool.as_ref(),
-                    memories_pool.as_ref(),
-                ])
-                .await;
-                return Err(err);
-            }
-        };
         let started = Instant::now();
         let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
         crate::telemetry::record_init_result(
@@ -296,7 +269,6 @@ impl StateRuntime {
                 logs_pool.as_ref(),
                 goals_pool.as_ref(),
                 memories_pool.as_ref(),
-                thread_history_pool.as_ref(),
             ])
             .await;
             return Err(err);
@@ -325,7 +297,6 @@ impl StateRuntime {
                         logs_pool.as_ref(),
                         goals_pool.as_ref(),
                         memories_pool.as_ref(),
-                        thread_history_pool.as_ref(),
                     ])
                     .await;
                     return Err(err);
@@ -338,7 +309,6 @@ impl StateRuntime {
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             pool,
             logs_pool,
-            thread_history_pool,
             codex_home,
             default_provider,
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
@@ -370,7 +340,6 @@ impl StateRuntime {
     pub async fn close(&self) {
         self.memories.close().await;
         self.thread_goals.close().await;
-        self.thread_history_pool.close().await;
         self.logs_pool.close().await;
         self.pool.close().await;
     }
@@ -443,14 +412,6 @@ async fn open_memories_sqlite(
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
-}
-
-async fn open_thread_history_sqlite(
-    path: &Path,
-    migrator: &Migrator,
-    telemetry_override: Option<&dyn DbTelemetry>,
-) -> anyhow::Result<SqlitePool> {
-    open_sqlite(path, migrator, THREAD_HISTORY_DB, telemetry_override).await
 }
 
 async fn open_sqlite(
@@ -783,8 +744,6 @@ mod tests {
             "migrate_goals",
             "open_memories",
             "migrate_memories",
-            "open_thread_history",
-            "migrate_thread_history",
             "ensure_backfill_state",
             "post_init_query",
         ]
