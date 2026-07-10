@@ -13,7 +13,7 @@ use std::time::Duration;
 const SESSION_IMPORT_MAX_COUNT: usize = 50;
 const SESSION_IMPORT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-pub fn detect_recent_sessions(
+pub fn detect_recent_cl_sessions(
     external_agent_home: &Path,
     codex_home: &Path,
 ) -> io::Result<Vec<ExternalAgentSessionMigration>> {
@@ -135,7 +135,8 @@ mod tests {
             ],
         );
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(
             sessions,
@@ -163,7 +164,8 @@ mod tests {
             ],
         );
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(
             sessions,
@@ -190,7 +192,8 @@ mod tests {
             ],
         );
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(
             sessions,
@@ -218,7 +221,8 @@ mod tests {
             ],
         );
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(
             sessions,
@@ -247,7 +251,8 @@ mod tests {
             )],
         );
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(
             sessions,
@@ -276,7 +281,7 @@ mod tests {
         );
 
         assert!(
-            detect_recent_sessions(&external_agent_home, root.path())
+            detect_recent_cl_sessions(&external_agent_home, root.path())
                 .expect("detect")
                 .is_empty()
         );
@@ -313,7 +318,8 @@ mod tests {
         let mut all_sessions = expected.clone();
         all_sessions.push(oldest_session.clone());
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(sessions, expected);
         for session in sessions {
@@ -321,7 +327,8 @@ mod tests {
                 .expect("record import");
         }
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(sessions, vec![oldest_session.clone()]);
         for session in sessions {
@@ -347,7 +354,8 @@ mod tests {
             );
         }
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(sessions, expected);
         for session in sessions {
@@ -355,7 +363,8 @@ mod tests {
                 .expect("record import");
         }
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
 
         assert_eq!(sessions, vec![oldest_session]);
     }
@@ -376,7 +385,7 @@ mod tests {
             .expect("record import");
 
         assert!(
-            detect_recent_sessions(&external_agent_home, root.path())
+            detect_recent_cl_sessions(&external_agent_home, root.path())
                 .expect("detect")
                 .is_empty()
         );
@@ -405,7 +414,8 @@ mod tests {
         )
         .expect("update session");
 
-        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+        let sessions =
+            detect_recent_cl_sessions(&external_agent_home, root.path()).expect("detect");
         assert_eq!(
             sessions,
             vec![ExternalAgentSessionMigration {

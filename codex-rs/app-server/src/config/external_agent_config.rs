@@ -20,8 +20,8 @@ use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use codex_external_agent_migration::count_missing_subagents;
 use codex_external_agent_migration::missing_subagent_names;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
-use codex_external_agent_sessions::detect_recent_cursor_sessions;
-use codex_external_agent_sessions::detect_recent_sessions;
+use codex_external_agent_sessions::detect_recent_cl_sessions;
+use codex_external_agent_sessions::detect_recent_cu_sessions;
 use codex_plugin::PluginId;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
@@ -783,10 +783,10 @@ impl ExternalAgentConfigService {
         if repo_root.is_none() && self.source.supports(SourceFeature::Sessions) {
             let sessions = match self.source {
                 ExternalAgentSource::Cl => {
-                    detect_recent_sessions(&self.external_agent_home, &self.codex_home)?
+                    detect_recent_cl_sessions(&self.external_agent_home, &self.codex_home)?
                 }
                 ExternalAgentSource::Cu => {
-                    detect_recent_cursor_sessions(&self.external_agent_home, &self.codex_home)?
+                    detect_recent_cu_sessions(&self.external_agent_home, &self.codex_home)?
                 }
             };
             if !sessions.is_empty() {

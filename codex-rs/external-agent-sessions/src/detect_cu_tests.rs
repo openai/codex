@@ -28,7 +28,7 @@ fn detects_cursor_transcript_with_project_cwd() {
     .expect("transcript");
 
     let sessions =
-        detect_recent_cursor_sessions(&external_agent_home, root.path()).expect("detect sessions");
+        detect_recent_cu_sessions(&external_agent_home, root.path()).expect("detect sessions");
 
     assert_eq!(
         sessions,

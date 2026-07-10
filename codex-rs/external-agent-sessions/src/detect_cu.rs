@@ -14,7 +14,7 @@ use std::time::Duration;
 const SESSION_IMPORT_MAX_COUNT: usize = 50;
 const SESSION_IMPORT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-pub fn detect_recent_cursor_sessions(
+pub fn detect_recent_cu_sessions(
     external_agent_home: &Path,
     codex_home: &Path,
 ) -> io::Result<Vec<ExternalAgentSessionMigration>> {
@@ -178,5 +178,5 @@ fn decode_cursor_project_path_from(encoded: &str, base: &Path, depth: usize) -> 
 }
 
 #[cfg(test)]
-#[path = "detect_cursor_tests.rs"]
+#[path = "detect_cu_tests.rs"]
 mod tests;
