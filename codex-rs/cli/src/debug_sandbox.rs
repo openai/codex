@@ -229,7 +229,10 @@ async fn run_command_under_sandbox(
             );
             state
                 .codex_linux_sandbox_exe
-                .clone()
+                .as_ref()
+                .map(|path| path.to_abs_path().map(AbsolutePathBuf::into_path_buf))
+                .transpose()
+                .context("sandbox state helper path is not native to this host")?
                 .or(codex_linux_sandbox_exe)
         }
         None => codex_linux_sandbox_exe,
@@ -267,7 +270,8 @@ async fn run_command_under_sandbox(
                 // without a sandbox.
                 PermissionProfile::read_only()
             }
-            permission_profile => permission_profile.clone(),
+            permission_profile => PermissionProfile::try_from(permission_profile.clone())
+                .context("sandbox state permissions are not native to this host")?,
         },
         None => config.permissions.effective_permission_profile(),
     };
