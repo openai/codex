@@ -66,6 +66,7 @@ use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_install_requested_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
+use crate::events::current_runtime_metadata;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
@@ -229,16 +230,6 @@ impl<'a> AnalyticsDropSite<'a> {
             event_name: "goal",
             thread_id: &input.thread_id,
             turn_id: input.turn_id.as_deref(),
-            review_id: None,
-            item_id: None,
-        }
-    }
-
-    fn plugin_script_lifecycle(input: &'a CodexPluginScriptLifecycleEvent) -> Self {
-        Self {
-            event_name: "plugin script lifecycle",
-            thread_id: &input.thread_id,
-            turn_id: Some(&input.turn_id),
             review_id: None,
             item_id: None,
         }
@@ -1454,10 +1445,49 @@ impl AnalyticsReducer {
         input: CodexPluginScriptLifecycleEvent,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some((connection_state, thread_state, thread_metadata)) =
-            self.thread_context_or_warn(AnalyticsDropSite::plugin_script_lifecycle(&input))
-        else {
+        if !is_normalized_plugin_relative_script_path(&input.script_path) {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping plugin script lifecycle analytics event: invalid plugin-relative script path"
+            );
             return;
+        }
+        let (
+            session_id,
+            app_server_client,
+            runtime,
+            thread_source,
+            subagent_source,
+            parent_thread_id,
+        ) = if let Some((connection_state, thread_state, thread_metadata)) =
+            self.thread_context(input.thread_id.as_str())
+        {
+            (
+                thread_metadata.session_id.clone(),
+                thread_state.app_server_client(connection_state),
+                connection_state.runtime.clone(),
+                thread_metadata.thread_source.clone(),
+                thread_metadata.subagent_source.clone(),
+                thread_metadata.parent_thread_id.clone(),
+            )
+        } else {
+            let runtime = current_runtime_metadata();
+            let product_client_id = input.product_client_id.clone();
+            (
+                input.session_id.clone(),
+                CodexAppServerClientMetadata {
+                    product_client_id: product_client_id.clone(),
+                    client_name: Some(product_client_id),
+                    client_version: Some(runtime.codex_rs_version.clone()),
+                    rpc_transport: AppServerRpcTransport::InProcess,
+                    experimental_api_enabled: None,
+                },
+                runtime,
+                None,
+                None,
+                None,
+            )
         };
         let skill_id = if let Some(skill) = input.skill.as_ref() {
             let repo_root = get_git_repo_root(skill.skill_path.as_path());
@@ -1483,13 +1513,13 @@ impl AnalyticsReducer {
                 event_params: CodexPluginScriptLifecycleEventParams {
                     version: 1,
                     thread_id: input.thread_id,
-                    session_id: thread_metadata.session_id.clone(),
+                    session_id,
                     turn_id: input.turn_id,
-                    app_server_client: thread_state.app_server_client(connection_state),
-                    runtime: connection_state.runtime.clone(),
-                    thread_source: thread_metadata.thread_source.clone(),
-                    subagent_source: thread_metadata.subagent_source.clone(),
-                    parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                    app_server_client,
+                    runtime,
+                    thread_source,
+                    subagent_source,
+                    parent_thread_id,
                     plugin_id: input.plugin_id,
                     execution_id: input.execution_id,
                     script_path: input.script_path,
@@ -1776,6 +1806,42 @@ impl AnalyticsReducer {
         };
         Some((connection_state, thread_state, thread_metadata))
     }
+
+    fn thread_context(
+        &self,
+        thread_id: &str,
+    ) -> Option<(
+        &ConnectionState,
+        &ThreadAnalyticsState,
+        &ThreadMetadataState,
+    )> {
+        let thread_state = self.threads.get(thread_id)?;
+        let connection_id = thread_state.connection_id?;
+        let connection_state = self.connections.get(&connection_id)?;
+        let thread_metadata = thread_state.metadata.as_ref()?;
+        Some((connection_state, thread_state, thread_metadata))
+    }
+}
+
+fn is_normalized_plugin_relative_script_path(path: &str) -> bool {
+    if path.contains('\\') {
+        return false;
+    }
+    let mut components = path.split('/');
+    let Some(first) = components.next() else {
+        return false;
+    };
+    if has_windows_drive_prefix(first) {
+        return false;
+    }
+    std::iter::once(first)
+        .chain(components)
+        .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+
+fn has_windows_drive_prefix(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn warn_missing_analytics_context(

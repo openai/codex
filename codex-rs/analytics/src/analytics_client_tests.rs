@@ -3559,6 +3559,24 @@ async fn reducer_enriches_plugin_script_lifecycle_events_without_sensitive_paths
         sensitive_skill_path.as_path(),
         "sample:doc",
     );
+    let lifecycle_event =
+        |script_path: &str,
+         status: PluginScriptLifecycleStatus,
+         duration_ms: Option<u64>,
+         exit_code: Option<i32>| CodexPluginScriptLifecycleEvent {
+            session_id: "direct-session".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            product_client_id: "direct-client".to_string(),
+            plugin_id: "sample@openai-curated".to_string(),
+            execution_id: "execution-1".to_string(),
+            script_path: script_path.to_string(),
+            timestamp: "2026-06-12T17:39:31.000Z".to_string(),
+            status,
+            duration_ms,
+            exit_code,
+            skill: Some(skill.clone()),
+        };
     for (status, duration_ms, exit_code) in [
         (PluginScriptLifecycleStatus::Started, None, None),
         (PluginScriptLifecycleStatus::Completed, Some(42), Some(0)),
@@ -3566,18 +3584,28 @@ async fn reducer_enriches_plugin_script_lifecycle_events_without_sensitive_paths
         reducer
             .ingest(
                 AnalyticsFact::Custom(CustomAnalyticsFact::PluginScriptLifecycle(Box::new(
-                    CodexPluginScriptLifecycleEvent {
-                        thread_id: "thread-1".to_string(),
-                        turn_id: "turn-1".to_string(),
-                        plugin_id: "sample@openai-curated".to_string(),
-                        execution_id: "execution-1".to_string(),
-                        script_path: "scripts/run.py".to_string(),
-                        timestamp: "2026-06-12T17:39:31.000Z".to_string(),
-                        status,
-                        duration_ms,
-                        exit_code,
-                        skill: Some(skill.clone()),
-                    },
+                    lifecycle_event("scripts/run.py", status, duration_ms, exit_code),
+                ))),
+                &mut events,
+            )
+            .await;
+    }
+    for script_path in [
+        "/Users/private/scripts/run.py",
+        "../scripts/run.py",
+        "scripts/../run.py",
+        "C:\\Users\\private\\scripts\\run.py",
+        "//server/share/run.py",
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::PluginScriptLifecycle(Box::new(
+                    lifecycle_event(
+                        script_path,
+                        PluginScriptLifecycleStatus::Started,
+                        None,
+                        None,
+                    ),
                 ))),
                 &mut events,
             )
@@ -3619,6 +3647,61 @@ async fn reducer_enriches_plugin_script_lifecycle_events_without_sensitive_paths
     let serialized = payload.to_string();
     assert!(!serialized.contains("/Users/private"));
     assert!(!serialized.contains("SKILL.md"));
+}
+
+#[tokio::test]
+async fn reducer_emits_plugin_script_lifecycle_without_app_server_context() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginScriptLifecycle(Box::new(
+                CodexPluginScriptLifecycleEvent {
+                    session_id: "direct-session".to_string(),
+                    thread_id: "direct-thread".to_string(),
+                    turn_id: "direct-turn".to_string(),
+                    product_client_id: "codex-direct".to_string(),
+                    plugin_id: "sample@openai-curated".to_string(),
+                    execution_id: "execution-1".to_string(),
+                    script_path: "scripts/run.py".to_string(),
+                    timestamp: "2026-06-12T17:39:31.000Z".to_string(),
+                    status: PluginScriptLifecycleStatus::Started,
+                    duration_ms: None,
+                    exit_code: None,
+                    skill: None,
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().map(Vec::len), Some(1));
+    let event = &payload[0];
+    assert_eq!(event["event_type"], "codex_plugin_lifecycle_event");
+    assert_eq!(event["event_params"]["session_id"], "direct-session");
+    assert_eq!(event["event_params"]["thread_id"], "direct-thread");
+    assert_eq!(event["event_params"]["turn_id"], "direct-turn");
+    assert_eq!(
+        event["event_params"]["app_server_client"]["product_client_id"],
+        "codex-direct"
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["client_name"],
+        "codex-direct"
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["client_version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["rpc_transport"],
+        "in_process"
+    );
+    assert_eq!(
+        event["event_params"]["runtime"]["codex_rs_version"],
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[tokio::test]

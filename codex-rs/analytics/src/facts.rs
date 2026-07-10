@@ -463,8 +463,10 @@ pub struct PluginScriptSkill {
 
 #[derive(Clone, Debug)]
 pub struct CodexPluginScriptLifecycleEvent {
+    pub session_id: String,
     pub thread_id: String,
     pub turn_id: String,
+    pub product_client_id: String,
     pub plugin_id: String,
     pub execution_id: String,
     pub script_path: String,
