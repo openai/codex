@@ -291,7 +291,7 @@
             "writableRoots": {
               "default": [],
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "$ref": "#/definitions/LegacyAppPathString"
               },
               "type": "array"
             }

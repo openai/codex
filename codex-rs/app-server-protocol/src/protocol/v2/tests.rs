@@ -488,7 +488,7 @@ fn permissions_request_approval_uses_request_permission_profile() {
     }))
     .expect("permissions request should deserialize");
 
-    assert_eq!(params.cwd, absolute_path("repo"));
+    assert_eq!(params.cwd, absolute_path("repo").into());
     assert_eq!(params.environment_id.as_deref(), Some("remote"));
     assert_eq!(
         params.permissions,
@@ -519,14 +519,14 @@ fn permissions_request_approval_uses_request_permission_profile() {
                 enabled: Some(true),
             }),
             file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
-                Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                Some(vec![PathUri::from_abs_path(
+                    &AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                         .expect("path must be absolute"),
-                ]),
-                Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                )]),
+                Some(vec![PathUri::from_abs_path(
+                    &AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                         .expect("path must be absolute"),
-                ]),
+                )]),
             )),
         }
     );
@@ -565,7 +565,7 @@ fn permissions_request_approval_rejects_macos_permissions() {
 
 #[test]
 fn additional_file_system_permissions_preserves_canonical_entries() {
-    let core_permissions = CoreFileSystemPermissions {
+    let core_permissions: CoreFileSystemPermissions<PathUri> = CoreFileSystemPermissions {
         entries: vec![
             CoreFileSystemSandboxEntry {
                 path: CoreFileSystemPath::Special {
@@ -617,10 +617,11 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
 fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
     let read_only_path = absolute_path("read-only");
     let read_write_path = absolute_path("read-write");
-    let core_permissions = CoreFileSystemPermissions::from_read_write_roots(
-        Some(vec![read_only_path.clone()]),
-        Some(vec![read_write_path.clone()]),
-    );
+    let core_permissions: CoreFileSystemPermissions<PathUri> =
+        CoreFileSystemPermissions::from_read_write_roots(
+            Some(vec![PathUri::from_abs_path(&read_only_path)]),
+            Some(vec![PathUri::from_abs_path(&read_write_path)]),
+        );
 
     let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
     let read_only_api_path = LegacyAppPathString::from_abs_path(&read_only_path);
@@ -740,14 +741,14 @@ fn permissions_request_approval_response_uses_granted_permission_profile_without
                 enabled: Some(true),
             }),
             file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
-                Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                Some(vec![PathUri::from_abs_path(
+                    &AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                         .expect("path must be absolute"),
-                ]),
-                Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                )]),
+                Some(vec![PathUri::from_abs_path(
+                    &AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                         .expect("path must be absolute"),
-                ]),
+                )]),
             )),
         }
     );
@@ -1593,7 +1594,9 @@ fn sandbox_policy_round_trips_external_sandbox_network_access() {
         network_access: NetworkAccess::Enabled,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy
+        .try_to_core()
+        .expect("convert external sandbox policy to core");
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
@@ -1611,7 +1614,9 @@ fn sandbox_policy_round_trips_read_only_network_access() {
         network_access: true,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy
+        .try_to_core()
+        .expect("convert read-only sandbox policy to core");
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ReadOnly {
@@ -2286,7 +2291,9 @@ fn sandbox_policy_round_trips_workspace_write_access() {
         exclude_slash_tmp: false,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy
+        .try_to_core()
+        .expect("convert workspace-write sandbox policy to core");
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
@@ -2336,7 +2343,7 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
     assert_eq!(
         policy,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![absolute_path("/workspace")],
+            writable_roots: vec![absolute_path("/workspace").into()],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2412,7 +2419,7 @@ fn guardian_approval_review_action_round_trips_command_shape() {
         GuardianApprovalReviewAction::Command {
             source: GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: absolute_path("tmp"),
+            cwd: absolute_path("tmp").into(),
         }
     );
     assert_eq!(

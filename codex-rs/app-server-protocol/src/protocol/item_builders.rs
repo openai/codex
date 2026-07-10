@@ -141,33 +141,40 @@ pub(crate) fn command_actions_for_path_uri(
     parsed_cmd: &[ParsedCommand],
     cwd: &PathUri,
 ) -> Vec<CommandAction> {
-    // TODO(anp): Carry PathUri into CommandAction so foreign Read actions retain resolved paths.
-    // Until then, omit those actions rather than project a foreign cwd onto the host.
-    let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {
-        cwd.to_abs_path().ok()
-    } else {
-        None
-    };
-
     parsed_cmd
         .iter()
         .cloned()
         .filter_map(|parsed| match parsed {
-            ParsedCommand::Read { cmd, name, path } => match native_cwd.as_ref() {
-                Some(native_cwd) => Some(CommandAction::Read {
-                    command: cmd,
-                    name,
-                    path: native_cwd.join(path),
-                }),
-                None => {
-                    warn!(
-                        command = cmd,
-                        %cwd,
-                        "omitting read command action whose path cannot be resolved against a foreign cwd"
-                    );
-                    None
+            ParsedCommand::Read { cmd, name, path } => {
+                let path = path.to_string_lossy();
+                let target_convention = cwd.infer_path_convention();
+                let is_home_relative = path == "~"
+                    || path.starts_with("~/")
+                    || (target_convention == Some(PathConvention::Windows)
+                        && path.starts_with(r"~\"));
+                let resolved = if is_home_relative {
+                    Err("the target home directory is unavailable from a path URI".to_string())
+                } else {
+                    cwd.join(path.as_ref()).map_err(|err| err.to_string())
+                };
+                match resolved {
+                    Ok(path) => Some(CommandAction::Read {
+                        command: cmd,
+                        name,
+                        path: path.into(),
+                    }),
+                    Err(err) => {
+                        warn!(
+                            command = cmd,
+                            path = %path,
+                            %cwd,
+                            %err,
+                            "omitting read command action whose path cannot be resolved against cwd"
+                        );
+                        None
+                    }
                 }
-            },
+            }
             ParsedCommand::ListFiles { cmd, path } => {
                 Some(CommandAction::ListFiles { command: cmd, path })
             }
@@ -227,10 +234,7 @@ pub fn build_item_from_guardian_event(
                     command: command.clone(),
                 }]
             } else {
-                parsed_cmd
-                    .into_iter()
-                    .map(|parsed| CommandAction::from_core_with_cwd(parsed, cwd))
-                    .collect()
+                command_actions_for_path_uri(&parsed_cmd, cwd)
             };
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),

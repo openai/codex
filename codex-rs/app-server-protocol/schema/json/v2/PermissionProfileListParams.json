@@ -1,5 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "LegacyAppPathString": {
+      "type": "string"
+    }
+  },
   "properties": {
     "cursor": {
       "description": "Opaque pagination cursor returned by a previous call.",
@@ -9,11 +14,15 @@
       ]
     },
     "cwd": {
-      "description": "Optional working directory to resolve project config layers.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LegacyAppPathString"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional working directory to resolve project config layers."
     },
     "limit": {
       "description": "Optional page size; defaults to the full result set.",

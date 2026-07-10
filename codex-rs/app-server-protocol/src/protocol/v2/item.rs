@@ -41,8 +41,8 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_shell_command::parse_command::shlex_join;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -121,7 +121,7 @@ pub enum CommandAction {
     Read {
         command: String,
         name: String,
-        path: AbsolutePathBuf,
+        path: LegacyAppPathString,
     },
     ListFiles {
         command: String,
@@ -185,7 +185,7 @@ impl CommandAction {
             } => CoreParsedCommand::Read {
                 cmd,
                 name,
-                path: path.into_path_buf(),
+                path: PathBuf::from(path.into_string()),
             },
             CommandAction::ListFiles { command: cmd, path } => {
                 CoreParsedCommand::ListFiles { cmd, path }
@@ -199,12 +199,15 @@ impl CommandAction {
         }
     }
 
-    pub fn from_core_with_cwd(value: CoreParsedCommand, cwd: &AbsolutePathBuf) -> Self {
+    pub fn from_core_with_cwd(value: CoreParsedCommand, cwd: &PathUri) -> Self {
         match value {
             CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
                 command: cmd,
                 name,
-                path: cwd.join(path),
+                path: cwd
+                    .join(path.to_string_lossy().as_ref())
+                    .map(LegacyAppPathString::from)
+                    .unwrap_or_else(|_| LegacyAppPathString::from_path(&path)),
             },
             CoreParsedCommand::ListFiles { cmd, path } => {
                 CommandAction::ListFiles { command: cmd, path }
@@ -558,7 +561,7 @@ impl From<GuardianCommandSource> for CoreGuardianCommandSource {
 pub struct GuardianCommandReviewAction {
     pub source: GuardianCommandSource,
     pub command: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: LegacyAppPathString,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -568,15 +571,15 @@ pub struct GuardianExecveReviewAction {
     pub source: GuardianCommandSource,
     pub program: String,
     pub argv: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: LegacyAppPathString,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GuardianApplyPatchReviewAction {
-    pub cwd: AbsolutePathBuf,
-    pub files: Vec<AbsolutePathBuf>,
+    pub cwd: LegacyAppPathString,
+    pub files: Vec<LegacyAppPathString>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -618,7 +621,7 @@ pub enum GuardianApprovalReviewAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: AbsolutePathBuf,
+        cwd: LegacyAppPathString,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -626,13 +629,13 @@ pub enum GuardianApprovalReviewAction {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: LegacyAppPathString,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ApplyPatch {
-        cwd: AbsolutePathBuf,
-        files: Vec<AbsolutePathBuf>,
+        cwd: LegacyAppPathString,
+        files: Vec<LegacyAppPathString>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -669,7 +672,7 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
             } => Self::Command {
                 source: source.into(),
                 command,
-                cwd,
+                cwd: cwd.into(),
             },
             CoreGuardianAssessmentAction::Execve {
                 source,
@@ -680,11 +683,12 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
                 source: source.into(),
                 program,
                 argv,
-                cwd,
+                cwd: cwd.into(),
             },
-            CoreGuardianAssessmentAction::ApplyPatch { cwd, files } => {
-                Self::ApplyPatch { cwd, files }
-            }
+            CoreGuardianAssessmentAction::ApplyPatch { cwd, files } => Self::ApplyPatch {
+                cwd: cwd.into(),
+                files: files.into_iter().map(Into::into).collect(),
+            },
             CoreGuardianAssessmentAction::NetworkAccess {
                 target,
                 host,
@@ -732,7 +736,9 @@ impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
             } => Self::Command {
                 source: source.into(),
                 command,
-                cwd,
+                cwd: cwd
+                    .try_into()
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
             },
             GuardianApprovalReviewAction::Execve {
                 source,
@@ -743,11 +749,22 @@ impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
                 source: source.into(),
                 program,
                 argv,
-                cwd,
+                cwd: cwd
+                    .try_into()
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
             },
-            GuardianApprovalReviewAction::ApplyPatch { cwd, files } => {
-                Self::ApplyPatch { cwd, files }
-            }
+            GuardianApprovalReviewAction::ApplyPatch { cwd, files } => Self::ApplyPatch {
+                cwd: cwd
+                    .try_into()
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+                files: files
+                    .into_iter()
+                    .map(|path| {
+                        path.try_into()
+                            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+                    })
+                    .collect::<io::Result<_>>()?,
+            },
             GuardianApprovalReviewAction::NetworkAccess {
                 target,
                 host,

@@ -3931,7 +3931,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/v2/AbsolutePathBuf"
+          "$ref": "#/definitions/v2/LegacyAppPathString"
         },
         "environmentId": {
           "default": null,
@@ -7347,7 +7347,7 @@
                 "type": "string"
               },
               "path": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "type": {
                 "enum": [
@@ -10523,7 +10523,7 @@
                 "type": "string"
               },
               "cwd": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "source": {
                 "$ref": "#/definitions/v2/GuardianCommandSource"
@@ -10554,7 +10554,7 @@
                 "type": "array"
               },
               "cwd": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "program": {
                 "type": "string"
@@ -10583,11 +10583,11 @@
           {
             "properties": {
               "cwd": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "files": {
                 "items": {
-                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  "$ref": "#/definitions/v2/LegacyAppPathString"
                 },
                 "type": "array"
               },
@@ -13195,11 +13195,15 @@
             ]
           },
           "cwd": {
-            "description": "Optional working directory to resolve project config layers.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/LegacyAppPathString"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional working directory to resolve project config layers."
           },
           "limit": {
             "description": "Optional page size; defaults to the full result set.",
@@ -16337,7 +16341,7 @@
               "writableRoots": {
                 "default": [],
                 "items": {
-                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  "$ref": "#/definitions/v2/LegacyAppPathString"
                 },
                 "type": "array"
               }
