@@ -21,6 +21,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::CODEX_CLOUD_AGENT_SESSION_SOURCE;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
@@ -1843,6 +1844,43 @@ async fn new_uses_active_provider_for_model_refresh() {
         )
         .await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn cloud_agent_uses_memory_only_models_cache_with_local_runtime_paths() {
+    let server = MockServer::start().await;
+    let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
+
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    config.model_catalog = None;
+    config.model_provider.base_url = Some(server.uri());
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Custom(CODEX_CLOUD_AGENT_SESSION_SOURCE.to_string()),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*agent_graph_store*/ None,
+        Some(TEST_INSTALLATION_ID.to_string()),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+
+    let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+    let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+
+    assert_eq!(models_mock.requests().len(), 1);
+    assert!(!config.codex_home.join("models_cache.json").exists());
 }
 
 #[test]

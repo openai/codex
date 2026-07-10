@@ -406,6 +406,9 @@ impl ThreadManager {
             Some(Arc::clone(&auth_manager)),
         );
         let models_manager = match local_runtime_paths.as_ref() {
+            Some(_) if session_source.is_codex_cloud_agent() => {
+                model_provider.models_manager_without_disk_cache(config.model_catalog.clone())
+            }
             Some(paths) => model_provider
                 .models_manager(paths.codex_home.to_path_buf(), config.model_catalog.clone()),
             None => model_provider.models_manager_without_disk_cache(config.model_catalog.clone()),

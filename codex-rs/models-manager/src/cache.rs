@@ -8,13 +8,15 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
+use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
 
-/// Manages loading and saving of models cache to disk.
+/// Manages loading and saving model cache state in memory or on disk.
 #[derive(Debug)]
 pub(crate) struct ModelsCacheManager {
     cache_path: Option<PathBuf>,
+    memory_cache: RwLock<Option<ModelsCache>>,
     cache_ttl: Duration,
 }
 
@@ -23,6 +25,7 @@ impl ModelsCacheManager {
     pub(crate) fn new(cache_path: PathBuf, cache_ttl: Duration) -> Self {
         Self {
             cache_path: Some(cache_path),
+            memory_cache: RwLock::new(None),
             cache_ttl,
         }
     }
@@ -31,16 +34,16 @@ impl ModelsCacheManager {
     pub(crate) fn without_disk_cache(cache_ttl: Duration) -> Self {
         Self {
             cache_path: None,
+            memory_cache: RwLock::new(None),
             cache_ttl,
         }
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
     pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
-        let cache_path = self.cache_path.as_ref()?;
         info!(
-                cache_path = %cache_path.display(),
-                expected_version,
+            cache_path = ?self.cache_path.as_ref(),
+            expected_version,
             "models cache: attempting load_fresh"
         );
         let cache = match self.load().await {
@@ -51,14 +54,14 @@ impl ModelsCacheManager {
             }
         };
         info!(
-            cache_path = %cache_path.display(),
+            cache_path = ?self.cache_path.as_ref(),
             cached_version = ?cache.client_version,
             fetched_at = %cache.fetched_at,
-            "models cache: loaded cache file"
+            "models cache: loaded cache entry"
         );
         if cache.client_version.as_deref() != Some(expected_version) {
             info!(
-                cache_path = %cache_path.display(),
+                cache_path = ?self.cache_path.as_ref(),
                 expected_version,
                 cached_version = ?cache.client_version,
                 "models cache: cache version mismatch"
@@ -67,7 +70,7 @@ impl ModelsCacheManager {
         }
         if !cache.is_fresh(self.cache_ttl) {
             info!(
-                cache_path = %cache_path.display(),
+                cache_path = ?self.cache_path.as_ref(),
                 cache_ttl_secs = self.cache_ttl.as_secs(),
                 fetched_at = %cache.fetched_at,
                 "models cache: cache is stale"
@@ -75,23 +78,20 @@ impl ModelsCacheManager {
             return None;
         }
         info!(
-            cache_path = %cache_path.display(),
+            cache_path = ?self.cache_path.as_ref(),
             cache_ttl_secs = self.cache_ttl.as_secs(),
             "models cache: cache hit"
         );
         Some(cache)
     }
 
-    /// Persist the cache to disk, creating parent directories as needed.
+    /// Persist the cache to its configured storage, creating disk directories as needed.
     pub(crate) async fn persist_cache(
         &self,
         models: &[ModelInfo],
         etag: Option<String>,
         client_version: String,
     ) {
-        if self.cache_path.is_none() {
-            return;
-        }
         let cache = ModelsCache {
             fetched_at: Utc::now(),
             etag,
@@ -105,9 +105,6 @@ impl ModelsCacheManager {
 
     /// Renew the cache TTL by updating the fetched_at timestamp to now.
     pub(crate) async fn renew_cache_ttl(&self) -> io::Result<()> {
-        if self.cache_path.is_none() {
-            return Ok(());
-        }
         let mut cache = match self.load().await? {
             Some(cache) => cache,
             None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
@@ -118,7 +115,7 @@ impl ModelsCacheManager {
 
     async fn load(&self) -> io::Result<Option<ModelsCache>> {
         let Some(cache_path) = self.cache_path.as_ref() else {
-            return Ok(None);
+            return Ok(self.memory_cache.read().await.clone());
         };
         match fs::read(cache_path).await {
             Ok(contents) => {
@@ -133,6 +130,7 @@ impl ModelsCacheManager {
 
     async fn save_internal(&self, cache: &ModelsCache) -> io::Result<()> {
         let Some(cache_path) = self.cache_path.as_ref() else {
+            *self.memory_cache.write().await = Some(cache.clone());
             return Ok(());
         };
         if let Some(parent) = cache_path.parent() {

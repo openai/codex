@@ -2705,6 +2705,9 @@ fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
     })
 }
 
+/// Custom session-source name used by Codex Cloud Agent runtimes.
+pub const CODEX_CLOUD_AGENT_SESSION_SOURCE: &str = "codex-cloud-agent";
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
@@ -2838,6 +2841,14 @@ impl SessionSource {
 
     pub fn is_internal(&self) -> bool {
         matches!(self, SessionSource::Internal(_))
+    }
+
+    /// Returns whether this is a Codex Cloud Agent runtime's base session source.
+    pub fn is_codex_cloud_agent(&self) -> bool {
+        matches!(
+            self,
+            SessionSource::Custom(source) if source == CODEX_CLOUD_AGENT_SESSION_SOURCE
+        )
     }
 
     pub fn is_non_root_agent(&self) -> bool {
