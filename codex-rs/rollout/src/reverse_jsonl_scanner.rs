@@ -10,6 +10,7 @@ const READ_CHUNK_SIZE: usize = 8 * 1024;
 #[derive(Debug)]
 pub(crate) enum ScanOutcome<T> {
     Parsed(T),
+    #[allow(dead_code)]
     Rejected(serde_json::Error),
 }
 
