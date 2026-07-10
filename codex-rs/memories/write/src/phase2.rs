@@ -12,6 +12,7 @@ use crate::sync_rollout_summaries_from_memories;
 use crate::workspace::memory_workspace_diff;
 use crate::workspace::prepare_memory_workspace;
 use crate::workspace::reset_memory_workspace_baseline;
+use crate::workspace::validate_consolidation_artifacts;
 use crate::workspace::write_workspace_diff;
 use codex_config::Constrained;
 use codex_core::config::Config;
@@ -140,7 +141,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             return;
         }
     };
-    if !workspace_diff.has_changes() {
+    if !workspace_diff.has_changes() && validate_consolidation_artifacts(&root).await.is_ok() {
         tracing::error!("Phase 2 no changes");
         // We check only after sync of the file system.
         job::succeed(
@@ -378,14 +379,30 @@ mod agent {
             let final_status =
                 loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
 
-            if matches!(final_status, AgentStatus::Completed(_)) {
-                if let Some(token_usage) = thread
+            let agent_completed = matches!(final_status, AgentStatus::Completed(_));
+            if agent_completed
+                && let Some(token_usage) = thread
                     .token_usage_info()
                     .await
                     .map(|info| info.total_token_usage)
-                {
-                    emit_token_usage_metrics(context.as_ref(), &token_usage);
+            {
+                emit_token_usage_metrics(context.as_ref(), &token_usage);
+            }
+            let artifacts_valid = if agent_completed {
+                match validate_consolidation_artifacts(&memory_root).await {
+                    Ok(()) => true,
+                    Err(err) => {
+                        tracing::error!("memory consolidation artifacts are invalid: {err}");
+                        job::failed(context.as_ref(), &db, &claim, "failed_invalid_artifacts")
+                            .await;
+                        false
+                    }
                 }
+            } else {
+                false
+            };
+
+            if agent_completed && artifacts_valid {
                 // Do not reset the workspace baseline if we lost the lock.
                 let still_owns_lock = match db
                     .memories()
@@ -431,7 +448,7 @@ mod agent {
                         );
                     }
                 }
-            } else {
+            } else if !agent_completed {
                 job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
             }
 
