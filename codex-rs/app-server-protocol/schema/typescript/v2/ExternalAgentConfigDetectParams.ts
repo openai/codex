@@ -12,7 +12,7 @@ includeHome?: boolean,
  */
 cwds?: Array<string> | null,
 /**
- * Source product to detect. Missing or unrecognized values use Claude Code for backwards
- * compatibility; `cursor` selects Cursor.
+ * Optional import-source selector. Missing or unrecognized values use the default source for
+ * backwards compatibility.
  */
 source?: string | null, };

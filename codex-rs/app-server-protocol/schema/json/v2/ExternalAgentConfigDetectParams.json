@@ -16,7 +16,7 @@
       "type": "boolean"
     },
     "source": {
-      "description": "Source product to detect. Missing or unrecognized values use Claude Code for backwards compatibility; `cursor` selects Cursor.",
+      "description": "Optional import-source selector. Missing or unrecognized values use the default source for backwards compatibility.",
       "type": [
         "string",
         "null"
