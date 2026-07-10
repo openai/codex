@@ -5,7 +5,9 @@
 //! when the visible thread changes.
 
 use super::*;
+use crate::app_server_session::local_rollout_path;
 use crate::session_resume::read_session_model;
+use codex_utils_path_uri::PathUri;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadRollbackOrigin {
@@ -198,6 +200,17 @@ impl App {
     pub(super) async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
         let channel = self.thread_event_channels.get(&thread_id)?;
         let store = channel.store.lock().await;
+        store
+            .session
+            .as_ref()?
+            .local_workspace
+            .as_ref()
+            .map(|workspace| workspace.cwd.clone())
+    }
+
+    async fn thread_target_cwd(&self, thread_id: ThreadId) -> Option<PathUri> {
+        let channel = self.thread_event_channels.get(&thread_id)?;
+        let store = channel.store.lock().await;
         store.session.as_ref().map(|session| session.cwd.clone())
     }
 
@@ -315,26 +328,16 @@ impl App {
                     }
                 }
             }
-            ServerRequest::PermissionsRequestApproval { params, .. } => {
-                // TODO(anp): Remove this native-path localization error path once core permission
-                // paths remain PathUri after crossing the app-server boundary.
-                let permissions = params.permissions.clone().try_into().map_err(|err| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("failed to localize requested filesystem paths: {err}"),
-                    )
-                })?;
-                Some(ThreadInteractiveRequest::Approval(
-                    ApprovalRequest::Permissions {
-                        thread_id,
-                        thread_label,
-                        call_id: params.item_id.clone(),
-                        environment_id: params.environment_id.clone(),
-                        reason: params.reason.clone(),
-                        permissions,
-                    },
-                ))
-            }
+            ServerRequest::PermissionsRequestApproval { params, .. } => Some(
+                ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
+                    thread_id,
+                    thread_label,
+                    call_id: params.item_id.clone(),
+                    environment_id: params.environment_id.clone(),
+                    reason: params.reason.clone(),
+                    permissions: params.permissions.clone(),
+                }),
+            ),
             _ => None,
         })
     }
@@ -639,6 +642,10 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let target_cwd = self.thread_target_cwd(thread_id).await.unwrap_or_else(|| {
+                        PathUri::from_host_native_path(cwd)
+                            .unwrap_or_else(|_| PathUri::from_abs_path(&self.config.cwd))
+                    });
                     let config = self.chat_widget.config_ref();
                     let approvals_reviewer =
                         approvals_reviewer.unwrap_or(config.approvals_reviewer);
@@ -653,7 +660,8 @@ impl App {
                         .turn_start(
                             thread_id,
                             items.to_vec(),
-                            cwd.clone(),
+                            target_cwd,
+                            config.cwd.as_path(),
                             *approval_policy,
                             approvals_reviewer,
                             permissions_override,
@@ -680,7 +688,12 @@ impl App {
                 self.handle_skills_list_result(
                     app_server
                         .skills_list(codex_app_server_protocol::SkillsListParams {
-                            cwds: cwds.clone(),
+                            cwds: cwds
+                                .iter()
+                                .map(|cwd| {
+                                    codex_utils_path_uri::LegacyAppPathString::from_path(cwd)
+                                })
+                                .collect(),
                             force_reload: *force_reload,
                         })
                         .await,
@@ -992,9 +1005,18 @@ impl App {
         session.thread_id = thread_id;
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
-        session
-            .set_cwd_retargeting_implicit_runtime_workspace_root(notification.thread.cwd.clone());
-        let rollout_path = notification.thread.path.clone();
+        if let Some(cwd) = notification.thread.cwd.to_inferred_path_uri() {
+            session.set_cwd_retargeting_implicit_runtime_workspace_root(cwd);
+        } else {
+            tracing::warn!(
+                cwd = %notification.thread.cwd,
+                "ignoring non-absolute cwd in thread/started notification"
+            );
+        }
+        let rollout_path = local_rollout_path(
+            notification.thread.path.as_ref(),
+            self.app_server_target.thread_params_mode(),
+        );
         if let Some(model) =
             read_session_model(self.state_db.as_deref(), thread_id, rollout_path.as_deref()).await
         {

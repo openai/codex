@@ -49,13 +49,13 @@ use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::NetworkApprovalContext;
 use codex_app_server_protocol::NetworkApprovalProtocol;
 use codex_app_server_protocol::NetworkPolicyRuleAction;
+use codex_app_server_protocol::PermissionGrantScope;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RequestPermissionProfile;
 use codex_features::Features;
 use codex_protocol::ThreadId;
-use codex_protocol::request_permissions::PermissionGrantScope;
-use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::LegacyAppPathString;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -399,7 +399,11 @@ impl ApprovalOverlay {
         let granted_permissions = match decision {
             PermissionsDecision::GrantForTurn
             | PermissionsDecision::GrantForTurnWithStrictAutoReview
-            | PermissionsDecision::GrantForSession => permissions.clone(),
+            | PermissionsDecision::GrantForSession => {
+                crate::app_server_approval_conversions::granted_permission_profile_from_request(
+                    permissions.clone(),
+                )
+            }
             PermissionsDecision::Deny => Default::default(),
         };
         let scope = if matches!(decision, PermissionsDecision::GrantForSession) {
@@ -429,10 +433,10 @@ impl ApprovalOverlay {
         self.app_event_tx.request_permissions_response(
             thread_id,
             call_id.to_string(),
-            codex_protocol::request_permissions::RequestPermissionsResponse {
+            PermissionsRequestApprovalResponse {
                 permissions: granted_permissions,
                 scope,
-                strict_auto_review,
+                strict_auto_review: strict_auto_review.then_some(true),
             },
         );
     }
@@ -1029,9 +1033,12 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     }
 }
 
-fn path_label(base: &str, subpath: &Option<LegacyAppPathString>) -> String {
+fn path_label(
+    base: &str,
+    subpath: &Option<codex_app_server_protocol::LegacyAppPathString>,
+) -> String {
     match subpath {
-        Some(subpath) => format!("{base}/{subpath}"),
+        Some(subpath) => format!("{base}/{}", subpath.render_for_ui()),
         None => base.to_string(),
     }
 }
@@ -1250,13 +1257,19 @@ mod tests {
             environment_id: None,
             reason: Some("need workspace access".to_string()),
             permissions: RequestPermissionProfile {
-                network: Some(NetworkPermissions {
-                    enabled: Some(true),
-                }),
-                file_system: Some(FileSystemPermissions::from_read_write_roots(
-                    Some(vec![absolute_path("/tmp/readme.txt")]),
-                    Some(vec![absolute_path("/tmp/out.txt")]),
-                )),
+                network: Some(
+                    NetworkPermissions {
+                        enabled: Some(true),
+                    }
+                    .into(),
+                ),
+                file_system: Some(
+                    FileSystemPermissions::from_read_write_roots(
+                        Some(vec![absolute_path("/tmp/readme.txt").into()]),
+                        Some(vec![absolute_path("/tmp/out.txt").into()]),
+                    )
+                    .into(),
+                ),
             },
         }
     }
@@ -1787,8 +1800,8 @@ mod tests {
             network: None,
             file_system: Some(
                 FileSystemPermissions::from_read_write_roots(
-                    Some(vec![absolute_path("/tmp/readme.txt")]),
-                    Some(vec![absolute_path("/tmp/out.txt")]),
+                    Some(vec![absolute_path("/tmp/readme.txt").into()]),
+                    Some(vec![absolute_path("/tmp/out.txt").into()]),
                 )
                 .into(),
             ),
@@ -1872,9 +1885,11 @@ mod tests {
                 entries: Some(vec![FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
                         value: FileSystemSpecialPath::ProjectRoots {
-                            subpath: Some(LegacyAppPathString::from_path(std::path::Path::new(
-                                ".git",
-                            ))),
+                            subpath: Some(
+                                codex_app_server_protocol::LegacyAppPathString::from_path(
+                                    std::path::Path::new(".git"),
+                                ),
+                            ),
                         },
                     },
                     access: FileSystemAccessMode::Read,
@@ -1941,7 +1956,7 @@ mod tests {
             {
                 assert!(response.permissions.is_empty());
                 assert_eq!(response.scope, PermissionGrantScope::Turn);
-                assert!(!response.strict_auto_review);
+                assert_eq!(response.strict_auto_review, None);
                 saw_op = true;
                 break;
             }
@@ -1968,7 +1983,7 @@ mod tests {
             } = ev
             {
                 assert_eq!(response.scope, PermissionGrantScope::Turn);
-                assert!(response.strict_auto_review);
+                assert_eq!(response.strict_auto_review, Some(true));
                 saw_op = true;
                 break;
             }
@@ -2001,8 +2016,8 @@ mod tests {
                 }),
                 file_system: Some(
                     FileSystemPermissions::from_read_write_roots(
-                        Some(vec![absolute_path("/tmp/readme.txt")]),
-                        Some(vec![absolute_path("/tmp/out.txt")]),
+                        Some(vec![absolute_path("/tmp/readme.txt").into()]),
+                        Some(vec![absolute_path("/tmp/out.txt").into()]),
                     )
                     .into(),
                 ),
@@ -2058,8 +2073,8 @@ mod tests {
                 }),
                 file_system: Some(
                     FileSystemPermissions::from_read_write_roots(
-                        Some(vec![absolute_path("/tmp/readme.txt")]),
-                        Some(vec![absolute_path("/tmp/out.txt")]),
+                        Some(vec![absolute_path("/tmp/readme.txt").into()]),
+                        Some(vec![absolute_path("/tmp/out.txt").into()]),
                     )
                     .into(),
                 ),

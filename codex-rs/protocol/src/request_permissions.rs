@@ -1,7 +1,11 @@
 use crate::models::AdditionalPermissionProfile;
 use crate::models::FileSystemPermissions;
 use crate::models::NetworkPermissions;
+use crate::permissions::FileSystemPath;
+use crate::permissions::FileSystemSandboxEntry;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -139,8 +143,110 @@ pub struct RequestPermissionsEvent {
     pub started_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub permissions: RequestPermissionProfile,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        serialize_with = "serialize_request_permission_profile_as_native_paths",
+        deserialize_with = "deserialize_request_permission_profile_from_native_paths"
+    )]
+    pub permissions: RequestPermissionProfile<PathUri>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_path_uri_as_native_path",
+        deserialize_with = "deserialize_optional_path_uri_from_native_path"
+    )]
     #[ts(optional)]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub cwd: Option<PathUri>,
+}
+
+pub(crate) fn serialize_request_permission_profile_as_native_paths<S>(
+    permissions: &RequestPermissionProfile<PathUri>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    permissions
+        .clone()
+        .map_paths(|path| path.inferred_native_path_string())
+        .serialize(serializer)
+}
+
+pub(crate) fn deserialize_request_permission_profile_from_native_paths<'de, D>(
+    deserializer: D,
+) -> Result<RequestPermissionProfile<PathUri>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let permissions = RequestPermissionProfile::<LegacyAppPathString>::deserialize(deserializer)?;
+    try_map_request_permission_profile_paths(permissions, path_uri_from_legacy_app_path)
+        .map_err(serde::de::Error::custom)
+}
+
+fn serialize_optional_path_uri_as_native_path<S>(
+    path: &Option<PathUri>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    path.as_ref()
+        .map(PathUri::inferred_native_path_string)
+        .serialize(serializer)
+}
+
+fn deserialize_optional_path_uri_from_native_path<'de, D>(
+    deserializer: D,
+) -> Result<Option<PathUri>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<LegacyAppPathString>::deserialize(deserializer)?
+        .map(path_uri_from_legacy_app_path)
+        .transpose()
+        .map_err(serde::de::Error::custom)
+}
+
+fn path_uri_from_legacy_app_path(
+    path: LegacyAppPathString,
+) -> Result<PathUri, codex_utils_path_uri::LegacyAppPathStringError> {
+    if let Ok(path_uri) = PathUri::parse(path.as_str()) {
+        return Ok(path_uri);
+    }
+    path.try_into()
+}
+
+fn try_map_request_permission_profile_paths<InputPath, OutputPath, Error>(
+    permissions: RequestPermissionProfile<InputPath>,
+    mut map: impl FnMut(InputPath) -> Result<OutputPath, Error>,
+) -> Result<RequestPermissionProfile<OutputPath>, Error> {
+    let file_system = permissions
+        .file_system
+        .map(|file_system| {
+            let entries = file_system
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let path = match entry.path {
+                        FileSystemPath::Path { path } => FileSystemPath::Path { path: map(path)? },
+                        FileSystemPath::GlobPattern { pattern } => {
+                            FileSystemPath::GlobPattern { pattern }
+                        }
+                        FileSystemPath::Special { value } => FileSystemPath::Special { value },
+                    };
+                    Ok(FileSystemSandboxEntry {
+                        path,
+                        access: entry.access,
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            Ok(FileSystemPermissions {
+                entries,
+                glob_scan_max_depth: file_system.glob_scan_max_depth,
+            })
+        })
+        .transpose()?;
+    Ok(RequestPermissionProfile {
+        network: permissions.network,
+        file_system,
+    })
 }

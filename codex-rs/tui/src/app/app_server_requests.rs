@@ -3,16 +3,13 @@ use std::collections::VecDeque;
 
 use super::App;
 use crate::app_command::AppCommand;
-use crate::app_server_approval_conversions::granted_permission_profile_from_request;
 use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
-use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 
 impl App {
     pub(super) async fn reject_app_server_request(
@@ -104,18 +101,6 @@ impl PendingAppServerRequests {
                 None
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
-                // TODO(anp): Remove this duplicate validation once core permission paths remain
-                // PathUri after crossing the app-server boundary. Native permission paths do not
-                // yet have an ingress validation step, so validate them here before recording the
-                // request as pending. Discovering an invalid path later in a UI delivery path
-                // would leave the app-server RPC waiting without a clean rejection path.
-                if let Err(err) = CoreRequestPermissionProfile::try_from(params.permissions.clone())
-                {
-                    return Some(UnsupportedAppServerRequest {
-                        request_id: request_id.clone(),
-                        message: format!("failed to localize requested filesystem paths: {err}"),
-                    });
-                }
                 self.permissions_approvals
                     .insert(params.item_id.clone(), request_id.clone());
                 None
@@ -223,14 +208,7 @@ impl PendingAppServerRequests {
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
-                        result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: granted_permission_profile_from_request(
-                                response.permissions.clone(),
-                            ),
-                            scope: response.scope.into(),
-                            strict_auto_review: response.strict_auto_review.then_some(true),
-                        })
-                        .map_err(|err| {
+                        result: serde_json::to_value(response).map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
                         })?,
                     })
@@ -417,7 +395,6 @@ struct McpRequestKey {
 mod tests {
     use super::PendingAppServerRequests;
     use super::ResolvedAppServerRequest;
-    use super::UnsupportedAppServerRequest;
     use crate::app_command::AppCommand as Op;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -438,9 +415,6 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputAnswer;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputResponse;
-    use codex_protocol::models::FileSystemPermissions;
-    use codex_protocol::models::NetworkPermissions;
-    use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -488,9 +462,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_permissions_with_paths_that_cannot_be_localized() {
+    fn preserves_permissions_with_relative_target_paths() {
         let mut pending = PendingAppServerRequests::default();
-        let request_id = AppServerRequestId::Integer(7);
         let permissions = codex_app_server_protocol::RequestPermissionProfile {
             network: None,
             file_system: Some(AdditionalFileSystemPermissions {
@@ -503,36 +476,28 @@ mod tests {
                 entries: None,
             }),
         };
-        let localization_error =
-            RequestPermissionProfile::try_from(permissions.clone()).expect_err("relative path");
         let cwd = AbsolutePathBuf::try_from(PathBuf::from(if cfg!(windows) {
             r"C:\tmp"
         } else {
             "/tmp"
         }))
         .expect("path must be absolute");
+        let request = ServerRequest::PermissionsRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: PermissionsRequestApprovalParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "perm-1".to_string(),
+                environment_id: None,
+                started_at_ms: 0,
+                cwd: cwd.into(),
+                reason: None,
+                permissions,
+            },
+        };
 
-        assert_eq!(
-            pending.note_server_request(&ServerRequest::PermissionsRequestApproval {
-                request_id: request_id.clone(),
-                params: PermissionsRequestApprovalParams {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    item_id: "perm-1".to_string(),
-                    environment_id: None,
-                    started_at_ms: 0,
-                    cwd,
-                    reason: None,
-                    permissions,
-                },
-            }),
-            Some(UnsupportedAppServerRequest {
-                request_id,
-                message: format!(
-                    "failed to localize requested filesystem paths: {localization_error}"
-                ),
-            })
-        );
+        assert_eq!(pending.note_server_request(&request), None);
+        assert!(pending.contains_server_request(&request));
     }
 
     #[test]
@@ -561,7 +526,7 @@ mod tests {
                     item_id: "perm-1".to_string(),
                     environment_id: None,
                     started_at_ms: 0,
-                    cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
+                    cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }).into(),
                     reason: None,
                     permissions: serde_json::from_value(json!({
                         "network": { "enabled": null }
@@ -588,18 +553,20 @@ mod tests {
         let permissions = pending
             .take_resolution(&Op::RequestPermissionsResponse {
                 id: "perm-1".to_string(),
-                response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: RequestPermissionProfile {
-                        network: Some(NetworkPermissions {
+                response: PermissionsRequestApprovalResponse {
+                    permissions: codex_app_server_protocol::GrantedPermissionProfile {
+                        network: Some(AdditionalNetworkPermissions {
                             enabled: Some(true),
                         }),
-                        file_system: Some(FileSystemPermissions::from_read_write_roots(
-                            Some(vec![absolute_path(read_path)]),
-                            Some(vec![absolute_path(write_path)]),
-                        )),
+                        file_system: Some(AdditionalFileSystemPermissions {
+                            read: Some(vec![absolute_path(read_path).into()]),
+                            write: Some(vec![absolute_path(write_path).into()]),
+                            glob_scan_max_depth: None,
+                            entries: None,
+                        }),
                     },
-                    scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
-                    strict_auto_review: false,
+                    scope: PermissionGrantScope::Session,
+                    strict_auto_review: None,
                 },
             })
             .expect("permissions response should serialize")
@@ -617,20 +584,7 @@ mod tests {
                         read: Some(vec![absolute_path(read_path).into()]),
                         write: Some(vec![absolute_path(write_path).into()]),
                         glob_scan_max_depth: None,
-                        entries: Some(vec![
-                            codex_app_server_protocol::FileSystemSandboxEntry {
-                                path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(read_path).into(),
-                                },
-                                access: codex_app_server_protocol::FileSystemAccessMode::Read,
-                            },
-                            codex_app_server_protocol::FileSystemSandboxEntry {
-                                path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(write_path).into(),
-                                },
-                                access: codex_app_server_protocol::FileSystemAccessMode::Write,
-                            },
-                        ]),
+                        entries: None,
                     }),
                 },
                 scope: PermissionGrantScope::Session,

@@ -9,11 +9,11 @@ use crate::app_command::AppCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
-use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
@@ -93,7 +93,7 @@ impl AppEventSender {
         &self,
         thread_id: ThreadId,
         id: String,
-        response: RequestPermissionsResponse,
+        response: PermissionsRequestApprovalResponse,
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,

@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -142,7 +141,7 @@ use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_rollout_trace::ThreadTraceContext;
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles_for_uri;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
@@ -2151,11 +2150,11 @@ impl Session {
         approval_id: Option<String>,
         environment_id: Option<String>,
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-        additional_permissions: Option<AdditionalPermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
         available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
         //  command-level approvals use `call_id`.
@@ -2267,10 +2266,10 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         call_id: String,
-        args: RequestPermissionsArgs,
+        args: RequestPermissionsArgs<PathUri>,
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
-    ) -> Option<RequestPermissionsResponse> {
+    ) -> Option<RequestPermissionsResponse<PathUri>> {
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2294,18 +2293,6 @@ impl Session {
         }
 
         let requested_permissions = args.permissions;
-        // TODO(anp): Migrate request_permissions to support paths from foreign environments.
-        let Ok(native_environment_cwd) = environment.cwd.to_abs_path() else {
-            warn!(
-                cwd = %environment.cwd,
-                "request_permissions requires a cwd native to the Codex host"
-            );
-            return Some(RequestPermissionsResponse {
-                permissions: RequestPermissionProfile::default(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-            });
-        };
 
         if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
             let originating_turn_state = {
@@ -2373,7 +2360,7 @@ impl Session {
             let response = Self::normalize_request_permissions_response(
                 requested_permissions,
                 response,
-                native_environment_cwd.as_path(),
+                &environment.cwd,
             );
             self.record_granted_request_permissions_for_turn(
                 &response,
@@ -2413,7 +2400,7 @@ impl Session {
             started_at_ms: now_unix_timestamp_ms(),
             reason: args.reason,
             permissions: requested_permissions,
-            cwd: Some(native_environment_cwd),
+            cwd: Some(environment.cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
@@ -2434,10 +2421,10 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         call_id: String,
-        args: RequestPermissionsArgs,
-        cwd: AbsolutePathBuf,
+        args: RequestPermissionsArgs<PathUri>,
+        cwd: PathUri,
         cancellation_token: CancellationToken,
-    ) -> Option<RequestPermissionsResponse> {
+    ) -> Option<RequestPermissionsResponse<PathUri>> {
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
@@ -2454,7 +2441,7 @@ impl Session {
             });
         };
         let mut environment = turn_environment.selection();
-        environment.cwd = PathUri::from_abs_path(&cwd);
+        environment.cwd = cwd;
         self.request_permissions_for_environment(
             turn_context,
             call_id,
@@ -2541,7 +2528,7 @@ impl Session {
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
-        response: RequestPermissionsResponse,
+        response: RequestPermissionsResponse<PathUri>,
     ) {
         let (entry, originating_turn_state) = {
             let mut active = self.active_turn.lock().await;
@@ -2557,26 +2544,11 @@ impl Session {
         };
         match entry {
             Some(entry) => {
-                // TODO(anp): Migrate request_permissions to support paths from foreign environments.
-                let response = match entry.environment.cwd.to_abs_path() {
-                    Ok(native_environment_cwd) => Self::normalize_request_permissions_response(
-                        entry.requested_permissions,
-                        response,
-                        native_environment_cwd.as_path(),
-                    ),
-                    Err(err) => {
-                        warn!(
-                            cwd = %entry.environment.cwd,
-                            %err,
-                            "request_permissions requires a cwd native to the Codex host"
-                        );
-                        RequestPermissionsResponse {
-                            permissions: RequestPermissionProfile::default(),
-                            scope: PermissionGrantScope::Turn,
-                            strict_auto_review: false,
-                        }
-                    }
-                };
+                let response = Self::normalize_request_permissions_response(
+                    entry.requested_permissions,
+                    response,
+                    &entry.environment.cwd,
+                );
                 self.record_granted_request_permissions_for_turn(
                     &response,
                     &entry.environment.environment_id,
@@ -2592,10 +2564,10 @@ impl Session {
     }
 
     fn normalize_request_permissions_response(
-        requested_permissions: RequestPermissionProfile,
-        response: RequestPermissionsResponse,
-        cwd: &Path,
-    ) -> RequestPermissionsResponse {
+        requested_permissions: RequestPermissionProfile<PathUri>,
+        response: RequestPermissionsResponse<PathUri>,
+        cwd: &PathUri,
+    ) -> RequestPermissionsResponse<PathUri> {
         if response.strict_auto_review && matches!(response.scope, PermissionGrantScope::Session) {
             return RequestPermissionsResponse {
                 permissions: RequestPermissionProfile::default(),
@@ -2609,7 +2581,7 @@ impl Session {
         }
 
         RequestPermissionsResponse {
-            permissions: intersect_permission_profiles(
+            permissions: intersect_permission_profiles_for_uri(
                 requested_permissions.into(),
                 response.permissions.into(),
                 cwd,
@@ -2622,7 +2594,7 @@ impl Session {
 
     async fn record_granted_request_permissions_for_turn(
         &self,
-        response: &RequestPermissionsResponse,
+        response: &RequestPermissionsResponse<PathUri>,
         environment_id: &str,
         originating_turn_state: Option<&Arc<Mutex<crate::state::TurnState>>>,
     ) {
@@ -2633,7 +2605,7 @@ impl Session {
             PermissionGrantScope::Turn => {
                 if let Some(turn_state) = originating_turn_state {
                     let mut ts = turn_state.lock().await;
-                    let permissions: AdditionalPermissionProfile =
+                    let permissions: AdditionalPermissionProfile<PathUri> =
                         response.permissions.clone().into();
                     ts.record_granted_permissions(environment_id, permissions);
                     if response.strict_auto_review {
@@ -2658,7 +2630,7 @@ impl Session {
     pub(crate) async fn granted_turn_permissions(
         &self,
         environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
+    ) -> Option<AdditionalPermissionProfile<PathUri>> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
         let ts = active.turn_state.lock().await;
@@ -2681,7 +2653,7 @@ impl Session {
     pub(crate) async fn granted_session_permissions(
         &self,
         environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
+    ) -> Option<AdditionalPermissionProfile<PathUri>> {
         let state = self.state.lock().await;
         state.granted_permissions(environment_id)
     }

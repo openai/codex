@@ -20,6 +20,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -259,7 +260,7 @@ async fn wait_for_exec_approval_or_completion(
 async fn expect_request_permissions_event(
     test: &TestCodex,
     expected_call_id: &str,
-) -> RequestPermissionProfile {
+) -> RequestPermissionProfile<PathUri> {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -297,11 +298,15 @@ fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfil
     }
 }
 
-fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissionProfile> {
+fn normalized_directory_write_permissions(
+    path: &Path,
+) -> Result<RequestPermissionProfile<PathUri>> {
     Ok(RequestPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
+            Some(vec![PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                path.canonicalize()?,
+            )?)]),
         )),
         ..RequestPermissionProfile::default()
     })
@@ -372,7 +377,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let approval = expect_exec_approval(&test, command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(requested_permissions.clone())
+        Some(requested_permissions.clone().into())
     );
     test.codex
         .submit(Op::ExecApproval {
@@ -594,7 +599,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir(
     let approval = expect_exec_approval(&test, command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(expected_permissions.clone())
+        Some(expected_permissions.clone().into())
     );
     test.codex
         .submit(Op::ExecApproval {
@@ -875,9 +880,9 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let normalized_requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(
+            Some(vec![PathUri::from_abs_path(&AbsolutePathBuf::try_from(
                 outside_dir.path().canonicalize()?,
-            )?]),
+            )?)]),
         )),
         ..RequestPermissionProfile::default()
     };
@@ -1011,7 +1016,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     let approval = expect_exec_approval(&test, &command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(normalized_requested_permissions)
+        Some(normalized_requested_permissions.into())
     );
     test.codex
         .submit(Op::ExecApproval {
@@ -1085,9 +1090,9 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
     let normalized_requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
-            Some(vec![AbsolutePathBuf::try_from(
+            Some(vec![PathUri::from_abs_path(&AbsolutePathBuf::try_from(
                 outside_dir.path().canonicalize()?,
-            )?]),
+            )?)]),
         )),
         ..Default::default()
     };
@@ -1569,8 +1574,12 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
             Some(vec![
-                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
-                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
+                PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                    first_dir.path().canonicalize()?,
+                )?),
+                PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                    second_dir.path().canonicalize()?,
+                )?),
             ]),
         )),
         ..RequestPermissionProfile::default()
@@ -1581,8 +1590,12 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
             Some(vec![
-                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
-                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
+                PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                    first_dir.path().canonicalize()?,
+                )?),
+                PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                    second_dir.path().canonicalize()?,
+                )?),
             ]),
         )),
         ..Default::default()
@@ -1655,7 +1668,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
     assert!(approval_reads.as_ref().is_none_or(Vec::is_empty));
 
     let mut approval_writes = approval_writes.unwrap_or_default();
-    approval_writes.sort_by_key(|path| path.display().to_string());
+    approval_writes.sort_by_key(ToString::to_string);
 
     let (_, expected_writes) = merged_permissions
         .file_system
@@ -1663,7 +1676,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         .legacy_read_write_roots()
         .expect("expected legacy-compatible permissions");
     let mut expected_writes = expected_writes.unwrap_or_default();
-    expected_writes.sort_by_key(|path| path.display().to_string());
+    expected_writes.sort_by_key(ToString::to_string);
 
     assert_eq!(approval_writes, expected_writes);
     test.codex

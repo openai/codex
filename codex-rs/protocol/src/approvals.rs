@@ -1,11 +1,17 @@
 use crate::mcp::RequestId;
 use crate::models::AdditionalPermissionProfile;
+use crate::models::FileSystemPermissions;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
+use crate::permissions::FileSystemPath;
+use crate::permissions::FileSystemSandboxEntry;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::request_permissions::RequestPermissionProfile;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::request_permissions::deserialize_request_permission_profile_from_native_paths;
+use crate::request_permissions::serialize_request_permission_profile_as_native_paths;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -138,17 +144,33 @@ pub enum GuardianAssessmentAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: AbsolutePathBuf,
+        #[serde(
+            serialize_with = "serialize_path_uri_as_native_path",
+            deserialize_with = "deserialize_path_uri_from_native_path"
+        )]
+        cwd: PathUri,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: AbsolutePathBuf,
+        #[serde(
+            serialize_with = "serialize_path_uri_as_native_path",
+            deserialize_with = "deserialize_path_uri_from_native_path"
+        )]
+        cwd: PathUri,
     },
     ApplyPatch {
-        cwd: AbsolutePathBuf,
-        files: Vec<AbsolutePathBuf>,
+        #[serde(
+            serialize_with = "serialize_path_uri_as_native_path",
+            deserialize_with = "deserialize_path_uri_from_native_path"
+        )]
+        cwd: PathUri,
+        #[serde(
+            serialize_with = "serialize_path_uris_as_native_paths",
+            deserialize_with = "deserialize_path_uris_from_native_paths"
+        )]
+        files: Vec<PathUri>,
     },
     NetworkAccess {
         target: String,
@@ -165,8 +187,117 @@ pub enum GuardianAssessmentAction {
     },
     RequestPermissions {
         reason: Option<String>,
-        permissions: RequestPermissionProfile,
+        #[serde(
+            serialize_with = "serialize_request_permission_profile_as_native_paths",
+            deserialize_with = "deserialize_request_permission_profile_from_native_paths"
+        )]
+        permissions: RequestPermissionProfile<PathUri>,
     },
+}
+
+fn serialize_path_uri_as_native_path<S>(path: &PathUri, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&path.inferred_native_path_string())
+}
+
+fn deserialize_path_uri_from_native_path<'de, D>(deserializer: D) -> Result<PathUri, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let path = LegacyAppPathString::deserialize(deserializer)?;
+    PathUri::try_from(path).map_err(serde::de::Error::custom)
+}
+
+fn serialize_path_uris_as_native_paths<S>(
+    paths: &[PathUri],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    paths
+        .iter()
+        .map(PathUri::inferred_native_path_string)
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
+fn deserialize_path_uris_from_native_paths<'de, D>(
+    deserializer: D,
+) -> Result<Vec<PathUri>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<LegacyAppPathString>::deserialize(deserializer)?
+        .into_iter()
+        .map(|path| PathUri::try_from(path).map_err(serde::de::Error::custom))
+        .collect()
+}
+
+fn serialize_optional_additional_permissions_as_native_paths<S>(
+    permissions: &Option<AdditionalPermissionProfile<PathUri>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    permissions
+        .clone()
+        .map(|permissions| permissions.map_paths(|path| path.inferred_native_path_string()))
+        .serialize(serializer)
+}
+
+fn deserialize_optional_additional_permissions_from_native_paths<'de, D>(
+    deserializer: D,
+) -> Result<Option<AdditionalPermissionProfile<PathUri>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<AdditionalPermissionProfile<LegacyAppPathString>>::deserialize(deserializer)?
+        .map(|permissions| {
+            try_map_additional_permission_paths(permissions, |path| {
+                PathUri::try_from(path).map_err(serde::de::Error::custom)
+            })
+        })
+        .transpose()
+}
+
+fn try_map_additional_permission_paths<InputPath, OutputPath, Error>(
+    permissions: AdditionalPermissionProfile<InputPath>,
+    mut map: impl FnMut(InputPath) -> Result<OutputPath, Error>,
+) -> Result<AdditionalPermissionProfile<OutputPath>, Error> {
+    let file_system = permissions
+        .file_system
+        .map(|file_system| {
+            let entries = file_system
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let path = match entry.path {
+                        FileSystemPath::Path { path } => FileSystemPath::Path { path: map(path)? },
+                        FileSystemPath::GlobPattern { pattern } => {
+                            FileSystemPath::GlobPattern { pattern }
+                        }
+                        FileSystemPath::Special { value } => FileSystemPath::Special { value },
+                    };
+                    Ok(FileSystemSandboxEntry {
+                        path,
+                        access: entry.access,
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            Ok(FileSystemPermissions {
+                entries,
+                glob_scan_max_depth: file_system.glob_scan_max_depth,
+            })
+        })
+        .transpose()?;
+    Ok(AdditionalPermissionProfile {
+        network: permissions.network,
+        file_system,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -244,7 +375,11 @@ pub struct ExecApprovalRequestEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
-    pub cwd: AbsolutePathBuf,
+    #[serde(
+        serialize_with = "serialize_path_uri_as_native_path",
+        deserialize_with = "deserialize_path_uri_from_native_path"
+    )]
+    pub cwd: PathUri,
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -261,9 +396,14 @@ pub struct ExecApprovalRequestEvent {
     #[ts(optional)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     /// Optional additional filesystem permissions requested for this command.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_additional_permissions_as_native_paths",
+        deserialize_with = "deserialize_optional_additional_permissions_from_native_paths"
+    )]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile<PathUri>>,
     /// Ordered list of decisions the client may present for this prompt.
     ///
     /// When absent, clients should derive the legacy default set from the
@@ -299,7 +439,7 @@ impl ExecApprovalRequestEvent {
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
-        additional_permissions: Option<&AdditionalPermissionProfile>,
+        additional_permissions: Option<&AdditionalPermissionProfile<PathUri>>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
@@ -432,7 +572,7 @@ mod tests {
             GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf /tmp/guardian".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_path_buf("/tmp").abs().into(),
             }
         );
     }
@@ -465,7 +605,7 @@ mod tests {
                     "-f".to_string(),
                     "/tmp/file.sqlite".to_string(),
                 ],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_path_buf("/tmp").abs().into(),
             }
         );
     }

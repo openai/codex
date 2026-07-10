@@ -30,16 +30,7 @@ impl ChatWidget {
                 self.on_elicitation_request(request_id, params);
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => {
-                // TODO(anp): Remove this native-path localization error path once core permission
-                // paths remain PathUri after crossing the app-server boundary.
-                match request_permissions_from_params(params) {
-                    Ok(event) => self.on_request_permissions(event),
-                    Err(err) => {
-                        self.add_error_message(format!(
-                            "failed to localize requested filesystem paths: {err}"
-                        ));
-                    }
-                }
+                self.on_request_permissions(request_permissions_from_params(params));
             }
             ServerRequest::ToolRequestUserInput { params, .. } => {
                 self.on_request_user_input(params);

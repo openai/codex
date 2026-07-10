@@ -6,22 +6,19 @@
 //! submission.
 
 use crate::diff_model::FileChange;
-use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_app_server_protocol::RequestPermissionProfile;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub(crate) fn granted_permission_profile_from_request(
-    value: CoreRequestPermissionProfile,
+    value: RequestPermissionProfile,
 ) -> GrantedPermissionProfile {
     GrantedPermissionProfile {
-        network: value.network.map(|network| AdditionalNetworkPermissions {
-            enabled: network.enabled,
-        }),
-        file_system: value.file_system.map(Into::into),
+        network: value.network,
+        file_system: value.file_system,
     }
 }
 
@@ -41,7 +38,7 @@ pub(crate) fn file_update_changes_to_display(
                 },
                 PatchChangeKind::Update { move_path } => FileChange::Update {
                     unified_diff: change.diff,
-                    move_path,
+                    move_path: move_path.map(PathBuf::from),
                 },
             };
             (path, file_change)
@@ -64,7 +61,6 @@ mod tests {
     use codex_app_server_protocol::GrantedPermissionProfile;
     use codex_app_server_protocol::PatchChangeKind;
     use codex_app_server_protocol::RequestPermissionProfile;
-    use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -104,9 +100,6 @@ mod tests {
                 entries: None,
             }),
         };
-        let request = CoreRequestPermissionProfile::try_from(request)
-            .expect("API paths should convert to native paths");
-
         assert_eq!(
             granted_permission_profile_from_request(request),
             GrantedPermissionProfile {
@@ -117,20 +110,7 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/read-only").into()]),
                     write: Some(vec![absolute_path("/tmp/write").into()]),
                     glob_scan_max_depth: None,
-                    entries: Some(vec![
-                        FileSystemSandboxEntry {
-                            path: FileSystemPath::Path {
-                                path: absolute_path("/tmp/read-only").into(),
-                            },
-                            access: FileSystemAccessMode::Read,
-                        },
-                        FileSystemSandboxEntry {
-                            path: FileSystemPath::Path {
-                                path: absolute_path("/tmp/write").into(),
-                            },
-                            access: FileSystemAccessMode::Write,
-                        },
-                    ]),
+                    entries: None,
                 }),
             }
         );
@@ -152,9 +132,6 @@ mod tests {
                 }]),
             }),
         };
-        let request = CoreRequestPermissionProfile::try_from(request)
-            .expect("API paths should convert to native paths");
-
         assert_eq!(
             granted_permission_profile_from_request(request),
             GrantedPermissionProfile {

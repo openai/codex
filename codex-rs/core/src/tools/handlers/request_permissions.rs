@@ -1,5 +1,6 @@
 use codex_protocol::request_permissions::RequestPermissionsArgs;
-use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions_for_uri;
+use codex_sandboxing::policy_transforms::resolve_additional_permission_paths;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
@@ -7,7 +8,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
@@ -15,15 +15,8 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use serde::Deserialize;
 
 pub struct RequestPermissionsHandler;
-
-#[derive(Deserialize)]
-struct RequestPermissionsEnvironmentArgs {
-    #[serde(default, rename = "environment_id", alias = "environmentId")]
-    environment_id: Option<String>,
-}
 
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     fn tool_name(&self) -> ToolName {
@@ -63,34 +56,29 @@ impl RequestPermissionsHandler {
             }
         };
 
-        let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) = resolve_tool_environment(
-            &step_context.environments,
-            environment_args.environment_id.as_deref(),
-        )?
+        let args: RequestPermissionsArgs<String> = parse_arguments(&arguments)?;
+        let Some(turn_environment) =
+            resolve_tool_environment(&step_context.environments, args.environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "request_permissions requires a primary environment".to_string(),
             ));
         };
-        // TODO(anp): Migrate request_permissions parsing and permission profiles to PathUri so
-        // environment-native foreign paths do not require host conversion.
-        let native_cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "request_permissions cwd `{}` is not native to the Codex host: {err}",
-                turn_environment.cwd()
-            ))
-        })?;
-        let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, &native_cwd)?;
-        args.permissions = normalize_additional_permissions(args.permissions.into())
-            .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
-            .map_err(FunctionCallError::RespondToModel)?;
-        if args.permissions.is_empty() {
+        let permissions =
+            resolve_additional_permission_paths(args.permissions.into(), turn_environment.cwd())
+                .and_then(normalize_additional_permissions_for_uri)
+                .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
+                .map_err(FunctionCallError::RespondToModel)?;
+        if permissions.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 "request_permissions requires at least one permission".to_string(),
             ));
         }
+        let args = RequestPermissionsArgs {
+            environment_id: args.environment_id,
+            reason: args.reason,
+            permissions,
+        };
 
         let response = session
             .request_permissions_for_environment(
@@ -107,6 +95,7 @@ impl RequestPermissionsHandler {
                 )
             })?;
 
+        let response = response.map_paths(|path| path.inferred_native_path_string());
         let content = serde_json::to_string(&response).map_err(|err| {
             FunctionCallError::Fatal(format!(
                 "failed to serialize request_permissions response: {err}"

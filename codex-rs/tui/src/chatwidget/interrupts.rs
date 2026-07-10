@@ -5,11 +5,11 @@ use std::collections::VecDeque;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
+use crate::approval_events::RequestPermissionsEvent;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ToolRequestUserInputParams;
-use codex_protocol::request_permissions::RequestPermissionsEvent;
 
 use super::ChatWidget;
 
@@ -163,7 +163,7 @@ mod tests {
             turn_id: "turn".to_string(),
             environment_id: None,
             command: vec!["true".to_string()],
-            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            cwd: AbsolutePathBuf::current_dir().expect("current dir").into(),
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,

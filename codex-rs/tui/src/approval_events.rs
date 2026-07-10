@@ -12,10 +12,11 @@ use crate::diff_model::FileChange;
 use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::ExecPolicyAmendment;
+use codex_app_server_protocol::LegacyAppPathString;
 use codex_app_server_protocol::NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_app_server_protocol::RequestPermissionProfile;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -29,7 +30,7 @@ pub(crate) struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) environment_id: Option<String>,
     pub(crate) command: Vec<String>,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) cwd: LegacyAppPathString,
     pub(crate) reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
@@ -117,5 +118,20 @@ pub(crate) struct ApplyPatchApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) grant_root: Option<PathBuf>,
+    pub(crate) grant_root: Option<LegacyAppPathString>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RequestPermissionsEvent {
+    pub(crate) call_id: String,
+    #[serde(default)]
+    pub(crate) turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) environment_id: Option<String>,
+    pub(crate) started_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    pub(crate) permissions: RequestPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cwd: Option<LegacyAppPathString>,
 }

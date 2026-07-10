@@ -47,6 +47,7 @@ use crate::app_event::HistoryLookupResponse;
 use crate::app_server_approval_conversions::file_update_changes_to_display;
 use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
+use crate::approval_events::RequestPermissionsEvent;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::StatusSurfacePreviewData;
@@ -62,6 +63,7 @@ use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::multi_agents::AgentMetadata;
+use crate::session_state::LocalWorkspaceState;
 use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::RateLimitWindowDisplay;
@@ -153,7 +155,6 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_terminal_detection::Multiplexer;
@@ -162,6 +163,7 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::resume_hint;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
@@ -583,7 +585,7 @@ pub(crate) struct ChatWidget {
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
-    skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
+    skills_initial_state: Option<HashMap<LegacyAppPathString, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
@@ -689,6 +691,8 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Host-local workspace state for embedded sessions. Remote target paths never enter Config.
+    local_workspace: Option<LocalWorkspaceState>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     // Instruction source files loaded for the current session, supplied by app-server.
@@ -855,12 +859,9 @@ fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
     fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
-    // TODO(anp): Keep this as PathUri once `tui::approval_events::ExecApprovalRequestEvent` and
-    // approval rendering support foreign paths.
     let cwd = params
         .cwd
-        .and_then(|cwd| cwd.to_inferred_abs_path())
-        .unwrap_or_else(|| fallback_cwd.clone());
+        .unwrap_or_else(|| LegacyAppPathString::from_abs_path(fallback_cwd));
     ExecApprovalRequestEvent {
         call_id: params.item_id,
         command: params
@@ -895,16 +896,16 @@ fn patch_approval_request_from_params(
 
 fn request_permissions_from_params(
     params: codex_app_server_protocol::PermissionsRequestApprovalParams,
-) -> std::io::Result<RequestPermissionsEvent> {
-    Ok(RequestPermissionsEvent {
+) -> RequestPermissionsEvent {
+    RequestPermissionsEvent {
         turn_id: params.turn_id,
         call_id: params.item_id,
         environment_id: params.environment_id,
         started_at_ms: params.started_at_ms,
         reason: params.reason,
-        permissions: params.permissions.try_into()?,
+        permissions: params.permissions,
         cwd: Some(params.cwd),
-    })
+    }
 }
 
 fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsageInfo {
@@ -1291,7 +1292,7 @@ impl ChatWidget {
                     UserInput::Skill { name, path } => Some(MentionBinding {
                         sigil: TOOL_MENTION_SIGIL,
                         mention: name.clone(),
-                        path: path.to_string_lossy().into_owned(),
+                        path: path.as_str().to_string(),
                     }),
                     UserInput::Mention { name, path } => {
                         let plugin_id = path.strip_prefix("plugin://");

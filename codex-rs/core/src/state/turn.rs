@@ -15,6 +15,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_utils_path_uri::PathUri;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
@@ -92,7 +93,7 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
-    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
+    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile<PathUri>>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
@@ -100,8 +101,8 @@ pub(crate) struct TurnState {
 }
 
 pub(crate) struct PendingRequestPermissions {
-    pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
-    pub(crate) requested_permissions: RequestPermissionProfile,
+    pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse<PathUri>>,
+    pub(crate) requested_permissions: RequestPermissionProfile<PathUri>,
     pub(crate) environment: TurnEnvironmentSelection,
 }
 
@@ -209,7 +210,7 @@ impl TurnState {
     pub(crate) fn record_granted_permissions(
         &mut self,
         environment_id: &str,
-        permissions: AdditionalPermissionProfile,
+        permissions: AdditionalPermissionProfile<PathUri>,
     ) {
         let granted_permissions = merge_permission_profiles(
             self.granted_permissions_by_environment_id
@@ -225,7 +226,7 @@ impl TurnState {
     pub(crate) fn granted_permissions(
         &self,
         environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
+    ) -> Option<AdditionalPermissionProfile<PathUri>> {
         self.granted_permissions_by_environment_id
             .get(environment_id)
             .cloned()

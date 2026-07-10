@@ -4,6 +4,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
@@ -17,7 +18,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -81,7 +81,7 @@ pub(crate) enum AppCommand {
     },
     RequestPermissionsResponse {
         id: String,
-        response: RequestPermissionsResponse,
+        response: PermissionsRequestApprovalResponse,
     },
     ReloadUserConfig,
     ListSkills {
@@ -230,7 +230,7 @@ impl AppCommand {
 
     pub(crate) fn request_permissions_response(
         id: String,
-        response: RequestPermissionsResponse,
+        response: PermissionsRequestApprovalResponse,
     ) -> Self {
         Self::RequestPermissionsResponse { id, response }
     }

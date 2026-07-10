@@ -7,17 +7,19 @@ use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleA
 use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy as CoreNetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
-use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -68,9 +70,8 @@ pub struct AdditionalFileSystemPermissions {
     pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPermissions {
-    fn from(value: CoreFileSystemPermissions<AbsolutePathBuf>) -> Self {
+impl From<CoreFileSystemPermissions<PathUri>> for AdditionalFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions<PathUri>) -> Self {
         if let Some((read, write)) = value.legacy_read_write_roots() {
             let mut entries = Vec::with_capacity(
                 read.as_ref().map_or(0, Vec::len) + write.as_ref().map_or(0, Vec::len),
@@ -78,7 +79,7 @@ impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPe
             if let Some(paths) = read.as_ref() {
                 entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: LegacyAppPathString::from_abs_path(path),
+                        path: path.clone().into(),
                     },
                     access: FileSystemAccessMode::Read,
                 }));
@@ -86,7 +87,7 @@ impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPe
             if let Some(paths) = write.as_ref() {
                 entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: LegacyAppPathString::from_abs_path(path),
+                        path: path.clone().into(),
                     },
                     access: FileSystemAccessMode::Write,
                 }));
@@ -95,13 +96,15 @@ impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPe
                 read: read.map(|paths| {
                     paths
                         .iter()
-                        .map(LegacyAppPathString::from_abs_path)
+                        .cloned()
+                        .map(LegacyAppPathString::from)
                         .collect()
                 }),
                 write: write.map(|paths| {
                     paths
                         .iter()
-                        .map(LegacyAppPathString::from_abs_path)
+                        .cloned()
+                        .map(LegacyAppPathString::from)
                         .collect()
                 }),
                 glob_scan_max_depth: None,
@@ -124,8 +127,7 @@ impl From<CoreFileSystemPermissions<AbsolutePathBuf>> for AdditionalFileSystemPe
     }
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<AbsolutePathBuf> {
+impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: AdditionalFileSystemPermissions) -> Result<Self, Self::Error> {
@@ -133,7 +135,7 @@ impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<Abso
             Self {
                 entries: entries
                     .into_iter()
-                    .map(CoreFileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                    .map(CoreFileSystemSandboxEntry::<PathUri>::try_from)
                     .collect::<io::Result<_>>()?,
                 glob_scan_max_depth: None,
             }
@@ -144,9 +146,8 @@ impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<Abso
                     paths
                         .into_iter()
                         .map(|path| {
-                            path.to_path_uri(PathConvention::native())
-                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
-                                .to_abs_path()
+                            PathUri::try_from(path)
+                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
                         })
                         .collect::<io::Result<Vec<_>>>()
                 })
@@ -157,9 +158,8 @@ impl TryFrom<AdditionalFileSystemPermissions> for CoreFileSystemPermissions<Abso
                     paths
                         .into_iter()
                         .map(|path| {
-                            path.to_path_uri(PathConvention::native())
-                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
-                                .to_abs_path()
+                            PathUri::try_from(path)
+                                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
                         })
                         .collect::<io::Result<Vec<_>>>()
                 })
@@ -194,7 +194,7 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 #[ts(export_to = "v2/")]
@@ -203,9 +203,8 @@ pub struct RequestPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
-    fn from(value: CoreRequestPermissionProfile) -> Self {
+impl From<CoreRequestPermissionProfile<PathUri>> for RequestPermissionProfile {
+    fn from(value: CoreRequestPermissionProfile<PathUri>) -> Self {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
@@ -213,7 +212,7 @@ impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
     }
 }
 
-impl TryFrom<RequestPermissionProfile> for CoreRequestPermissionProfile {
+impl TryFrom<RequestPermissionProfile> for CoreRequestPermissionProfile<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: RequestPermissionProfile) -> Result<Self, Self::Error> {
@@ -221,7 +220,7 @@ impl TryFrom<RequestPermissionProfile> for CoreRequestPermissionProfile {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value
                 .file_system
-                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .map(CoreFileSystemPermissions::<PathUri>::try_from)
                 .transpose()?,
         })
     }
@@ -307,13 +306,10 @@ pub enum FileSystemPath {
     Special { value: FileSystemSpecialPath },
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl From<CoreFileSystemPath<AbsolutePathBuf>> for FileSystemPath {
-    fn from(value: CoreFileSystemPath<AbsolutePathBuf>) -> Self {
+impl From<CoreFileSystemPath<PathUri>> for FileSystemPath {
+    fn from(value: CoreFileSystemPath<PathUri>) -> Self {
         match value {
-            CoreFileSystemPath::Path { path } => Self::Path {
-                path: LegacyAppPathString::from_abs_path(&path),
-            },
+            CoreFileSystemPath::Path { path } => Self::Path { path: path.into() },
             CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             CoreFileSystemPath::Special { value } => Self::Special {
                 value: value.into(),
@@ -322,17 +318,14 @@ impl From<CoreFileSystemPath<AbsolutePathBuf>> for FileSystemPath {
     }
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl TryFrom<FileSystemPath> for CoreFileSystemPath<AbsolutePathBuf> {
+impl TryFrom<FileSystemPath> for CoreFileSystemPath<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: FileSystemPath) -> Result<Self, Self::Error> {
         Ok(match value {
             FileSystemPath::Path { path } => Self::Path {
-                path: path
-                    .to_path_uri(PathConvention::native())
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
-                    .to_abs_path()?,
+                path: PathUri::try_from(path)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
             },
             FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             FileSystemPath::Special { value } => Self::Special {
@@ -350,9 +343,8 @@ pub struct FileSystemSandboxEntry {
     pub access: FileSystemAccessMode,
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl From<CoreFileSystemSandboxEntry<AbsolutePathBuf>> for FileSystemSandboxEntry {
-    fn from(value: CoreFileSystemSandboxEntry<AbsolutePathBuf>) -> Self {
+impl From<CoreFileSystemSandboxEntry<PathUri>> for FileSystemSandboxEntry {
+    fn from(value: CoreFileSystemSandboxEntry<PathUri>) -> Self {
         Self {
             path: value.path.into(),
             access: value.access.into(),
@@ -360,7 +352,7 @@ impl From<CoreFileSystemSandboxEntry<AbsolutePathBuf>> for FileSystemSandboxEntr
     }
 }
 
-impl TryFrom<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry<AbsolutePathBuf> {
+impl TryFrom<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: FileSystemSandboxEntry) -> Result<Self, Self::Error> {
@@ -383,7 +375,7 @@ pub struct PermissionProfileListParams {
     pub limit: Option<u32>,
     /// Optional working directory to resolve project config layers.
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub cwd: Option<LegacyAppPathString>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -461,9 +453,8 @@ pub struct AdditionalPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-// TODO(anp): Remove this conversion once core permission paths use PathUri.
-impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
-    fn from(value: CoreAdditionalPermissionProfile) -> Self {
+impl From<CoreAdditionalPermissionProfile<PathUri>> for AdditionalPermissionProfile {
+    fn from(value: CoreAdditionalPermissionProfile<PathUri>) -> Self {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
@@ -471,7 +462,7 @@ impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
     }
 }
 
-impl TryFrom<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
+impl TryFrom<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: AdditionalPermissionProfile) -> Result<Self, Self::Error> {
@@ -479,7 +470,7 @@ impl TryFrom<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value
                 .file_system
-                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .map(CoreFileSystemPermissions::<PathUri>::try_from)
                 .transpose()?,
         })
     }
@@ -497,7 +488,7 @@ pub struct GrantedPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl TryFrom<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
+impl TryFrom<GrantedPermissionProfile> for CoreAdditionalPermissionProfile<PathUri> {
     type Error = io::Error;
 
     fn try_from(value: GrantedPermissionProfile) -> Result<Self, Self::Error> {
@@ -505,9 +496,15 @@ impl TryFrom<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value
                 .file_system
-                .map(CoreFileSystemPermissions::<AbsolutePathBuf>::try_from)
+                .map(CoreFileSystemPermissions::<PathUri>::try_from)
                 .transpose()?,
         })
+    }
+}
+
+impl GrantedPermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none() && self.file_system.is_none()
     }
 }
 
@@ -542,7 +539,7 @@ pub enum SandboxPolicy {
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        writable_roots: Vec<LegacyAppPathString>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -571,7 +568,7 @@ enum SandboxPolicyDeserialize {
     #[serde(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        writable_roots: Vec<LegacyAppPathString>,
         #[serde(default)]
         read_only_access: Option<LegacyReadOnlyAccess>,
         #[serde(default)]
@@ -635,8 +632,103 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
-        match self {
+    pub fn try_to_path_uri_permission_profile(&self) -> io::Result<CorePermissionProfile<PathUri>> {
+        let network = match self {
+            SandboxPolicy::DangerFullAccess => CoreNetworkSandboxPolicy::Enabled,
+            SandboxPolicy::ReadOnly { network_access }
+            | SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+                if *network_access {
+                    CoreNetworkSandboxPolicy::Enabled
+                } else {
+                    CoreNetworkSandboxPolicy::Restricted
+                }
+            }
+            SandboxPolicy::ExternalSandbox { network_access } => match network_access {
+                NetworkAccess::Restricted => CoreNetworkSandboxPolicy::Restricted,
+                NetworkAccess::Enabled => CoreNetworkSandboxPolicy::Enabled,
+            },
+        };
+
+        Ok(match self {
+            SandboxPolicy::DangerFullAccess => CorePermissionProfile::Disabled,
+            SandboxPolicy::ExternalSandbox { .. } => CorePermissionProfile::External { network },
+            SandboxPolicy::ReadOnly { .. } => CorePermissionProfile::Managed {
+                file_system: CoreManagedFileSystemPermissions::Restricted {
+                    entries: vec![CoreFileSystemSandboxEntry {
+                        path: CoreFileSystemPath::Special {
+                            value: CoreFileSystemSpecialPath::Root,
+                        },
+                        access: CoreFileSystemAccessMode::Read,
+                    }],
+                    glob_scan_max_depth: None,
+                },
+                network,
+            },
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+                ..
+            } => {
+                let mut entries = vec![
+                    CoreFileSystemSandboxEntry {
+                        path: CoreFileSystemPath::Special {
+                            value: CoreFileSystemSpecialPath::Root,
+                        },
+                        access: CoreFileSystemAccessMode::Read,
+                    },
+                    CoreFileSystemSandboxEntry {
+                        path: CoreFileSystemPath::Special {
+                            value: CoreFileSystemSpecialPath::ProjectRoots { subpath: None },
+                        },
+                        access: CoreFileSystemAccessMode::Write,
+                    },
+                ];
+                if !exclude_slash_tmp {
+                    entries.push(CoreFileSystemSandboxEntry {
+                        path: CoreFileSystemPath::Special {
+                            value: CoreFileSystemSpecialPath::SlashTmp,
+                        },
+                        access: CoreFileSystemAccessMode::Write,
+                    });
+                }
+                if !exclude_tmpdir_env_var {
+                    entries.push(CoreFileSystemSandboxEntry {
+                        path: CoreFileSystemPath::Special {
+                            value: CoreFileSystemSpecialPath::Tmpdir,
+                        },
+                        access: CoreFileSystemAccessMode::Write,
+                    });
+                }
+                entries.extend(
+                    writable_roots
+                        .iter()
+                        .cloned()
+                        .map(|root| {
+                            Ok(CoreFileSystemSandboxEntry {
+                                path: CoreFileSystemPath::Path {
+                                    path: PathUri::try_from(root).map_err(|err| {
+                                        io::Error::new(io::ErrorKind::InvalidInput, err)
+                                    })?,
+                                },
+                                access: CoreFileSystemAccessMode::Write,
+                            })
+                        })
+                        .collect::<io::Result<Vec<_>>>()?,
+                );
+                CorePermissionProfile::Managed {
+                    file_system: CoreManagedFileSystemPermissions::Restricted {
+                        entries,
+                        glob_scan_max_depth: None,
+                    },
+                    network,
+                }
+            }
+        })
+    }
+
+    pub fn try_to_core(&self) -> io::Result<codex_protocol::protocol::SandboxPolicy> {
+        Ok(match self {
             SandboxPolicy::DangerFullAccess => {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
@@ -659,12 +751,26 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: writable_roots.clone(),
+                writable_roots: writable_roots
+                    .iter()
+                    .cloned()
+                    .map(|root| {
+                        if let Ok(root) = root.to_host_abs_path() {
+                            return Ok(root);
+                        }
+                        let root_uri = PathUri::try_from(root)
+                            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+                        Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("sandbox writable root path URI {root_uri} is not local"),
+                        ))
+                    })
+                    .collect::<io::Result<_>>()?,
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             },
-        }
+        })
     }
 }
 
@@ -691,7 +797,10 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
-                writable_roots,
+                writable_roots: writable_roots
+                    .iter()
+                    .map(LegacyAppPathString::from_abs_path)
+                    .collect(),
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
@@ -765,7 +874,7 @@ pub struct PermissionsRequestApprovalParams {
     /// Unix timestamp (in milliseconds) when this approval request started.
     #[ts(type = "number")]
     pub started_at_ms: i64,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: LegacyAppPathString,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
 }

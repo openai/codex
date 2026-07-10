@@ -109,10 +109,11 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles_for_uri;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -539,7 +540,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id: item_id.clone(),
                 started_at_ms: event.started_at_ms,
                 reason: event.reason.clone(),
-                grant_root: event.grant_root.clone(),
+                grant_root: event
+                    .grant_root
+                    .as_deref()
+                    .map(LegacyAppPathString::from_path),
             };
             let (pending_request_id, rx) = outgoing
                 .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
@@ -790,7 +794,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let requested_permissions = request.permissions.clone();
             let request_cwd = match request.cwd.clone() {
                 Some(cwd) => cwd,
-                None => conversation.config_snapshot().await.cwd().clone(),
+                None => PathUri::from_abs_path(conversation.config_snapshot().await.cwd()),
             };
             let params = PermissionsRequestApprovalParams {
                 thread_id: conversation_id.to_string(),
@@ -798,7 +802,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id: request.call_id.clone(),
                 environment_id: request.environment_id.clone(),
                 started_at_ms: request.started_at_ms,
-                cwd: request_cwd.clone(),
+                cwd: request_cwd.clone().into(),
                 reason: request.reason,
                 permissions: request.permissions.into(),
             };
@@ -1783,14 +1787,12 @@ async fn on_request_permissions_response(
     let response = match request_permissions_response_from_client_result(
         requested_permissions,
         response,
-        request_cwd.as_path(),
+        &request_cwd,
     ) {
         Ok(Some(response)) => response,
         Ok(None) => return,
-        // TODO(anp): Remove this native-path localization error path once core permission paths
-        // remain PathUri after crossing the app-server boundary.
         Err(err) => {
-            let message = format!("failed to localize granted filesystem paths: {err}");
+            let message = format!("failed to parse granted filesystem paths: {err}");
             handle_error_notification(
                 conversation_id,
                 &turn_id,
@@ -1826,8 +1828,8 @@ struct PendingRequestPermissionsResponse {
     call_id: String,
     conversation_id: ThreadId,
     turn_id: String,
-    requested_permissions: CoreRequestPermissionProfile,
-    request_cwd: AbsolutePathBuf,
+    requested_permissions: CoreRequestPermissionProfile<PathUri>,
+    request_cwd: PathUri,
     pending_request_id: RequestId,
     outgoing: ThreadScopedOutgoingMessageSender,
     receiver: oneshot::Receiver<ClientRequestResult>,
@@ -1835,10 +1837,10 @@ struct PendingRequestPermissionsResponse {
 }
 
 fn request_permissions_response_from_client_result(
-    requested_permissions: CoreRequestPermissionProfile,
+    requested_permissions: CoreRequestPermissionProfile<PathUri>,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
-    cwd: &std::path::Path,
-) -> std::io::Result<Option<CoreRequestPermissionsResponse>> {
+    cwd: &PathUri,
+) -> std::io::Result<Option<CoreRequestPermissionsResponse<PathUri>>> {
     let value = match response {
         Ok(Ok(value)) => value,
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return Ok(None),
@@ -1883,11 +1885,17 @@ fn request_permissions_response_from_client_result(
             strict_auto_review: false,
         }));
     }
-    let granted_permissions: CoreAdditionalPermissionProfile = response.permissions.try_into()?;
+    let granted_permissions: CoreAdditionalPermissionProfile<PathUri> =
+        response.permissions.try_into()?;
     let permissions = if granted_permissions.is_empty() {
         CoreRequestPermissionProfile::default()
     } else {
-        intersect_permission_profiles(requested_permissions.into(), granted_permissions, cwd).into()
+        intersect_permission_profiles_for_uri(
+            requested_permissions.into(),
+            granted_permissions,
+            cwd,
+        )
+        .into()
     };
     Ok(Some(CoreRequestPermissionsResponse {
         permissions,
@@ -2148,6 +2156,14 @@ mod tests {
         Arc::new(Mutex::new(ThreadState::default()))
     }
 
+    fn current_dir_uri() -> PathUri {
+        let cwd = AbsolutePathBuf::from_absolute_path(
+            std::env::current_dir().expect("current dir should be available"),
+        )
+        .expect("current dir should be absolute");
+        PathUri::from_abs_path(&cwd)
+    }
+
     const TEST_TURN_COMPLETED_AT: i64 = 1_716_000_456;
     const TEST_TURN_DURATION_MS: i64 = 1_234;
 
@@ -2350,7 +2366,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
@@ -2396,7 +2412,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
@@ -2882,7 +2898,7 @@ mod tests {
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
             Ok(Err(error)),
-            std::env::current_dir().expect("current dir").as_path(),
+            &current_dir_uri(),
         )
         .expect("paths should localize");
 
@@ -2906,16 +2922,18 @@ mod tests {
         } else {
             "/tmp/ignored"
         };
-        let absolute_path = |path: &str| {
-            AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path")
+        let path_uri = |path: &str| {
+            PathUri::from_abs_path(
+                &AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path"),
+            )
         };
         let requested_permissions = CoreRequestPermissionProfile {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
             }),
             file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
-                Some(vec![absolute_path(input_path)]),
-                Some(vec![absolute_path(output_path)]),
+                Some(vec![path_uri(input_path)]),
+                Some(vec![path_uri(output_path)]),
             )),
         };
         let cases = vec![
@@ -2945,7 +2963,7 @@ mod tests {
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
                         /*read*/ None,
-                        Some(vec![absolute_path(output_path)]),
+                        Some(vec![path_uri(output_path)]),
                     )),
                     ..CoreRequestPermissionProfile::default()
                 },
@@ -2962,22 +2980,22 @@ mod tests {
                 }),
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
-                        Some(vec![absolute_path(input_path)]),
-                        Some(vec![absolute_path(output_path)]),
+                        Some(vec![path_uri(input_path)]),
+                        Some(vec![path_uri(output_path)]),
                     )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
         ];
 
-        let cwd = std::env::current_dir().expect("current dir");
+        let cwd = current_dir_uri();
         for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
                 Ok(Ok(serde_json::json!({
                     "permissions": granted_permissions,
                 }))),
-                cwd.as_path(),
+                &cwd,
             )
             .expect("paths should localize")
             .expect("response should be accepted");
@@ -3001,7 +3019,7 @@ mod tests {
                 "scope": "session",
                 "permissions": {},
             }))),
-            std::env::current_dir().expect("current dir").as_path(),
+            &current_dir_uri(),
         )
         .expect("paths should localize")
         .expect("response should be accepted");
@@ -3029,7 +3047,7 @@ mod tests {
                     },
                 },
             }))),
-            std::env::current_dir().expect("current dir").as_path(),
+            &current_dir_uri(),
         )
         .expect("paths should localize")
         .expect("response should be accepted");
@@ -3061,7 +3079,7 @@ mod tests {
                     },
                 },
             }))),
-            std::env::current_dir().expect("current dir").as_path(),
+            &current_dir_uri(),
         )
         .expect("paths should localize")
         .expect("response should be accepted");
@@ -3075,18 +3093,21 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute cwd");
         let child = cwd.join("child");
-        let requested_permissions = CoreRequestPermissionProfile {
-            file_system: Some(CoreFileSystemPermissions {
-                entries: vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-                    },
-                    access: FileSystemAccessMode::Write,
-                }],
-                glob_scan_max_depth: None,
-            }),
-            ..Default::default()
-        };
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        let child_uri = PathUri::from_abs_path(&child);
+        let requested_permissions: CoreRequestPermissionProfile<PathUri> =
+            CoreRequestPermissionProfile {
+                file_system: Some(CoreFileSystemPermissions {
+                    entries: vec![FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                        },
+                        access: FileSystemAccessMode::Write,
+                    }],
+                    glob_scan_max_depth: None,
+                }),
+                ..Default::default()
+            };
 
         let response = request_permissions_response_from_client_result(
             requested_permissions,
@@ -3097,7 +3118,7 @@ mod tests {
                     },
                 },
             }))),
-            cwd.as_path(),
+            &cwd_uri,
         )
         .expect("paths should localize")
         .expect("response should be accepted");
@@ -3107,7 +3128,7 @@ mod tests {
             CoreRequestPermissionProfile {
                 file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
                     /*read*/ None,
-                    Some(vec![child]),
+                    Some(vec![child_uri]),
                 )),
                 ..Default::default()
             }
@@ -3122,18 +3143,20 @@ mod tests {
         let later_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("later-cwd"))
             .expect("absolute later cwd");
         let later_child = later_cwd.join("child");
-        let requested_permissions = CoreRequestPermissionProfile {
-            file_system: Some(CoreFileSystemPermissions {
-                entries: vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-                    },
-                    access: FileSystemAccessMode::Write,
-                }],
-                glob_scan_max_depth: None,
-            }),
-            ..Default::default()
-        };
+        let request_cwd_uri = PathUri::from_abs_path(&request_cwd);
+        let requested_permissions: CoreRequestPermissionProfile<PathUri> =
+            CoreRequestPermissionProfile {
+                file_system: Some(CoreFileSystemPermissions {
+                    entries: vec![FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                        },
+                        access: FileSystemAccessMode::Write,
+                    }],
+                    glob_scan_max_depth: None,
+                }),
+                ..Default::default()
+            };
 
         let response = request_permissions_response_from_client_result(
             requested_permissions,
@@ -3144,7 +3167,7 @@ mod tests {
                     },
                 },
             }))),
-            request_cwd.as_path(),
+            &request_cwd_uri,
         )
         .expect("paths should localize")
         .expect("response should be accepted");
@@ -3160,10 +3183,12 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute cwd");
         let child = cwd.join("child");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        let child_uri = PathUri::from_abs_path(&child);
         let requested_permissions = CoreRequestPermissionProfile {
             file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
                 /*read*/ None,
-                Some(vec![child]),
+                Some(vec![child_uri]),
             )),
             ..Default::default()
         };
@@ -3186,7 +3211,7 @@ mod tests {
                     },
                 },
             }))),
-            cwd.as_path(),
+            &cwd_uri,
         )
         .expect("paths should localize")
         .expect("response should be accepted");

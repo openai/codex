@@ -26,6 +26,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::SubAgentActivityDisplay;
+use crate::session_state::LocalWorkspaceState;
 use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
@@ -91,11 +92,8 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
-use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyModifiers;
@@ -2241,7 +2239,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             /*capacity*/ 1,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                permission_profile: PermissionProfile::workspace_write(),
+                permission_profile: PermissionProfile::workspace_write().into(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2400,7 +2398,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                permission_profile: PermissionProfile::workspace_write(),
+                permission_profile: PermissionProfile::workspace_write().into(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2643,7 +2641,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
             item_id: "call-approval".to_string(),
             environment_id: Some("remote".to_string()),
             started_at_ms: 0,
-            cwd: test_absolute_path("/tmp"),
+            cwd: test_absolute_path("/tmp").into(),
             reason: Some("Need access to .git".to_string()),
             permissions: codex_app_server_protocol::RequestPermissionProfile {
                 network: Some(AdditionalNetworkPermissions {
@@ -2674,14 +2672,16 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
     assert_eq!(environment_id.as_deref(), Some("remote"));
     assert_eq!(
         permissions,
-        RequestPermissionProfile {
-            network: Some(NetworkPermissions {
+        codex_app_server_protocol::RequestPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions::from_read_write_roots(
-                Some(vec![test_absolute_path("/tmp/read-only")]),
-                Some(vec![test_absolute_path("/tmp/write")]),
-            )),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+                write: Some(vec![test_absolute_path("/tmp/write").into()]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
         }
     );
 }
@@ -2784,7 +2784,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                permission_profile: PermissionProfile::workspace_write(),
+                permission_profile: PermissionProfile::workspace_write().into(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2839,8 +2839,8 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let shared_root = test_path_buf("/tmp/shared").abs();
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone(), shared_root.clone()],
+        permission_profile: PermissionProfile::workspace_write().into(),
+        runtime_workspace_roots: vec![primary_cwd.clone().into(), shared_root.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
 
@@ -2886,8 +2886,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 updated_at: 2,
                 recency_at: Some(2),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
-                path: Some(rollout_path.clone()),
-                cwd: test_path_buf("/tmp/agent").abs(),
+                path: Some(codex_app_server_protocol::LegacyAppPathString::from_path(
+                    &rollout_path,
+                )),
+                cwd: test_path_buf("/tmp/agent").abs().into(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
                 thread_source: None,
@@ -2916,10 +2918,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     assert_eq!(session.model, "gpt-agent");
     assert_eq!(session.model_provider_id, "agent-provider");
     assert_eq!(session.approval_policy, primary_session.approval_policy);
-    assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/agent").as_path());
+    assert_eq!(session.cwd, test_path_buf("/tmp/agent").abs().into());
     assert_eq!(
         session.runtime_workspace_roots,
-        vec![test_path_buf("/tmp/agent").abs(), shared_root]
+        vec![test_path_buf("/tmp/agent").abs().into(), shared_root.into()]
     );
     assert_eq!(session.rollout_path, Some(rollout_path));
     assert_eq!(
@@ -2947,8 +2949,8 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let primary_cwd = test_path_buf("/tmp/main").abs();
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone()],
+        permission_profile: PermissionProfile::workspace_write().into(),
+        runtime_workspace_roots: vec![primary_cwd.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
 
@@ -2982,7 +2984,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 recency_at: Some(2),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
                 path: None,
-                cwd: test_path_buf("/tmp/agent").abs(),
+                cwd: test_path_buf("/tmp/agent").abs().into(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
                 thread_source: None,
@@ -3023,8 +3025,8 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     let primary_cwd = test_path_buf("/tmp/main").abs();
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        permission_profile: PermissionProfile::workspace_write(),
-        runtime_workspace_roots: vec![primary_cwd.clone()],
+        permission_profile: PermissionProfile::workspace_write().into(),
+        runtime_workspace_roots: vec![primary_cwd.clone().into()],
         ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
     };
     app.primary_session_configured = Some(primary_session);
@@ -3044,7 +3046,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         recency_at: Some(2),
         status: codex_app_server_protocol::ThreadStatus::Idle,
         path: None,
-        cwd: test_path_buf("/tmp/read").abs(),
+        cwd: test_path_buf("/tmp/read").abs().into(),
         cli_version: "0.0.0".to_string(),
         source: codex_app_server_protocol::SessionSource::Unknown,
         thread_source: None,
@@ -3060,10 +3062,10 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         .await;
 
     assert_eq!(session.thread_id, read_thread_id);
-    assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/read").as_path());
+    assert_eq!(session.cwd, test_path_buf("/tmp/read").abs().into());
     assert_eq!(
         session.runtime_workspace_roots,
-        vec![test_path_buf("/tmp/read").abs()]
+        vec![test_path_buf("/tmp/read").abs().into()]
     );
     let expected_permission_profile = app
         .chat_widget
@@ -3072,7 +3074,8 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         .permission_profile()
         .clone();
     assert_eq!(
-        session.permission_profile, expected_permission_profile,
+        session.permission_profile,
+        expected_permission_profile.into(),
         "thread/read does not return fresh server permissions; the fallback profile must use the \
          active widget permissions rather than reusing the cached primary session profile"
     );
@@ -3930,9 +3933,9 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/tmp/project").abs(),
+            cwd: test_path_buf("/tmp/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
@@ -3940,6 +3943,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         };
         Arc::new(new_session_info(
@@ -4395,6 +4399,7 @@ async fn replace_goal_confirmation_snapshot() {
 }
 
 fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
+    let cwd = cwd.abs();
     ThreadSessionState {
         thread_id,
         forked_from_id: None,
@@ -4405,9 +4410,9 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::read_only(),
+        permission_profile: PermissionProfile::read_only().into(),
         active_permission_profile: None,
-        cwd: cwd.abs(),
+        cwd: cwd.clone().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -4415,6 +4420,10 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         personality: None,
         message_history: None,
         network_proxy: None,
+        local_workspace: Some(LocalWorkspaceState {
+            cwd,
+            runtime_workspace_roots: Vec::new(),
+        }),
         rollout_path: Some(PathBuf::new()),
     }
 }
@@ -5019,9 +5028,9 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/home/user/project").abs(),
+            cwd: test_path_buf("/home/user/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -5029,6 +5038,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         };
         Arc::new(new_session_info(
@@ -5085,9 +5095,9 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/home/user/project").abs(),
+            cwd: test_path_buf("/home/user/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -5095,6 +5105,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         });
 
@@ -5235,9 +5246,9 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/home/user/project").abs(),
+            cwd: test_path_buf("/home/user/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -5245,6 +5256,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         });
 
@@ -5478,7 +5490,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         }],
     )];
     let resumed_session = ThreadSessionState {
-        cwd: test_path_buf("/tmp/refreshed").abs(),
+        cwd: test_path_buf("/tmp/refreshed").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         ..initial_session.clone()
@@ -5662,7 +5674,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 recency_at: Some(0),
                 status: codex_app_server_protocol::ThreadStatus::Idle,
                 path: None,
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: test_path_buf("/tmp/project").abs().into(),
                 cli_version: "0.0.0".to_string(),
                 source: SessionSource::Cli,
                 thread_source: None,
@@ -5699,9 +5711,9 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/home/user/project").abs(),
+            cwd: test_path_buf("/home/user/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -5709,6 +5721,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         };
 
@@ -6035,7 +6048,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     let notification = ThreadSettingsUpdatedNotification {
         thread_id: inactive_thread_id.to_string(),
         thread_settings: ThreadSettings {
-            cwd: test_absolute_path("/tmp/thread-settings"),
+            cwd: test_absolute_path("/tmp/thread-settings").into(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -6113,9 +6126,9 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
+            permission_profile: PermissionProfile::read_only().into(),
             active_permission_profile: None,
-            cwd: test_path_buf("/tmp/project").abs(),
+            cwd: test_path_buf("/tmp/project").abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -6123,6 +6136,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             personality: None,
             message_history: None,
             network_proxy: None,
+            local_workspace: None,
             rollout_path: Some(PathBuf::new()),
         });
     app.chat_widget
@@ -6162,7 +6176,9 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
 async fn clear_only_ui_reset_allows_active_skill_warning_to_render_again() {
     let mut app = make_test_app().await;
     let error = SkillErrorInfo {
-        path: test_path_buf("/tmp/project/.codex/skills/abc/SKILL.md"),
+        path: codex_utils_path_uri::LegacyAppPathString::from_path(&test_path_buf(
+            "/tmp/project/.codex/skills/abc/SKILL.md",
+        )),
         message: "invalid description".to_string(),
     };
 
