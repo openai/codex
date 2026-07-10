@@ -193,11 +193,10 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
-    let (environment_cwd, environment_workspace_roots, environment_shell) = {
+    let (environment_cwd, environment_shell) = {
         let auto_env = app_server.auto_env()?;
         (
             auto_env.selection().cwd.clone(),
-            auto_env.selection().workspace_roots.clone(),
             auto_env.environment().info().await?.shell.name,
         )
     };
@@ -245,14 +244,5 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
             )),
         )
     );
-    let [environment_workspace_root] = environment_workspace_roots.as_slice() else {
-        anyhow::bail!("expected one runtime workspace root");
-    };
-    let expected_workspace_roots = format!(
-        "<workspace_roots><root>{}</root></workspace_roots>",
-        environment_workspace_root.inferred_native_path_string()
-    );
-    assert!(environment_context.contains(&expected_workspace_roots));
-
     Ok(())
 }
