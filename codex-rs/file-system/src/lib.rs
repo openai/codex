@@ -171,10 +171,11 @@ impl FileSystemSandboxContext {
         permissions: PermissionProfile<AbsolutePathBuf>,
         cwd: Option<PathUri>,
     ) -> Self {
+        let workspace_roots = cwd.iter().cloned().collect();
         Self {
             permissions: permissions.into(),
             cwd,
-            workspace_roots: Vec::new(),
+            workspace_roots,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,

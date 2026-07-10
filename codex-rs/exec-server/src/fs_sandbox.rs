@@ -72,11 +72,7 @@ impl FileSystemSandboxRunner {
             .iter()
             .map(native_workspace_root)
             .collect::<Result<Vec<_>, _>>()?;
-        let workspace_roots = if native_workspace_roots.is_empty() {
-            std::slice::from_ref(&cwd.native)
-        } else {
-            native_workspace_roots.as_slice()
-        };
+        let workspace_roots = native_workspace_roots.as_slice();
         let native_permissions: PermissionProfile =
             sandbox.permissions.clone().try_into().map_err(|err| {
                 invalid_request(format!("invalid sandbox permission path URI: {err}"))
