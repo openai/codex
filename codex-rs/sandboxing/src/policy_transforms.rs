@@ -18,6 +18,10 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 
+mod uri_intersection;
+
+pub use uri_intersection::intersect_permission_profiles_for_uri;
+
 pub fn normalize_additional_permissions(
     additional_permissions: AdditionalPermissionProfile,
 ) -> Result<AdditionalPermissionProfile, String> {
