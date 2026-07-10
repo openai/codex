@@ -406,5 +406,4 @@ mod tests {
             format!("metadata batch must not exceed {FS_GET_METADATA_BATCH_MAX_PATHS} paths")
         );
     }
-
 }
