@@ -1,5 +1,6 @@
 use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::CodexUserSettingsResponse;
 use crate::types::CodexWorkspaceMessagesResponse;
 use crate::types::ConfigBundleResponse;
 use crate::types::PaginatedListTaskListItem;
@@ -432,6 +433,24 @@ impl Client {
             .map_err(RequestError::from)
     }
 
+    /// Fetch authenticated Codex user settings from the active backend route.
+    ///
+    /// Uses `GET /api/codex/settings/user` for Codex API hosts and
+    /// `GET /wham/settings/user` for ChatGPT `backend-api` hosts.
+    pub async fn get_user_settings(
+        &self,
+    ) -> std::result::Result<CodexUserSettingsResponse, RequestError> {
+        let url = self.user_settings_url();
+        let req = self
+            .http
+            .get(&url)
+            .headers(self.headers())
+            .header(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        self.decode_json::<CodexUserSettingsResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
     pub async fn list_workspace_messages(
         &self,
     ) -> std::result::Result<CodexWorkspaceMessagesResponse, RequestError> {
@@ -590,6 +609,13 @@ impl Client {
         match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/workspace-messages", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/workspace-messages", self.base_url),
+        }
+    }
+
+    fn user_settings_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/settings/user", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/settings/user", self.base_url),
         }
     }
 
@@ -971,6 +997,55 @@ mod tests {
         assert_eq!(
             chatgpt_client.workspace_messages_url(),
             "https://chatgpt.com/backend-api/wham/workspace-messages"
+        );
+    }
+
+    #[test]
+    fn user_settings_uses_expected_paths() {
+        let codex_client = test_client("https://example.test", PathStyle::CodexApi);
+        assert_eq!(
+            codex_client.user_settings_url(),
+            "https://example.test/api/codex/settings/user"
+        );
+
+        let chatgpt_client = test_client("https://chatgpt.com/backend-api", PathStyle::ChatGptApi);
+        assert_eq!(
+            chatgpt_client.user_settings_url(),
+            "https://chatgpt.com/backend-api/wham/settings/user"
+        );
+    }
+
+    #[test]
+    fn user_settings_missing_attribution_policy_defaults_to_disabled() {
+        assert_eq!(
+            serde_json::from_value::<CodexUserSettingsResponse>(serde_json::json!({})).unwrap(),
+            CodexUserSettingsResponse {
+                commit_attribution_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn authenticated_user_settings_client_uses_active_workspace_headers() {
+        let auth = CodexAuth::from_external_chatgpt_tokens(
+            "e30.e30.c2ln",
+            "workspace-123",
+            Some("enterprise"),
+        )
+        .unwrap();
+        let client = Client::from_auth("https://chatgpt.com/backend-api", &auth).unwrap();
+        let headers = client.headers();
+
+        assert_eq!(
+            [
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                headers
+                    .get("chatgpt-account-id")
+                    .and_then(|value| value.to_str().ok()),
+            ],
+            [Some("Bearer e30.e30.c2ln"), Some("workspace-123")]
         );
     }
 

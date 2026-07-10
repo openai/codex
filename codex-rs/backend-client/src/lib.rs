@@ -8,6 +8,7 @@ pub use types::AccountEntry;
 pub use types::AccountsCheckResponse;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;
+pub use types::CodexUserSettingsResponse;
 pub use types::CodexWorkspaceMessage;
 pub use types::CodexWorkspaceMessageType;
 pub use types::CodexWorkspaceMessagesResponse;
