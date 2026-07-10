@@ -2,3 +2,7 @@
 # .git/sl/origbackups (which can be populated by Sapling SCM).
 .git
 codex-rs/target
+
+# The BUILD.bazel files in this folder are destined for openai/codex and
+# therefore should be ignored when working in openai/codex-internal.
+public
