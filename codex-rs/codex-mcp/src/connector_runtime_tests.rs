@@ -492,6 +492,17 @@ fn activating_new_context_discards_old_context_without_state_bleed() {
             tools_a.clone(),
         )
         .expect("publish context A");
+    let client_a = context_a.routing_cancellation_token();
+
+    let _same_context_a = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-a".to_string()),
+            chatgpt_user_id: Some("user-a".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    assert!(!client_a.is_cancelled());
 
     let context_b = manager.context(
         codex_home.path().to_path_buf(),
@@ -502,6 +513,7 @@ fn activating_new_context_discards_old_context_without_state_bleed() {
         },
     );
 
+    assert!(client_a.is_cancelled());
     assert!(context_a.current_snapshot().is_none());
     assert!(context_b.current_snapshot().is_none());
     assert!(

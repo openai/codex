@@ -200,6 +200,11 @@ impl McpConnectionManager {
                 codex_apps_tools_cache
                     .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
             });
+            let routing_cancellation_token = codex_apps_tools_cache_context
+                .as_ref()
+                .map_or_else(CancellationToken::new, |context| {
+                    context.routing_cancellation_token()
+                });
             // If Codex Apps has an env bearer token, that is its auth path. Do
             // not also attach the ambient CodexAuth provider.
             let runtime_auth_provider =
@@ -215,6 +220,7 @@ impl McpConnectionManager {
                 store_mode,
                 keyring_backend_kind,
                 cancel_token.clone(),
+                routing_cancellation_token,
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
@@ -472,18 +478,10 @@ impl McpConnectionManager {
     }
 
     pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
-        let Some(async_managed_client) = self.clients.get(server_name) else {
-            return false;
-        };
-        if !async_managed_client.connector_runtime_context_is_active() {
-            return false;
-        }
-
-        let ready = match tokio::time::timeout(timeout, async_managed_client.client()).await {
+        match tokio::time::timeout(timeout, self.client_by_name(server_name)).await {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
-        };
-        ready && async_managed_client.connector_runtime_context_is_active()
+        }
     }
 
     /// Returns all tools with model-visible names normalized.
@@ -595,20 +593,14 @@ impl McpConnectionManager {
 
         let clients_snapshot = &self.clients;
 
-        for (server_name, async_managed_client) in clients_snapshot
+        for (server_name, _) in clients_snapshot
             .iter()
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
-            if !async_managed_client.connector_runtime_context_is_active() {
-                continue;
-            }
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = self.client_by_name(&server_name).await else {
                 continue;
             };
-            if !async_managed_client.connector_runtime_context_is_active() {
-                continue;
-            }
             let timeout = managed_client.tool_timeout;
             let client = managed_client.client.clone();
 
@@ -672,20 +664,14 @@ impl McpConnectionManager {
 
         let clients_snapshot = &self.clients;
 
-        for (server_name, async_managed_client) in clients_snapshot
+        for (server_name, _) in clients_snapshot
             .iter()
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name_cloned = server_name.clone();
-            if !async_managed_client.connector_runtime_context_is_active() {
-                continue;
-            }
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = self.client_by_name(server_name).await else {
                 continue;
             };
-            if !async_managed_client.connector_runtime_context_is_active() {
-                continue;
-            }
             let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
 
@@ -881,18 +867,12 @@ impl McpConnectionManager {
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        let client = self
-            .clients
+        self.clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
-        if !client.connector_runtime_context_is_active() {
-            return Err(anyhow!("connector runtime context was discarded"));
-        }
-        let managed = client.client().await.context("failed to get client")?;
-        if !client.connector_runtime_context_is_active() {
-            return Err(anyhow!("connector runtime context was discarded"));
-        }
-        Ok(managed)
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
+            .client()
+            .await
+            .context("failed to get client")
     }
 
     #[cfg(test)]

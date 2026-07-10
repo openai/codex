@@ -381,6 +381,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) startup_reconnect: Option<Arc<CodexAppsStartupReconnect>>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
+    pub(crate) routing_cancellation_token: CancellationToken,
 }
 
 impl AsyncManagedClient {
@@ -395,6 +396,7 @@ impl AsyncManagedClient {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         cancel_token: CancellationToken,
+        routing_cancellation_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
@@ -466,10 +468,22 @@ impl AsyncManagedClient {
             startup_reconnect,
             tool_plugin_provenance,
             cancel_token,
+            routing_cancellation_token,
         }
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        if self.routing_cancellation_token.is_cancelled() {
+            return Err(StartupOutcomeError::Cancelled);
+        }
+        let outcome = self.client_unchecked().await;
+        if self.routing_cancellation_token.is_cancelled() {
+            return Err(StartupOutcomeError::Cancelled);
+        }
+        outcome
+    }
+
+    async fn client_unchecked(&self) -> Result<ManagedClient, StartupOutcomeError> {
         if let Some(client) = self
             .startup_reconnect
             .as_ref()
@@ -481,9 +495,6 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn reconnect_failed_startup(&self) {
-        if !self.connector_runtime_context_is_active() {
-            return;
-        }
         let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;
         };
@@ -491,7 +502,7 @@ impl AsyncManagedClient {
             return;
         }
         if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. }))
-            && self.connector_runtime_context_is_active()
+            && !self.routing_cancellation_token.is_cancelled()
         {
             startup_reconnect.reconnect_in_background();
         }
@@ -499,7 +510,7 @@ impl AsyncManagedClient {
 
     pub(crate) async fn shutdown(&self) {
         self.cancel_token.cancel();
-        match self.client().await {
+        match self.client_unchecked().await {
             Ok(client) => client.client.shutdown().await,
             Err(StartupOutcomeError::Cancelled) => {}
             Err(error) => {
@@ -514,14 +525,6 @@ impl AsyncManagedClient {
             .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
     }
 
-    pub(crate) fn connector_runtime_context_is_active(&self) -> bool {
-        !self.is_codex_apps_mcp_server
-            || self
-                .codex_apps_tools_cache_context
-                .as_ref()
-                .is_none_or(CodexAppsToolsCacheContext::is_active)
-    }
-
     fn cached_tools(&self) -> Option<Vec<ToolInfo>> {
         self.codex_apps_tools_cache_context
             .as_ref()
@@ -530,9 +533,6 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        if !self.connector_runtime_context_is_active() {
-            return None;
-        }
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if !self.startup_complete.load(Ordering::Acquire)
             && let Some(startup_tools) = self.cached_tools()
@@ -544,7 +544,7 @@ impl AsyncManagedClient {
                 Err(_) => self.cached_tools(),
             }
         }?;
-        if !self.connector_runtime_context_is_active() {
+        if self.routing_cancellation_token.is_cancelled() {
             return None;
         }
         Some(if self.is_codex_apps_mcp_server {

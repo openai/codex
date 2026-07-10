@@ -139,6 +139,7 @@ async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> AsyncManaged
         startup_reconnect: None,
         tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         cancel_token: CancellationToken::new(),
+        routing_cancellation_token: CancellationToken::new(),
     }
 }
 
@@ -157,6 +158,7 @@ async fn create_blocked_codex_apps_client(
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let release = Arc::new(tokio::sync::Notify::new());
     let release_for_client = Arc::clone(&release);
+    let routing_cancellation_token = cache_context.routing_cancellation_token();
     let client = async move {
         let _ = started_tx.send(());
         release_for_client.notified().await;
@@ -175,6 +177,7 @@ async fn create_blocked_codex_apps_client(
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token,
         },
         started_rx,
         release,
@@ -217,6 +220,7 @@ fn create_test_manager_with_failed_apps_startup(
             startup_reconnect: Some(Arc::new(CodexAppsStartupReconnect::new(reconnect_factory))),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
     manager
@@ -834,6 +838,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
 
@@ -874,6 +879,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
 
@@ -975,12 +981,29 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tools() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
 
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
     assert!(timeout_result.is_err());
+}
+
+#[tokio::test]
+async fn cancelling_startup_does_not_disable_a_ready_client() {
+    let client = create_ready_async_managed_client(vec![create_test_tool("ready", "search")]).await;
+
+    client.cancel_token.cancel();
+
+    let managed = client
+        .client()
+        .await
+        .expect("startup cancellation should not disable a ready client");
+    assert_eq!(
+        model_tool_names(&managed.tools),
+        HashSet::from([ToolName::namespaced("ready", "search")])
+    );
 }
 
 #[tokio::test]
@@ -1014,6 +1037,7 @@ async fn shutdown_cancels_pending_tool_listing() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token,
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
     let manager = Arc::new(manager);
@@ -1061,6 +1085,7 @@ async fn shutdown_continues_after_caller_is_aborted() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
     let manager = Arc::new(manager);
@@ -1114,6 +1139,7 @@ async fn list_all_tools_does_not_block_when_shared_codex_apps_cache_is_empty() {
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
 
@@ -1164,6 +1190,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
             startup_reconnect: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
+            routing_cancellation_token: CancellationToken::new(),
         },
     );
 
@@ -1222,6 +1249,7 @@ async fn context_discard_while_checking_failed_startup_does_not_reconnect() {
         .boxed()
         .shared()
     });
+    let routing_cancellation_token = context.routing_cancellation_token();
     let client = AsyncManagedClient {
         client,
         is_codex_apps_mcp_server: true,
@@ -1232,6 +1260,7 @@ async fn context_discard_while_checking_failed_startup_does_not_reconnect() {
         startup_reconnect: Some(Arc::new(CodexAppsStartupReconnect::new(reconnect_factory))),
         tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         cancel_token: CancellationToken::new(),
+        routing_cancellation_token,
     };
     let reconnect_task = tokio::spawn({
         let client = client.clone();
@@ -1549,6 +1578,7 @@ async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
     )])
     .await;
     client.is_codex_apps_mcp_server = true;
+    client.routing_cancellation_token = context.routing_cancellation_token();
     client.codex_apps_tools_cache_context = Some(context);
 
     let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -1581,7 +1611,10 @@ async fn discarded_codex_apps_context_hides_tools_and_rejects_calls() {
         )
         .await
         .expect_err("discarded context should reject tool calls");
-    assert_eq!(error.to_string(), "connector runtime context was discarded");
+    assert_eq!(
+        format!("{error:#}"),
+        "failed to get client: MCP startup cancelled"
+    );
 }
 
 #[tokio::test]
@@ -1757,7 +1790,10 @@ async fn context_discard_during_startup_rejects_codex_apps_calls() {
         .expect("tool call should finish")
         .expect("tool call task should not panic")
         .expect_err("discarded context should reject tool calls");
-    assert_eq!(error.to_string(), "connector runtime context was discarded");
+    assert_eq!(
+        format!("{error:#}"),
+        "failed to get client: MCP startup cancelled"
+    );
 }
 
 #[test]

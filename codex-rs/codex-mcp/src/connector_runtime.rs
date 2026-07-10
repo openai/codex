@@ -19,6 +19,7 @@ use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::connector_runtime_persistence::load_cached_codex_apps_server_info;
 use crate::connector_runtime_persistence::load_cached_connector_runtime_for_identity;
@@ -91,67 +92,13 @@ pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCac
 /// prevents account A state from bleeding into account B.
 #[derive(Clone, Default)]
 pub struct ConnectorRuntimeManager {
-    inner: Arc<ConnectorRuntimeManagerInner>,
-}
-
-#[derive(Default)]
-struct ConnectorRuntimeManagerInner {
-    active: Mutex<Option<ActiveConnectorRuntime>>,
-    next_activation: AtomicU64,
-}
-
-struct ActiveConnectorRuntime {
-    identity: ConnectorRuntimeIdentity,
-    activation: u64,
-    entry: Arc<ConnectorRuntimeEntry>,
-}
-
-/// Handle to the active account/workspace connector runtime.
-#[derive(Clone)]
-pub(crate) struct ConnectorRuntimeContext {
-    manager: Arc<ConnectorRuntimeManagerInner>,
-    activation: u64,
-    pub(crate) entry: Arc<ConnectorRuntimeEntry>,
+    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry>>>>,
 }
 
 /// Compatibility alias for existing cache call sites.
 pub type CodexAppsToolsCache = ConnectorRuntimeManager;
 
-/// Compatibility alias for existing cache call sites.
-pub(crate) type CodexAppsToolsCacheContext = ConnectorRuntimeContext;
-
 impl ConnectorRuntimeManager {
-    pub(crate) fn context(
-        &self,
-        codex_home: PathBuf,
-        key: ConnectorRuntimeContextKey,
-    ) -> ConnectorRuntimeContext {
-        let identity = ConnectorRuntimeIdentity { codex_home, key };
-        let mut active = lock_unpoisoned(&self.inner.active);
-        if let Some(active) = active.as_ref()
-            && active.identity == identity
-        {
-            return ConnectorRuntimeContext {
-                manager: Arc::clone(&self.inner),
-                activation: active.activation,
-                entry: Arc::clone(&active.entry),
-            };
-        }
-
-        let activation = self.inner.next_activation.fetch_add(1, Ordering::Relaxed) + 1;
-        let entry = Arc::new(ConnectorRuntimeEntry::new(identity.clone()));
-        *active = Some(ActiveConnectorRuntime {
-            identity,
-            activation,
-            entry: Arc::clone(&entry),
-        });
-        ConnectorRuntimeContext {
-            manager: Arc::clone(&self.inner),
-            activation,
-            entry,
-        }
-    }
-
     pub fn current_snapshot(
         &self,
         codex_home: PathBuf,
@@ -159,11 +106,48 @@ impl ConnectorRuntimeManager {
     ) -> Option<Arc<ConnectorRuntimeSnapshot>> {
         self.context(codex_home, key).current_snapshot()
     }
+
+    pub(crate) fn context(
+        &self,
+        codex_home: PathBuf,
+        key: ConnectorRuntimeContextKey,
+    ) -> ConnectorRuntimeContext {
+        let identity = ConnectorRuntimeIdentity { codex_home, key };
+        let mut active = lock_unpoisoned(&self.active);
+        if let Some(active) = active.as_ref()
+            && active.identity == identity
+        {
+            return ConnectorRuntimeContext {
+                active: Arc::clone(&self.active),
+                entry: Arc::clone(active),
+            };
+        }
+
+        let entry = Arc::new(ConnectorRuntimeEntry::new(identity));
+        if let Some(previous) = active.as_ref() {
+            previous.routing_cancellation_token.cancel();
+        }
+        *active = Some(Arc::clone(&entry));
+        ConnectorRuntimeContext {
+            active: Arc::clone(&self.active),
+            entry,
+        }
+    }
 }
+
+/// Handle to the active account/workspace connector runtime.
+#[derive(Clone)]
+pub(crate) struct ConnectorRuntimeContext {
+    active: Arc<Mutex<Option<Arc<ConnectorRuntimeEntry>>>>,
+    pub(crate) entry: Arc<ConnectorRuntimeEntry>,
+}
+
+/// Compatibility alias for existing cache call sites.
+pub(crate) type CodexAppsToolsCacheContext = ConnectorRuntimeContext;
 
 impl ConnectorRuntimeContext {
     pub fn current_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot>> {
-        let active = lock_unpoisoned(&self.manager.active);
+        let active = lock_unpoisoned(&self.active);
         self.matches_active(active.as_ref())
             .then(|| self.entry.current_snapshot.load_full())
             .flatten()
@@ -184,6 +168,11 @@ impl ConnectorRuntimeContext {
 
     pub(crate) fn has_current_tools(&self) -> bool {
         self.current_snapshot().is_some()
+    }
+
+    /// Shared by MCP clients attached to this context and cancelled before an identity switch.
+    pub(crate) fn routing_cancellation_token(&self) -> CancellationToken {
+        self.entry.routing_cancellation_token.clone()
     }
 
     pub(crate) fn begin_fetch(
@@ -222,7 +211,7 @@ impl ConnectorRuntimeContext {
         persist: impl FnOnce(&ConnectorRuntimeContext, &McpServerInfo, &ConnectorRuntimeSnapshot),
     ) -> Result<Arc<ConnectorRuntimeSnapshot>, ConnectorRuntimeContextDiscarded> {
         let publish_start = Instant::now();
-        let active = lock_unpoisoned(&self.manager.active);
+        let active = lock_unpoisoned(&self.active);
         if !self.matches_active(active.as_ref()) {
             drop(active);
             emit_duration(
@@ -281,7 +270,7 @@ impl ConnectorRuntimeContext {
 
     #[cfg(test)]
     pub(crate) fn store_current_tools_for_test(&self, tools: Vec<ToolInfo>) {
-        if !self.is_active() {
+        if !self.matches_active(lock_unpoisoned(&self.active).as_ref()) {
             return;
         }
         let snapshot = ConnectorRuntimeSnapshot {
@@ -291,14 +280,8 @@ impl ConnectorRuntimeContext {
         self.entry.current_snapshot.store(Some(Arc::new(snapshot)));
     }
 
-    pub(crate) fn is_active(&self) -> bool {
-        self.matches_active(lock_unpoisoned(&self.manager.active).as_ref())
-    }
-
-    fn matches_active(&self, active: Option<&ActiveConnectorRuntime>) -> bool {
-        active.is_some_and(|active| {
-            active.activation == self.activation && Arc::ptr_eq(&active.entry, &self.entry)
-        })
+    fn matches_active(&self, active: Option<&Arc<ConnectorRuntimeEntry>>) -> bool {
+        active.is_some_and(|active| Arc::ptr_eq(active, &self.entry))
     }
 }
 
@@ -326,9 +309,11 @@ pub(crate) struct CodexAppsToolsFetchTicket {
 #[error("connector runtime context was discarded")]
 pub(crate) struct ConnectorRuntimeContextDiscarded;
 
+/// All live state owned by one activated connector identity.
 pub(crate) struct ConnectorRuntimeEntry {
     pub(crate) identity: ConnectorRuntimeIdentity,
     pub(crate) current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot>,
+    routing_cancellation_token: CancellationToken,
     next_fetch_generation: AtomicU64,
     last_accepted_generation: Mutex<u64>,
 }
@@ -339,6 +324,7 @@ impl ConnectorRuntimeEntry {
         Self {
             identity,
             current_snapshot: ArcSwapOption::from(current_snapshot),
+            routing_cancellation_token: CancellationToken::new(),
             next_fetch_generation: AtomicU64::new(0),
             last_accepted_generation: Mutex::new(0),
         }
