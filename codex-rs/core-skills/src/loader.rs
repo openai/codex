@@ -40,6 +40,7 @@ use discovery::SkillMetadataDiscovery;
 use discovery::discover_skills;
 use futures::FutureExt;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use namespace::SkillNamespaceResolver;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -190,7 +191,27 @@ pub struct SkillRoot {
     pub plugin_root: Option<AbsolutePathBuf>,
 }
 
+#[derive(Default)]
+pub(crate) struct SkillRootPreflight {
+    pub(crate) absent_paths: HashSet<AbsolutePathBuf>,
+}
+
+pub(crate) struct SkillRootResolution {
+    pub(crate) roots: Vec<SkillRoot>,
+    pub(crate) preflight: SkillRootPreflight,
+}
+
+#[derive(Clone, Copy)]
+enum SkillRootPreflightMode {
+    Disabled,
+    MissingExecutorRoots,
+}
+
 impl SkillRoot {
+    pub(crate) fn is_host_owned(&self) -> bool {
+        Arc::ptr_eq(&self.file_system, &LOCAL_FS)
+    }
+
     pub(crate) fn is_agents_skills_root(&self) -> bool {
         self.path.file_name() == Some(std::ffi::OsStr::new(SKILLS_DIR_NAME))
             && self.path.parent().is_some_and(|parent| {
@@ -211,6 +232,19 @@ where
         .await
 }
 
+pub(crate) fn load_skills_from_roots_with_preflight<'a>(
+    roots: Vec<SkillRoot>,
+    plugin_skill_snapshots: Option<&'a crate::PluginSkillSnapshots>,
+    preflight_absent_paths: &'a HashSet<AbsolutePathBuf>,
+) -> BoxFuture<'a, SkillLoadOutcome> {
+    crate::root_loader::load_and_merge_skill_roots_with_preflight(
+        roots,
+        plugin_skill_snapshots,
+        preflight_absent_paths,
+    )
+    .boxed()
+}
+
 #[derive(Clone)]
 pub(crate) struct SkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
@@ -219,7 +253,7 @@ pub(crate) struct SkillRootSnapshot {
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
 }
 
-pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {
+pub(crate) async fn load_skill_root(root: SkillRoot, preflight_absent: bool) -> SkillRootSnapshot {
     let SkillRoot {
         path,
         scope,
@@ -228,6 +262,16 @@ pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {
         plugin_namespace,
         plugin_root,
     } = root;
+    // The hint comes from an exact metadata probe performed while repo roots were discovered. It
+    // avoids repeating canonicalize and walk calls for a root known to be absent at that point.
+    if preflight_absent {
+        return SkillRootSnapshot {
+            root: path,
+            skills: Vec::new(),
+            errors: Vec::new(),
+            file_system,
+        };
+    }
     let root = canonicalize_for_skill_identity(file_system.as_ref(), &path).await;
     let mut outcome = SkillLoadOutcome::default();
     load_skills_under_root(
@@ -255,6 +299,44 @@ pub(crate) async fn skill_roots(
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    skill_root_resolution_with_mode(
+        fs,
+        config_layer_stack,
+        cwd,
+        plugin_skill_roots,
+        extra_skill_roots,
+        SkillRootPreflightMode::Disabled,
+    )
+    .await
+    .roots
+}
+
+pub(crate) async fn skill_root_resolution(
+    fs: Option<Arc<dyn ExecutorFileSystem>>,
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &AbsolutePathBuf,
+    plugin_skill_roots: Vec<PluginSkillRoot>,
+    extra_skill_roots: Vec<AbsolutePathBuf>,
+) -> SkillRootResolution {
+    skill_root_resolution_with_mode(
+        fs,
+        config_layer_stack,
+        cwd,
+        plugin_skill_roots,
+        extra_skill_roots,
+        SkillRootPreflightMode::MissingExecutorRoots,
+    )
+    .await
+}
+
+async fn skill_root_resolution_with_mode(
+    fs: Option<Arc<dyn ExecutorFileSystem>>,
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &AbsolutePathBuf,
+    plugin_skill_roots: Vec<PluginSkillRoot>,
+    extra_skill_roots: Vec<AbsolutePathBuf>,
+    preflight_mode: SkillRootPreflightMode,
+) -> SkillRootResolution {
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
@@ -264,6 +346,7 @@ pub(crate) async fn skill_roots(
         home_dir.as_ref(),
         plugin_skill_roots,
         extra_skill_roots,
+        preflight_mode,
     )
     .await
 }
@@ -275,7 +358,8 @@ async fn skill_roots_with_home_dir(
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
-) -> Vec<SkillRoot> {
+    preflight_mode: SkillRootPreflightMode,
+) -> SkillRootResolution {
     let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir, fs.clone());
     roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
         path: root.path,
@@ -293,9 +377,48 @@ async fn skill_roots_with_home_dir(
         plugin_namespace: None,
         plugin_root: None,
     }));
-    roots.extend(repo_agents_skill_roots(fs, config_layer_stack, cwd).await);
     dedupe_skill_roots_by_path(&mut roots);
-    roots
+    let preflight_paths = match preflight_mode {
+        SkillRootPreflightMode::Disabled => Vec::new(),
+        SkillRootPreflightMode::MissingExecutorRoots => roots
+            .iter()
+            .filter(|root| !root.is_host_owned())
+            .map(|root| root.path.clone())
+            .collect(),
+    };
+    let repo_fs = fs.clone();
+    let (repo_roots, preflight) = tokio::join!(
+        repo_agents_skill_roots(repo_fs, config_layer_stack, cwd),
+        preflight_skill_roots(fs, preflight_paths),
+    );
+    roots.extend(repo_roots);
+    dedupe_skill_roots_by_path(&mut roots);
+    SkillRootResolution { roots, preflight }
+}
+
+async fn preflight_skill_roots(
+    fs: Option<Arc<dyn ExecutorFileSystem>>,
+    paths: Vec<AbsolutePathBuf>,
+) -> SkillRootPreflight {
+    let mut preflight = SkillRootPreflight::default();
+    let Some(fs) = fs else {
+        return preflight;
+    };
+    for paths in paths.chunks(FS_GET_METADATA_BATCH_MAX_PATHS) {
+        let path_uris = paths.iter().map(PathUri::from_abs_path).collect::<Vec<_>>();
+        let Ok(results) = fs.get_metadata_batch(&path_uris, /*sandbox*/ None).await else {
+            continue;
+        };
+        if results.len() != paths.len() {
+            continue;
+        }
+        for (path, result) in paths.iter().zip(results) {
+            if result.is_err_and(|err| err.kind() == io::ErrorKind::NotFound) {
+                preflight.absent_paths.insert(path.clone());
+            }
+        }
+    }
+    preflight
 }
 
 fn skill_roots_from_layer_stack_inner(
@@ -1205,8 +1328,10 @@ pub(crate) async fn skill_roots_from_layer_stack(
         home_dir,
         Vec::new(),
         Vec::new(),
+        SkillRootPreflightMode::Disabled,
     )
     .await
+    .roots
 }
 
 #[cfg(test)]

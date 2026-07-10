@@ -67,6 +67,23 @@ pub(crate) async fn load_and_merge_skill_roots<I>(
 where
     I: IntoIterator<Item = SkillRoot>,
 {
+    let preflight_absent_paths = HashSet::new();
+    load_and_merge_skill_roots_with_preflight(
+        roots,
+        plugin_skill_snapshots,
+        &preflight_absent_paths,
+    )
+    .await
+}
+
+pub(crate) async fn load_and_merge_skill_roots_with_preflight<I>(
+    roots: I,
+    plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    preflight_absent_paths: &HashSet<codex_utils_absolute_path::AbsolutePathBuf>,
+) -> SkillLoadOutcome
+where
+    I: IntoIterator<Item = SkillRoot>,
+{
     let roots = roots.into_iter().collect::<Vec<_>>();
     let root_count = roots.len();
     let mut pending_loads = Vec::<PendingRootLoad>::with_capacity(root_count);
@@ -147,7 +164,8 @@ where
                     snapshot,
                 },
                 None => {
-                    let snapshot = load_skill_root(root).await;
+                    let preflight_absent = preflight_absent_paths.contains(&root.path);
+                    let snapshot = load_skill_root(root, preflight_absent).await;
                     if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
                         && let Some(cache_key) = cache_key
                     {

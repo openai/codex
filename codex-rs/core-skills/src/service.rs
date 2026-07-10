@@ -21,7 +21,8 @@ use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
 use crate::config_rules::skill_config_rules_from_stack;
 use crate::loader::SkillRoot;
-use crate::loader::load_skills_from_roots;
+use crate::loader::load_skills_from_roots_with_preflight;
+use crate::loader::skill_root_resolution;
 use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
@@ -128,7 +129,20 @@ impl SkillsService {
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> HostSkillsSnapshot {
-        let roots = self.skill_roots_for_config(input, fs).await;
+        let mut resolution = skill_root_resolution(
+            fs,
+            &input.config_layer_stack,
+            &input.cwd,
+            input.effective_skill_roots.clone(),
+            self.extra_roots(),
+        )
+        .await;
+        if !input.bundled_skills_enabled {
+            resolution
+                .roots
+                .retain(|root| root.scope != SkillScope::System);
+        }
+        let roots = resolution.roots;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
@@ -136,8 +150,13 @@ impl SkillsService {
         }
 
         let snapshot = HostSkillsSnapshot::new(Arc::new(
-            self.build_skill_outcome(input, roots, &skill_config_rules)
-                .await,
+            self.build_skill_outcome(
+                input,
+                roots,
+                &skill_config_rules,
+                &resolution.preflight.absent_paths,
+            )
+            .await,
         ));
         let mut cache = self
             .cache_by_config
@@ -180,7 +199,7 @@ impl SkillsService {
             return snapshot;
         }
 
-        let mut roots = skill_roots(
+        let mut resolution = skill_root_resolution(
             fs.clone(),
             &input.config_layer_stack,
             &input.cwd,
@@ -189,12 +208,20 @@ impl SkillsService {
         )
         .await;
         if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
-            roots.retain(|root| root.scope != SkillScope::System);
+            resolution
+                .roots
+                .retain(|root| root.scope != SkillScope::System);
         }
+        let roots = resolution.roots;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let snapshot = HostSkillsSnapshot::new(Arc::new(
-            self.build_skill_outcome(input, roots, &skill_config_rules)
-                .await,
+            self.build_skill_outcome(
+                input,
+                roots,
+                &skill_config_rules,
+                &resolution.preflight.absent_paths,
+            )
+            .await,
         ));
         if use_cwd_cache {
             let mut cache = self
@@ -212,8 +239,14 @@ impl SkillsService {
         input: &SkillsLoadInput,
         roots: Vec<SkillRoot>,
         skill_config_rules: &SkillConfigRules,
+        preflight_absent_paths: &HashSet<AbsolutePathBuf>,
     ) -> SkillLoadOutcome {
-        let outcome = load_skills_from_roots(roots, input.plugin_skill_snapshots.as_ref()).await;
+        let outcome = load_skills_from_roots_with_preflight(
+            roots,
+            input.plugin_skill_snapshots.as_ref(),
+            preflight_absent_paths,
+        )
+        .await;
         let outcome =
             crate::filter_skill_load_outcome_for_product(outcome, self.restriction_product);
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);

@@ -31,6 +31,7 @@ use tokio::sync::Semaphore;
 use super::MAX_CONCURRENT_ROOT_SCANS;
 use super::PluginSkillSnapshots;
 use super::load_and_merge_skill_roots;
+use super::load_and_merge_skill_roots_with_preflight;
 use crate::SkillError;
 use crate::loader::SkillRoot;
 
@@ -40,6 +41,7 @@ struct ControlledFileSystem {
     inner: Arc<dyn ExecutorFileSystem>,
     walk_gate: Option<Arc<Semaphore>>,
     walk_paths: Mutex<Vec<PathUri>>,
+    canonicalize_paths: Mutex<Vec<PathUri>>,
     walks_started: AtomicUsize,
     walk_started: Notify,
     blocked_read_root: Option<PathUri>,
@@ -55,6 +57,7 @@ impl ControlledFileSystem {
             inner,
             walk_gate: None,
             walk_paths: Mutex::new(Vec::new()),
+            canonicalize_paths: Mutex::new(Vec::new()),
             walks_started: AtomicUsize::new(/*v*/ 0),
             walk_started: Notify::new(),
             blocked_read_root: None,
@@ -86,6 +89,13 @@ impl ControlledFileSystem {
 
     fn walks_started(&self) -> usize {
         self.walks_started.load(Ordering::Acquire)
+    }
+
+    fn canonicalize_paths(&self) -> Vec<PathUri> {
+        self.canonicalize_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn walk_paths(&self) -> Vec<PathUri> {
@@ -130,6 +140,10 @@ impl ExecutorFileSystem for ControlledFileSystem {
         path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        self.canonicalize_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.clone());
         self.inner.canonicalize(path, sandbox)
     }
 
@@ -294,6 +308,94 @@ fn plugin_root(
         plugin_namespace: Some("demo".to_string()),
         plugin_root: Some(plugin_root.to_path_buf().abs()),
     }
+}
+
+#[tokio::test]
+async fn missing_root_preflight_skips_io_and_preserves_merge_order() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let first_root = temp.path().join("first");
+    let missing_root = temp.path().join("missing");
+    let last_root = temp.path().join("last");
+    let first_skill = write_skill(&first_root, "broken", "first missing frontmatter");
+    let last_skill = write_skill(&last_root, "broken", "last missing frontmatter");
+    let file_system = Arc::new(ControlledFileSystem::new(Arc::clone(&LOCAL_FS)));
+    let root_file_system: Arc<dyn ExecutorFileSystem> = file_system.clone();
+
+    let outcome = load_and_merge_skill_roots_with_preflight(
+        [
+            plain_root(&first_root, SkillScope::Repo, Arc::clone(&root_file_system)),
+            plain_root(
+                &missing_root,
+                SkillScope::Repo,
+                Arc::clone(&root_file_system),
+            ),
+            plain_root(&last_root, SkillScope::User, root_file_system),
+        ],
+        /*plugin_skill_snapshots*/ None,
+        &HashSet::from([missing_root.abs()]),
+    )
+    .await;
+
+    assert!(
+        !file_system
+            .canonicalize_paths()
+            .contains(&PathUri::from_abs_path(&missing_root.abs()))
+    );
+    assert_eq!(file_system.walks_started(), 2);
+    assert_eq!(outcome.skills, Vec::new());
+    assert_eq!(
+        outcome.errors,
+        vec![
+            SkillError {
+                path: dunce::canonicalize(first_skill)
+                    .expect("canonical first skill")
+                    .abs(),
+                message: "missing YAML frontmatter delimited by ---".to_string(),
+            },
+            SkillError {
+                path: dunce::canonicalize(last_skill)
+                    .expect("canonical last skill")
+                    .abs(),
+                message: "missing YAML frontmatter delimited by ---".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn plugin_snapshot_hit_precedes_preflight_hint() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_root = temp.path().join("plugin").join("skills");
+    write_skill(
+        &skills_root,
+        "demo",
+        "---\nname: demo\ndescription: demo skill\n---\n",
+    );
+    let file_system = Arc::new(ControlledFileSystem::new(Arc::clone(&LOCAL_FS)));
+    let root_file_system: Arc<dyn ExecutorFileSystem> = file_system.clone();
+    let snapshots = PluginSkillSnapshots::for_plugin_load();
+    let first = load_and_merge_skill_roots(
+        [plugin_root(
+            &skills_root,
+            temp.path(),
+            Arc::clone(&root_file_system),
+        )],
+        Some(&snapshots),
+    )
+    .await;
+    assert_eq!(file_system.walks_started(), 1);
+
+    let hinted = load_and_merge_skill_roots_with_preflight(
+        [plugin_root(&skills_root, temp.path(), root_file_system)],
+        Some(&snapshots),
+        &HashSet::from([skills_root.abs()]),
+    )
+    .await;
+
+    assert_eq!(file_system.walks_started(), 1);
+    assert_eq!(hinted.skills, first.skills);
+    assert_eq!(hinted.errors, first.errors);
+    assert_eq!(hinted.skills.len(), 1);
 }
 
 #[tokio::test]

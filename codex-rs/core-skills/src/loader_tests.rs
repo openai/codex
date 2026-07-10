@@ -146,6 +146,28 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
 }
 
 #[tokio::test]
+async fn preflight_only_short_circuits_exact_not_found_results() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing = temp.path().join("missing").abs();
+    let existing_directory = temp.path().join("directory");
+    fs::create_dir(&existing_directory).expect("create directory");
+    let existing_file = temp.path().join("file");
+    fs::write(&existing_file, "contents").expect("write file");
+
+    let preflight = preflight_skill_roots(
+        Some(Arc::clone(&LOCAL_FS)),
+        vec![
+            missing.clone(),
+            existing_directory.abs(),
+            existing_file.abs(),
+        ],
+    )
+    .await;
+
+    assert_eq!(preflight.absent_paths, HashSet::from([missing]));
+}
+
+#[tokio::test]
 async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to_admin()
 -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
