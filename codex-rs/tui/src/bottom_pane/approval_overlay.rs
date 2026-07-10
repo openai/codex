@@ -1028,9 +1028,9 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     }
 }
 
-fn path_label(base: &str, subpath: &Option<PathBuf>) -> String {
+fn path_label(base: &str, subpath: &Option<String>) -> String {
     match subpath {
-        Some(subpath) => format!("{base}/{}", subpath.display()),
+        Some(subpath) => format!("{base}/{subpath}"),
         None => base.to_string(),
     }
 }

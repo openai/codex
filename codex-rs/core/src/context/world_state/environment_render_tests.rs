@@ -14,12 +14,11 @@ use codex_utils_absolute_path::test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::path::Path;
-use std::path::PathBuf;
 
 fn fake_shell_name() -> String {
     let shell = crate::shell::Shell {
         shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
+        shell_path: "/bin/bash".to_string(),
     };
     shell.name().to_string()
 }
@@ -150,7 +149,7 @@ fn workspace_write_permission_profile_with_private_denials() -> PermissionProfil
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from("private"))),
+                    value: FileSystemSpecialPath::project_roots(Some("private".to_string())),
                 },
                 access: FileSystemAccessMode::Deny,
             },

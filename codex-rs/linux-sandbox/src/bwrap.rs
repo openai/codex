@@ -410,7 +410,7 @@ fn create_filesystem_args(
                 // rules should keep their normal bwrap behavior, which can mask
                 // the first missing component to prevent creation under writable
                 // roots.
-                let project_subpath = subpath.as_path();
+                let project_subpath = Path::new(subpath);
                 if project_subpath != Path::new(".git")
                     && project_subpath != Path::new(".agents")
                     && project_subpath != Path::new(".codex")
