@@ -1,6 +1,7 @@
 mod discovery;
 mod environment;
 mod namespace;
+mod text_prefix;
 
 pub use environment::EnvironmentSkillLoadOutcome;
 pub use environment::EnvironmentSkillMetadata;
@@ -21,7 +22,6 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FS_GET_METADATA_BATCH_MAX_PATHS;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -596,27 +596,50 @@ async fn load_skills_under_root(
             }
         }
     };
-    let skill_results = futures::stream::iter(resolved_skills)
+    let contents = text_prefix::read_skill_frontmatter_texts(fs, &skill_paths);
+    let metadata_requests = resolved_skills
+        .iter()
         .map(|skill| {
-            let plugin_root = plugin_root.as_ref();
-            async move {
-                let result = parse_skill_file(
-                    fs,
-                    &skill.skill,
-                    &skill.path,
-                    &skill.path_uri,
-                    scope,
-                    plugin_id,
-                    plugin_root,
-                )
-                .await
-                .map_err(|err| err.to_string());
-                (skill.path, skill.path_uri, result)
+            let metadata_path = skill
+                .path_uri
+                .parent()
+                .and_then(|parent| parent.join(SKILLS_METADATA_DIR).ok())
+                .and_then(|directory| directory.join(SKILLS_METADATA_FILENAME).ok());
+            let metadata = match &skill.skill.metadata {
+                SkillMetadataDiscovery::Present(_) => {
+                    metadata_path.map(SkillMetadataDiscovery::Present)
+                }
+                SkillMetadataDiscovery::Probe(_) => {
+                    metadata_path.map(SkillMetadataDiscovery::Probe)
+                }
+                SkillMetadataDiscovery::Absent => None,
             }
+            .unwrap_or(SkillMetadataDiscovery::Absent);
+            (skill.path.clone(), metadata)
+        })
+        .collect::<Vec<_>>();
+    let plugin_root = plugin_root.as_ref();
+    let metadata = futures::stream::iter(metadata_requests)
+        .map(|(path, metadata)| async move {
+            load_skill_metadata(fs, &path, &metadata, plugin_root).await
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
-        .collect::<Vec<_>>()
-        .boxed();
+        .collect::<Vec<_>>();
+    let skill_results = async move {
+        let (contents, metadata) = tokio::join!(contents, metadata);
+        resolved_skills
+            .into_iter()
+            .zip(contents)
+            .zip(metadata)
+            .map(|((skill, contents), loaded_metadata)| {
+                let result =
+                    parse_skill_contents(&skill.path, contents, loaded_metadata, scope, plugin_id)
+                        .map_err(|err| err.to_string());
+                (skill.path, skill.path_uri, result)
+            })
+            .collect::<Vec<_>>()
+    }
+    .boxed();
     let (namespace_resolver, skill_results) = tokio::join!(namespace_resolver, skill_results);
     for (path, path_uri, result) in skill_results {
         let result = result.and_then(|mut skill| {
@@ -637,29 +660,13 @@ async fn load_skills_under_root(
     }
 }
 
-async fn parse_skill_file(
-    fs: &dyn ExecutorFileSystem,
-    skill: &DiscoveredSkill,
+fn parse_skill_contents(
     path: &AbsolutePathBuf,
-    path_uri: &PathUri,
+    contents: io::Result<String>,
+    loaded_metadata: LoadedSkillMetadata,
     scope: SkillScope,
     plugin_id: Option<&str>,
-    plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
-    let metadata_path = path_uri
-        .parent()
-        .and_then(|parent| parent.join(SKILLS_METADATA_DIR).ok())
-        .and_then(|directory| directory.join(SKILLS_METADATA_FILENAME).ok());
-    let metadata = match &skill.metadata {
-        SkillMetadataDiscovery::Present(_) => metadata_path.map(SkillMetadataDiscovery::Present),
-        SkillMetadataDiscovery::Probe(_) => metadata_path.map(SkillMetadataDiscovery::Probe),
-        SkillMetadataDiscovery::Absent => None,
-    }
-    .unwrap_or(SkillMetadataDiscovery::Absent);
-    let (contents, loaded_metadata) = tokio::join!(
-        fs.read_file_text(path_uri, /*sandbox*/ None),
-        load_skill_metadata(fs, path, &metadata, plugin_root),
-    );
     let contents = contents.map_err(SkillParseError::Read)?;
     let ParsedSkillFrontmatter {
         name: base_name,
