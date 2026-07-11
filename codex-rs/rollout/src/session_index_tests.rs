@@ -23,6 +23,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
     let timestamp = "2024-01-01T00-00-00Z".to_string();
     let line = RolloutLine {
         timestamp: timestamp.clone(),
+        ordinal: None,
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
