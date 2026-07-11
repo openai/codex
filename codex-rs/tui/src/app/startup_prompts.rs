@@ -215,17 +215,18 @@ pub(super) fn select_model_availability_nux(
     available_models: &[ModelPreset],
     nux_config: &ModelAvailabilityNuxConfig,
 ) -> Option<StartupTooltipOverride> {
-    available_models.iter().find_map(|preset| {
-        let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
-        let shown_count = nux_config
-            .shown_count
-            .get(&preset.model)
-            .copied()
-            .unwrap_or_default();
-        (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
-            model_slug: preset.model.clone(),
-            message: message.clone(),
-        })
+    let preset = available_models
+        .iter()
+        .find(|preset| preset.availability_nux.is_some())?;
+    let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
+    let shown_count = nux_config
+        .shown_count
+        .get(&preset.model)
+        .copied()
+        .unwrap_or_default();
+    (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
+        model_slug: preset.model.clone(),
+        message: message.clone(),
     })
 }
 
