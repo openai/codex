@@ -21,8 +21,10 @@ async fn consolidation_rebinds_workspace_roots_to_memory_root() -> anyhow::Resul
         Some(test.thread_manager.auth_manager()),
     );
 
+    let parent_permission_profile = test.config.permissions.effective_permission_profile();
     let agent_config =
-        agent::get_config(&test.config, provider.as_ref()).expect("agent config should be created");
+        agent::get_config(&test.config, parent_permission_profile, provider.as_ref())
+            .expect("agent config should be created");
     let root = memory_root(&test.config.codex_home);
 
     assert_eq!(agent_config.cwd, root);

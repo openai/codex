@@ -554,7 +554,8 @@ async fn run_memory_phase_two_model_request_test(
     tokio::fs::create_dir_all(&root).await?;
     seed_extension_instructions(&root).await?;
     seed_required_memory_artifacts(&root).await?;
-    phase2::run(context, config).await;
+    let parent_permission_profile = config.permissions.effective_permission_profile();
+    phase2::run(context, config, parent_permission_profile).await;
     let request = wait_for_single_request(&response).await;
     wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
     shutdown_test_codex(&test).await?;
@@ -608,12 +609,14 @@ async fn trigger_memories_startup(test: &TestCodex) {
         .features
         .enable(Feature::MemoryTool)
         .expect("test config should allow feature update");
+    let parent_permission_profile = config.permissions.effective_permission_profile();
     start_memories_startup_task(
         Arc::clone(&test.thread_manager),
         test.thread_manager.auth_manager(),
         test.session_configured.thread_id,
         Arc::clone(&test.codex),
         Arc::new(config),
+        parent_permission_profile,
         &config_snapshot.session_source,
     );
 }

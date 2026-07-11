@@ -19,6 +19,7 @@ use codex_core::config::Config;
 use codex_features::Feature;
 use codex_model_provider::ModelProvider;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -44,7 +45,11 @@ struct Counters {
 
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
-pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
+pub async fn run(
+    context: Arc<MemoryStartupContext>,
+    config: Arc<Config>,
+    parent_permission_profile: PermissionProfile,
+) {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
     let Some(db) = context.state_db() else {
@@ -78,7 +83,11 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
-    let Some(agent_config) = agent::get_config(config.as_ref(), context.provider()) else {
+    let Some(agent_config) = agent::get_config(
+        config.as_ref(),
+        parent_permission_profile,
+        context.provider(),
+    ) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(
@@ -299,7 +308,11 @@ mod agent {
     use super::*;
     use tracing::warn;
 
-    pub(super) fn get_config(config: &Config, provider: &dyn ModelProvider) -> Option<Config> {
+    pub(super) fn get_config(
+        config: &Config,
+        parent_permission_profile: PermissionProfile,
+        provider: &dyn ModelProvider,
+    ) -> Option<Config> {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.clone();
 
@@ -322,18 +335,25 @@ mod agent {
             .features
             .disable(Feature::SkillMcpDependencyInstall);
 
-        // Sandbox policy
-        let writable_roots = vec![root];
-        // The consolidation agent only needs local memory-root write access and no network.
-        let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-        agent_config
-            .set_legacy_sandbox_policy(consolidation_sandbox_policy)
-            .ok()?;
+        // Preserve the parent's explicit choice to skip Codex-managed sandboxing.
+        match parent_permission_profile {
+            PermissionProfile::Disabled => agent_config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled),
+            PermissionProfile::External { network } => agent_config
+                .permissions
+                .set_permission_profile(PermissionProfile::External { network }),
+            PermissionProfile::Managed { .. } => {
+                // The consolidation agent only needs local memory-root write access and no network.
+                agent_config.set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![root],
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                })
+            }
+        }
+        .ok()?;
 
         agent_config.model = Some(
             config
@@ -533,6 +553,9 @@ mod agent {
     }
 }
 
+#[cfg(test)]
+#[path = "phase2_sandbox_tests.rs"]
+mod sandbox_tests;
 #[cfg(test)]
 #[path = "phase2_workspace_roots_tests.rs"]
 mod workspace_roots_tests;
