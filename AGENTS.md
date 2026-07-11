@@ -1,3 +1,7 @@
+This private GitHub repository is the source of truth for the Codex CLI/harness. It contains a mix of public and private information, so **take care when merging changes to this repository to ensure private information is not leaked externally.**
+
+Every commit on `main` in this repository is sanitized and then exported to `main` in the public Codex repo at https://github.com/openai/codex (assuming the commit is non-empty after the sanitization process). See [docs/copyberry.md](docs/copyberry.md) for the rules that govern sanitization.
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:
