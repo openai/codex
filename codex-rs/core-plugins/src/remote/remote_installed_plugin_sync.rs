@@ -7,6 +7,7 @@ use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use super::RemotePluginCatalogError;
 use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
+use super::RemotePluginShareDiscoverability;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins_for_scope_with_download_url;
 use super::remote_plugin_canonical_marketplace_name;
@@ -35,16 +36,25 @@ static REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT: OnceLock<
     Mutex<HashMap<RemotePluginCacheMutationKey, usize>>,
 > = OnceLock::new();
 
+/// A remote plugin bundle newly installed or updated from an authenticated snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginMaterialization {
+    pub plugin_id: PluginId,
+    pub scope: RemotePluginScope,
+    pub discoverability: Option<RemotePluginShareDiscoverability>,
+    pub authenticated_account_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RemoteInstalledPluginBundleSyncOutcome {
-    pub installed_plugin_ids: Vec<String>,
+    pub materialized_remote_plugins: Vec<RemotePluginMaterialization>,
     pub removed_cache_plugin_ids: Vec<String>,
     pub failed_remote_plugin_ids: Vec<String>,
 }
 
 impl RemoteInstalledPluginBundleSyncOutcome {
     pub fn changed_local_cache(&self) -> bool {
-        !self.installed_plugin_ids.is_empty() || !self.removed_cache_plugin_ids.is_empty()
+        !self.materialized_remote_plugins.is_empty() || !self.removed_cache_plugin_ids.is_empty()
     }
 }
 
@@ -55,12 +65,6 @@ pub enum RemoteInstalledPluginBundleSyncError {
 
     #[error("{0}")]
     Store(#[from] PluginStoreError),
-
-    #[error("failed to join stale remote plugin cache cleanup task: {0}")]
-    Join(#[from] tokio::task::JoinError),
-
-    #[error("failed to remove stale remote plugin cache entries: {0}")]
-    CacheRemove(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,7 +87,9 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
-    on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    on_local_cache_changed: Option<
+        Arc<dyn Fn(RemoteInstalledPluginBundleSyncOutcome) + Send + Sync + 'static>,
+    >,
 ) {
     let Some(auth) = auth else {
         return;
@@ -100,17 +106,17 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
             sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
         match result {
             Ok(outcome) => {
-                if outcome.changed_local_cache()
-                    && let Some(on_local_cache_changed) = on_local_cache_changed
-                {
-                    on_local_cache_changed();
-                }
                 info!(
-                    installed_plugin_ids = ?outcome.installed_plugin_ids,
+                    materialized_remote_plugins = ?outcome.materialized_remote_plugins,
                     removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
                     failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
                     "completed remote installed plugin bundle sync"
                 );
+                if outcome.changed_local_cache()
+                    && let Some(on_local_cache_changed) = on_local_cache_changed
+                {
+                    on_local_cache_changed(outcome);
+                }
             }
             Err(err) => {
                 warn!(
@@ -129,6 +135,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     auth: Option<&CodexAuth>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
+    let authenticated_account_id = auth.get_account_id();
     let global = async {
         let scope = RemotePluginScope::Global;
         let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
@@ -180,12 +187,14 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 BTreeSet::new(),
             ),
         ]);
-    let mut installed_plugin_ids = BTreeSet::new();
+    let mut materialized_remote_plugins = BTreeMap::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
     for (_scope, installed_plugins) in [global, workspace, user] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
+            let scope = plugin.scope;
+            let discoverability = plugin.discoverability;
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
             installed_plugin_names_by_marketplace
                 .entry(marketplace_name.clone())
@@ -254,7 +263,16 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             .await
             {
                 Ok(result) => {
-                    installed_plugin_ids.insert(result.plugin_id.as_key());
+                    let plugin_id = result.plugin_id;
+                    materialized_remote_plugins.insert(
+                        plugin_id.as_key(),
+                        RemotePluginMaterialization {
+                            plugin_id,
+                            scope,
+                            discoverability,
+                            authenticated_account_id: authenticated_account_id.clone(),
+                        },
+                    );
                 }
                 Err(err) => {
                     warn!(
@@ -270,17 +288,27 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         }
     }
 
-    let removed_cache_plugin_ids = tokio::task::spawn_blocking(move || {
+    let stale_cache_cleanup = tokio::task::spawn_blocking(move || {
         remove_stale_remote_plugin_caches(
             codex_home.as_path(),
             &installed_plugin_names_by_marketplace,
         )
     })
-    .await?
-    .map_err(RemoteInstalledPluginBundleSyncError::CacheRemove)?;
+    .await;
+    let removed_cache_plugin_ids = match stale_cache_cleanup {
+        Ok(Ok(removed_cache_plugin_ids)) => removed_cache_plugin_ids,
+        Ok(Err(err)) => {
+            warn!(error = %err, "failed to remove stale remote plugin cache entries");
+            Vec::new()
+        }
+        Err(err) => {
+            warn!(error = %err, "failed to join stale remote plugin cache cleanup task");
+            Vec::new()
+        }
+    };
 
     Ok(RemoteInstalledPluginBundleSyncOutcome {
-        installed_plugin_ids: installed_plugin_ids.into_iter().collect(),
+        materialized_remote_plugins: materialized_remote_plugins.into_values().collect(),
         removed_cache_plugin_ids,
         failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
     })
@@ -479,7 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_backfills_remote_plugin_install_metadata_for_current_bundle() {
+    async fn sync_same_version_backfills_metadata_without_materialization() {
         let server = MockServer::start().await;
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cached_manifest = codex_home

@@ -5874,3 +5874,79 @@ async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
     );
     assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
 }
+
+#[test]
+fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
+    let tmp = TempDir::new().unwrap();
+    let manager = std::sync::Arc::new(PluginsManager::new(tmp.path().to_path_buf()));
+    let materialization_callback_count =
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let unrelated_callback_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    manager
+        .remote_installed_plugins_cache_refresh_state
+        .write()
+        .expect("refresh state lock")
+        .in_flight = true;
+    let materialization = |name: &str| RemotePluginMaterialization {
+        plugin_id: PluginId::new(
+            name.to_string(),
+            REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+        )
+        .expect("valid plugin id"),
+        scope: crate::remote::RemotePluginScope::Workspace,
+        discoverability: Some(crate::remote::RemotePluginShareDiscoverability::Listed),
+        authenticated_account_id: Some("account-123".to_string()),
+    };
+    let change = |name: &str| EffectivePluginsChange {
+        materialized_remote_plugins: vec![materialization(name)],
+    };
+    let callback = |count: std::sync::Arc<std::sync::atomic::AtomicUsize>| {
+        let callback: EffectivePluginsChangedCallback = std::sync::Arc::new(move |_change| {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        callback
+    };
+    let request =
+        |change, on_effective_plugins_changed| RemoteInstalledPluginsCacheRefreshRequest {
+            service_config: RemotePluginServiceConfig {
+                chatgpt_base_url: "https://example.com".to_string(),
+            },
+            auth: None,
+            notify: RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
+            on_effective_plugins_changed: Some(on_effective_plugins_changed),
+            change,
+        };
+
+    manager.schedule_remote_installed_plugins_cache_refresh(request(
+        change("beta"),
+        callback(std::sync::Arc::clone(&materialization_callback_count)),
+    ));
+    manager.schedule_remote_installed_plugins_cache_refresh(request(
+        change("alpha"),
+        callback(std::sync::Arc::clone(&unrelated_callback_count)),
+    ));
+
+    let state = manager
+        .remote_installed_plugins_cache_refresh_state
+        .read()
+        .expect("refresh state lock");
+    let request = state.requested.as_ref().expect("pending refresh");
+    assert_eq!(
+        request.change,
+        EffectivePluginsChange {
+            materialized_remote_plugins: vec![materialization("alpha"), materialization("beta"),],
+        }
+    );
+    request
+        .on_effective_plugins_changed
+        .as_ref()
+        .expect("pending callback")(request.change.clone());
+    assert_eq!(
+        materialization_callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        unrelated_callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+}

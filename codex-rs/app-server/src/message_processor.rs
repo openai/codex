@@ -313,6 +313,21 @@ impl MessageProcessor {
         let workspace_settings_cache =
             Arc::new(workspace_settings::WorkspaceSettingsCache::default());
         let app_list_shutdown_token = CancellationToken::new();
+        let request_serialization_queues = RequestSerializationQueues::default();
+        let config_processor = ConfigRequestProcessor::new(
+            outgoing.clone(),
+            config_manager.clone(),
+            thread_manager.clone(),
+            analytics_events_client.clone(),
+        );
+        let on_effective_plugins_changed =
+            crate::effective_plugin_change::effective_plugins_changed_callback(
+                auth_manager.clone(),
+                Arc::clone(&thread_manager),
+                config_manager.clone(),
+                config_processor.clone(),
+                request_serialization_queues.clone(),
+            );
         let account_processor = AccountRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -382,6 +397,7 @@ impl MessageProcessor {
             analytics_events_client.clone(),
             config_manager.clone(),
             workspace_settings_cache,
+            on_effective_plugins_changed,
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
@@ -437,12 +453,6 @@ impl MessageProcessor {
                     Some(on_effective_plugins_changed),
                 );
         }
-        let config_processor = ConfigRequestProcessor::new(
-            outgoing.clone(),
-            config_manager.clone(),
-            thread_manager.clone(),
-            analytics_events_client.clone(),
-        );
         let external_agent_config_processor =
             ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
                 outgoing: outgoing.clone(),
@@ -492,7 +502,7 @@ impl MessageProcessor {
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
-            request_serialization_queues: RequestSerializationQueues::default(),
+            request_serialization_queues,
         }
     }
 
