@@ -69,7 +69,7 @@ impl ChatWidget {
             return;
         }
 
-        match crate::ide_context::fetch_ide_context(&self.config.cwd) {
+        match crate::ide_context::fetch_ide_context(&self.config.cwd, &self.config.codex_home) {
             Ok(context) => {
                 self.ide_context.mark_available();
                 self.sync_ide_context_status_indicator();
@@ -95,7 +95,7 @@ impl ChatWidget {
             return;
         }
 
-        match crate::ide_context::fetch_ide_context(&self.config.cwd) {
+        match crate::ide_context::fetch_ide_context(&self.config.cwd, &self.config.codex_home) {
             Ok(context) => {
                 self.ide_context.mark_available();
                 self.sync_ide_context_status_indicator();

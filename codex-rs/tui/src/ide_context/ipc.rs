@@ -138,8 +138,28 @@ type IdeContextStream = UnixDeadlineStream;
 #[cfg(windows)]
 type IdeContextStream = super::windows_pipe::WindowsPipeStream;
 
-#[cfg(any(unix, windows))]
-pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
+#[cfg(unix)]
+pub(crate) fn fetch_ide_context(
+    workspace_root: &Path,
+    codex_home: &Path,
+) -> Result<IdeContext, IdeContextError> {
+    let deadline = Instant::now() + IDE_CONTEXT_REQUEST_TIMEOUT;
+    let primary_socket_path = primary_ipc_socket_path(codex_home);
+    let uid = unsafe { libc::getuid() };
+    let legacy_socket_paths = legacy_ipc_socket_paths(&std::env::temp_dir(), uid);
+    fetch_ide_context_from_unix_socket_paths(
+        primary_socket_path,
+        legacy_socket_paths,
+        workspace_root,
+        deadline,
+    )
+}
+
+#[cfg(windows)]
+pub(crate) fn fetch_ide_context(
+    workspace_root: &Path,
+    _codex_home: &Path,
+) -> Result<IdeContext, IdeContextError> {
     fetch_ide_context_from_socket(
         default_ipc_socket_path(),
         workspace_root,
@@ -148,16 +168,26 @@ pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, Ide
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn fetch_ide_context(_workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
+pub(crate) fn fetch_ide_context(
+    _workspace_root: &Path,
+    _codex_home: &Path,
+) -> Result<IdeContext, IdeContextError> {
     Err(IdeContextError::UnsupportedPlatform)
 }
 
 #[cfg(unix)]
-fn default_ipc_socket_path() -> PathBuf {
-    let uid = unsafe { libc::getuid() };
-    std::env::temp_dir()
-        .join("codex-ipc")
-        .join(format!("ipc-{uid}.sock"))
+fn primary_ipc_socket_path(codex_home: &Path) -> PathBuf {
+    codex_home.join("ipc").join("ipc.sock")
+}
+
+#[cfg(unix)]
+fn legacy_ipc_socket_paths(temp_dir: &Path, uid: libc::uid_t) -> Vec<PathBuf> {
+    let ipc_dir = temp_dir.join("codex-ipc");
+    if uid == 0 {
+        vec![ipc_dir.join("ipc.sock"), ipc_dir.join("ipc-0.sock")]
+    } else {
+        vec![ipc_dir.join(format!("ipc-{uid}.sock"))]
+    }
 }
 
 #[cfg(windows)]
@@ -170,7 +200,7 @@ fn default_ipc_socket_path() -> PathBuf {
     PathBuf::new()
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(windows)]
 fn fetch_ide_context_from_socket(
     socket_path: PathBuf,
     workspace_root: &Path,
@@ -182,11 +212,37 @@ fn fetch_ide_context_from_socket(
 }
 
 #[cfg(unix)]
-fn connect_stream(
-    socket_path: PathBuf,
+fn fetch_ide_context_from_unix_socket_paths(
+    primary_socket_path: PathBuf,
+    legacy_socket_paths: Vec<PathBuf>,
+    workspace_root: &Path,
     deadline: Instant,
-) -> Result<IdeContextStream, IdeContextError> {
-    UnixDeadlineStream::connect(socket_path, deadline).map_err(IdeContextError::Connect)
+) -> Result<IdeContext, IdeContextError> {
+    let mut last_error = std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "no IDE IPC socket paths were available",
+    );
+    let mut stream = None;
+    for socket_path in std::iter::once(primary_socket_path).chain(legacy_socket_paths) {
+        match UnixDeadlineStream::connect(socket_path, deadline) {
+            Ok(connected) => {
+                stream = Some(connected);
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(IdeContextError::Connect(err));
+            }
+            Err(err) if Instant::now() >= deadline => {
+                return Err(IdeContextError::Connect(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("IDE IPC connection exhausted the request deadline: {err}"),
+                )));
+            }
+            Err(err) => last_error = err,
+        }
+    }
+    let mut stream = stream.ok_or(IdeContextError::Connect(last_error))?;
+    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
 }
 
 #[cfg(unix)]
@@ -861,6 +917,216 @@ mod tests {
         }
     }
 
+    fn spawn_ide_context_server(
+        listener: std::os::unix::net::UnixListener,
+        active_selection_content: &'static str,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                panic!("accept failed");
+            };
+            let request = match read_frame(&mut stream, test_deadline()) {
+                Ok(request) => request,
+                Err(err) => panic!("read ide-context failed: {err}"),
+            };
+            let Some(request_id) = request.get("requestId").and_then(Value::as_str) else {
+                panic!("ide-context request did not include a request id");
+            };
+            write_ide_context_response(&mut stream, request_id, active_selection_content);
+        })
+    }
+
+    fn fetch_test_ide_context(
+        primary_socket_path: PathBuf,
+        legacy_socket_path: PathBuf,
+    ) -> Result<IdeContext, IdeContextError> {
+        fetch_ide_context_from_unix_socket_paths(
+            primary_socket_path,
+            vec![legacy_socket_path],
+            Path::new("/repo"),
+            test_deadline(),
+        )
+    }
+
+    fn assert_listener_unused(listener: &std::os::unix::net::UnixListener) {
+        if let Err(err) = listener.set_nonblocking(true) {
+            panic!("set listener nonblocking failed: {err}");
+        }
+        match listener.accept() {
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock),
+            Ok(_) => panic!("listener should not receive a connection"),
+        }
+    }
+
+    #[test]
+    fn primary_ipc_socket_path_uses_codex_home() {
+        let codex_home = Path::new("/home/test/.codex");
+
+        assert_eq!(
+            primary_ipc_socket_path(codex_home),
+            codex_home.join("ipc").join("ipc.sock")
+        );
+    }
+
+    #[test]
+    fn fetch_ide_context_prefers_primary_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("primary.sock");
+        let legacy_socket_path = tempdir.path().join("legacy.sock");
+        let primary_listener = UnixListener::bind(&primary_socket_path).expect("bind primary");
+        let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
+        let server = spawn_ide_context_server(primary_listener, "primary");
+
+        let context = fetch_test_ide_context(primary_socket_path, legacy_socket_path)
+            .expect("fetch IDE context from primary socket");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .expect("active file")
+                .active_selection_content,
+            "primary"
+        );
+        assert_listener_unused(&legacy_listener);
+    }
+
+    #[test]
+    fn fetch_ide_context_falls_back_to_legacy_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("missing-primary.sock");
+        let legacy_socket_path = tempdir.path().join("legacy.sock");
+        let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
+        let server = spawn_ide_context_server(legacy_listener, "legacy");
+
+        let context = fetch_test_ide_context(primary_socket_path, legacy_socket_path)
+            .expect("fetch IDE context from legacy socket");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .expect("active file")
+                .active_selection_content,
+            "legacy"
+        );
+    }
+
+    #[test]
+    fn fetch_ide_context_falls_back_to_uid_zero_legacy_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("missing-primary.sock");
+        let legacy_socket_path = legacy_ipc_socket_paths(tempdir.path(), /*uid*/ 0)
+            .into_iter()
+            .next()
+            .expect("UID-0 legacy socket path");
+        std::fs::create_dir(legacy_socket_path.parent().expect("legacy parent"))
+            .expect("create legacy parent");
+        let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
+        let server = spawn_ide_context_server(legacy_listener, "legacy-root");
+
+        let context = fetch_test_ide_context(primary_socket_path, legacy_socket_path)
+            .expect("fetch IDE context from UID-0 legacy socket");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .expect("active file")
+                .active_selection_content,
+            "legacy-root"
+        );
+    }
+
+    #[test]
+    fn fetch_ide_context_falls_back_to_pre_migration_uid_zero_legacy_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("missing-primary.sock");
+        let legacy_socket_paths = legacy_ipc_socket_paths(tempdir.path(), /*uid*/ 0);
+        let pre_migration_socket_path = legacy_socket_paths
+            .last()
+            .expect("pre-migration UID-0 legacy socket path");
+        std::fs::create_dir(pre_migration_socket_path.parent().expect("legacy parent"))
+            .expect("create legacy parent");
+        let legacy_listener =
+            UnixListener::bind(pre_migration_socket_path).expect("bind pre-migration legacy");
+        let server = spawn_ide_context_server(legacy_listener, "legacy-root-pre-migration");
+
+        let context = fetch_ide_context_from_unix_socket_paths(
+            primary_socket_path,
+            legacy_socket_paths,
+            Path::new("/repo"),
+            test_deadline(),
+        )
+        .expect("fetch IDE context from pre-migration UID-0 legacy socket");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .expect("active file")
+                .active_selection_content,
+            "legacy-root-pre-migration"
+        );
+    }
+
+    #[test]
+    fn fetch_ide_context_does_not_fall_back_after_primary_timeout() {
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("missing-primary.sock");
+        let legacy_socket_path = tempdir.path().join("legacy.sock");
+        let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
+
+        let err = fetch_ide_context_from_unix_socket_paths(
+            primary_socket_path,
+            vec![legacy_socket_path],
+            Path::new("/repo"),
+            Instant::now(),
+        )
+        .expect_err("expired primary deadline should fail");
+
+        assert!(matches!(
+            err,
+            IdeContextError::Connect(err) if err.kind() == std::io::ErrorKind::TimedOut
+        ));
+        assert_listener_unused(&legacy_listener);
+    }
+
+    #[test]
+    fn fetch_ide_context_does_not_fall_back_after_primary_protocol_error() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let primary_socket_path = tempdir.path().join("primary.sock");
+        let legacy_socket_path = tempdir.path().join("legacy.sock");
+        let primary_listener = UnixListener::bind(&primary_socket_path).expect("bind primary");
+        let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = primary_listener.accept().expect("accept primary");
+            read_frame(&mut stream, test_deadline()).expect("read ide-context");
+            write_frame(&mut stream, &json!({ "type": "unexpected" }))
+                .expect("write invalid response");
+        });
+
+        let err = fetch_test_ide_context(primary_socket_path, legacy_socket_path)
+            .expect_err("invalid primary response should fail");
+
+        server.join().expect("server joins");
+        assert!(matches!(err, IdeContextError::InvalidResponse(_)));
+        assert_listener_unused(&legacy_listener);
+    }
+
     #[cfg(unix)]
     #[test]
     fn unix_deadline_stream_uses_remaining_deadline_for_blocking_reads() {
@@ -994,16 +1260,16 @@ mod tests {
         });
 
         let context =
-            fetch_ide_context_from_socket(socket_path, Path::new("/repo"), Duration::from_secs(1))
+            fetch_test_ide_context(socket_path, tempdir.path().join("missing-legacy.sock"))
                 .expect("fetch ide context");
 
         server.join().expect("server joins");
         assert_eq!(
             context
                 .active_file
-                .as_ref()
-                .map(|file| file.active_selection_content.as_str()),
-            Some("use")
+                .expect("active file")
+                .active_selection_content,
+            "use"
         );
     }
 }
