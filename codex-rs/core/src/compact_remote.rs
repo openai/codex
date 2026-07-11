@@ -434,13 +434,14 @@ fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseIt
             internal_chat_message_metadata_passthrough: metadata.clone(),
         },
         ResponseItem::ToolSearchOutput {
+            id,
             call_id,
             status,
             execution,
             internal_chat_message_metadata_passthrough: metadata,
             ..
         } => ResponseItem::ToolSearchOutput {
-            id: item.id().map(str::to_string),
+            id: id.clone(),
             call_id: call_id.clone(),
             status: status.clone(),
             execution: execution.clone(),

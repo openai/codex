@@ -43,6 +43,7 @@ use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
+use codex_protocol::ResponseItemId;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -1922,7 +1923,10 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         RolloutItem::ResponseItem(item @ ResponseItem::AgentMessage { .. }) => item.id(),
         _ => None,
     });
-    assert_eq!(persisted_item_id, Some(live_item_id.as_str()));
+    assert_eq!(
+        persisted_item_id.map(ResponseItemId::as_str),
+        Some(live_item_id.as_str())
+    );
 
     let (resumed_session, _resumed_turn_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
@@ -1940,7 +1944,10 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     let [resumed_item] = resumed_history.raw_items() else {
         panic!("expected exactly one resumed history item");
     };
-    assert_eq!(resumed_item.id(), Some(live_item_id.as_str()));
+    assert_eq!(
+        resumed_item.id().map(ResponseItemId::as_str),
+        Some(live_item_id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -1982,15 +1989,14 @@ async fn prepares_image_failures_before_history_insertion() {
     let history = session.state.lock().await.clone_history();
     let id = history.raw_items()[0]
         .id()
-        .expect("history item should have an ID")
-        .to_string();
+        .expect("history item should have an ID");
     let uuid = id
         .strip_prefix("fco_")
         .expect("function call output ID should have the Responses API prefix");
     let parsed_id = Uuid::parse_str(uuid).expect("history item should have a UUID ID");
     assert_eq!(parsed_id.get_version(), Some(uuid::Version::SortRand));
     let expected = vec![ResponseItem::FunctionCallOutput {
-        id: Some(id),
+        id: Some(id.clone()),
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -2869,7 +2875,7 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         .expect("forked response item should have an id")
         .to_string();
     assert!(live_item_id.starts_with("msg_"));
-    expected_item.set_id(Some(live_item_id.clone()));
+    expected_item.set_id(live_item.id().cloned());
     assert_eq!(live_history.raw_items(), &[expected_item]);
 
     session.flush_rollout().await.expect("rollout should flush");
@@ -2889,7 +2895,10 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::WorldState(_)
         | RolloutItem::EventMsg(_) => None,
     });
-    assert_eq!(persisted_item_id, Some(live_item_id.as_str()));
+    assert_eq!(
+        persisted_item_id.map(ResponseItemId::as_str),
+        Some(live_item_id.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

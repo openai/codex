@@ -10,6 +10,7 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::ContentItem;
@@ -169,7 +170,7 @@ fn truncates_before_requested_user_message() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: Some("r1".to_string()),
+            id: Some(ResponseItemId::with_suffix("rs", "1")),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],

@@ -16,6 +16,7 @@ use std::time::Duration;
 use strum_macros::EnumIter;
 
 use crate::AgentPath;
+use crate::ResponseItemId;
 use crate::SessionId;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
@@ -736,7 +737,7 @@ impl From<Vec<UserInput>> for Op {
 pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub id: Option<String>,
+    pub id: Option<ResponseItemId>,
     pub author: AgentPath,
     pub recipient: AgentPath,
     #[serde(default)]
@@ -4509,7 +4510,7 @@ mod tests {
     #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
         let mut communication = InterAgentCommunication {
-            id: Some("amsg_1".to_string()),
+            id: Some(ResponseItemId::with_suffix("amsg", "1")),
             author: AgentPath::root(),
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],

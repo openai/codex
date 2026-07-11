@@ -908,6 +908,12 @@ impl ModelClient {
     }
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
+        for item in input.iter_mut() {
+            if item.id().is_some_and(|id| !id.is_prefixed()) {
+                item.set_id(/*new_id*/ None);
+            }
+        }
+
         if self.state.item_ids_enabled || store {
             return;
         }

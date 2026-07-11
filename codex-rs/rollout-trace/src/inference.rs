@@ -391,6 +391,7 @@ fn append_with_context_best_effort(
 mod tests {
     use std::sync::Arc;
 
+    use codex_protocol::ResponseItemId;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use pretty_assertions::assert_eq;
@@ -496,7 +497,7 @@ mod tests {
     #[test]
     fn traced_response_item_preserves_reasoning_content_omitted_by_normal_serializer() {
         let item = ResponseItem::Reasoning {
-            id: Some("rs-1".to_string()),
+            id: Some(ResponseItemId::with_suffix("rs", "1")),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "summary".to_string(),
             }],
@@ -515,7 +516,7 @@ mod tests {
             traced,
             json!({
                 "type": "reasoning",
-                "id": "rs-1",
+                "id": "rs_1",
                 "summary": [{"type": "summary_text", "text": "summary"}],
                 "content": [{"type": "text", "text": "raw reasoning"}],
                 "encrypted_content": "encoded",

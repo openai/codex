@@ -1,10 +1,12 @@
 pub mod account;
 mod agent_path;
 pub mod auth;
+mod response_item_id;
 mod session_id;
 mod thread_id;
 mod tool_name;
 pub use agent_path::AgentPath;
+pub use response_item_id::ResponseItemId;
 pub use session_id::SessionId;
 pub use thread_id::ThreadId;
 pub use tool_name::ToolName;

@@ -447,7 +447,7 @@ impl ThreadHistoryBuilder {
             return;
         }
 
-        let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+        let Some(hook_prompt) = parse_hook_prompt_message(id.as_deref(), content) else {
             return;
         };
 
@@ -4113,7 +4113,7 @@ mod tests {
                 collaboration_mode_kind: Default::default(),
             })),
             RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
-                id: Some("msg-1".into()),
+                id: Some(codex_protocol::ResponseItemId::with_suffix("msg", "1")),
                 role: "user".into(),
                 content: vec![codex_protocol::models::ContentItem::InputText {
                     text: "plain text".into(),

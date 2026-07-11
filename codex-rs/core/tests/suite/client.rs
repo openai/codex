@@ -20,6 +20,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -388,7 +389,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-                id: Some("fc_existing".to_string()),
+                id: Some(ResponseItemId::with_suffix("fc", "existing")),
                 name: "do_it".to_string(),
                 namespace: None,
                 arguments: "{}".to_string(),
@@ -2992,7 +2993,7 @@ async fn includes_developer_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn azure_responses_request_includes_store_and_reasoning_ids() {
+async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3071,7 +3072,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
-        id: Some("reasoning-id".into()),
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".into(),
         }],
@@ -3082,7 +3083,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::Message {
-        id: Some("message-id".into()),
+        id: Some(ResponseItemId::with_suffix("msg", "message-id")),
         role: "assistant".into(),
         content: vec![ContentItem::OutputText {
             text: "message".into(),
@@ -3091,7 +3092,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::WebSearchCall {
-        id: Some("web-search-id".into()),
+        id: Some(ResponseItemId::with_suffix("ws", "web-search-id")),
         status: Some("completed".into()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
@@ -3100,7 +3101,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::FunctionCall {
-        id: Some("function-id".into()),
+        id: Some(ResponseItemId::with_suffix("fc", "function-id")),
         name: "do_thing".into(),
         namespace: None,
         arguments: "{}".into(),
@@ -3114,7 +3115,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::LocalShellCall {
-        id: Some("local-shell-id".into()),
+        id: Some(ResponseItemId::with_suffix("lsh", "local-shell-id")),
         call_id: Some("local-shell-call-id".into()),
         status: LocalShellStatus::Completed,
         action: LocalShellAction::Exec(LocalShellExecAction {
@@ -3127,7 +3128,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::CustomToolCall {
-        id: Some("custom-tool-id".into()),
+        id: Some(ResponseItemId::with_suffix("ctc", "custom-tool-id")),
         status: Some("completed".into()),
         call_id: "custom-tool-call-id".into(),
         name: "custom_tool".into(),
@@ -3142,6 +3143,24 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         output: FunctionCallOutputPayload::from_text("ok".into()),
         internal_chat_message_metadata_passthrough: None,
     });
+    prompt.input.push(
+        serde_json::from_value(json!({
+            "type": "message",
+            "id": "018f9e15-7a6a-7000-8000-000000000001",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "legacy message"}],
+        }))
+        .expect("legacy response item should deserialize"),
+    );
+    prompt.input.push(
+        serde_json::from_value(json!({
+            "type": "message",
+            "id": "",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "empty-id message"}],
+        }))
+        .expect("response item with an empty id should deserialize"),
+    );
 
     let mut stream = client_session
         .stream(
@@ -3169,21 +3188,23 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
-    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
-    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
-    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
-    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(10));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("rs_reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("msg_message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("ws_web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("fc_function-id"));
     assert_eq!(
         body["input"][4]["call_id"].as_str(),
         Some("function-call-id")
     );
-    assert_eq!(body["input"][5]["id"].as_str(), Some("local-shell-id"));
-    assert_eq!(body["input"][6]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(body["input"][5]["id"].as_str(), Some("lsh_local-shell-id"));
+    assert_eq!(body["input"][6]["id"].as_str(), Some("ctc_custom-tool-id"));
     assert_eq!(
         body["input"][7]["call_id"].as_str(),
         Some("custom-tool-call-id")
     );
+    assert_eq!(body["input"][8].get("id"), None);
+    assert_eq!(body["input"][9].get("id"), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

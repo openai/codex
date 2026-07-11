@@ -19,6 +19,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
+use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ModeKind;
@@ -979,7 +980,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
                 ResponseItem::Reasoning {
-                    id: Some("parent-reasoning".to_string()),
+                    id: Some(ResponseItemId::with_suffix("rs", "parent-reasoning")),
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,

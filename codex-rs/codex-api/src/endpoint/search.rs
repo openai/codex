@@ -70,6 +70,7 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use http::StatusCode;
@@ -150,7 +151,7 @@ mod tests {
                     model: "gpt-test".to_string(),
                     reasoning: None,
                     input: Some(SearchInput::Items(vec![ResponseItem::Message {
-                        id: Some("msg_search".to_string()),
+                        id: Some(ResponseItemId::with_suffix("msg", "search")),
                         role: "user".to_string(),
                         content: vec![
                             ContentItem::InputText {

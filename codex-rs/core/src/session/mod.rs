@@ -337,6 +337,7 @@ use codex_mcp::effective_mcp_servers;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -2784,7 +2785,10 @@ impl Session {
     }
 
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
-        if items.iter().all(|item| item.id().is_some()) {
+        if items
+            .iter()
+            .all(|item| item.id().is_some_and(|id| !id.is_empty()))
+        {
             return items;
         }
         let mut items = items;
@@ -2795,27 +2799,13 @@ impl Session {
     }
 
     fn assign_missing_response_item_id(item: &mut ResponseItem) {
-        if item.id().is_some() {
+        if item.id().is_some_and(|id| !id.is_empty()) {
             return;
         }
-        let prefix = match item {
-            ResponseItem::AdditionalTools { .. } => "at",
-            ResponseItem::Message { .. } => "msg",
-            ResponseItem::Reasoning { .. } => "rs",
-            ResponseItem::LocalShellCall { .. } => "lsh",
-            ResponseItem::FunctionCall { .. } => "fc",
-            ResponseItem::ToolSearchCall { .. } => "tsc",
-            ResponseItem::FunctionCallOutput { .. } => "fco",
-            ResponseItem::CustomToolCall { .. } => "ctc",
-            ResponseItem::CustomToolCallOutput { .. } => "ctco",
-            ResponseItem::ToolSearchOutput { .. } => "tso",
-            ResponseItem::WebSearchCall { .. } => "ws",
-            ResponseItem::ImageGenerationCall { .. } => "ig",
-            ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-            ResponseItem::AgentMessage { .. } => "amsg",
-            ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => return,
+        let Some(prefix) = item.id_prefix() else {
+            return;
         };
-        item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
+        item.set_id(Some(ResponseItemId::new(prefix)));
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {

@@ -892,6 +892,7 @@ fn serialize_websocket_request(request: &ResponsesWsRequest) -> Result<String, A
 mod tests {
     use super::*;
     use crate::common::ResponseCreateWsRequest;
+    use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
@@ -905,7 +906,7 @@ mod tests {
             instructions: "Use the available tools.".to_string(),
             previous_response_id: Some("resp-1".to_string()),
             input: vec![ResponseItem::Message {
-                id: Some("msg-1".to_string()),
+                id: Some(ResponseItemId::with_suffix("msg", "1")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "hello".to_string(),

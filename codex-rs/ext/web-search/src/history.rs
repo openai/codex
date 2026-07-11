@@ -82,6 +82,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
 #[cfg(test)]
 mod tests {
     use codex_api::SearchInput;
+    use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
@@ -111,9 +112,12 @@ mod tests {
     #[test]
     fn keeps_current_user_and_previous_visible_turn() {
         let mut previous_user = message(USER_ROLE, "previous user");
-        previous_user.set_id(Some("msg_previous_user".to_string()));
+        previous_user.set_id(Some(ResponseItemId::with_suffix("msg", "previous_user")));
         let mut previous_assistant = message(ASSISTANT_ROLE, "previous assistant");
-        previous_assistant.set_id(Some("msg_previous_assistant".to_string()));
+        previous_assistant.set_id(Some(ResponseItemId::with_suffix(
+            "msg",
+            "previous_assistant",
+        )));
         let items = vec![
             message("system", "system"),
             message(USER_ROLE, "old user"),

@@ -1,4 +1,5 @@
 use crate::AgentPath;
+use crate::ResponseItemId;
 use crate::ThreadId;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::mcp::CallToolResult;
@@ -528,9 +529,9 @@ fn trim_trailing_default_image_details(
 }
 
 impl HookPromptItem {
-    pub fn from_fragments(id: Option<&String>, fragments: Vec<HookPromptFragment>) -> Self {
+    pub fn from_fragments(id: Option<&str>, fragments: Vec<HookPromptFragment>) -> Self {
         Self {
-            id: id.cloned().unwrap_or_else(new_item_id),
+            id: id.map(str::to_string).unwrap_or_else(new_item_id),
             fragments,
         }
     }
@@ -560,7 +561,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
-        id: Some(new_item_id()),
+        id: Some(ResponseItemId::new("msg")),
         role: "user".to_string(),
         content,
         phase: None,
@@ -569,7 +570,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
 }
 
 pub fn parse_hook_prompt_message(
-    id: Option<&String>,
+    id: Option<&str>,
     content: &[ContentItem],
 ) -> Option<HookPromptItem> {
     let fragments = content
@@ -660,9 +661,10 @@ mod tests {
         ];
         let message = build_hook_prompt_message(&original).expect("hook prompt");
 
-        let ResponseItem::Message { content, .. } = message else {
+        let ResponseItem::Message { id, content, .. } = message else {
             panic!("expected hook prompt message");
         };
+        assert!(id.is_some_and(|id| id.starts_with("msg_")));
 
         let parsed = parse_hook_prompt_message(/*id*/ None, &content).expect("parsed hook prompt");
         assert_eq!(parsed.fragments, original);
