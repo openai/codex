@@ -37,6 +37,7 @@ use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use anyhow::Result;
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use async_channel::Sender;
 use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
@@ -101,7 +102,8 @@ const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
 pub(crate) struct ManagedClient {
     pub(crate) client: Arc<RmcpClient>,
     pub(crate) server_info: McpServerInfo,
-    pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) tools: Arc<ArcSwap<Vec<ToolInfo>>>,
+    pub(crate) tool_refresh_semaphore: Arc<tokio::sync::Semaphore>,
     pub(crate) tool_filter: ToolFilter,
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
@@ -110,7 +112,15 @@ pub(crate) struct ManagedClient {
 }
 
 impl ManagedClient {
-    fn listed_tools(&self) -> Vec<ToolInfo> {
+    pub(crate) fn current_tools(&self) -> Vec<ToolInfo> {
+        self.tools.load_full().as_ref().clone()
+    }
+
+    pub(crate) fn replace_tools(&self, tools: Vec<ToolInfo>) {
+        self.tools.store(Arc::new(tools));
+    }
+
+    pub(crate) fn listed_tools(&self) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(tools) = self
             .codex_apps_tools_cache_context
@@ -133,7 +143,7 @@ impl ManagedClient {
             );
         }
 
-        self.tools.clone()
+        self.current_tools()
     }
 }
 
@@ -851,7 +861,7 @@ async fn start_server_task(
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
-    let tools = list_tools_for_client_uncached(
+    let fetched_tools = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
@@ -862,13 +872,17 @@ async fn start_server_task(
     .await
     .map_err(StartupOutcomeError::from)?;
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
-    let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
+    match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
         (Some(cache_context), Some(fetch_ticket)) => {
-            cache_context.publish_if_newest_accepted(fetch_ticket, &server_info, tools)
+            cache_context.publish_if_newest_accepted(
+                fetch_ticket,
+                &server_info,
+                fetched_tools.clone(),
+            );
         }
-        (None, None) => tools,
+        (None, None) => {}
         _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-    };
+    }
     if is_codex_apps_mcp_server {
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
@@ -876,12 +890,13 @@ async fn start_server_task(
             &[("cache", "miss")],
         );
     }
-    let tools = filter_tools(tools, &tool_filter);
+    let tools = filter_tools(fetched_tools, &tool_filter);
 
     let managed = ManagedClient {
         client: Arc::clone(&client),
         server_info,
-        tools,
+        tools: Arc::new(ArcSwap::from_pointee(tools)),
+        tool_refresh_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_instructions: initialize_result.instructions,

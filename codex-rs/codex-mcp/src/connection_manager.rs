@@ -562,13 +562,18 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")?;
+        let _tool_refresh_permit = managed_client
+            .tool_refresh_semaphore
+            .acquire()
+            .await
+            .context("tool refresh semaphore closed")?;
 
         let list_start = Instant::now();
         let fetch_ticket = managed_client
             .codex_apps_tools_cache_context
             .as_ref()
             .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh));
-        let tools = list_tools_for_client_uncached(
+        let fetched_tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
             /*codex_apps_refresh_trigger*/ "explicit",
@@ -581,16 +586,23 @@ impl McpConnectionManager {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
 
-        let tools =
-            match (
-                managed_client.codex_apps_tools_cache_context.as_ref(),
+        managed_client.replace_tools(filter_tools(
+            fetched_tools.clone(),
+            &managed_client.tool_filter,
+        ));
+
+        let tools = match (
+            managed_client.codex_apps_tools_cache_context.as_ref(),
+            fetch_ticket,
+        ) {
+            (Some(cache_context), Some(fetch_ticket)) => cache_context.publish_if_newest_accepted(
                 fetch_ticket,
-            ) {
-                (Some(cache_context), Some(fetch_ticket)) => cache_context
-                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools),
-                (None, None) => tools,
-                _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-            };
+                &managed_client.server_info,
+                fetched_tools,
+            ),
+            (None, None) => fetched_tools,
+            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+        };
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
