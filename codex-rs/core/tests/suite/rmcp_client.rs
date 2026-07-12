@@ -869,7 +869,7 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
+async fn direct_mcp_tool_call_omits_host_metadata_but_keeps_sandbox_state() -> anyhow::Result<()> {
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -937,6 +937,18 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let meta = output_json
         .as_object()
         .expect("sandbox_meta should return metadata object");
+    assert!(
+        !meta.contains_key("threadId"),
+        "direct MCP calls should not include thread identity: {meta:?}"
+    );
+    assert!(
+        !meta.contains_key("x-codex-turn-metadata"),
+        "direct MCP calls should not include turn metadata: {meta:?}"
+    );
+    assert!(
+        !meta.contains_key("codex_bridge_mcp_call_id"),
+        "direct MCP calls should not include rollout correlation: {meta:?}"
+    );
 
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
@@ -951,6 +963,49 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
             use_legacy_landlock: false,
         }
     );
+
+    let caller_meta_result = fixture
+        .codex
+        .call_mcp_tool(
+            server_name,
+            "sandbox_meta",
+            /*arguments*/ None,
+            Some(json!({
+                "threadId": "caller-thread",
+                "x-codex-turn-metadata": {"model": "caller-model"},
+                "codex_bridge_mcp_call_id": "caller-trace",
+                "connector_id": "snake-id",
+                "connectorId": "camel-id",
+                "connector_name": "Snake Name",
+                "connectorName": "Camel Name",
+                "connector_display_name": "Snake Display Name",
+                "connectorDisplayName": "Camel Display Name",
+                "thirdPartyHint": "preserved",
+            })),
+        )
+        .await?;
+    let caller_meta = caller_meta_result
+        .structured_content
+        .as_ref()
+        .and_then(Value::as_object)
+        .expect("sandbox_meta should return caller metadata");
+    assert_eq!(caller_meta.get("thirdPartyHint"), Some(&json!("preserved")));
+    for reserved_key in [
+        "threadId",
+        "x-codex-turn-metadata",
+        "codex_bridge_mcp_call_id",
+        "connector_id",
+        "connectorId",
+        "connector_name",
+        "connectorName",
+        "connector_display_name",
+        "connectorDisplayName",
+    ] {
+        assert!(
+            !caller_meta.contains_key(reserved_key),
+            "direct MCP calls should strip {reserved_key}: {caller_meta:?}"
+        );
+    }
 
     server.verify().await;
 

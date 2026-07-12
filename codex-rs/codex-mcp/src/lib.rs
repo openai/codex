@@ -80,6 +80,7 @@ mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod codex_apps_cache;
 pub(crate) mod connection_manager;
+mod egress;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
 mod plugin_config;

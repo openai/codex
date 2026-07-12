@@ -1319,6 +1319,7 @@ async fn list_all_tools_adds_server_metadata_to_tools() {
             supports_parallel_tool_calls: true,
             default_tools_approval_mode: None,
             tool_approval_modes: HashMap::new(),
+            egress_profile: McpEgressProfile::DirectMcpV1,
         },
     );
     manager

@@ -1,7 +1,5 @@
 use super::*;
 
-const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
-
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -460,41 +458,16 @@ impl McpRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
-        let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
             let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
+                .call_mcp_tool(&params.server, &params.tool, params.arguments, params.meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
-    }
-}
-
-fn with_mcp_tool_call_thread_id_meta(
-    meta: Option<serde_json::Value>,
-    thread_id: &str,
-) -> Option<serde_json::Value> {
-    match meta {
-        Some(serde_json::Value::Object(mut map)) => {
-            map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
-                serde_json::Value::String(thread_id.to_string()),
-            );
-            Some(serde_json::Value::Object(map))
-        }
-        None => {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
-                serde_json::Value::String(thread_id.to_string()),
-            );
-            Some(serde_json::Value::Object(map))
-        }
-        other => other,
     }
 }
