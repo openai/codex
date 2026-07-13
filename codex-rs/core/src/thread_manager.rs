@@ -1411,8 +1411,11 @@ impl ThreadManagerState {
             inherited_environments,
             inherited_exec_policy,
         } = options;
-        let environments =
-            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
+        let environments = if let Some(inherited_environments) = &inherited_environments {
+            inherited_environments.to_selections()
+        } else {
+            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
+        };
         let thread_source = initial_history.get_resumed_thread_source();
         Box::pin(self.spawn_thread_with_source(
             config,
